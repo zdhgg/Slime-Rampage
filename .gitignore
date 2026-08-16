@@ -1,0 +1,14 @@
+node_modules
+dist
+coverage
+.vite
+.DS_Store
+*.local
+npm-debug.log*
+.env
+.env.*
+!.env.example
+.reasonix/
+.zcode/
+test-viewer.png
+*.tgz

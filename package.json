@@ -1,0 +1,23 @@
+{
+  "name": "slime-rampage",
+  "private": true,
+  "version": "0.1.0",
+  "description": "史莱姆大暴走 Slime Rampage - 俯视角动作肉鸽割草游戏",
+  "type": "module",
+  "engines": {
+    "node": "^18.0.0 || ^20.0.0 || >=22.0.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "node smoke-test.mjs && node engine-smoke.mjs && node verify-changes.mjs && node verify-p1.mjs && node verify-p2.mjs && node verify-content.mjs"
+  },
+  "dependencies": {
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.1",
+    "vite": "^6.1.0"
+  }
+}
