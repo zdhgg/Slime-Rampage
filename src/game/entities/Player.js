@@ -1,5 +1,6 @@
 import { Entity } from '../core/Entity.js'
 import { getActiveReactions, getElement } from '../ElementSystem.js'
+import { ENDLESS_FORMATION_BREAK_SPEED_MUL } from '../EndlessMode.js'
 import { AssetManager } from '../AssetManager.js'
 
 const TAU = Math.PI * 2
@@ -12,6 +13,27 @@ const angleLerp = (current, target, k) =>
 
 /** 元素附魔概率上限：等级累加封顶，避免高等级必中失去随机性 */
 const ELEMENT_PROC_CHANCE_CAP = 0.6
+
+export const STARTING_EXP_THRESHOLD = 40
+
+// 开局放慢选择面板密度，随后逐级收敛到原有中期阈值。
+const GUIDED_EXP_THRESHOLDS = {
+  2: 55,
+  3: 75,
+  4: 100,
+  5: 130,
+  6: 170,
+  7: 220,
+  8: 290,
+  9: 400,
+}
+
+/** 前期使用引导曲线，10 级后逐段减缓阈值膨胀，维持后半局升级反馈。 */
+export function getNextExpThreshold(currentThreshold, nextLevel) {
+  if (GUIDED_EXP_THRESHOLDS[nextLevel]) return GUIDED_EXP_THRESHOLDS[nextLevel]
+  const growth = nextLevel >= 15 ? 1.28 : nextLevel >= 10 ? 1.32 : 1.4
+  return Math.floor(currentThreshold * growth)
+}
 
 // —— 冲刺（阶段十三主动技能）：Space/Shift 触发 ——
 const DASH_SPEED = 900 // 冲刺速度（px/s）
@@ -129,9 +151,9 @@ export class Player extends Entity {
     // —— 等级与经验（阶段四） ——
     this.level = 1
     this.exp = 0
-    // 首级阈值 28（原 20）：前期升级面板 15~25 秒一次太碎（打 20 秒停 10 秒），
-    // 抬高前几级阈值拉长间隔；每级 ×1.4 不变，后期节奏与原曲线重合
-    this.maxExp = 28
+    // 首级阈值 40：前期避免升级面板过密；10 级后降低复利增幅，
+    // 让中后期仍能稳定获得构筑选择，而不是突然进入长时间空窗。
+    this.maxExp = STARTING_EXP_THRESHOLD
     this.pickupRadius = 150 // 经验宝石磁力吸附范围（可被升级面板强化）
 
     // —— 生命与受击（阶段六） ——
@@ -471,7 +493,7 @@ export class Player extends Entity {
   settleLevelUp() {
     this.exp -= this.maxExp
     this.level++
-    this.maxExp = Math.floor(this.maxExp * 1.4)
+    this.maxExp = getNextExpThreshold(this.maxExp, this.level)
     this.game.weaponSystem.onLevelUp() // 等级攻击力成长（每级 ×1.08）
     this.game.triggerLevelUp() // 暂停 + 生成 3 个技能选项 + onLevelUp 回调
   }
@@ -633,6 +655,9 @@ export class Player extends Entity {
 
     const dir = this.input.getMoveVector()
     const moving = dir.x !== 0 || dir.y !== 0
+    const previousX = this.x
+    const previousY = this.y
+    const wasDashing = this._dashT > 0
     if (this.adrenalineTimer > 0) this.adrenalineTimer -= dt // 肾上腺素计时与移动状态无关，统一衰减
 
     // —— 冲刺（阶段十三主动技能：Space/Shift） ——
@@ -708,7 +733,12 @@ export class Player extends Entity {
       if (this.speedBuffTimer > 0) this.speedBuffTimer -= dt
       const rushBonus = this.killRushTimer > 0 ? this.killRushSpeed : 0
       const adrenaline = this.adrenalineTimer > 0 ? this.adrenalineSpeed : 0
-      const curSpeed = this.speed * (this.speedBuffTimer > 0 ? 1.25 : 1) * (1 + rushBonus + adrenaline)
+      const terrainMul = this.game.mapFeatures?.speedMultiplierAt(this.x, this.y, 'player') || 1
+      const formationMul = this.game.endlessFormationBreakTimer > 0
+        ? ENDLESS_FORMATION_BREAK_SPEED_MUL
+        : 1
+      const curSpeed = this.speed * (this.speedBuffTimer > 0 ? 1.25 : 1) *
+        (1 + rushBonus + adrenaline) * terrainMul * formationMul
       this.x += dir.x * curSpeed * dt
       this.y += dir.y * curSpeed * dt
       // 面朝方向平滑转向（dt 归一化，帧率无关）
@@ -740,6 +770,7 @@ export class Player extends Entity {
     const { worldWidth, worldHeight } = this.game
     this.x = clamp(this.x, this.radius, worldWidth - this.radius)
     this.y = clamp(this.y, this.radius, worldHeight - this.radius)
+    this.game.mapFeatures?.resolvePlayerMovement(this, previousX, previousY, wasDashing)
   }
 
   render(ctx) {

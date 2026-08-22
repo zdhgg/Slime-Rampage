@@ -12,3 +12,4 @@ npm-debug.log*
 .zcode/
 test-viewer.png
 *.tgz
+data/

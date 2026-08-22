@@ -19,46 +19,223 @@ import LevelUpModal from './components/LevelUpModal.vue'
 import GameOverModal from './components/GameOverModal.vue'
 import PauseModal from './components/PauseModal.vue'
 import StartScreen from './components/StartScreen.vue'
+import SaveSlotModal from './components/SaveSlotModal.vue'
 import BlackMarket from './components/BlackMarket.vue'
 import ReactionSwapModal from './components/ReactionSwapModal.vue'
 import FusionConfirmModal from './components/FusionConfirmModal.vue'
 import ExpeditionRewardModal from './components/ExpeditionRewardModal.vue'
+import EndlessDecisionModal from './components/EndlessDecisionModal.vue'
 import RunIntroOverlay from './components/RunIntroOverlay.vue'
-import { getRunRecord, loadSave, saveSave, pushScore } from './game/SaveManager.js'
+import LanAccountModal from './components/LanAccountModal.vue'
+import {
+  createSaveSlot,
+  deleteSaveSlot,
+  getActiveSave,
+  getActiveSaveSlot,
+  getRunRecord,
+  loadSaveCatalog,
+  pushScore,
+  saveSaveCatalog,
+  switchSaveSlot,
+  updateActiveSave,
+} from './game/SaveManager.js'
 import { calculateMaterialReward, normalizeRunSelection, sumDrops } from './game/RunRules.js'
 import { getGene, getGenePurchaseState } from './game/GenePool.js'
 import { createDefaultStats } from './game/GameEngine.js'
 import { getRunIntro } from './game/RunIntro.js'
+import { lanApi } from './services/LanClient.js'
 
 const engine = shallowRef(null) // 仅作为挂载句柄：浅响应，避免 Vue 深代理整个引擎对象树
 const started = ref(false) // 序章结束、主循环已启动
 const showMarket = ref(false) // 黑市打开
-const save = ref(loadSave()) // 局外存档（掉落物 + 基因等级 + 分数榜 + 音效设置）
+const showSaveSlots = ref(false)
+const showLanAccount = ref(false)
+const offlineCatalog = ref(loadSaveCatalog())
+saveSaveCatalog(offlineCatalog.value) // 首次启动即落盘三槽结构，避免旧档每次重复迁移
+const saveCatalog = ref(offlineCatalog.value)
+const save = ref(getActiveSave(saveCatalog.value)) // 当前档案（掉落物 + 基因等级 + 分数榜）
 const selectedRun = ref(normalizeRunSelection(save.value.preferences))
-const muted = ref(save.value.sound?.muted || false) // 音效静音开关（HUD 按钮）
+const muted = ref(saveCatalog.value.settings?.sound?.muted || false) // 全局音效设置，不随档案切换
 const elementToast = ref('') // 元素组合激活提示（短暂显示）
 const toastKind = ref('info')
 const evolution = ref(null) // 进化事件演出（title/subtitle/mutation）
+const lanStatus = ref({ checked: false, online: false, registrationEnabled: false })
+const lanAccount = ref(null)
+const lanBusy = ref(false)
+const lanMessage = ref('')
+const lanRunTicket = ref(null)
+const deployingRun = ref(false)
+const publicLeaderboard = ref(null)
+const publicLeaderboardKey = ref('')
 let toastTimer = 0
 let evolutionTimer = 0
 
 /** 音效快捷访问（引擎未就绪时静默） */
 const snd = () => engine.value?.sound
 
+function onUiSound(effect) {
+  const sound = snd()
+  if (!sound) return
+  if (effect === 'select') sound.uiSelect()
+  else sound.uiClick()
+}
+
 // stats：引擎快照直接整树赋值（shallowRef 不深层代理，形状由 createDefaultStats 保证）
 const stats = shallowRef(createDefaultStats())
 const levelUpOptions = ref(null) // 升级面板的 3 个技能选项（null = 不显示）
 // 高频冷却数据（引擎 onCooldown ~10Hz 推送）：冲刺 CD / Boss 施法条是连续递变量，
-// 走 2Hz 大快照会肉眼跳变，单独小通道进响应式（仅 3 个数字，HUD 重渲染开销可忽略）
-const cooldown = ref({ dashCd: 0, dashMax: 1.2, cast: 0 })
+// 走 2Hz 大快照会肉眼跳变，单独小通道进响应式（仅少量数字，HUD 重渲染开销可忽略）
+const cooldown = ref({
+  dashCd: 0,
+  dashMax: 1.2,
+  cast: 0,
+  formationBreak: 0,
+  formationBreakMax: 8,
+})
 const gameOverInfo = ref(null) // 游戏结束统计（null = 游戏中）
 const isNewRecord = ref(false) // 本局是否刷新了最高纪录
 const paused = ref(false) // 手动暂停状态（引擎已暂停，画面冻结）
 const reactionChoice = ref(null) // 副反应替换面板数据（null = 不显示；阶段十六槽位经济）
 const fusionConfirm = ref(null) // 首融确认面板数据（null = 不显示；阶段十六追加设计）
 const expeditionReward = ref(null)
+const endlessDecision = ref(null)
 const pendingRun = ref(null)
 const currentRecord = computed(() => getRunRecord(save.value, selectedRun.value))
+const activeSaveSlot = computed(() => getActiveSaveSlot(saveCatalog.value))
+const activeLocalSaveSlot = computed(() => getActiveSaveSlot(offlineCatalog.value))
+const isLanSignedIn = computed(() => !!lanAccount.value)
+
+function showToast(message, kind = 'info', duration = 3000) {
+  toastKind.value = kind
+  elementToast.value = message
+  clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => {
+    elementToast.value = ''
+  }, duration)
+}
+
+function cloneSave(source) {
+  return JSON.parse(JSON.stringify(source))
+}
+
+function persistActiveSave() {
+  if (isLanSignedIn.value) return
+  updateActiveSave(offlineCatalog.value, save.value)
+  saveCatalog.value = offlineCatalog.value
+  saveSaveCatalog(offlineCatalog.value)
+}
+
+function applyActiveSave() {
+  save.value = getActiveSave(saveCatalog.value)
+  selectedRun.value = normalizeRunSelection(save.value.preferences)
+  engine.value?.setGenes(save.value.genes)
+}
+
+function applyCatalog(catalog, remote = isLanSignedIn.value) {
+  if (!catalog) return
+  if (remote) saveCatalog.value = catalog
+  else {
+    offlineCatalog.value = catalog
+    saveCatalog.value = offlineCatalog.value
+    saveSaveCatalog(offlineCatalog.value)
+  }
+  applyActiveSave()
+}
+
+function applyLanPayload(payload) {
+  if (payload?.account) lanAccount.value = payload.account
+  if (payload?.catalog) applyCatalog(payload.catalog, true)
+}
+
+function persistFallbackSave(targetSave) {
+  updateActiveSave(offlineCatalog.value, targetSave)
+  saveSaveCatalog(offlineCatalog.value)
+}
+
+function buildLocalGameOver(info, options = {}) {
+  const {
+    persist = true,
+    syncError = '',
+    fallbackToOffline = false,
+  } = options
+  const targetSave = fallbackToOffline ? cloneSave(save.value) : persist ? save.value : cloneSave(save.value)
+  const rawDrops = sumDrops(info.drops)
+  const earnedDrops = calculateMaterialReward(rawDrops, selectedRun.value, info)
+  targetSave.drops += earnedDrops
+  const previousScore = getRunRecord(targetSave, selectedRun.value).best.score || 0
+  const { rank, entry, best, board, unlocked, unlockedMode } = pushScore(targetSave, selectedRun.value, {
+    ...info,
+    species: info.species?.name || '',
+  })
+  if (fallbackToOffline) persistFallbackSave(targetSave)
+  else if (persist) persistActiveSave()
+  return {
+    ...info,
+    rawDrops,
+    earnedDrops,
+    score: entry.score,
+    scoreBreakdown: entry.breakdown,
+    rank,
+    entry,
+    best,
+    board,
+    unlocked,
+    unlockedMode,
+    isNewRecord: entry.score > previousScore,
+    lanSync: syncError ? 'failed' : 'offline',
+    lanSyncError: syncError,
+    lanLocalFallback: fallbackToOffline,
+  }
+}
+
+async function settleGameOver(info) {
+  endlessDecision.value = null
+  lanRunTicket.value ||= null
+  if (isLanSignedIn.value && lanRunTicket.value) {
+    try {
+      const payload = await lanApi.finishRun(lanRunTicket.value, {
+        ...info,
+        species: info.species?.name || '',
+      })
+      lanRunTicket.value = null
+      applyCatalog(payload.catalog, true)
+      publicLeaderboard.value = payload.leaderboard || null
+      publicLeaderboardKey.value = `${info.mode}:${info.difficulty}`
+      const result = payload.result
+      isNewRecord.value = !!result.isNewRecord
+      gameOverInfo.value = {
+        ...info,
+        rawDrops: result.rawDrops,
+        earnedDrops: result.earnedDrops,
+        score: result.score,
+        scoreBreakdown: result.scoreBreakdown,
+        rank: result.rank,
+        entry: result.entry,
+        best: result.best,
+        board: result.personalBoard,
+        publicLeaderboard: payload.leaderboard,
+        unlocked: result.unlocked,
+        unlockedMode: result.unlockedMode,
+        lanSync: 'synced',
+      }
+      if (isNewRecord.value) snd()?.newRecord()
+      return
+    } catch (error) {
+      const message = error?.message || '公共榜同步失败'
+      lanMessage.value = message
+      const fallback = buildLocalGameOver(info, { persist: false, syncError: message, fallbackToOffline: true })
+      gameOverInfo.value = fallback
+      isNewRecord.value = !!fallback.isNewRecord
+      if (isNewRecord.value) snd()?.newRecord()
+      showToast(`局域网结算失败，已保存到本机档案：${message}`, 'danger', 5200)
+      return
+    }
+  }
+
+  gameOverInfo.value = buildLocalGameOver(info, true)
+  isNewRecord.value = !!gameOverInfo.value.isNewRecord
+  if (isNewRecord.value) snd()?.newRecord()
+}
 
 function onEngineReady(eng) {
   engine.value = eng
@@ -69,7 +246,7 @@ function onEngineReady(eng) {
   eng.onStats = (s) => {
     stats.value = s
   }
-  // 高频冷却桥接（~10Hz）：冲刺条 / Boss 施法条的平滑数据源
+  // 高频冷却桥接（~10Hz）：冲刺、Boss 施法与破阵追击条的平滑数据源
   eng.onCooldown = (c) => {
     cooldown.value = c
   }
@@ -77,32 +254,9 @@ function onEngineReady(eng) {
   eng.onLevelUp = (options) => {
     levelUpOptions.value = options
   }
-  // 引擎玩家死亡后回调：显示结算面板 + 战利品入账 + 最高纪录更新 + 分数榜入榜
+  // 引擎玩家死亡后回调：离线本地入榜；LAN 登录时提交服务器，返回公共榜与远程档案。
   eng.onGameOver = (info) => {
-    const rawDrops = sumDrops(info.drops)
-    const earnedDrops = calculateMaterialReward(rawDrops, selectedRun.value)
-    save.value.drops += earnedDrops
-    const previousScore = currentRecord.value.best.score || 0
-    const { rank, entry, best, board, unlocked, unlockedMode } = pushScore(save.value, selectedRun.value, {
-      ...info,
-      species: info.species?.name || '',
-    })
-    saveSave(save.value)
-    isNewRecord.value = entry.score > previousScore
-    gameOverInfo.value = {
-      ...info,
-      rawDrops,
-      earnedDrops,
-      score: entry.score,
-      scoreBreakdown: entry.breakdown,
-      rank,
-      entry,
-      best,
-      board,
-      unlocked,
-      unlockedMode,
-    }
-    if (isNewRecord.value) snd()?.newRecord()
+    settleGameOver(info)
   }
   // 进化事件回调（评审 Day 2）：融合激活时全屏演出，0.95s 后自动淡出
   eng.onEvolution = (title, subtitle, mutation, desc) => {
@@ -129,6 +283,14 @@ function onEngineReady(eng) {
       elementToast.value = ''
     }, 3000)
   }
+  eng.onBossGroupSpawn = (group) => {
+    toastKind.value = 'danger'
+    elementToast.value = `${group.label} · ${group.total} 名首领参战`
+    clearTimeout(toastTimer)
+    toastTimer = setTimeout(() => {
+      elementToast.value = ''
+    }, group.finale ? 4200 : 3200)
+  }
   // 波次叙事回调：进入命名波次时提示（反转剧情）
   eng.onWaveChanged = (wave, name) => {
     toastKind.value = 'info'
@@ -154,10 +316,15 @@ function onEngineReady(eng) {
     }, event.kind === 'completed' ? 3200 : 2600)
   }
   eng.onRunState = (event) => {
-    toastKind.value = event.kind === 'expedition-clear' || event.kind === 'zone'
+    if (event.kind === 'expedition-stage') {
+      clearTimeout(toastTimer)
+      elementToast.value = ''
+      return
+    }
+    toastKind.value = event.kind === 'expedition-clear' || event.kind === 'zone' ||
+      event.kind === 'calamity' || event.kind === 'bounty-complete' ||
+      event.kind === 'formation-break'
       ? 'success'
-      : event.kind === 'expedition-stage'
-      ? 'info'
       : 'danger'
     elementToast.value = event.kind === 'warning'
       ? '终局勇者正在集结 · 30 秒后降临'
@@ -165,49 +332,222 @@ function onEngineReady(eng) {
       ? `${event.boss} 降临 · 击败他才能通关`
       : event.kind === 'zone'
       ? `战区推进 · ${event.zone}`
+      : event.kind === 'calamity'
+      ? `灾变已叠加 · ${event.name} Lv.${event.level}`
+      : event.kind === 'bounty-complete'
+      ? `悬赏完成 · ${event.reward}`
+      : event.kind === 'bounty-failed'
+      ? `悬赏失效 · ${event.name}`
+      : event.kind === 'formation-break'
+      ? `${event.name} · 追击 ${event.duration} 秒（攻速 +25% / 移速 +15%）`
+      : event.kind === 'expedition-guardian'
+      ? `${event.boss} 阻断去路 · ${event.special}`
       : event.kind === 'expedition-clear'
-      ? `第 ${event.stage} 关完成 · 残敌溃散`
-      : `第 ${event.stage} / ${event.total} 关 · ${event.title}`
+      ? `第 ${event.stage} 章 · ${event.title} 已完成`
+      : ''
     clearTimeout(toastTimer)
     toastTimer = setTimeout(() => {
       elementToast.value = ''
-    }, event.kind === 'finale' ? 4200 : 3200)
+    }, event.kind === 'finale' || event.kind === 'expedition-guardian' ? 4200 : 3200)
   }
   eng.onExpeditionReward = (payload) => {
     expeditionReward.value = payload
   }
-}
-
-/** 选择配置后先进入战前简报，确认按钮才真正消耗一次开局。 */
-function onPrepareRun(selection) {
-  const normalized = normalizeRunSelection(selection || save.value.preferences)
-  const strain = selection?.strain || 'origin'
-  selectedRun.value = normalized
-  save.value.preferences = { ...normalized }
-  saveSave(save.value)
-  pendingRun.value = {
-    selection: normalized,
-    spec: selection?.spec || null,
-    strain,
-    intro: getRunIntro(normalized, strain),
+  eng.onEndlessDecision = (payload) => {
+    endlessDecision.value = payload
   }
 }
 
+function lanErrorMessage(error) {
+  return error?.message || '局域网请求失败'
+}
+
+async function loadPublicLeaderboard(selection = selectedRun.value) {
+  const normalized = normalizeRunSelection(selection)
+  const key = `${normalized.mode}:${normalized.difficulty}`
+  publicLeaderboardKey.value = key
+  if (!lanStatus.value.online) {
+    publicLeaderboard.value = null
+    return
+  }
+  try {
+    const payload = await lanApi.leaderboard({ ...normalized, limit: 10 })
+    if (publicLeaderboardKey.value === key) publicLeaderboard.value = payload.leaderboard || null
+  } catch {
+    if (publicLeaderboardKey.value === key) publicLeaderboard.value = null
+  }
+}
+
+async function refreshLanSession() {
+  try {
+    const status = await lanApi.status()
+    lanStatus.value = {
+      checked: true,
+      online: true,
+      registrationEnabled: status.registrationEnabled !== false,
+      serverTime: status.serverTime,
+    }
+    const payload = await lanApi.me()
+    if (payload.account) applyLanPayload(payload)
+    else {
+      lanAccount.value = null
+      saveCatalog.value = offlineCatalog.value
+      applyActiveSave()
+    }
+    await loadPublicLeaderboard(selectedRun.value)
+  } catch {
+    lanStatus.value = { checked: true, online: false, registrationEnabled: false }
+    lanAccount.value = null
+    publicLeaderboard.value = null
+    saveCatalog.value = offlineCatalog.value
+    applyActiveSave()
+  }
+}
+
+function onOpenLanAccount() {
+  snd()?.uiClick()
+  lanMessage.value = ''
+  showLanAccount.value = true
+  refreshLanSession()
+}
+
+async function onLanAuth(kind, credentials) {
+  lanBusy.value = true
+  lanMessage.value = ''
+  try {
+    const payload = await lanApi[kind](credentials)
+    applyLanPayload(payload)
+    showLanAccount.value = false
+    showToast(`已登录局域网账号：${payload.account.displayName || payload.account.username}`, 'success')
+    await loadPublicLeaderboard(selectedRun.value)
+  } catch (error) {
+    lanMessage.value = lanErrorMessage(error)
+  } finally {
+    lanBusy.value = false
+  }
+}
+
+function onLanLogin(credentials) {
+  return onLanAuth('login', credentials)
+}
+
+function onLanRegister(credentials) {
+  return onLanAuth('register', credentials)
+}
+
+async function onLanLogout() {
+  lanBusy.value = true
+  try {
+    await lanApi.logout()
+  } catch {
+    /* 退出登录以本地状态清理为准。 */
+  } finally {
+    lanBusy.value = false
+    lanAccount.value = null
+    lanRunTicket.value = null
+    saveCatalog.value = offlineCatalog.value
+    applyActiveSave()
+    showLanAccount.value = false
+    showToast('已切回本地单机档案', 'info')
+  }
+}
+
+async function onImportLocalSlot() {
+  const localSlot = activeLocalSaveSlot.value
+  if (!localSlot || !isLanSignedIn.value) return
+  lanBusy.value = true
+  lanMessage.value = ''
+  try {
+    const payload = await lanApi.importSlot(localSlot)
+    applyCatalog(payload.catalog, true)
+    showToast('本机档案已导入当前局域网档案', 'success')
+  } catch (error) {
+    lanMessage.value = lanErrorMessage(error)
+  } finally {
+    lanBusy.value = false
+  }
+}
+
+async function syncRunPreferences(normalized) {
+  save.value.preferences = { ...normalized }
+  if (!isLanSignedIn.value) {
+    persistActiveSave()
+    return true
+  }
+  try {
+    const payload = await lanApi.updatePreferences(normalized)
+    applyCatalog(payload.catalog, true)
+    return true
+  } catch (error) {
+    const message = lanErrorMessage(error)
+    lanMessage.value = message
+    showToast(`局域网档案同步失败：${message}`, 'danger', 3800)
+    return false
+  }
+}
+
+async function runLanCatalogAction(action, successMessage) {
+  lanBusy.value = true
+  lanMessage.value = ''
+  try {
+    const payload = await action()
+    applyCatalog(payload.catalog, true)
+    showSaveSlots.value = false
+    snd()?.uiSelect()
+    if (successMessage) showToast(successMessage, 'success')
+  } catch (error) {
+    lanMessage.value = lanErrorMessage(error)
+    showLanAccount.value = true
+  } finally {
+    lanBusy.value = false
+  }
+}
+
+/** 选择配置后先进入战前简报，确认按钮才真正消耗一次开局。 */
+async function onPrepareRun(selection) {
+  const normalized = normalizeRunSelection(selection || save.value.preferences)
+  const strain = selection?.strain || 'origin'
+  selectedRun.value = normalized
+  if (!(await syncRunPreferences(normalized))) return
+  pendingRun.value = {
+    selection: normalized,
+    strain,
+    intro: getRunIntro(normalized, strain),
+  }
+  loadPublicLeaderboard(normalized)
+}
+
 /** 战前简报确认：先 reset 再 start，避免结算/黑市返回后残留死亡与暂停锁。 */
-function onDeployRun() {
+async function onDeployRun() {
   const plan = pendingRun.value
-  if (!plan || !engine.value) return
+  if (!plan || !engine.value || deployingRun.value) return
+  deployingRun.value = true
+  if (isLanSignedIn.value) {
+    try {
+      const payload = await lanApi.startRun(plan.selection)
+      lanRunTicket.value = payload.ticket?.id || null
+    } catch (error) {
+      const message = lanErrorMessage(error)
+      lanMessage.value = message
+      showToast(`无法开始局域网行动：${message}`, 'danger', 4200)
+      deployingRun.value = false
+      return
+    }
+  } else {
+    lanRunTicket.value = null
+  }
   snd()?.gameStart()
   gameOverInfo.value = null
   paused.value = false
   expeditionReward.value = null
+  endlessDecision.value = null
   engine.value.configureRun(plan.selection)
-  engine.value.applyStartingSpec(plan.spec)
   engine.value.applyStartingStrain(plan.strain)
   engine.value.reset()
   engine.value.start()
   started.value = true
   pendingRun.value = null
+  deployingRun.value = false
 }
 
 function onBackFromIntro() {
@@ -220,6 +560,7 @@ function onOpenMarket() {
   gameOverInfo.value = null
   paused.value = false
   expeditionReward.value = null
+  endlessDecision.value = null
   pendingRun.value = null
   started.value = false
   showMarket.value = true
@@ -231,8 +572,63 @@ function onCloseMarket() {
   showMarket.value = false
 }
 
+function onOpenSaveSlots() {
+  snd()?.uiClick()
+  showSaveSlots.value = true
+}
+
+function onCloseSaveSlots() {
+  snd()?.uiClick()
+  showSaveSlots.value = false
+}
+
+function onCreateSaveSlot(index) {
+  if (isLanSignedIn.value) {
+    runLanCatalogAction(() => lanApi.createSlot(index), '局域网档案已创建')
+    return
+  }
+  persistActiveSave()
+  if (!createSaveSlot(offlineCatalog.value, index)) return
+  saveSaveCatalog(offlineCatalog.value)
+  saveCatalog.value = offlineCatalog.value
+  applyActiveSave()
+  showSaveSlots.value = false
+  snd()?.uiSelect()
+}
+
+function onSwitchSaveSlot(id) {
+  if (id === saveCatalog.value.activeSlotId) {
+    showSaveSlots.value = false
+    return
+  }
+  if (isLanSignedIn.value) {
+    runLanCatalogAction(() => lanApi.switchSlot(id), '已切换局域网档案')
+    return
+  }
+  persistActiveSave()
+  if (!switchSaveSlot(offlineCatalog.value, id)) return
+  saveSaveCatalog(offlineCatalog.value)
+  saveCatalog.value = offlineCatalog.value
+  applyActiveSave()
+  showSaveSlots.value = false
+  snd()?.uiSelect()
+}
+
+function onDeleteSaveSlot(id) {
+  if (isLanSignedIn.value) {
+    runLanCatalogAction(() => lanApi.deleteSlot(id), '局域网档案已删除')
+    return
+  }
+  const previousActive = offlineCatalog.value.activeSlotId
+  if (!deleteSaveSlot(offlineCatalog.value, id)) return
+  saveSaveCatalog(offlineCatalog.value)
+  saveCatalog.value = offlineCatalog.value
+  if (previousActive !== offlineCatalog.value.activeSlotId) applyActiveSave()
+  snd()?.uiClick()
+}
+
 /** 购买基因：校验费用 → 扣款升级 → 写档 → 立即应用到引擎 */
-function onBuyGene(geneId) {
+async function onBuyGene(geneId) {
   const gene = getGene(geneId)
   if (!gene) return
   const state = getGenePurchaseState(gene, save.value.genes, save.value.drops)
@@ -240,9 +636,20 @@ function onBuyGene(geneId) {
     snd()?.buyFail()
     return
   }
+  if (isLanSignedIn.value) {
+    try {
+      const payload = await lanApi.buyGene(geneId)
+      applyCatalog(payload.catalog, true)
+      snd()?.buy()
+    } catch (error) {
+      snd()?.buyFail()
+      showToast(lanErrorMessage(error), 'danger', 3200)
+    }
+    return
+  }
   save.value.drops -= state.cost
   save.value.genes[geneId] = state.level + 1
-  saveSave(save.value)
+  persistActiveSave()
   snd()?.buy() // 购买成功：金币双响
   engine.value?.setGenes(save.value.genes) // 立即生效（后续每局 reset 自动保持）
 }
@@ -275,12 +682,33 @@ function onSelectExpeditionReward(rewardId) {
   engine.value?.resolveExpeditionReward(rewardId)
 }
 
+function onSelectEndlessCalamity(id) {
+  endlessDecision.value = null
+  snd()?.select()
+  engine.value?.resolveEndlessCalamity(id)
+}
+
+function onSelectEndlessBounty(id) {
+  endlessDecision.value = null
+  snd()?.select()
+  engine.value?.resolveEndlessBounty(id)
+}
+
+function onResolveEndlessCheckpoint(action) {
+  endlessDecision.value = null
+  snd()?.select()
+  engine.value?.resolveEndlessCheckpoint(action)
+}
+
 /** 再来一局：重置整局状态并恢复主循环 */
 function onRestart() {
+  engine.value?.stop()
+  gameOverInfo.value = null
+  endlessDecision.value = null
+  paused.value = false
   const strain = engine.value?.startingStrain || 'origin'
   pendingRun.value = {
     selection: { ...selectedRun.value },
-    spec: engine.value?.startingSpec || null,
     strain,
     intro: getRunIntro(selectedRun.value, strain),
   }
@@ -288,11 +716,24 @@ function onRestart() {
 
 function onChangeRules() {
   snd()?.uiClick()
+  engine.value?.stop()
+  lanRunTicket.value = null
+  levelUpOptions.value = null
   gameOverInfo.value = null
   paused.value = false
+  reactionChoice.value = null
+  fusionConfirm.value = null
   expeditionReward.value = null
+  endlessDecision.value = null
   pendingRun.value = null
+  evolution.value = null
+  elementToast.value = ''
   started.value = false
+}
+
+/** 暂停菜单放弃本局：不触发结算，直接清理局内界面并返回模式选择。 */
+function onAbandonRun() {
+  onChangeRules()
 }
 
 /** 任一模态面板打开中（升级/结算/替换/首融/远征奖励）——暂停与 Esc 守卫共用 */
@@ -304,6 +745,7 @@ const isModalOpen = computed(
       reactionChoice.value ||
       fusionConfirm.value ||
       expeditionReward.value ||
+      endlessDecision.value ||
       pendingRun.value
     )
 )
@@ -327,13 +769,16 @@ function onResume() {
 function onToggleMute() {
   muted.value = !muted.value
   snd()?.setMuted(muted.value)
-  save.value.sound = { ...save.value.sound, muted: muted.value }
-  saveSave(save.value)
+  offlineCatalog.value.settings ||= {}
+  offlineCatalog.value.settings.sound = { muted: muted.value }
+  if (!isLanSignedIn.value) saveCatalog.value = offlineCatalog.value
+  saveSaveCatalog(offlineCatalog.value)
 }
 
 /** Esc 键：黑市 → 返回开场；游戏中 → 切换暂停（模态面板打开时不响应） */
 function onKeydown(e) {
   if (e.code !== 'Escape') return
+  if (!started.value && showSaveSlots.value) return // 档案面板自行处理 Esc 与删除确认
   if (!started.value && showMarket.value) {
     onCloseMarket()
     return
@@ -346,6 +791,7 @@ function onKeydown(e) {
 
 onMounted(() => {
   window.addEventListener('keydown', onKeydown)
+  refreshLanSession()
 })
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeydown)
@@ -363,7 +809,7 @@ onUnmounted(() => {
       :cooldown="cooldown"
       :muted="muted"
       :paused="paused"
-      :buttons-visible="!levelUpOptions && !gameOverInfo && !expeditionReward"
+      :buttons-visible="!levelUpOptions && !gameOverInfo && !expeditionReward && !endlessDecision"
       :toast="elementToast"
       :toast-kind="toastKind"
       :evolution="evolution"
@@ -385,6 +831,16 @@ onUnmounted(() => {
       />
     </Transition>
 
+    <Transition name="modal-fade">
+      <EndlessDecisionModal
+        v-if="endlessDecision"
+        :info="endlessDecision"
+        @select-calamity="onSelectEndlessCalamity"
+        @select-bounty="onSelectEndlessBounty"
+        @resolve-checkpoint="onResolveEndlessCheckpoint"
+      />
+    </Transition>
+
     <!-- 副反应替换面板（阶段十六槽位经济）：槽满时选择替换或放弃 -->
     <Transition name="modal-fade">
       <ReactionSwapModal v-if="reactionChoice" :info="reactionChoice" @resolve="onResolveSwap" />
@@ -397,7 +853,12 @@ onUnmounted(() => {
 
     <!-- 暂停面板 -->
     <Transition name="modal-fade">
-      <PauseModal v-if="paused" @resume="onResume" @restart="onRestart" />
+      <PauseModal
+        v-if="paused"
+        @resume="onResume"
+        @restart="onRestart"
+        @quit="onAbandonRun"
+      />
     </Transition>
 
     <!-- 游戏结束面板：显示统计 + 分数榜，点击重开 -->
@@ -407,6 +868,7 @@ onUnmounted(() => {
         :info="gameOverInfo"
         :best="gameOverInfo.best"
         :board="gameOverInfo.board"
+        :public-board="gameOverInfo.publicLeaderboard"
         :is-new-record="isNewRecord"
         @restart="onRestart"
         @market="onOpenMarket"
@@ -428,12 +890,33 @@ onUnmounted(() => {
     <!-- 模式选择与本局配置 -->
     <StartScreen
       v-if="!started && !showMarket"
+      :key="saveCatalog.activeSlotId"
       :records="save.records"
       :progression="save.progression"
       :preferences="save.preferences"
+      :active-slot="activeSaveSlot"
+      :lan-account="lanAccount"
+      :lan-status="lanStatus"
+      :public-leaderboard="publicLeaderboard"
       @prepare="onPrepareRun"
       @market="onOpenMarket"
+      @profiles="onOpenSaveSlots"
+      @account="onOpenLanAccount"
+      @leaderboard="loadPublicLeaderboard"
+      @ui-sound="onUiSound"
     />
+
+    <Transition name="modal-fade">
+      <SaveSlotModal
+        v-if="showSaveSlots"
+        :slots="saveCatalog.slots"
+        :active-slot-id="saveCatalog.activeSlotId"
+        @close="onCloseSaveSlots"
+        @create="onCreateSaveSlot"
+        @switch="onSwitchSaveSlot"
+        @delete="onDeleteSaveSlot"
+      />
+    </Transition>
 
     <Transition name="modal-fade">
       <RunIntroOverlay
@@ -441,6 +924,23 @@ onUnmounted(() => {
         :intro="pendingRun.intro"
         @deploy="onDeployRun"
         @back="onBackFromIntro"
+      />
+    </Transition>
+
+    <Transition name="modal-fade">
+      <LanAccountModal
+        v-if="showLanAccount"
+        :account="lanAccount"
+        :status="lanStatus"
+        :active-slot="activeSaveSlot"
+        :local-slot="activeLocalSaveSlot"
+        :busy="lanBusy"
+        :message="lanMessage"
+        @close="showLanAccount = false"
+        @login="onLanLogin"
+        @register="onLanRegister"
+        @logout="onLanLogout"
+        @import-local="onImportLocalSlot"
       />
     </Transition>
   </div>

@@ -3,12 +3,12 @@ import { STRAINS } from './Strains.js'
 
 const MODE_BRIEFINGS = {
   expedition: {
-    code: '远征协议 01',
-    location: '湿苔边境 · 破晓前',
+    code: '逆袭路线 01',
+    location: '史莱姆巢界 · 破晓前',
     title: '讨伐队越过了巢穴边界',
-    story: '晨雾压在苔地上，前哨的火把正沿旧路逼近。他们仍把你写在任务单最末一行：史莱姆，经验值十点。',
-    objective: '穿过六处战区，击溃王庭统帅。',
-    signal: '第一目标：击退勇者先锋',
+    story: '巢心的黏液刚刚苏醒，前哨的火把已沿旧路逼近。他们仍把你写在任务单最末一行：史莱姆，经验值十点。',
+    objective: '完成六个独立章节，击败讨伐统帅。',
+    signal: '第一章：害兽讨伐令',
     tone: 'frontier',
   },
   timed: {
@@ -55,7 +55,7 @@ export function getRunIntro(selection, strainId = 'origin') {
     strainNote: strain.id === 'origin' ? null : `作战血统：${strain.name} · ${strain.desc}`,
     objective:
       value.mode === 'expedition'
-        ? `穿过${STAGE_COUNT_CN[getExpeditionStages(value.difficulty).length] || getExpeditionStages(value.difficulty).length}处战区，击溃王庭统帅。`
+        ? `完成${STAGE_COUNT_CN[getExpeditionStages(value.difficulty).length] || getExpeditionStages(value.difficulty).length}个独立章节，击败讨伐统帅。`
         : briefing.objective,
   }
 }

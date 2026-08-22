@@ -85,6 +85,66 @@ export const BOSS_DIALOGUE = {
     phase: '身后是王城，我没有第二条路。',
     defeat: '原来一路进犯的……是我们。',
   },
+  'expedition-border_warden': {
+    spawn: '这道边界之后，不该再有魔物。',
+    phase: '关门！我亲自把缺口合上！',
+    defeat: '情报说……它只是一只害兽。',
+  },
+  'expedition-beacon_engineer': {
+    spawn: '信标记得每一条回家的路。除了你的。',
+    phase: '烧掉回路，让整片边境一起过载！',
+    defeat: '王城早就收到了坐标……为何无人来？',
+  },
+  'expedition-hunt_captain': {
+    spawn: '队长们的血迹，都指向了你。',
+    phase: '收网！猎物不可能逃出八支箭！',
+    defeat: '原来被围猎的……一直是我们。',
+  },
+  'expedition-nest_inquisitor': {
+    spawn: '奉净化令，巢中不留一滴活物。',
+    phase: '圣火成环，把它和巢穴一同焚尽！',
+    defeat: '它只是在……守自己的家。',
+  },
+  'expedition-gate_marshal': {
+    spawn: '城门在我身后，你一步也过不去。',
+    phase: '盾墙合拢！用我们的命堵住缺口！',
+    defeat: '门没有倒……是守门的人倒了。',
+  },
+  'expedition-relic_keeper': {
+    spawn: '你吞下的不是宝物，是王国的记忆。',
+    phase: '圣物会彼此呼应，历史不会任你抹去！',
+    defeat: '也许真正被藏起来的……不是荣耀。',
+  },
+  'expedition-ash_paladin': {
+    spawn: '圣殿已经烧尽，我便是最后的圣火。',
+    phase: '让我的灰烬，画完这道十字！',
+    defeat: '信仰若只剩焚烧……还算光吗？',
+  },
+  'expedition-tomb_regent': {
+    spawn: '生者惊扰王陵，死者替王开战。',
+    phase: '历代王魂，听我再下一次诏令！',
+    defeat: '我们守的不是陵墓……是不能见光的罪。',
+  },
+  'expedition-seal_archbishop': {
+    spawn: '你从封印里诞生，也该在这里消失。',
+    phase: '四象逆转，把王国的原罪重新锁回去！',
+    defeat: '你不是灾厄……你是封印漏出的证词。',
+  },
+  'expedition-throne_guard': {
+    spawn: '觐见王座之前，先学会低头。',
+    phase: '王命不容直视，背身者亦要受裁！',
+    defeat: '王座上……究竟还有谁在看？',
+  },
+  'expedition-last_marshal': {
+    spawn: '能站起来的人，都已写进最后的点兵册。',
+    phase: '举国皆兵！哪怕只剩最后一个名字！',
+    defeat: '册上最后一人……原来是我。',
+  },
+  'expedition-court_commander': {
+    spawn: '退回巢穴。我不愿再添一场屠杀。',
+    phase: '身后是王城，我没有第二条路。',
+    defeat: '原来一路进犯的……是我们。',
+  },
 }
 
 const choose = (pool, random) => pool[(random() * pool.length) | 0]

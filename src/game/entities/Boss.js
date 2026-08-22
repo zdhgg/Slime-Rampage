@@ -45,7 +45,7 @@ const BOSS_CFG = {
     phaseName: '终焉轮转',
   },
   'boss-expedition': {
-    name: '远征统帅 雷欧尼斯',
+    name: '讨伐统帅 雷欧尼斯',
     speed: 60,
     radius: 40,
     range: 275,
@@ -146,7 +146,10 @@ export class Boss extends Enemy {
   }
 
   hit(damage, effects = null) {
-    const amplified = this.vulnerableTimer > 0 && damage > 0 ? damage * 1.35 : damage
+    const formationMul = damage > 0
+      ? this.game?.enemyManager?.getBossDamageTakenMultiplier?.(this) || 1
+      : 1
+    const amplified = (this.vulnerableTimer > 0 && damage > 0 ? damage * 1.35 : damage) * formationMul
     super.hit(amplified, effects)
   }
 
@@ -175,23 +178,26 @@ export class Boss extends Enemy {
       this.specialTimer -= dt
       this.stateLabel = '破绽暴露'
       if (this.specialTimer <= 0) {
+        this.game.enemyManager.releaseBossCast?.(this)
         this.specialState = 'idle'
         this.stateLabel = '追猎'
       }
       return
     }
 
-    this.specialCd -= dt
+    const squadTempo = this.game.enemyManager.getBossTempoMultiplier?.(this) || 1
+    this.specialCd -= dt * squadTempo
     if (this.specialCd <= 0) {
       this._startSpecial()
       return
     }
 
-    this._updateStandardAttack(dt)
+    this._updateStandardAttack(dt * squadTempo)
     if (this._moving) this._walkT += dt * 5
   }
 
   _enterPhaseTwo() {
+    this.game.enemyManager.releaseBossCast?.(this)
     this.phase = 2
     this.enraged = true
     this.phaseShift = 0.85
@@ -210,6 +216,11 @@ export class Boss extends Enemy {
   }
 
   _startSpecial() {
+    const claimCast = this.game.enemyManager.claimBossCast
+    if (claimCast && !claimCast.call(this.game.enemyManager, this)) {
+      this.specialCd = 0.35
+      return
+    }
     const cfg = BOSS_CFG[this.type]
     const p = this.game.player
     if (this.isCompositeBoss) {

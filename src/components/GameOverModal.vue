@@ -14,18 +14,35 @@ import { MODES, sumDrops } from '../game/RunRules.js'
 const EL_ICONS = { fire: '🔥', water: '💧', poison: '☠️', lightning: '⚡' }
 /** 前三名奖牌（分数榜行首） */
 const MEDALS = ['🥇', '🥈', '🥉']
+const LOOT_ICONS = {
+  knight: '🛡️',
+  mage: '📖',
+  archer: '🏹',
+  assassin: '🗡️',
+  priest: '⛪',
+  berserker: '🪓',
+  hound: '🐕',
+  golem: '🗿',
+  wraith: '👻',
+}
 
 const props = defineProps({
   info: { type: Object, required: true },
   best: { type: Object, default: () => ({ wave: 1, kills: 0, time: 0 }) },
   board: { type: Array, default: () => [] },
+  publicBoard: { type: Object, default: null },
   isNewRecord: { type: Boolean, default: false },
 })
 const emit = defineEmits(['restart', 'market', 'menu'])
 const victory = computed(() => props.info?.result === 'victory')
+const extracted = computed(() => props.info?.result === 'extracted')
+const totalStages = computed(() => props.info?.totalStages || 6)
 const resultTitle = computed(() => {
-  if (!victory.value) return '史莱姆倒下了'
-  return props.info?.mode === 'expedition' ? '远征统帅已被吞噬' : '终审勇者已被吞噬'
+  if (extracted.value) return '带着战利品安全撤离'
+  if (!victory.value) {
+    return props.info?.defeatReason === 'nest-destroyed' ? '巢心被净化了' : '史莱姆倒下了'
+  }
+  return props.info?.mode === 'expedition' ? '讨伐统帅已被吞噬' : '终审勇者已被吞噬'
 })
 
 /** 时长格式化（mm:ss），info.elapsed 可选链兜底防漏传 */
@@ -42,6 +59,18 @@ const bestTimeText = computed(() => fmtTime(props.best?.time))
 
 /** 本局分数（千分位） */
 const scoreText = computed(() => (props.info?.score || 0).toLocaleString('en-US'))
+const publicEntries = computed(() => props.publicBoard?.entries || [])
+const lanSyncText = computed(() => {
+  if (props.info?.lanSync === 'synced') {
+    const rank = props.publicBoard?.currentRank ? ` · 全员第 ${props.publicBoard.currentRank}` : ''
+    return `局域网公共榜已同步${rank}`
+  }
+  if (props.info?.lanSync === 'failed') {
+    const fallback = props.info?.lanLocalFallback ? '，本局已保存到本机档案' : ''
+    return `局域网同步失败${fallback}：${props.info?.lanSyncError || '请稍后重试'}`
+  }
+  return '本局保存到本机档案'
+})
 
 const scoreRows = computed(() => {
   const b = props.info?.scoreBreakdown || {}
@@ -52,9 +81,9 @@ const scoreRows = computed(() => {
     { label: '王级勇者', detail: `${props.info?.bossKills || 0} × 500`, value: b.boss || 0 },
     { label: '地图事件', detail: `${props.info?.eventsCompleted || 0} × 350`, value: b.events || 0 },
     {
-      label: props.info?.mode === 'expedition' ? '关卡推进' : '波次推进',
+      label: props.info?.mode === 'expedition' ? '章节推进' : '波次推进',
       detail: props.info?.mode === 'expedition'
-        ? `抵达第 ${props.info?.stage || 1} / ${props.info?.totalStages || 6} 关`
+        ? `抵达第 ${props.info?.stage || 1} / ${props.info?.totalStages || 6} 章`
         : `通过 ${Math.max(0, Math.min(props.info?.mode === 'timed' ? 24 : 9999, props.info?.wave || 1) - 1)} 波`,
       value: b.progress || 0,
     },
@@ -62,7 +91,7 @@ const scoreRows = computed(() => {
   if (b.victory) {
     rows.push({
       label: props.info?.mode === 'expedition' ? '远征通关' : '终局通关',
-      detail: props.info?.mode === 'expedition' ? '击败远征统帅' : '击败终审勇者',
+      detail: props.info?.mode === 'expedition' ? '击败讨伐统帅' : '击败终审勇者',
       value: b.victory,
     })
   }
@@ -74,13 +103,18 @@ const scoreRows = computed(() => {
 /** 分数榜行首标记：前三奖牌，其余 #n */
 const rankBadge = (i) => (i < 3 ? MEDALS[i] : `#${i + 1}`)
 
-/** 本局掉落物总数（黑市货币；与 App 结算入账共用 sumDrops 口径） */
+/** 本局九类掉落物总数（黑市货币；与 App 结算入账共用 sumDrops 口径） */
 const dropTotal = computed(() => sumDrops(props.info.drops))
+const dropEntries = computed(() =>
+  Object.entries(LOOT_ICONS)
+    .map(([id, icon]) => ({ id, icon, count: props.info.drops?.[id] || 0 }))
+    .filter((entry) => entry.count > 0)
+)
 </script>
 
 <template>
   <div class="gameover-overlay" role="dialog" aria-modal="true" aria-label="本局结算">
-    <div class="gameover-panel" :class="{ victory }">
+    <div class="gameover-panel" :class="{ victory, extracted }">
       <div class="result-kicker">{{ info.modeName }} · {{ info.difficultyName }}</div>
       <h2 class="gameover-title">{{ resultTitle }}</h2>
       <blockquote v-if="victory && info.epilogue" class="boss-epilogue">
@@ -88,7 +122,7 @@ const dropTotal = computed(() => sumDrops(props.info.drops))
         <cite>— {{ info.epilogue.speaker }}</cite>
       </blockquote>
       <div class="gameover-stats">
-        <div class="stat"><span>{{ info.mode === 'expedition' ? '关卡' : '波次' }}</span><b>{{ info.mode === 'expedition' ? `${info.stage}/6` : info.wave }}</b></div>
+        <div class="stat"><span>{{ info.mode === 'expedition' ? '章节' : '波次' }}</span><b>{{ info.mode === 'expedition' ? `${info.stage}/${totalStages}` : info.wave }}</b></div>
         <div class="stat"><span>等级</span><b>{{ info.level }}</b></div>
         <div class="stat"><span>击杀</span><b>{{ info.kills }}</b></div>
         <div class="stat"><span>存活</span><b>{{ timeText }}</b></div>
@@ -108,12 +142,20 @@ const dropTotal = computed(() => sumDrops(props.info.drops))
       <div class="gameover-drops">
         🎒 战利品
         <span v-if="dropTotal === 0">空空如也…</span>
-        <span v-else>
-          🛡️×{{ info.drops?.knight || 0 }} 📖×{{ info.drops?.mage || 0 }} 🏹×{{ info.drops?.archer || 0 }} 🗡️×{{ info.drops?.assassin || 0 }} ⛪×{{ info.drops?.priest || 0 }} 🪓×{{ info.drops?.berserker || 0 }}
-          （战斗获得 {{ dropTotal }}）
+        <span v-else class="drop-list">
+          <span v-for="entry in dropEntries" :key="entry.id" class="loot-item">
+            {{ entry.icon }}×{{ entry.count }}
+          </span>
+          <span class="drop-total">（战斗获得 {{ dropTotal }}）</span>
         </span>
-        <b>难度倍率 ×{{ info.rewardMultiplier }} · 实际入账 {{ info.earnedDrops || 0 }}</b>
+        <b v-if="info.mode === 'endless'">
+          结算倍率 ×{{ Number(info.lootMultiplier || info.rewardMultiplier || 1).toFixed(2) }} ·
+          {{ info.lootRetention < 1 ? `战败保留 ${Math.round(info.lootRetention * 100)}%` : '安全结算 100%' }} ·
+          实际入账 {{ info.earnedDrops || 0 }} · 完成悬赏 {{ info.bountiesCompleted || 0 }}
+        </b>
+        <b v-else>难度倍率 ×{{ info.rewardMultiplier }} · 实际入账 {{ info.earnedDrops || 0 }}</b>
       </div>
+      <div class="sync-banner" :class="info.lanSync">{{ lanSyncText }}</div>
       <div v-if="info.unlocked" class="unlock-banner">
         新难度已解锁：{{ info.unlocked === 'hell' ? '地狱' : '困难' }}
       </div>
@@ -158,27 +200,50 @@ const dropTotal = computed(() => sumDrops(props.info.drops))
               {{ row.result === 'victory' ? `通关 · 终局 ${fmtTime(row.finaleTime)}` : `败退 · 波${row.wave}` }}
             </template>
             <template v-else-if="info.mode === 'expedition'">
-              {{ row.result === 'victory' ? `通关 · ${fmtTime(row.time)}` : `败退 · 第${row.stage}/6关` }}
+              {{ row.result === 'victory' ? `通关 · ${fmtTime(row.time)}` : `败退 · 第${row.stage}/${totalStages}章` }}
             </template>
-            <template v-else>波{{ row.wave }} · 杀{{ row.kills }} · {{ fmtTime(row.time) }}</template>
+            <template v-else>{{ row.result === 'extracted' ? '撤离' : '败退' }} · 波{{ row.wave }} · 杀{{ row.kills }} · {{ fmtTime(row.time) }}</template>
           </span>
           <span class="board-species">{{ row.species }}</span>
           <i v-if="row === info.entry" class="board-tag">本次</i>
         </div>
         <div v-if="info.rank === 0" class="board-miss">本次成绩未上榜，继续变强！</div>
       </div>
+      <div v-if="publicEntries.length" class="gameover-board public">
+        <div class="board-title">局域网全员榜</div>
+        <div
+          v-for="entry in publicEntries.slice(0, 8)"
+          :key="entry.runId"
+          class="board-row"
+          :class="{ current: entry.current }"
+        >
+          <span class="board-rank">#{{ entry.rank }}</span>
+          <span class="board-score">{{ entry.score.toLocaleString('en-US') }}</span>
+          <span class="board-meta">
+            <template v-if="info.mode === 'timed'">
+              {{ entry.result === 'victory' ? `通关 · 终局 ${fmtTime(entry.finaleTime)}` : `败退 · 波${entry.wave}` }}
+            </template>
+            <template v-else-if="info.mode === 'expedition'">
+              {{ entry.result === 'victory' ? `通关 · ${fmtTime(entry.time)}` : `败退 · 第${entry.stage}/${totalStages}章` }}
+            </template>
+            <template v-else>{{ entry.result === 'extracted' ? '撤离' : '败退' }} · 波{{ entry.wave }} · {{ fmtTime(entry.time) }}</template>
+          </span>
+          <span class="board-species">{{ entry.username }} · {{ entry.species }}</span>
+          <i v-if="entry.current" class="board-tag">我的</i>
+        </div>
+      </div>
       <div class="gameover-best" :class="{ new: isNewRecord }">
         {{ isNewRecord ? '当前规则新纪录' : '当前规则最高纪录' }} ·
         {{ best.score?.toLocaleString('en-US') || 0 }} 分 ·
-        {{ info.mode === 'expedition' ? `关卡 ${best.stage || 1}/6` : `波次 ${best.wave}` }} ·
+        {{ info.mode === 'expedition' ? `章节 ${best.stage || 1}/${totalStages}` : `波次 ${best.wave}` }} ·
         击杀 {{ best.kills }} · {{ bestTimeText }}
       </div>
       <div class="result-actions">
-        <button class="restart-btn" @click="emit('restart')">按当前规则重试</button>
-        <button class="rules-btn" @click="emit('menu')">更改规则</button>
+        <button class="restart-btn" @click="emit('restart')">重新开始</button>
+        <button class="rules-btn" @click="emit('menu')">返回主页</button>
       </div>
       <button class="market-btn" @click="emit('market')">🏪 去黑市强化基因</button>
-      <div class="gameover-hint">{{ victory ? '新的威胁等级正等待挑战。' : '调整构筑或规则，再次迎战勇者。' }}</div>
+      <div class="gameover-hint">{{ victory ? '新的威胁等级正等待挑战。' : extracted ? '这批战利品已完整入账，可以整备后再次深入。' : info.defeatReason === 'nest-destroyed' ? '净化兵突破了防线，优先拦截奔向巢心的近战单位。' : '调整构筑或规则，再次迎战勇者。' }}</div>
     </div>
   </div>
 </template>
@@ -228,6 +293,15 @@ const dropTotal = computed(() => sumDrops(props.info.drops))
 
 .gameover-panel.victory .gameover-title {
   color: #d2ff8a;
+}
+
+.gameover-panel.extracted {
+  border-color: rgba(101, 170, 126, 0.5);
+  background: rgba(13, 20, 16, 0.97);
+}
+
+.gameover-panel.extracted .gameover-title {
+  color: #b9ebc7;
 }
 
 .boss-epilogue {
@@ -329,6 +403,15 @@ const dropTotal = computed(() => sumDrops(props.info.drops))
   padding: 14px 0 10px;
   border-top: 1px solid rgba(255, 209, 102, 0.22);
   border-bottom: 1px solid rgba(255, 209, 102, 0.14);
+}
+
+.gameover-board.public {
+  border-top-color: rgba(138, 232, 74, 0.18);
+  border-bottom-color: rgba(138, 232, 74, 0.12);
+}
+
+.gameover-board.public .board-title {
+  color: #d2ff8a;
 }
 
 .board-title {
@@ -463,6 +546,43 @@ const dropTotal = computed(() => sumDrops(props.info.drops))
   margin-top: 6px;
   color: #d2ff8a;
   font-size: 12px;
+}
+
+.drop-list {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 8px;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
+.loot-item,
+.drop-total {
+  white-space: nowrap;
+}
+
+.sync-banner {
+  margin: 0 0 12px;
+  padding: 8px 11px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  color: rgba(255, 255, 255, 0.62);
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.sync-banner.synced {
+  border-color: rgba(138, 232, 74, 0.3);
+  color: #d2ff8a;
+  background: rgba(138, 232, 74, 0.07);
+}
+
+.sync-banner.failed {
+  border-color: rgba(255, 138, 138, 0.34);
+  color: #ffb0a5;
+  background: rgba(255, 82, 82, 0.08);
 }
 
 .unlock-banner {

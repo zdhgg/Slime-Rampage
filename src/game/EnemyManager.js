@@ -2,9 +2,14 @@ import { Entity } from './core/Entity.js'
 import { Enemy } from './entities/Enemy.js'
 import { EnemyBullet } from './entities/EnemyBullet.js'
 import { Boss } from './entities/Boss.js'
+import { ExpeditionBoss } from './entities/ExpeditionBoss.js'
 import { FloatingText } from './effects/FloatingText.js'
 import { AssetManager } from './AssetManager.js'
-import { getWaveModifiers } from './RunRules.js'
+import {
+  getBossWavePlan,
+  getExpeditionBossHpMultiplier,
+  getWaveModifiers,
+} from './RunRules.js'
 
 const TAU = Math.PI * 2
 
@@ -12,7 +17,9 @@ const MAX_ENEMIES = 300 // 性能护栏：场上敌人数量上限（防无限�
 const SPAWN_MARGIN = 24 // 生成点偏移：视口边缘外侧，营造「涌入」感
 export const CELL_SIZE = 64 // 空间哈希网格单元尺寸（≥ 2×最大碰撞半径和，供分离与飞弹碰撞共用）
 export const GRID_KEY_SCALE = 100000 // cell 坐标 → Map 唯一数字 key 的缩放系数
-const WAVE_DURATION = 30 // 每波持续时间（秒）：时间驱动推进，压力随时间递增
+const WAVE_DURATION = 30 // 每波持续时间（秒）：远征外用于时间驱动的压力推进
+const BOSS_RECOVERY_DURATION = 4
+const CLEAR_RATE_WINDOW = 3
 
 /** 波次叙事表：开局是勇者刷史莱姆，后期是整个世界在阻止史莱姆（评审：反转感） */
 const WAVE_NAMES = {
@@ -73,10 +80,19 @@ export class EnemyManager extends Entity {
     this._grid = new Map() // 空间哈希表：cell key → 敌人数组（每帧 clear 复用，不新建对象）
     this.wave = 1 // 当前波次（阶段六：随时间推进，属性递增）
     this._waveTimer = 0
-    this._boss = null // 当前存活的 Boss（每 5 波一个）
+    this._boss = null // 当前主目标（兼容旧索敌/测试入口）
+    this._bosses = [] // 活跃首领编队，最多三名
+    this._bossCaster = null // 当前持有大型技能施放权的首领
+    this._bossEncounter = null // 终局增援队列与编队元数据
+    this._bossGroupSeq = 0
     this._bossGrace = 0 // Boss 登场后的短暂清晰读招窗口
+    this._bossRecovery = 0 // Boss 阵亡后的喘息窗口
     this._directorPhase = '集结'
     this._directorIntensity = 0.75
+    this._clearSampleTime = 0
+    this._clearSampleKills = 0
+    this._clearSampleReady = false
+    this._clearRate = 0
     this._devouring = [] // 正在被吸入的敌人（溶解动画）
     this._routing = [] // 过关溃散中的残敌（原地震散动画，非吞噬）
     this._texts = [] // 浮动提示文本（吞噬等）
@@ -90,29 +106,63 @@ export class EnemyManager extends Entity {
 
   /** 当前是否有 Boss 存活 */
   get hasBoss() {
-    return this._boss !== null
+    return this.activeBossCount > 0
+  }
+
+  get activeBossCount() {
+    let count = 0
+    for (const boss of this._bosses) if (boss.active) count++
+    return count || (this._boss?.active ? 1 : 0)
+  }
+
+  get pendingBossCount() {
+    return this._bossEncounter?.pending?.length || 0
   }
 
   get bossInfo() {
-    const b = this._boss
-    if (!b?.active) return null
+    let active = this._bosses.filter((boss) => boss.active)
+    if (active.length === 0 && this._boss?.active) active = [this._boss]
+    if (active.length === 0) return null
+    const b = this._bossCaster?.active ? this._bossCaster : active[0]
     const combat = b.combatInfo || {}
+    const totalHp = active.reduce((sum, boss) => sum + Math.max(0, boss.hp), 0)
+    const totalMaxHp = active.reduce((sum, boss) => sum + boss.maxHp, 0)
+    const groupTotal = Math.max(active.length, this._bossEncounter?.total || 0)
+    const formation = this._bossFormationInfo(active)
     return {
-      name: b.name,
-      hp: b.hp,
-      maxHp: b.maxHp,
-      enraged: !!b.enraged,
+      name: groupTotal > 1 ? this._bossEncounter?.label || `王级编队 · ${groupTotal}` : b.name,
+      activeName: b.name,
+      hp: totalHp,
+      maxHp: totalMaxHp,
+      enraged: active.some((boss) => boss.enraged),
       phase: combat.phase || 1,
       phaseName: combat.phaseName || '王级交锋',
       state: combat.state || '追猎',
       special: combat.special || '',
       castProgress: combat.castProgress || 0,
       vulnerable: !!combat.vulnerable,
+      count: active.length,
+      total: groupTotal,
+      pending: this.pendingBossCount,
+      formation,
+      members: active.map((boss) => ({
+        id: boss.bossMemberId || boss.name,
+        name: boss.name,
+        hp: Math.max(0, boss.hp),
+        maxHp: boss.maxHp,
+        enraged: !!boss.enraged,
+        casting: boss === this._bossCaster,
+        protected: formation?.id === 'royal_guard' && formation.captainId === boss.bossMemberId && formation.active,
+      })),
     }
   }
 
   get directorInfo() {
-    return { phase: this._directorPhase, intensity: this._directorIntensity }
+    return {
+      phase: this._directorPhase,
+      intensity: this._directorIntensity,
+      clearRate: this._clearRate,
+    }
   }
 
   /** 当前波次名称（叙事化：取 ≤ 当前波次最近的命名节点） */
@@ -148,9 +198,18 @@ export class EnemyManager extends Entity {
     this.wave = 1
     this._waveTimer = 0
     this._boss = null
+    this._bosses.length = 0
+    this._bossCaster = null
+    this._bossEncounter = null
+    this._bossGroupSeq = 0
     this._bossGrace = 0
+    this._bossRecovery = 0
     this._directorPhase = '集结'
     this._directorIntensity = 0.75
+    this._clearSampleTime = 0
+    this._clearSampleKills = 0
+    this._clearSampleReady = false
+    this._clearRate = 0
     this._devouring.length = 0
     this._routing.length = 0
     this._texts.length = 0
@@ -162,19 +221,29 @@ export class EnemyManager extends Entity {
     this._spawnTimer = this._nextInterval()
   }
 
-  /** 下一次生成的随机等待时间：基础曲线叠加导演节拍与场上压力护栏；远征关卡越深节奏越紧。 */
+  /** 远征只按关卡推进强度，避免同一关停留更久时再叠加计时波次成长。 */
+  _effectiveWave() {
+    if (this.game?.runSelection?.mode !== 'expedition') return this.wave
+    const stage = Math.max(1, this.game.expeditionStage || 1)
+    return 1 + Math.round((stage - 1) * 1.6)
+  }
+
+  _populationTarget() {
+    return Math.min(120, 16 + this._effectiveWave() * 7)
+  }
+
+  /** 下一次生成的随机等待时间：基础曲线叠加导演节拍与场上压力护栏。 */
   _nextInterval() {
-    const introMul = this.wave === 1 ? 1.35 : this.wave === 2 ? 1.15 : 1
-    const pressure = this.game?.runProfile?.spawnPressureMul || 1
-    const stagePressure =
-      this.game?.runSelection?.mode === 'expedition'
-        ? 1 + ((this.game.expeditionStage || 1) - 1) * 0.05
-        : 1
-    return Math.max(
-      0.2,
-      (rand(0.4, 1.0) * introMul * Math.pow(0.92, this.wave - 1) * this._directorFactor()) /
-        (pressure * stagePressure)
-    )
+    const effectiveWave = this._effectiveWave()
+    const introMul = effectiveWave === 1 ? 1.35 : effectiveWave === 2 ? 1.15 : 1
+    const pressure =
+      (this.game?.runProfile?.spawnPressureMul || 1) *
+      (this.game?.endlessModifiers?.spawnPressureMul || 1)
+    const interval =
+      (rand(0.4, 1.0) * introMul * Math.pow(0.92, effectiveWave - 1) * this._directorFactor()) /
+      pressure
+    // 高难度的刷怪倍率在后期仍然有效，而不是所有档位一起撞上 0.2 秒硬下限。
+    return Math.max(0.2 / Math.max(0.75, pressure), interval)
   }
 
   _combatModifiers() {
@@ -182,13 +251,34 @@ export class EnemyManager extends Entity {
     const stage =
       this.game?.runSelection?.mode === 'expedition' ? this.game.expeditionStage || 1 : 0
     const wave = getWaveModifiers(this.game?.runSelection, this.wave, stage)
+    const endless = this.game?.endlessModifiers || {}
+    wave.enemyHpMul *= endless.enemyHpMul || 1
+    wave.bossHpMul *= endless.bossHpMul || 1
+    wave.attackTempoMul *= endless.attackTempoMul || 1
+    wave.eliteChanceBonus += endless.eliteChanceBonus || 0
+    wave.eliteChanceCapBonus = endless.eliteChanceBonus || 0
+    wave.bossPatternBonus += endless.bossPatternBonus || 0
     return { profile, wave }
   }
 
+  /** 决策闸门放行后才真正开始新波，确保首领不会生成在选择面板背后。 */
+  beginWave(wave = this.wave) {
+    const bossPlan = getBossWavePlan(
+      this.game?.runSelection,
+      wave,
+      this.game?.endlessModifiers?.bossExtraMembers || 0
+    )
+    if (bossPlan) {
+      this._bossGrace = 4
+      this._spawnTimer = Math.max(this._spawnTimer, this._nextInterval())
+      this.spawnBossGroup(bossPlan)
+    }
+    if (WAVE_NAMES[wave]) this.game.onWaveChanged?.(wave, WAVE_NAMES[wave])
+  }
+
   _speedGrowth() {
-    const endless = this.game?.runSelection?.mode === 'endless'
-    const growthWave = endless ? Math.min(this.wave - 1, 24) : this.wave - 1
-    return 1 + Math.max(0, growthWave) * 0.08
+    const growthWave = Math.min(Math.max(0, this._effectiveWave() - 1), 16)
+    return 1 + growthWave * 0.06
   }
 
   _rollAffixes(elite, forced = null) {
@@ -209,6 +299,11 @@ export class EnemyManager extends Entity {
       this._directorIntensity = 0
       return 1.5
     }
+    if (this._bossRecovery > 0) {
+      this._directorPhase = '战后喘息'
+      this._directorIntensity = 0.25
+      return 1.6
+    }
 
     const beat = this._waveTimer / WAVE_DURATION
     let factor = 1
@@ -228,23 +323,34 @@ export class EnemyManager extends Entity {
       factor = 0.84
     }
 
-    const target = Math.min(120, 16 + this.wave * 7)
+    const effectiveWave = this._effectiveWave()
+    const target = this._populationTarget()
     if (this._enemies.length > target) factor *= 1.35
     else if (this._enemies.length < target * 0.42) factor *= 0.9
+
+    if (this._clearSampleReady) {
+      const expectedRate = Math.min(4.5, 0.6 + effectiveWave * 0.12)
+      if (this._clearRate < expectedRate * 0.55 && this._enemies.length > target * 0.7) {
+        factor *= 1.1
+      } else if (this._clearRate > expectedRate * 1.35 && this._enemies.length < target * 0.55) {
+        factor *= 0.94
+      }
+    }
 
     const player = this.game?.player
     if (player) {
       const hpRatio = player.maxHp > 0 ? player.hp / player.maxHp : 1
       if (hpRatio < 0.35) factor *= 1.12
-      else if (hpRatio > 0.8 && player.level > this.wave * 1.35) factor *= 0.93
+      else if (hpRatio > 0.8 && player.level > effectiveWave * 1.35) factor *= 0.93
     }
     return Math.max(0.68, Math.min(1.65, factor))
   }
 
   _rollType() {
+    const effectiveWave = this._effectiveWave()
     let roster = WAVE_ROSTERS[0].units
     for (const profile of WAVE_ROSTERS) {
-      if (profile.min > this.wave) break
+      if (profile.min > effectiveWave) break
       roster = profile.units
     }
     let roll = Math.random()
@@ -267,11 +373,17 @@ export class EnemyManager extends Entity {
     const vw = this.game.width // 视口尺寸（世界坐标下的可见范围）
     const vh = this.game.height
 
-    // 随机选一条视口边，坐标落在该边外侧
+    // 守巢章节从巢心四条进攻路线入场；其余关卡仍从当前视口四边涌入。
+    const defensePoint = this.game.mapFeatures?.nestDefenseActive
+      ? this.game.mapFeatures.getDefenseSpawnPoint()
+      : null
     const side = (Math.random() * 4) | 0
     let x = 0
     let y = 0
-    if (side === 0) {
+    if (defensePoint) {
+      x = defensePoint.x
+      y = defensePoint.y
+    } else if (side === 0) {
       x = cam.x + rand(0, vw)
       y = cam.y - SPAWN_MARGIN // 上边
     } else if (side === 1) {
@@ -291,41 +403,45 @@ export class EnemyManager extends Entity {
     // 命名波次使用对应的加权敌军编成；精英怪第 3 波起出现，概率随波次增长。
     const type = this._rollType()
     const { profile, wave } = this._combatModifiers()
-    const baseEliteChance = 0.03 + this.wave * 0.01
+    const effectiveWave = this._effectiveWave()
+    const baseEliteChance = 0.03 + effectiveWave * 0.01
     const eliteChance = Math.min(
-      profile.eliteChanceCap || 0.12,
+      (profile.eliteChanceCap || 0.12) + (wave.eliteChanceCapBonus || 0),
       baseEliteChance * (profile.eliteChanceMul || 1) + wave.eliteChanceBonus
     )
-    const elite = this.wave >= 3 && Math.random() < eliteChance
+    const elite = effectiveWave >= 3 && Math.random() < eliteChance
     const affixes = this._rollAffixes(elite)
 
-    const baseHp = 1 + ((Math.random() * 3) | 0) + Math.floor((this.wave - 1) / 2)
+    const baseHp = 1 + ((Math.random() * 3) | 0) + Math.floor((effectiveWave - 1) / 2)
     const enemy = new Enemy({
       x,
       y,
       type,
       elite,
       affixes,
-      // 波次成长曲线：每波速度 +8%、每 2 波基础生命 +1（职业/精英系数在 Enemy 内乘算）
+      // 波次成长曲线：每波速度 +6%（封顶）、每 2 波基础生命 +1（职业/精英系数在 Enemy 内乘算）
       speed: rand(65, 110) * this._speedGrowth() * (profile.enemySpeedMul || 1),
+      speedCap: profile.enemySpeedCap,
       hp: baseHp * (profile.enemyHpMul || 1) * wave.enemyHpMul,
       rewardHp: baseHp,
-      attackTempo: profile.attackTempoMul || 1,
+      attackTempo: (profile.attackTempoMul || 1) * (wave.attackTempoMul || 1),
     })
+    enemy.objectiveTarget = this.game.mapFeatures?.shouldTargetNest(enemy) ? 'nest' : null
     enemy.attach(this.game)
     this._enemies.push(enemy)
   }
 
   /**
    * 在指定坐标生成敌人（Boss 召唤 / 召唤词缀用），受上限保护。
-   * 阶段十三修复：复用 spawn 的波次成长公式（速度 +8%/波、生命 +1/2波），
+   * 阶段十三修复：复用 spawn 的波次成长公式（速度 +6%/波且封顶、生命 +1/2波），
    * 高波次下召唤兵不再是一碰就碎的第 1 波属性空气。
    */
   spawnAt(x, y, type = 'knight', options = {}) {
     if (this._enemies.length >= MAX_ENEMIES) return
     const elite = !!options.elite
     const { profile, wave } = this._combatModifiers()
-    const baseHp = 1 + ((Math.random() * 3) | 0) + Math.floor((this.wave - 1) / 2)
+    const effectiveWave = this._effectiveWave()
+    const baseHp = 1 + ((Math.random() * 3) | 0) + Math.floor((effectiveWave - 1) / 2)
     const enemy = new Enemy({
       x,
       y,
@@ -333,42 +449,165 @@ export class EnemyManager extends Entity {
       elite,
       affixes: this._rollAffixes(elite, options.affix || null),
       speed: rand(65, 110) * this._speedGrowth() * (profile.enemySpeedMul || 1),
+      speedCap: profile.enemySpeedCap,
       hp: baseHp * (profile.enemyHpMul || 1) * wave.enemyHpMul,
       rewardHp: baseHp,
-      attackTempo: profile.attackTempoMul || 1,
+      attackTempo: (profile.attackTempoMul || 1) * (wave.attackTempoMul || 1),
     })
     enemy.eventToken = options.eventToken || null
+    enemy.objectiveTarget = options.objectiveTarget || null
     enemy.attach(this.game)
     this._enemies.push(enemy)
     return enemy
   }
 
-  /** 生成 Boss（每 5 波一次）：在玩家周围 420~620px 处登场 */
+  /** 大型技能共享令牌：编队中同一时刻只允许一名首领制造全屏预警。 */
+  claimBossCast(boss) {
+    if (!boss?.active) return false
+    if (this._bossCaster?.active && this._bossCaster !== boss) return false
+    this._bossCaster = boss
+    const encounter = this._bossEncounter
+    if (encounter && encounter.relayTargetId === boss.bossMemberId) {
+      encounter.relayTargetId = null
+    }
+    return true
+  }
+
+  releaseBossCast(boss) {
+    const wasCaster = this._bossCaster === boss
+    if (wasCaster) this._bossCaster = null
+    const encounter = this._bossEncounter
+    if (
+      !wasCaster ||
+      !boss?.active ||
+      boss.specialState !== 'recover' ||
+      encounter?.formation?.id !== 'arcane_relay' ||
+      encounter.breakClaimed ||
+      encounter.id !== boss.bossGroupId
+    ) return
+
+    const next = this._bosses.find((member) =>
+      member.active && member !== boss && member.bossGroupId === encounter.id
+    )
+    if (!next) return
+    next.specialCd = Math.min(next.specialCd, 0.65)
+    encounter.relayTargetId = next.bossMemberId
+    this.addText(next.x, next.y - next.radius - 14, '奥术接力', '强招蓄势', '#e8c477', 13)
+  }
+
+  getBossDamageTakenMultiplier(boss) {
+    const encounter = this._bossEncounter
+    if (
+      encounter?.formation?.id !== 'royal_guard' ||
+      encounter.id !== boss?.bossGroupId ||
+      encounter.captainId !== boss?.bossMemberId
+    ) return 1
+    const guards = this._bosses.some((member) =>
+      member.active && member !== boss && member.bossGroupId === encounter.id
+    ) || encounter.pending.length > 0
+    return guards ? 0.65 : 1
+  }
+
+  getBossTempoMultiplier(boss) {
+    const encounter = this._bossEncounter
+    if (
+      encounter?.formation?.id !== 'blood_oath' ||
+      encounter.breakClaimed ||
+      encounter.id !== boss?.bossGroupId
+    ) return 1
+    return 1 + Math.min(4, encounter.furyStacks || 0) * 0.12
+  }
+
+  _bossFormationInfo(active = this._bosses.filter((boss) => boss.active)) {
+    const encounter = this._bossEncounter
+    const formation = encounter?.formation
+    if (!formation || encounter.final) return null
+    if (formation.id === 'royal_guard') {
+      const captain = active.find((boss) => boss.bossMemberId === encounter.captainId)
+      const protectedNow = captain && this.getBossDamageTakenMultiplier(captain) < 1
+      return {
+        ...formation,
+        captainId: encounter.captainId,
+        active: !!protectedNow,
+        broken: !!encounter.breakClaimed,
+        status: encounter.breakClaimed
+          ? '护卫线已破 · 追击中'
+          : protectedNow ? '受护 · 清空护卫可破阵' : '护卫线已破',
+      }
+    }
+    if (formation.id === 'blood_oath') {
+      const stacks = Math.min(4, encounter.furyStacks || 0)
+      return {
+        ...formation,
+        stacks,
+        broken: !!encounter.breakClaimed,
+        status: encounter.breakClaimed
+          ? '血誓已断 · 追击中'
+          : `血誓 ${stacks}/4 · 行动 +${stacks * 12}% · 破绽击杀`,
+      }
+    }
+    const relay = active.find((boss) => boss.bossMemberId === encounter.relayTargetId)
+    return {
+      ...formation,
+      broken: !!encounter.breakClaimed,
+      status: encounter.breakClaimed
+        ? '接力已断 · 追击中'
+        : this._bossCaster?.active
+        ? `施法 · ${this._bossCaster.name} · 击杀破阵`
+        : relay ? `接力 · ${relay.name} · 击杀破阵` : '待接力 · 击杀施法目标破阵',
+    }
+  }
+
+  /** 生成一名 Boss：编队入口显式传 allowMultiple，普通调用仍保持单首领语义。 */
   spawnBoss(options = {}) {
-    if (this._boss) return
+    if (this.hasBoss && !options.allowMultiple) return
+    if (this.activeBossCount >= 3) return
     const types = ['boss-knight', 'boss-mage', 'boss-archer']
-    const type = options.type || types[(Math.random() * 3) | 0]
+    const encounter = options.encounter || null
+    const type = encounter ? `boss-${encounter.archetype}` : options.type || types[(Math.random() * 3) | 0]
     const player = this.game.player
-    const a = Math.random() * TAU
-    const d = 420 + Math.random() * 200
+    const a = Number.isFinite(options.spawnAngle) ? options.spawnAngle : Math.random() * TAU
+    const d = options.distance || 420 + Math.random() * 200
     const x = Math.max(0, Math.min(this.game.worldWidth, player.x + Math.cos(a) * d))
     const y = Math.max(0, Math.min(this.game.worldHeight, player.y + Math.sin(a) * d))
     const { profile, wave } = this._combatModifiers()
-    const boss = new Boss({
+    const expedition = this.game?.runSelection?.mode === 'expedition'
+    const scalingWave = expedition ? 12 + this._effectiveWave() : this.wave
+    const expeditionBossHpMul = expedition && encounter
+      ? getExpeditionBossHpMultiplier(encounter)
+      : 1
+    const bossOptions = {
       x,
       y,
-      wave: this.wave,
+      wave: scalingWave,
       type,
-      hpMultiplier: (profile.bossHpMul || 1) * wave.bossHpMul,
+      hpMultiplier:
+        (profile.bossHpMul || 1) *
+        wave.bossHpMul *
+        (encounter?.hpMul || 1) *
+        expeditionBossHpMul *
+        (options.memberHpMul || 1),
       speedMultiplier: profile.enemySpeedMul || 1,
-      attackTempo: profile.attackTempoMul || 1,
+      attackTempo: (profile.attackTempoMul || 1) * (wave.attackTempoMul || 1),
       patternBonus: (profile.bossPatternBonus || 0) + wave.bossPatternBonus,
       finalBoss: !!options.finalBoss,
       expeditionBoss: !!options.expeditionBoss,
-    })
+    }
+    const boss = encounter
+      ? new ExpeditionBoss({ ...bossOptions, encounter })
+      : new Boss(bossOptions)
+    boss.bossGroupId = options.groupId || `solo-${++this._bossGroupSeq}`
+    boss.bossMemberId = `${boss.bossGroupId}-${this._bosses.length + 1}`
+    boss.bossGroupSize = options.groupTotal || 1
+    boss.isBossSquadMember = boss.bossGroupSize > 1
+    boss.bossLootDrops = Number.isFinite(options.bossLootDrops) ? options.bossLootDrops : null
+    boss.bossEncounterFinal = !!options.bossEncounterFinal
+    boss.encounterLabel = options.encounterLabel || boss.name
+    if (options.expMul) boss.expValue = Math.max(20, Math.round(boss.expValue * options.expMul))
     boss.attach(this.game)
     this._enemies.push(boss)
-    this._boss = boss
+    this._bosses.push(boss)
+    if (!this._boss?.active) this._boss = boss
     this.game.sound.bossRoar()
     this.game.shakeScreen(6, 0.35) // Boss 登场震撼（阶段十五美化）
     this.game.onBossSpawn?.(boss)
@@ -376,7 +615,193 @@ export class EnemyManager extends Entity {
     return boss
   }
 
-  /** 限时模式终局：清掉普通敌人与敌方弹幕，只保留确定性的终局 Boss。 */
+  /** 五波节点首领：场上硬封顶三名，超出的编队成员在首领阵亡后依次补位。 */
+  spawnBossGroup(plan) {
+    if (!plan?.types?.length) return []
+    const active = this._bosses.filter((boss) => boss.active)
+    const target = Math.max(active.length, plan.total || plan.types.length)
+    const maxActive = Math.min(3, plan.maxActive || target)
+    const existing = this._bossEncounter?.final ? null : this._bossEncounter
+    const formationChanged = !existing || existing.formationWave !== this.wave
+    const committed = active.length + (existing?.pending.length || 0)
+    if (committed >= target) return []
+
+    const groupId = existing?.id || `wave-${this.wave}-${++this._bossGroupSeq}`
+    this._bossEncounter = existing || {
+      id: groupId,
+      label: plan.label,
+      total: target,
+      pending: [],
+      maxActive,
+      lootSlotsAssigned: 0,
+      final: false,
+      formation: plan.formation || null,
+      formationWave: this.wave,
+      captainId: null,
+      furyStacks: 0,
+      relayTargetId: null,
+      breakClaimed: false,
+    }
+    this._bossEncounter.label = plan.label
+    this._bossEncounter.total = target
+    this._bossEncounter.maxActive = maxActive
+    this._bossEncounter.lootSlotsAssigned = 0
+    if (formationChanged) {
+      this._bossEncounter.formation = plan.formation || null
+      this._bossEncounter.formationWave = this.wave
+      this._bossEncounter.captainId = null
+      this._bossEncounter.furyStacks = 0
+      this._bossEncounter.relayTargetId = null
+      this._bossEncounter.breakClaimed = false
+    }
+    for (const boss of active) {
+      boss.bossGroupId = groupId
+      boss.bossGroupSize = target
+      boss.isBossSquadMember = target > 1
+      boss.bossLootDrops = this._bossEncounter.lootSlotsAssigned < 3 ? 1 : 0
+      this._bossEncounter.lootSlotsAssigned++
+      boss.encounterLabel = plan.label
+    }
+
+    for (const member of this._bossEncounter.pending) {
+      member.memberHpMul = plan.memberHpMul
+      member.expMul = target > 1 ? 1.2 / target : 1
+      member.bossLootDrops = this._bossEncounter.lootSlotsAssigned < 3 ? 1 : 0
+      this._bossEncounter.lootSlotsAssigned++
+    }
+
+    const occupied = new Set([
+      ...active.map((boss) => boss.type),
+      ...this._bossEncounter.pending.map((member) => member.type),
+    ])
+    const candidates = [
+      ...plan.types.filter((type) => !occupied.has(type)),
+      ...plan.types.filter((type) => occupied.has(type)),
+    ]
+    const missing = target - committed
+    const baseAngle = Math.random() * TAU
+    for (let i = 0; i < missing; i++) {
+      this._bossEncounter.pending.push({
+        type: candidates[i % candidates.length],
+        spawnAngle: baseAngle + ((committed + i) / target) * TAU,
+        distance: 480,
+        memberHpMul: plan.memberHpMul,
+        expMul: target > 1 ? 1.2 / target : 1,
+      })
+    }
+    const spawned = this._fillBossEncounter()
+    if (this._bossEncounter.formation?.id === 'royal_guard' && !this._bossEncounter.captainId) {
+      const captain = this._bosses.find((boss) => boss.active && boss.bossGroupId === groupId)
+      this._bossEncounter.captainId = captain?.bossMemberId || null
+    }
+    this.game.onBossGroupSpawn?.({
+      label: plan.label,
+      total: target,
+      wave: this.wave,
+      formation: this._bossEncounter.formation,
+    })
+    return spawned
+  }
+
+  _startBossEncounter({ label, members, maxActive = 2 }) {
+    const groupId = `encounter-${++this._bossGroupSeq}`
+    this._bossEncounter = {
+      id: groupId,
+      label,
+      total: members.length,
+      pending: members.map((member) => ({ ...member })),
+      maxActive,
+      lootSlotsAssigned: 0,
+      final: true,
+    }
+    this._fillBossEncounter()
+    this.game.onBossGroupSpawn?.({ label, total: members.length, wave: this.wave, finale: true })
+    return this._boss
+  }
+
+  _fillBossEncounter() {
+    const encounter = this._bossEncounter
+    const spawned = []
+    if (!encounter) return spawned
+    while (this.activeBossCount < encounter.maxActive && encounter.pending.length > 0) {
+      const member = encounter.pending.shift()
+      const bossLootDrops = Number.isFinite(member.bossLootDrops)
+        ? member.bossLootDrops
+        : encounter.lootSlotsAssigned < 3 ? 1 : 0
+      encounter.lootSlotsAssigned++
+      const boss = this.spawnBoss({
+        ...member,
+        allowMultiple: true,
+        groupId: encounter.id,
+        groupTotal: encounter.total,
+        encounterLabel: encounter.label,
+        bossLootDrops,
+        bossEncounterFinal: encounter.final,
+        expMul: member.expMul ?? (encounter.final ? 0.4 : 1),
+      })
+      if (boss) spawned.push(boss)
+    }
+    return spawned
+  }
+
+  /** Boss 击败结算后推进增援；返回整个编队是否已经清空。 */
+  advanceBossEncounter(boss) {
+    const encounter = this._bossEncounter
+    const sameGroup = encounter && encounter.id === boss?.bossGroupId
+    const formationId = sameGroup ? encounter.formation?.id : null
+    const bloodOathBreak = formationId === 'blood_oath' && boss.vulnerableTimer > 0
+    const arcaneRelayBreak = formationId === 'arcane_relay' &&
+      (this._bossCaster === boss || encounter.relayTargetId === boss.bossMemberId)
+    this.releaseBossCast(boss)
+    let bloodOathTriggered = false
+    if (
+      encounter?.formation?.id === 'blood_oath' &&
+      !encounter.breakClaimed &&
+      !bloodOathBreak &&
+      encounter.id === boss?.bossGroupId &&
+      this.activeBossCount + this.pendingBossCount > 0
+    ) {
+      encounter.furyStacks = Math.min(4, (encounter.furyStacks || 0) + 1)
+      bloodOathTriggered = true
+    }
+    this._fillBossEncounter()
+    if (bloodOathTriggered) {
+      for (const survivor of this._bosses) {
+        if (!survivor.active || survivor.bossGroupId !== encounter.id) continue
+        const heal = Math.max(1, Math.round(survivor.maxHp * 0.08))
+        survivor.hp = Math.min(survivor.maxHp, survivor.hp + heal)
+        this.addText(survivor.x, survivor.y - survivor.radius - 14, `血誓 +${encounter.furyStacks}`, `恢复 ${heal}`, '#ef998c', 13)
+      }
+    }
+    const royalGuardBreak = formationId === 'royal_guard' &&
+      boss.bossMemberId !== encounter.captainId &&
+      this._bosses.some((member) =>
+        member.active && member.bossGroupId === encounter.id &&
+        member.bossMemberId === encounter.captainId
+      ) &&
+      !this._bosses.some((member) =>
+        member.active && member.bossGroupId === encounter.id &&
+        member.bossMemberId !== encounter.captainId
+      ) && encounter.pending.length === 0
+    const remaining = this.activeBossCount + this.pendingBossCount > 0
+    if (
+      sameGroup &&
+      !encounter.breakClaimed &&
+      remaining &&
+      (royalGuardBreak || bloodOathBreak || arcaneRelayBreak)
+    ) {
+      encounter.breakClaimed = true
+      this.game.triggerEndlessFormationBreak?.({
+        id: encounter.formation.id,
+        name: encounter.formation.breakName,
+      })
+    }
+    const complete = this.activeBossCount === 0 && this.pendingBossCount === 0
+    if (complete) this._bossEncounter = null
+    return complete
+  }
+
+  /** 限时终局：两名先遣同时登场，任一阵亡后终审勇者补位，场上始终最多两名。 */
   beginFinale() {
     if (this._finale) return this._boss
     this._finale = true
@@ -384,9 +809,18 @@ export class EnemyManager extends Entity {
     this.wave = Math.max(25, this.wave)
     this._waveTimer = 0
     this._bossGrace = 0
+    this._bossRecovery = 0
     this._directorPhase = '终局审判'
     this._directorIntensity = 1
-    return this.spawnBoss({ type: 'boss-final', finalBoss: true })
+    return this._startBossEncounter({
+      label: '王国最后防线',
+      maxActive: 2,
+      members: [
+        { type: 'boss-knight', memberHpMul: 0.62, spawnAngle: -Math.PI / 5, distance: 500 },
+        { type: 'boss-archer', memberHpMul: 0.62, spawnAngle: Math.PI / 5, distance: 500 },
+        { type: 'boss-final', finalBoss: true, memberHpMul: 0.78, spawnAngle: Math.PI, distance: 520 },
+      ],
+    })
   }
 
   _clearCombatants() {
@@ -396,14 +830,23 @@ export class EnemyManager extends Entity {
     this._devouring.length = 0
     this._routing.length = 0
     this._boss = null
+    this._bosses.length = 0
+    this._bossCaster = null
+    this._bossEncounter = null
   }
 
   /** 远征换关：中立清场并恢复普通生成。 */
   prepareExpeditionStage() {
     this._clearCombatants()
     this._finale = false
+    this.wave = 1
     this._waveTimer = 0
     this._bossGrace = 0
+    this._bossRecovery = 0
+    this._clearSampleTime = 0
+    this._clearSampleKills = this.game?.weaponSystem?.kills || 0
+    this._clearSampleReady = false
+    this._clearRate = 0
     this._spawnTimer = this._nextInterval()
     this._directorPhase = '远征推进'
     this._directorIntensity = 0.8
@@ -424,13 +867,23 @@ export class EnemyManager extends Entity {
     }
   }
 
-  beginExpeditionBoss() {
+  beginExpeditionStageBoss(encounter, final = false) {
     this._finale = true
-    this._clearCombatants()
-    this.wave = Math.max(20, this.wave)
     this._waveTimer = 0
     this._bossGrace = 0
-    this._directorPhase = '王庭决战'
+    this._bossRecovery = 0
+    this._directorPhase = final ? '王庭真相' : '章节首领'
+    this._directorIntensity = 1
+    return this.spawnBoss({ encounter, expeditionBoss: final })
+  }
+
+  beginExpeditionBoss(encounter = null) {
+    if (encounter) return this.beginExpeditionStageBoss(encounter, true)
+    this._finale = true
+    this._waveTimer = 0
+    this._bossGrace = 0
+    this._bossRecovery = 0
+    this._directorPhase = '王庭真相'
     this._directorIntensity = 1
     return this.spawnBoss({ type: 'boss-expedition', expeditionBoss: true })
   }
@@ -440,21 +893,19 @@ export class EnemyManager extends Entity {
     // 防止死亡帧残差继续吞噬/击杀结算（结算快照之后的数据变动会丢失或重复）
     if (this.game.player.dead) return
 
-    // 0) 波次推进：终局阶段冻结波次与普通生成。
+    this._updateClearRate(dt)
+
+    // 0) 波次推进：远征只循环本章内的导演节拍，不再递增全局波次。
+    const expedition = this.game?.runSelection?.mode === 'expedition'
     if (!this._finale) this._waveTimer += dt
-    if (!this._finale && this._waveTimer >= WAVE_DURATION) {
+    if (!this._finale && expedition && this._waveTimer >= WAVE_DURATION) {
+      this._waveTimer %= WAVE_DURATION
+    } else if (!this._finale && this._waveTimer >= WAVE_DURATION) {
       this._waveTimer -= WAVE_DURATION
       this.wave++
       this.game.sound.wave() // 波次切换号角
-      if (this.wave % 5 === 0) {
-        this._bossGrace = 4
-        this._spawnTimer = Math.max(this._spawnTimer, this._nextInterval())
-        this.spawnBoss() // 每 5 波：Boss 登场
-      }
-      // 叙事节点：进入命名波次时提示（反转剧情让玩家看见）
-      if (WAVE_NAMES[this.wave]) {
-        this.game.onWaveChanged?.(this.wave, WAVE_NAMES[this.wave])
-      }
+      if (this.game.handleWaveAdvanced?.(this.wave)) return
+      this.beginWave(this.wave)
     }
 
     // 更新导演节拍，即使当前处于生成冷却，HUD/下一次间隔也能得到当前状态。
@@ -462,10 +913,12 @@ export class EnemyManager extends Entity {
 
     // 1) 定时生成
     this._bossGrace = Math.max(0, this._bossGrace - dt)
-    if (!this._finale && this._bossGrace <= 0) {
+    this._bossRecovery = Math.max(0, this._bossRecovery - dt)
+    if (!this._finale && this._bossGrace <= 0 && this._bossRecovery <= 0) {
       this._spawnTimer -= dt
       if (this._spawnTimer <= 0) {
-        this.spawn()
+        const softCap = Math.ceil(this._populationTarget() * 1.2)
+        if (this._enemies.length < softCap) this.spawn()
         this._spawnTimer += this._nextInterval()
       }
     }
@@ -499,13 +952,37 @@ export class EnemyManager extends Entity {
 
     // 4) 回收已死亡（destroy 标记 active=false）的敌人
     let hasDead = false
+    let bossDied = false
     for (const e of this._enemies) {
       if (!e.active) {
         hasDead = true
-        if (e === this._boss) this._boss = null // Boss 阵亡，清除引用
+        if (e.isBoss) {
+          bossDied = true
+          this.releaseBossCast(e)
+        }
       }
     }
     if (hasDead) this._enemies = this._enemies.filter((e) => e.active)
+    if (bossDied) {
+      this._bosses = this._bosses.filter((boss) => boss.active)
+      this._boss = this._bossCaster?.active ? this._bossCaster : this._bosses[0] || null
+      if (this.activeBossCount === 0 && this.pendingBossCount === 0) {
+        this._bossRecovery = BOSS_RECOVERY_DURATION
+        this._spawnTimer = Math.max(this._spawnTimer, 0.8)
+        if (!this._bossEncounter?.final) this._bossEncounter = null
+      }
+    }
+  }
+
+  _updateClearRate(dt) {
+    const kills = this.game?.weaponSystem?.kills || 0
+    if (!this._clearSampleReady && this._clearSampleTime === 0) this._clearSampleKills = kills
+    this._clearSampleTime += dt
+    if (this._clearSampleTime < CLEAR_RATE_WINDOW) return
+    this._clearRate = Math.max(0, kills - this._clearSampleKills) / this._clearSampleTime
+    this._clearSampleKills = kills
+    this._clearSampleTime = 0
+    this._clearSampleReady = true
   }
 
   /** 吞噬检测：可吞噬的残血敌人进入玩家吸入口径时触发吞噬（一帧至多一个） */

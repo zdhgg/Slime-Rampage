@@ -224,6 +224,29 @@ export class SoundManager {
     this._tone({ freq: 330, dur: 0.12, type: 'sawtooth', vol: 0.04, delay: 0.12 })
   }
 
+  /** 战区切换：低频地鸣配一次短促定位音。 */
+  mapShift(theme = 'frontier') {
+    const roots = { frontier: 116, blight: 98, royal: 82 }
+    const root = roots[theme] || roots.frontier
+    this._tone({ freq: root, endFreq: root * 0.72, dur: 0.42, type: 'sine', vol: 0.035 })
+    this._tone({ freq: root * 2.5, endFreq: root * 2.1, dur: 0.16, type: 'triangle', vol: 0.022, delay: 0.08 })
+  }
+
+  /** 巢心受击：限频后的湿润低响，不与玩家受击音混淆。 */
+  nestHit() {
+    this._tone({ freq: 145, endFreq: 84, dur: 0.13, type: 'triangle', vol: 0.04 })
+  }
+
+  nestSecured() {
+    this._tone({ freq: 294, dur: 0.11, type: 'sine', vol: 0.045 })
+    this._tone({ freq: 392, dur: 0.18, type: 'sine', vol: 0.045, delay: 0.09 })
+  }
+
+  barrierBreak() {
+    this._tone({ freq: 170, endFreq: 58, dur: 0.2, type: 'square', vol: 0.045 })
+    this._tone({ freq: 310, endFreq: 90, dur: 0.1, type: 'triangle', vol: 0.025, delay: 0.03 })
+  }
+
   /** 游戏结束：长下滑哀鸣 */
   gameOver() {
     this._tone({ freq: 300, endFreq: 55, dur: 0.9, type: 'sawtooth', vol: 0.07 })
@@ -233,7 +256,15 @@ export class SoundManager {
 
   /** 按钮点击：短促三角波软嗒（所有 UI 按钮通用） */
   uiClick() {
+    this.ensure()
     this._tone({ freq: 440, endFreq: 330, dur: 0.05, type: 'triangle', vol: 0.04 })
+  }
+
+  /** 配置选中：低音软触叠加轻微上行泛音，与技能确认音区分。 */
+  uiSelect() {
+    this.ensure()
+    this._tone({ freq: 420, endFreq: 560, dur: 0.075, type: 'triangle', vol: 0.034 })
+    this._tone({ freq: 840, endFreq: 720, dur: 0.1, type: 'sine', vol: 0.018, delay: 0.025 })
   }
 
   /** 技能卡确认：双音快上行（选择升级卡） */

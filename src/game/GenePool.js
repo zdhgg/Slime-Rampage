@@ -35,7 +35,7 @@ export const GENES = [
     name: '巨大化基因',
     icon: '🐘',
     desc: '每级体型 +3px、生命上限 +2',
-    baseCost: 8,
+    costs: [12, 24, 40, 64],
     maxLevel: 4,
     apply(game, lv) {
       game.player.radius = 26 + 3 * lv
@@ -50,7 +50,7 @@ export const GENES = [
     name: '再生基因',
     icon: '💚',
     desc: '每 10 秒回复生命，每级 +1 点',
-    baseCost: 10,
+    costs: [18, 36, 60],
     maxLevel: 3,
     apply(game, lv) {
       game.player.regen = lv
@@ -66,7 +66,7 @@ export const GENES = [
     name: '捕食原核',
     icon: '◆',
     desc: '生命上限 +2；吞噬回复 1 点生命并额外获得 35% 经验，且每次吞噬攻击永久 +3%（封顶 +100%）——捕食体路线的滚雪球机制',
-    baseCost: 36,
+    costs: [120],
     maxLevel: 1,
     apply(game) {
       game.player.maxHp += 2
@@ -82,7 +82,7 @@ export const GENES = [
     name: '迅捷基因',
     icon: '🦶',
     desc: '每级移动速度 +8%',
-    baseCost: 6,
+    costs: [10, 20, 34, 52],
     maxLevel: 4,
     apply(game, lv) {
       game.player.speed = 340 * (1 + 0.08 * lv)
@@ -96,7 +96,7 @@ export const GENES = [
     name: '分裂基因',
     icon: '🧬',
     desc: '每级获得 25% 基础分裂概率，可与局内技能叠加',
-    baseCost: 6,
+    costs: [24, 50],
     maxLevel: 2,
     apply(game, lv) {
       game.weaponSystem.baseSplitChance = 0.25 * lv
@@ -112,7 +112,7 @@ export const GENES = [
     name: '动能原核',
     icon: '◆',
     desc: '冲刺冷却缩短 20%；所有主弹与分裂弹额外穿透 1 个目标',
-    baseCost: 36,
+    costs: [120],
     maxLevel: 1,
     apply(game) {
       game.player.geneDashCdMultiplier = 0.8
@@ -126,7 +126,7 @@ export const GENES = [
     name: '经验基因',
     icon: '📖',
     desc: '每级经验获取 +15%',
-    baseCost: 7,
+    costs: [12, 24, 40, 64],
     maxLevel: 4,
     apply(game, lv) {
       game.player.expGainMul = 1 + 0.15 * lv
@@ -140,7 +140,7 @@ export const GENES = [
     name: '共鸣基因',
     icon: '🔗',
     desc: '每级增加 1 个副反应槽位，基础为 2 个',
-    baseCost: 20,
+    costs: [30, 60, 100],
     maxLevel: 3,
     apply(game, lv) {
       game.player.secondarySlots = 2 + lv
@@ -156,7 +156,7 @@ export const GENES = [
     name: '共鸣原核',
     icon: '◆',
     desc: '反应伤害 +25%，并额外增加 1 个副反应槽位',
-    baseCost: 42,
+    costs: [140],
     maxLevel: 1,
     apply(game) {
       game.weaponSystem.geneReactionDmgMul = 1.25
@@ -175,7 +175,9 @@ export function getGeneLevel(genes, gene) {
 }
 
 export function getGeneCost(gene, level) {
-  return gene.baseCost * (level + 1)
+  const explicit = gene.costs?.[level]
+  if (Number.isFinite(explicit)) return explicit
+  return (gene.baseCost || 0) * (level + 1)
 }
 
 export function getChosenOrigin(genes) {

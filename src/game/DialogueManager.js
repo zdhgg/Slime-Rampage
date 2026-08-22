@@ -93,7 +93,7 @@ export class DialogueManager extends Entity {
     if (!boss._dialogueEvents) boss._dialogueEvents = new Set()
     if (boss._dialogueEvents.has(event)) return null
     boss._dialogueEvents.add(event)
-    const text = getBossDialogue(boss.type, event)
+    const text = getBossDialogue(boss.dialogueKey || boss.type, event)
     if (!text) return null
 
     const line = this._show({

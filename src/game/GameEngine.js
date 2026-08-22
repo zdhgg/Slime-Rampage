@@ -1,15 +1,16 @@
 import { InputManager } from './InputManager.js'
-import { Player } from './entities/Player.js'
+import { Player, STARTING_EXP_THRESHOLD } from './entities/Player.js'
 import { EnemyManager } from './EnemyManager.js'
 import { WeaponSystem } from './WeaponSystem.js'
 import { GemManager } from './GemManager.js'
 import { SoundManager } from './SoundManager.js'
-import { rollSkills, SPEC_INFO, getStartingGift } from './SkillPool.js'
+import { rollSkills, SPEC_INFO } from './SkillPool.js'
 import { applyGenes } from './GenePool.js'
 import { buildSpecies } from './Species.js'
 import { REACTIONS, getElement, getActiveReactions } from './ElementSystem.js'
 import { generateDecor, drawBgItem, drawFgItem, getMapTheme } from './MapDecor.js'
 import { WorldEventManager } from './WorldEventManager.js'
+import { MapFeatureManager } from './MapFeatureManager.js'
 import { DialogueManager } from './DialogueManager.js'
 import { AmbientLayer } from './effects/AmbientLayer.js'
 import { STRAIN_IDS, applyStrain } from './Strains.js'
@@ -18,15 +19,32 @@ import {
   EVENT_LOCK_AT,
   FINAL_WARNING_AT,
   RUN_DURATION,
+  calculateMaterialReward,
   getEndlessDisasterTier,
+  getExpeditionBoss,
   getExpeditionStage,
   getExpeditionStages,
   getProgressionStage,
   getRunProfile,
   normalizeRunSelection,
+  sumDrops,
 } from './RunRules.js'
+import {
+  ENDLESS_DEFEAT_RETENTION,
+  ENDLESS_FORMATION_BREAK_DURATION,
+  getEndlessBounty,
+  getEndlessBountyChoices,
+  getEndlessCalamity,
+  getEndlessCalamitySummary,
+  getEndlessModifiers,
+  getEndlessRewardBonus,
+  isEndlessCalamityWave,
+  isEndlessExtractionWave,
+  rollEndlessCalamityChoices,
+} from './EndlessMode.js'
 
 const MAX_DT = 0.05 // 单帧时间上限（50ms）：切后台回来时防止物理「爆炸」
+const EXPEDITION_INTRO_DURATION = 1.6
 
 /**
  * HUD 初始统计快照：与 _pushStats 的字段形状保持一致。
@@ -44,7 +62,7 @@ export function createDefaultStats() {
     waveName: '',
     level: 1,
     exp: 0,
-    maxExp: 28,
+    maxExp: STARTING_EXP_THRESHOLD,
     hp: 5,
     maxHp: 5,
     dashCd: 0,
@@ -73,9 +91,17 @@ export function createDefaultStats() {
       remaining: null,
       finaleTime: 0,
       rewardMultiplier: 1,
+      endlessRewardBonus: 0,
+      lootMultiplier: 1,
       disasterTier: 0,
+      calamities: [],
+      endlessContinues: 0,
+      bounty: null,
+      bountiesCompleted: 0,
       stage: 1,
       totalStages: 6,
+      chapterTitle: '',
+      chapterBrief: '',
       region: '',
       theme: 'frontier',
       objective: null,
@@ -136,6 +162,7 @@ export class GameEngine {
     this.entities = []
     this.player = new Player({ input: this.input })
     this.enemyManager = new EnemyManager()
+    this.mapFeatures = new MapFeatureManager()
     this.worldEvents = new WorldEventManager()
     this.dialogue = new DialogueManager()
     this.weaponSystem = new WeaponSystem({
@@ -157,11 +184,23 @@ export class GameEngine {
     this.runState = 'idle'
     this.finaleTime = 0
     this.runFinished = false
+    this.defeatReason = null
     this._finalWarningShown = false
     this.expeditionStage = 1
     this.expeditionStageElapsed = 0
+    this.expeditionIntroTime = 0
     this._expeditionBaseline = { kills: 0, elites: 0, events: 0 }
+    this._expeditionDefinition = null
     this._pendingExpeditionStage = 0
+    this.endlessCalamities = {}
+    this.endlessContinues = 0
+    this._pendingEndlessWave = 0
+    this._endlessDecisionKind = null
+    this._endlessChoices = []
+    this.endlessBounty = null
+    this.endlessBountiesCompleted = 0
+    this._pendingEndlessBountyReward = false
+    this.endlessFormationBreakTimer = 0
     // 暂停锁：手动暂停/升级面板/进化事件/游戏结束 都会 +1，
     // 页面恢复时若锁 > 0 则不自动启动（修复切页后「暂停被解除」的顺序 bug）
     this._pauseLock = 0
@@ -169,10 +208,10 @@ export class GameEngine {
     // 低频统计（UI 桥接，不参与热路径）
     this._statAcc = 0
     this.onStats = null // (stats) => void，约 2Hz 调用
-    // 高频冷却桥接（约 10Hz）：冲刺 CD / Boss 施法条是连续递变量，
-    // 2Hz 快照下进度条会肉眼跳变，单独走轻量通道（仅 3 个数字）
+    // 高频冷却桥接（约 10Hz）：冲刺、Boss 施法与破阵追击是连续递变量，
+    // 2Hz 快照下进度条会肉眼跳变，单独走五个数值的轻量通道。
     this._cdAcc = 0
-    this.onCooldown = null // ({ dashCd, dashMax, cast }) => void
+    this.onCooldown = null // ({ dashCd, dashMax, cast, formationBreak, formationBreakMax }) => void
     // 世界背景重建防抖计时器（resize 高频触发时合并为一次重建）
     this._worldBgTimer = 0
 
@@ -181,7 +220,6 @@ export class GameEngine {
     this.skillLevels = {} // 技能已选次数（SkillPool 过滤满级用），普通对象不走响应式
     this.primarySpec = null // 主专精（'gluttony' | 'gatling' | 'elemental' | 'assassin'）
     this.secondarySpec = null // 副专精
-    this.startingSpec = null // 开局流派预选（null = 自由变异，走 Lv.5 里程碑觉醒）
     this.startingStrain = 'origin' // 开局血统预选（先天属性，reset 末尾叠加应用）
     this.strainDevourBonus = 0 // 贪噬血统：吞噬线整体加宽（pct）
     this.devourThreshold = 0.25 // 吞噬生命百分比阈值（暴食流放宽）
@@ -191,6 +229,7 @@ export class GameEngine {
 
     // Boss 登场桥接：每 5 波王级勇者出现时回调 Vue 显示警告
     this.onBossSpawn = null // (boss) => void
+    this.onBossGroupSpawn = null // ({ label, total, wave, finale }) => void
 
     // 波次叙事桥接：进入命名波次时回调 Vue（「第 8 波 · A级勇者小队」）
     this.onWaveChanged = null // (wave, name) => void
@@ -199,6 +238,7 @@ export class GameEngine {
     this.onWorldEvent = null // (payload) => void
     this.onRunState = null // (payload) => void，限时预警/终局开始
     this.onExpeditionReward = null // (payload) => void，远征关间补给
+    this.onEndlessDecision = null // (payload) => void，无尽灾变与撤离抉择
 
     // 进化事件桥接：元素融合激活时暂停 + 回调 Vue 演出
     this.onEvolution = null // (title, subtitle, mutation) => void
@@ -228,6 +268,7 @@ export class GameEngine {
     this._themeFadeT = 0
     this._bgFadePending = false
     this._mapVariant = 'marsh-edge'
+    this._mapSpawn = { x: 0.5, y: 0.5 }
 
     this._tick = this._tick.bind(this)
     this._onResize = this._onResize.bind(this)
@@ -246,7 +287,8 @@ export class GameEngine {
     window.addEventListener('keydown', this._unlockAudio)
     window.addEventListener('click', this._unlockAudio)
 
-    // 世界事件先绘制，作为地图地标位于玩家、敌人和弹幕之下。
+    // 功能地形、巢心与拒马在最底层，世界事件随后，都位于战斗实体之下。
+    this.addEntity(this.mapFeatures)
     this.addEntity(this.worldEvents)
     // 注册玩家（需在 _onResize 之后：Player.attach 依赖画布尺寸定位出生点）
     this.addEntity(this.player)
@@ -275,6 +317,65 @@ export class GameEngine {
     this.runSelection = normalizeRunSelection(selection)
     this.runProfile = getRunProfile(this.runSelection)
     return this.runSelection
+  }
+
+  get endlessModifiers() {
+    return this.runSelection?.mode === 'endless'
+      ? getEndlessModifiers(this.endlessCalamities)
+      : getEndlessModifiers()
+  }
+
+  get endlessRewardBonus() {
+    return this.runSelection?.mode === 'endless'
+      ? getEndlessRewardBonus(this.endlessCalamities, this.endlessContinues)
+      : 0
+  }
+
+  get endlessLootMultiplier() {
+    return this.runProfile.rewardMul * (1 + this.endlessRewardBonus)
+  }
+
+  _endlessMetricValue(metric) {
+    return Math.max(0, Number(this.weaponSystem?.[metric]) || 0)
+  }
+
+  get endlessBountyInfo() {
+    const bounty = this.endlessBounty
+    if (!bounty) return null
+    const progress = Math.min(
+      bounty.target,
+      Math.max(0, this._endlessMetricValue(bounty.metric) - bounty.baseline)
+    )
+    return {
+      id: bounty.id,
+      mark: bounty.mark,
+      name: bounty.name,
+      brief: bounty.brief,
+      metric: bounty.metric,
+      progress,
+      target: bounty.target,
+      timeLeft: Math.max(0, bounty.duration - (this.elapsed - bounty.startedAt)),
+      reward: bounty.reward,
+    }
+  }
+
+  /** 成功破解无尽首领阵型后刷新短时追击窗口，不产生额外素材。 */
+  triggerEndlessFormationBreak(info = {}) {
+    if (this.runSelection?.mode !== 'endless' || this.runFinished) return false
+    this.endlessFormationBreakTimer = ENDLESS_FORMATION_BREAK_DURATION
+    this.onRunState?.({
+      kind: 'formation-break',
+      id: info.id || '',
+      name: info.name || '阵型瓦解',
+      duration: ENDLESS_FORMATION_BREAK_DURATION,
+    })
+    this._pushCooldown()
+    return true
+  }
+
+  _updateEndlessFormationBreak(dt) {
+    if (this.endlessFormationBreakTimer <= 0) return
+    this.endlessFormationBreakTimer = Math.max(0, this.endlessFormationBreakTimer - dt)
   }
 
   get canStartWorldEvent() {
@@ -325,6 +426,11 @@ export class GameEngine {
   resume() {
     this._pauseLock = Math.max(0, this._pauseLock - 1)
     if (this._pauseLock > 0) return
+    if (this._pendingEndlessBountyReward) {
+      this._pendingEndlessBountyReward = false
+      this.openFreeSkillPanel()
+      return
+    }
     this.start()
     // 连升结算：剩余经验仍够升级时必须走完整升级（扣经验/升级/阈值递增），
     // 再弹面板——原先只弹面板不扣经验，大额经验（吞噬×2/×3 + 经验基因）时
@@ -422,36 +528,11 @@ export class GameEngine {
     }
   }
 
-  /**
-   * 开局流派预选（消除探索期陷阱）：确立主专精（跳过 Lv.5 里程碑），
-   * 并附赠该流派首个 T1 技能 Lv.1。传 null = 回到自由变异（原玩法）。
-   * 在 reset() 之后、start() 之前调用；后续每局 reset 自动重新应用。
-   */
-  applyStartingSpec(spec) {
-    if (spec && !getStartingGift(spec)) return false
-    this.startingSpec = spec || null
-    this._applyStartingSpec()
-    return true
-  }
-
-  /** 开局血统预选：先天属性每局 reset 末尾（基因/难度/专精之后）叠加应用 */
+  /** 开局血统预选：先天属性每局 reset 末尾（基因/难度之后）叠加应用 */
   applyStartingStrain(id) {
     this.startingStrain = STRAIN_IDS.includes(id) ? id : 'origin'
     applyStrain(this, this.startingStrain)
     return true
-  }
-
-  _applyStartingSpec() {
-    const spec = this.startingSpec
-    if (!spec) return
-    this.primarySpec = spec
-    this._applyPrimarySpecBonus(spec)
-    const gift = getStartingGift(spec)
-    if (gift && !(this.skillLevels[gift.id] > 0)) {
-      this.skillLevels[gift.id] = 1
-      gift.apply?.(this, 1)
-      this.weaponSystem.registerSkillEvolution(gift)
-    }
   }
 
   /**
@@ -459,17 +540,179 @@ export class GameEngine {
    * 暂停主循环 + 结束音效 + 回调 Vue 弹结算面板（带统计信息）。
    */
   gameOver() {
-    this.finishRun('defeat')
+    this.finishRun('defeat', 'slime-defeated')
+  }
+
+  /** 波次开场决策：无尽模式在撤离点/灾变点暂停，确认后才放行波次。 */
+  handleWaveAdvanced(wave) {
+    if (
+      this.runSelection.mode !== 'endless' ||
+      typeof this.onEndlessDecision !== 'function' ||
+      (!isEndlessExtractionWave(wave) && !isEndlessCalamityWave(wave))
+    ) return false
+
+    this._pendingEndlessWave = wave
+    this.pause()
+    if (isEndlessExtractionWave(wave)) this._offerEndlessCheckpoint(wave)
+    else this._offerEndlessCalamities(wave)
+    return true
+  }
+
+  _rawEndlessDrops() {
+    return sumDrops(this.weaponSystem?.drops)
+  }
+
+  _offerEndlessCheckpoint(wave) {
+    this._endlessDecisionKind = 'checkpoint'
+    this._endlessChoices = []
+    const rawDrops = this._rawEndlessDrops()
+    const nextBonus = getEndlessRewardBonus(this.endlessCalamities, this.endlessContinues + 1)
+    this.onEndlessDecision?.({
+      kind: 'checkpoint',
+      wave,
+      rawDrops,
+      safeLoot: calculateMaterialReward(rawDrops, this.runSelection, {
+        result: 'extracted',
+        endlessRewardBonus: this.endlessRewardBonus,
+      }),
+      defeatLoot: calculateMaterialReward(rawDrops, this.runSelection, {
+        result: 'defeat',
+        endlessRewardBonus: this.endlessRewardBonus,
+      }),
+      currentLootMultiplier: this.endlessLootMultiplier,
+      nextLootMultiplier: this.runProfile.rewardMul * (1 + nextBonus),
+      continues: this.endlessContinues,
+      calamities: getEndlessCalamitySummary(this.endlessCalamities),
+    })
+  }
+
+  _offerEndlessCalamities(wave) {
+    this._endlessDecisionKind = 'calamity'
+    this._endlessChoices = rollEndlessCalamityChoices(this.endlessCalamities, 3)
+    this.onEndlessDecision?.({
+      kind: 'calamity',
+      wave,
+      currentLootMultiplier: this.endlessLootMultiplier,
+      choices: this._endlessChoices.map((choice) => ({
+        ...choice,
+        lootMultiplier:
+          this.runProfile.rewardMul *
+          (1 +
+            getEndlessRewardBonus(
+              {
+                ...this.endlessCalamities,
+                [choice.id]: (this.endlessCalamities[choice.id] || 0) + 1,
+              },
+              this.endlessContinues
+            )),
+      })),
+      calamities: getEndlessCalamitySummary(this.endlessCalamities),
+      continues: this.endlessContinues,
+    })
+  }
+
+  _offerEndlessBounties(wave) {
+    this._endlessDecisionKind = 'bounty'
+    this._endlessChoices = getEndlessBountyChoices(this.endlessContinues)
+    this.onEndlessDecision?.({
+      kind: 'bounty',
+      wave,
+      choices: this._endlessChoices,
+      continues: this.endlessContinues,
+    })
+  }
+
+  resolveEndlessCheckpoint(action) {
+    if (this._endlessDecisionKind !== 'checkpoint' || this._pendingEndlessWave <= 0) return false
+    const wave = this._pendingEndlessWave
+    if (action === 'extract') {
+      this._pendingEndlessWave = 0
+      this._endlessDecisionKind = null
+      this._endlessChoices = []
+      this.finishRun('extracted')
+      return true
+    }
+    if (action !== 'continue') return false
+    this.endlessContinues += 1
+    this._offerEndlessBounties(wave)
+    return true
+  }
+
+  resolveEndlessBounty(id) {
+    if (this._endlessDecisionKind !== 'bounty' || this._pendingEndlessWave <= 0) return false
+    const choice = this._endlessChoices.find((entry) => entry.id === id)
+    if (!choice || !getEndlessBounty(id)) return false
+    this.endlessBounty = {
+      ...choice,
+      baseline: this._endlessMetricValue(choice.metric),
+      startedAt: this.elapsed,
+    }
+    const wave = this._pendingEndlessWave
+    if (isEndlessCalamityWave(wave)) this._offerEndlessCalamities(wave)
+    else this._completeEndlessDecision()
+    return true
+  }
+
+  resolveEndlessCalamity(id) {
+    if (this._endlessDecisionKind !== 'calamity' || this._pendingEndlessWave <= 0) return false
+    if (!this._endlessChoices.some((choice) => choice.id === id) || !getEndlessCalamity(id)) return false
+    this.endlessCalamities[id] = Math.max(0, Math.floor(this.endlessCalamities[id] || 0)) + 1
+    this._completeEndlessDecision()
+    this.onRunState?.({ kind: 'calamity', id, name: getEndlessCalamity(id).name, level: this.endlessCalamities[id] })
+    return true
+  }
+
+  _completeEndlessDecision() {
+    const wave = this._pendingEndlessWave
+    this._pendingEndlessWave = 0
+    this._endlessDecisionKind = null
+    this._endlessChoices = []
+    this.enemyManager.beginWave(wave)
+    this._pushStats()
+    this.resume()
+  }
+
+  _updateEndlessBounty() {
+    const bounty = this.endlessBountyInfo
+    if (!bounty) return
+    if (bounty.progress >= bounty.target) {
+      this.endlessBounty = null
+      this.endlessBountiesCompleted += 1
+      this._pendingEndlessBountyReward = true
+      this.onRunState?.({ kind: 'bounty-complete', name: bounty.name, reward: bounty.reward })
+      this._pushStats()
+      if (this._pauseLock === 0) {
+        this._pendingEndlessBountyReward = false
+        this.openFreeSkillPanel()
+      }
+      return
+    }
+    if (bounty.timeLeft <= 0) {
+      this.endlessBounty = null
+      this.onRunState?.({ kind: 'bounty-failed', name: bounty.name })
+      this._pushStats()
+    }
   }
 
   _runSnapshot(result) {
     return {
       result,
+      defeatReason: result === 'defeat' ? this.defeatReason : null,
       mode: this.runSelection.mode,
       difficulty: this.runSelection.difficulty,
       modeName: this.runProfile.modeInfo.name,
       difficultyName: this.runProfile.difficultyInfo.name,
       rewardMultiplier: this.runProfile.rewardMul,
+      endlessRewardBonus: this.endlessRewardBonus,
+      lootMultiplier: this.endlessLootMultiplier,
+      lootRetention:
+        this.runSelection.mode === 'endless' && result === 'defeat'
+          ? ENDLESS_DEFEAT_RETENTION
+          : 1,
+      calamities: getEndlessCalamitySummary(this.endlessCalamities),
+      endlessContinues: this.endlessContinues,
+      bounty: this.endlessBountyInfo,
+      bountiesCompleted: this.endlessBountiesCompleted,
       stage: this.expeditionStage,
       totalStages: getExpeditionStages(this.runSelection.difficulty).length,
       kills: this.weaponSystem.kills,
@@ -490,20 +733,46 @@ export class GameEngine {
     }
   }
 
-  finishRun(result) {
+  finishRun(result, defeatReason = null) {
     if (this.runFinished) return
     this.runFinished = true
-    this.runState = result === 'victory' ? 'victory' : 'defeat'
+    this.defeatReason = result === 'defeat' ? defeatReason || 'slime-defeated' : null
+    this.runState = result === 'victory'
+      ? 'victory'
+      : result === 'extracted' ? 'extracted' : 'defeat'
     this.pause()
     if (result === 'defeat') this.sound.gameOver()
-    else this.sound.newRecord?.()
+    else if (result === 'victory') this.sound.newRecord?.()
+    else this.sound.uiSelect?.()
     this._pushStats()
     this.onGameOver?.(this._runSnapshot(result))
   }
 
+  failExpeditionObjective(reason) {
+    if (this.runSelection.mode !== 'expedition' || this.runFinished) return false
+    this.finishRun('defeat', reason)
+    return true
+  }
+
   handleBossDefeated(boss) {
-    if (this.runState === 'finale' && boss?.isFinalBoss) this.finishRun('victory')
-    if (this.runState === 'expedition-boss' && boss?.isExpeditionBoss) this.finishRun('victory')
+    const encounterComplete = this.enemyManager.advanceBossEncounter(boss)
+    if (
+      this.runState === 'finale' &&
+      (boss?.isFinalBoss || boss?.bossEncounterFinal) &&
+      encounterComplete
+    ) {
+      this.finishRun('victory')
+    }
+    if (this.runState === 'expedition-boss' && boss?.isExpeditionBoss && encounterComplete) {
+      this.finishRun('victory')
+    }
+    if (
+      this.runState === 'expedition-guardian' &&
+      boss?.isExpeditionStageBoss &&
+      encounterComplete
+    ) {
+      this._completeExpeditionStage()
+    }
   }
 
   _enterFinale() {
@@ -514,7 +783,7 @@ export class GameEngine {
     // 终局审判：战场切入王城决战场（与远征统帅共用宫廷构图）
     this._setMapTheme('royal', 'shattered-court', false)
     const boss = this.enemyManager.beginFinale()
-    this.onRunState?.({ kind: 'finale', boss: boss?.name || '终审勇者' })
+    this.onRunState?.({ kind: 'finale', boss: boss?.encounterLabel || '王国最后防线' })
   }
 
   _updateRunState(dt) {
@@ -524,6 +793,8 @@ export class GameEngine {
     }
     // 无尽战场推进：跨过推进波次即换景（边境 → 腐化 → 王城），交叉淡化 + 战区横幅
     if (this.runSelection.mode === 'endless' && this.runState === 'active') {
+      this._updateEndlessFormationBreak(dt)
+      this._updateEndlessBounty()
       const progression = getProgressionStage(this.enemyManager.wave)
       if (progression.theme !== this._mapThemeId) {
         this._setMapTheme(progression.theme, progression.variant, false)
@@ -543,27 +814,24 @@ export class GameEngine {
     if (this.elapsed >= RUN_DURATION) this._enterFinale()
   }
 
-  _enterExpeditionStage(stage) {
+  _enterExpeditionStage(stage, forceMap = false) {
     const total = getExpeditionStages(this.runSelection.difficulty).length
     this.expeditionStage = Math.max(1, Math.min(total, stage))
     this.expeditionStageElapsed = 0
-    this.runState = this.expeditionStage === total ? 'expedition-boss' : 'active'
+    this.expeditionIntroTime = 0
+    const definition = getExpeditionStage(this.runSelection.difficulty, this.expeditionStage)
+    this._expeditionDefinition = definition
+    this._mapSpawn = definition.spawn || { x: 0.5, y: 0.5 }
+    this.runState = 'expedition-intro'
     this.worldEvents.cancelForTransition()
     this.enemyManager.prepareExpeditionStage()
-    const definition = getExpeditionStage(this.runSelection.difficulty, this.expeditionStage)
-    this._setMapTheme(definition.theme, definition.variant, true)
+    this._setMapTheme(definition.theme, definition.variant, true, forceMap)
+    this.mapFeatures.prepareStage(definition)
+    this._placePlayerAtMapSpawn()
     this._expeditionBaseline = {
       kills: this.weaponSystem.kills,
       elites: this.weaponSystem.eliteKills,
       events: this.worldEvents.completed,
-    }
-
-    if (definition.type === 'event' || definition.type === 'mixed') {
-      this.worldEvents.spawnEvent(definition.eventType)
-    } else if (definition.type === 'elites') {
-      this.enemyManager.spawnExpeditionElites(definition.target, definition.eliteTypes)
-    } else if (definition.type === 'boss') {
-      this.enemyManager.beginExpeditionBoss()
     }
     this.onRunState?.({
       kind: 'expedition-stage',
@@ -572,6 +840,33 @@ export class GameEngine {
       title: definition.title,
       region: definition.region,
     })
+    this._pushStats()
+  }
+
+  /** 远征换章是地域跳转：玩家与相机必须同步落在本章入口。 */
+  _placePlayerAtMapSpawn() {
+    const spawn = this._mapSpawn || { x: 0.5, y: 0.5 }
+    this.player.x = Math.max(this.player.radius, Math.min(this.worldWidth - this.player.radius, spawn.x * this.worldWidth))
+    this.player.y = Math.max(this.player.radius, Math.min(this.worldHeight - this.player.radius, spawn.y * this.worldHeight))
+    this.player._trail.length = 0
+    this.player._decoys.length = 0
+    this.player._dashT = 0
+    this._camInit = false
+  }
+
+  _activateExpeditionStage() {
+    const definition = this._expeditionDefinition ||
+      getExpeditionStage(this.runSelection.difficulty, this.expeditionStage)
+    this.runState = definition.type === 'boss' ? 'expedition-boss' : 'active'
+    if (definition.type === 'event' || definition.type === 'mixed') {
+      this.worldEvents.spawnEvent(definition.eventType)
+    } else if (definition.type === 'elites') {
+      this.enemyManager.spawnExpeditionElites(definition.target, definition.eliteTypes)
+    } else if (definition.type === 'defend') {
+      this.mapFeatures.beginNestDefense()
+    } else if (definition.type === 'boss') {
+      this.enemyManager.beginExpeditionBoss(getExpeditionBoss(definition.bossId))
+    }
     this._pushStats()
   }
 
@@ -586,24 +881,33 @@ export class GameEngine {
       ? events
       : definition.type === 'elites'
       ? elites
-      : definition.type === 'survive'
+      : definition.type === 'survive' || definition.type === 'defend'
       ? this.expeditionStageElapsed
       : definition.type === 'mixed'
       ? Math.min(definition.target, kills) +
         Math.min(definition.eventTarget, events) * definition.target
-      : this.enemyManager.hasBoss ? 0 : 1
+      : this.runState === 'expedition-intro' || this.enemyManager.hasBoss ? 0 : 1
     const total = definition.type === 'mixed'
       ? definition.target * 2
       : definition.target
     const complete = definition.type === 'mixed'
       ? kills >= definition.target && events >= definition.eventTarget
+      : definition.type === 'defend'
+      ? progress >= total && (this.mapFeatures.nestInfo?.hp || 0) > 0
       : progress >= total
     return { definition, kills, elites, events, progress, total, complete }
   }
 
   _updateExpedition(dt) {
     if (this.runFinished) return
-    if (this.runState === 'expedition-boss') {
+    if (this.runState === 'expedition-intro') {
+      this.expeditionIntroTime += dt
+      if (this.expeditionIntroTime >= EXPEDITION_INTRO_DURATION) {
+        this._activateExpeditionStage()
+      }
+      return
+    }
+    if (this.runState === 'expedition-boss' || this.runState === 'expedition-guardian') {
       this.expeditionStageElapsed += dt
       return
     }
@@ -618,6 +922,10 @@ export class GameEngine {
       this.onExpeditionReward?.({
         stage: this.expeditionStage,
         nextStage: this.expeditionStage + 1,
+        totalStages: getExpeditionStages(this.runSelection.difficulty).length,
+        stageTitle: getExpeditionStage(this.runSelection.difficulty, this.expeditionStage).title,
+        nextTitle: getExpeditionStage(this.runSelection.difficulty, this.expeditionStage + 1).title,
+        nextRegion: getExpeditionStage(this.runSelection.difficulty, this.expeditionStage + 1).region,
         rewards: EXPEDITION_REWARDS,
       })
       return
@@ -627,6 +935,23 @@ export class GameEngine {
     const progress = this._expeditionProgress()
     if (!progress.complete) return
 
+    if (progress.definition.type === 'defend') this.mapFeatures.completeNestDefense()
+    this.runState = 'expedition-guardian'
+    this.worldEvents.cancelForEncounter()
+    const encounter = getExpeditionBoss(progress.definition.bossId)
+    const boss = this.enemyManager.beginExpeditionStageBoss(encounter)
+    this.onRunState?.({
+      kind: 'expedition-guardian',
+      stage: this.expeditionStage,
+      title: progress.definition.title,
+      boss: boss?.name || encounter.name,
+      special: encounter.special,
+    })
+    this._pushStats()
+  }
+
+  _completeExpeditionStage() {
+    const definition = getExpeditionStage(this.runSelection.difficulty, this.expeditionStage)
     // 过关瞬间：残敌溃散 + 横幅提示，先播 0.6s 胜势演出
     this.runState = 'stage-clearing'
     this._stageClearT = 0
@@ -635,7 +960,7 @@ export class GameEngine {
     this.onRunState?.({
       kind: 'expedition-clear',
       stage: this.expeditionStage,
-      title: progress.definition.title,
+      title: definition.title,
     })
   }
 
@@ -765,6 +1090,7 @@ export class GameEngine {
   reset() {
     const p = this.player
     this._mapSeed = ((Math.random() * 0xffffffff) >>> 0) || 1
+    this._mapSpawn = { x: 0.5, y: 0.5 }
     this.input.reset()
     p.resetRunState() // 先清掉上一局专精/临时状态，再恢复基础值并应用永久基因
     p.x = this.worldWidth / 2 // 出生点：世界中心
@@ -776,7 +1102,7 @@ export class GameEngine {
     p.speed = 340
     p.level = 1
     p.exp = 0
-    p.maxExp = 28
+    p.maxExp = STARTING_EXP_THRESHOLD
     p.pickupRadius = 150
     p.elements.clear() // 清空本局吸收的元素
     p._refreshElements() // 重建元素派生缓存（激活反应/附魔概率归零）
@@ -805,15 +1131,28 @@ export class GameEngine {
     this.runState = 'active'
     this.finaleTime = 0
     this.runFinished = false
+    this.defeatReason = null
     this._finalWarningShown = false
     this.expeditionStage = 1
     this.expeditionStageElapsed = 0
+    this.expeditionIntroTime = 0
+    this._expeditionDefinition = null
     this._pendingExpeditionStage = 0
+    this.endlessCalamities = {}
+    this.endlessContinues = 0
+    this._pendingEndlessWave = 0
+    this._endlessDecisionKind = null
+    this._endlessChoices = []
+    this.endlessBounty = null
+    this.endlessBountiesCompleted = 0
+    this._pendingEndlessBountyReward = false
+    this.endlessFormationBreakTimer = 0
     this._pauseLock = 0 // 清空暂停锁（重开即全新状态）
     this._camInit = false // 相机下一帧瞬间定位到新出生点
     this._shakeT = 0 // 清空屏幕震动（阶段十五）
     this.sound.stopMusic() // 复位 BGM（reset 后由 start() 重建，防孤立播放）
     this.enemyManager.reset()
+    this.mapFeatures.reset()
     this.worldEvents.reset()
     this.dialogue.reset()
     this.gemManager.reset()
@@ -823,18 +1162,17 @@ export class GameEngine {
       p.maxHp += this.runProfile.playerBonusHp
       p.hp = p.maxHp
     }
-    this._applyStartingSpec() // 开局流派预选：基因基线重建后重新应用（附赠 T1 与觉醒赋能）
     applyStrain(this, this.startingStrain) // 血统先天属性：最后叠加（生命/移速/攻击/吞噬口径）
     if (this.runSelection.mode === 'expedition') {
-      this._enterExpeditionStage(1)
+      this._enterExpeditionStage(1, true)
     } else if (this.runSelection.mode === 'endless') {
       // 无尽：边境开局，随灾变波次推进到腐化、王城（战场烧向王都）
-      this._setMapTheme('frontier', 'marsh-edge', true)
+      this._setMapTheme('frontier', 'marsh-edge', true, true)
     } else {
       // 限时：边境或腐化开局（种子决定），王城留给终局勇者的决战场
       const startTheme = this._mapSeed % 2 === 0 ? 'frontier' : 'blight'
       const variants = { frontier: 'marsh-edge', blight: 'blight-garden' }
-      this._setMapTheme(startTheme, variants[startTheme], true)
+      this._setMapTheme(startTheme, variants[startTheme], true, true)
     }
   }
 
@@ -860,10 +1198,12 @@ export class GameEngine {
     this.onLevelUp = null
     this.onGameOver = null
     this.onBossSpawn = null
+    this.onBossGroupSpawn = null
     this.onWaveChanged = null
     this.onWorldEvent = null
     this.onRunState = null
     this.onExpeditionReward = null
+    this.onEndlessDecision = null
     this.onEvolution = null
     this.onReactionFull = null
     this.onFusionConfirm = null
@@ -899,12 +1239,14 @@ export class GameEngine {
     if (this._cdAcc >= 0.1) this._pushCooldown()
   }
 
-  /** 推送一次冷却数据（冲刺 CD / Boss 施法进度），约 10Hz */
+  /** 推送一次冷却数据（冲刺 / Boss 施法 / 破阵追击），约 10Hz */
   _pushCooldown() {
     this.onCooldown?.({
       dashCd: this.player.dashCd,
       dashMax: 1.2 * (this.player.dashCdMultiplier || 1) * (this.player.geneDashCdMultiplier || 1),
       cast: this.enemyManager.bossInfo?.castProgress || 0,
+      formationBreak: this.endlessFormationBreakTimer,
+      formationBreakMax: ENDLESS_FORMATION_BREAK_DURATION,
     })
     this._cdAcc = 0
   }
@@ -956,9 +1298,21 @@ export class GameEngine {
           : null,
         finaleTime: this.finaleTime,
         rewardMultiplier: this.runProfile.rewardMul,
+        endlessRewardBonus: this.endlessRewardBonus,
+        lootMultiplier: this.endlessLootMultiplier,
         disasterTier: getEndlessDisasterTier(this.runSelection, this.enemyManager.wave),
+        calamities: getEndlessCalamitySummary(this.endlessCalamities),
+        endlessContinues: this.endlessContinues,
+        bounty: this.endlessBountyInfo,
+        bountiesCompleted: this.endlessBountiesCompleted,
         stage: this.expeditionStage,
         totalStages: getExpeditionStages(this.runSelection.difficulty).length,
+        chapterTitle: this.runSelection.mode === 'expedition'
+          ? getExpeditionStage(this.runSelection.difficulty, this.expeditionStage).title
+          : '',
+        chapterBrief: this.runSelection.mode === 'expedition'
+          ? getExpeditionStage(this.runSelection.difficulty, this.expeditionStage).brief
+          : '',
         region: this.runSelection.mode === 'expedition'
           ? getExpeditionStage(this.runSelection.difficulty, this.expeditionStage).region
           : getMapTheme(this._mapThemeId).name,
@@ -975,6 +1329,7 @@ export class GameEngine {
                 kills: progress.kills,
                 events: progress.events,
                 eventTarget: progress.definition.eventTarget || 0,
+                defense: progress.definition.type === 'defend' ? this.mapFeatures.nestInfo : null,
               }
             })()
           : null,
@@ -986,7 +1341,7 @@ export class GameEngine {
   update(dt) {
     if (this._shakeT > 0) this._shakeT -= dt // 屏幕震动计时衰减
     this._updateRunState(dt)
-    if (this.runState !== 'stage-reward') {
+    if (this.runState !== 'stage-reward' && this.runState !== 'expedition-intro') {
       for (const e of this.entities) {
         if (e.active && !this.runFinished) e.update(dt)
       }
@@ -1150,14 +1505,17 @@ export class GameEngine {
   }
 
   /** 切换地图主题；远征关间处于暂停态，可同步烘焙而不影响战斗帧。 */
-  _setMapTheme(themeId, variant, immediate = false) {
+  _setMapTheme(themeId, variant, immediate = false, force = false) {
     const nextTheme = getMapTheme(themeId).id
     const nextVariant = variant || `${nextTheme}-default`
-    if (nextTheme === this._mapThemeId && nextVariant === this._mapVariant && this._worldBg) return false
+    if (!force && nextTheme === this._mapThemeId && nextVariant === this._mapVariant && this._worldBg) return false
+    const changed = nextTheme !== this._mapThemeId || nextVariant !== this._mapVariant
     // 运行中换景（已有烘焙背景）：新背景构建完成后做交叉淡化，避免画面瞬间跳变
-    if (this._worldBg) this._bgFadePending = true
+    if (this._worldBg && !force) this._bgFadePending = true
     this._mapThemeId = nextTheme
     this._mapVariant = nextVariant
+    this.mapFeatures.configure(nextTheme, nextVariant, this._mapSeed)
+    if (changed && !force) this.sound.mapShift?.(nextTheme)
     if (immediate && this.worldWidth > 0 && this.worldHeight > 0) {
       clearTimeout(this._worldBgTimer)
       this._worldBgTimer = 0
@@ -1224,6 +1582,7 @@ export class GameEngine {
       themeId: this._mapThemeId,
       variant: this._mapVariant,
       seed: this._mapSeed,
+      spawn: this._mapSpawn,
     })
     this._fgDecor = fg
     for (const item of bg) drawBgItem(ctx, item, this._mapThemeId)

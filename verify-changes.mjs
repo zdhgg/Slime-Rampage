@@ -1,4 +1,4 @@
-// 本轮改动验证脚本（输入挂起 / 开局预选 / 分裂继承 / 冲撞附魔）。运行：node verify-changes.mjs
+// 本轮改动验证脚本（输入挂起 / 局内觉醒 / 分裂继承 / 冲撞附魔）。运行：node verify-changes.mjs
 import assert from 'node:assert/strict'
 
 const gradient = { addColorStop() {} }
@@ -33,6 +33,7 @@ globalThis.cancelAnimationFrame = () => {}
 const { GameEngine } = await import('./src/game/GameEngine.js')
 const { Enemy } = await import('./src/game/entities/Enemy.js')
 const { Projectile } = await import('./src/game/entities/Projectile.js')
+const { SKILL_DATABASE, rollSkills } = await import('./src/game/SkillPool.js')
 
 const engine = GameEngine.create(canvasStub)
 for (const k of ['onStats', 'onLevelUp', 'onGameOver', 'onBossSpawn', 'onWaveChanged', 'onEvolution']) {
@@ -47,7 +48,6 @@ const evSpace = { code: 'Space', repeat: false, preventDefault() { this.prevente
 engine.input._onKeyDown(evSpace)
 assert.equal(engine.input._dashQueued, false, '挂态按下 Space 不应入队')
 assert.equal(evSpace.prevented, undefined, '挂态不应 preventDefault（放行给 UI 按钮）')
-engine.applyStartingSpec('gatling')
 engine.reset()
 engine.start()
 assert.equal(engine.input.suspended, false, 'start 后应接管键盘')
@@ -59,25 +59,49 @@ assert.equal(engine.input._dashQueued, false, '暂停应清空队列（无幽灵
 engine.resume()
 ok('输入挂起：UI 期间不劫持 Space、恢复后无幽灵操作')
 
-// —— 2. 开局流派预选：赋能 + 附赠 T1 + 重开保持 / 切换干净 ——
-assert.equal(engine.primarySpec, 'gatling')
-assert.equal(engine.weaponSystem.projectileCount, 3, 'gatling 觉醒 +1 与附赠 T1(自身+1) 叠加 = 开局 3 弹')
-assert.ok(Math.abs(engine.weaponSystem.fireInterval - 0.85 * 0.85) < 1e-9, '两重射速加成独立相乘')
-assert.equal(engine.skillLevels['gat_multishot'], 1, '附赠首个 T1 Lv.1')
-// Lv.5 不再触发主专精里程碑（已确立），正常抽取主专精树技能
+// —— 2. 主专精只在局内觉醒：开局无专精，Lv.5 四系陈列且不附赠 T1 ——
+assert.equal(engine.primarySpec, null)
+assert.equal(engine.weaponSystem.projectileCount, 1, '开局保持基础单弹')
+assert.equal(typeof engine.applyStartingSpec, 'undefined', '引擎不再暴露开局预选通道')
 engine.player.level = 5
 engine.player.exp = 0
 engine.player.maxExp = 1
-const options = engine.constructor ? (await import('./src/game/SkillPool.js')).rollSkills(engine, 3) : []
-assert.ok(options.every((o) => !o.isMilestone), '主专精已确立时 Lv.5 无里程碑面板')
-// 换流派重开：基线干净，不叠加旧加成
-engine.applyStartingSpec('elemental')
+let options = rollSkills(engine, 3)
+assert.equal(options.length, 4, 'Lv.5 必须完整展示四个主专精')
+assert.ok(options.every((o) => o.isMilestone && o.milestoneType === 'primary'))
+engine.applySkill(options.find((o) => o.spec === 'gatling'))
+assert.equal(engine.primarySpec, 'gatling')
+assert.equal(engine.weaponSystem.projectileCount, 2, '机枪觉醒只应用专精赋能，不附赠 T1')
+assert.ok(Math.abs(engine.weaponSystem.fireInterval - 0.85) < 1e-9)
+assert.equal(engine.skillLevels['gat_multishot'] || 0, 0, '局内觉醒不白送 T1')
+
+// 暴食的核心技能主动压低攻击，逐级扩大留血窗口；重开后不残留。
 engine.reset()
+engine.player.level = 5
+options = rollSkills(engine, 3)
+engine.applySkill(options.find((o) => o.spec === 'gluttony'))
+assert.equal(engine.weaponSystem.damage, 1, '暴食觉醒本身不附赠深渊胃囊')
+const maw = SKILL_DATABASE.gluttony.primary.find((skill) => skill.id === 'glut_maw')
+maw.apply(engine, 1)
+assert.ok(Math.abs(engine.weaponSystem.damage - 0.9) < 1e-9, '深渊胃囊 Lv.1：攻击降至 90%')
+maw.apply(engine, 2)
+maw.apply(engine, 3)
+assert.ok(Math.abs(engine.weaponSystem.damage - 0.7) < 1e-9, '深渊胃囊 Lv.3：攻击降至 70%')
+assert.equal(engine.devourThreshold, 0.36)
+assert.equal(engine.player.devourRadiusBonus, 1.6)
+
+// 重开回到无专精基线，再由 Lv.5 选择另一条路线。
+engine.reset()
+assert.equal(engine.weaponSystem.damage, 1, '重开后暴食攻击抑制完全复位')
+assert.equal(engine.primarySpec, null)
+engine.player.level = 5
+options = rollSkills(engine, 3)
+engine.applySkill(options.find((o) => o.spec === 'elemental'))
 assert.equal(engine.primarySpec, 'elemental')
-assert.equal(engine.weaponSystem.projectileCount, 1, '换 elemental 后弹数回到基线 1（gatling 加成不残留）')
-assert.ok(Math.abs(engine.weaponSystem.freezeChance - 0.35) < 1e-9, 'elemental 觉醒 +0.2 与附赠 T1(+0.15) 叠加 = 0.35')
-assert.equal(engine.skillLevels['ele_affinity'], 1, 'elemental 附赠 T1「四象亲和」')
-ok('开局预选：附赠 T1 + 跳过 Lv.5 仪式 + 换流派重开不残留')
+assert.equal(engine.weaponSystem.projectileCount, 1, '机枪赋能不残留')
+assert.ok(Math.abs(engine.weaponSystem.freezeChance - 0.2) < 1e-9, '元素觉醒只应用 +20% 基础赋能')
+assert.equal(engine.skillLevels['ele_affinity'] || 0, 0, '元素路线同样不附赠 T1')
+ok('主专精仅在 Lv.5 局内四选一，开局无预选与附赠技能')
 
 // —— 3. 分裂弹继承母弹特效概率 ——
 const ws = engine.weaponSystem
@@ -118,13 +142,12 @@ assert.equal(ws.kills, killsBefore + 1, '冲撞击杀进入统一击杀结算')
 assert.ok(engine.gemManager.count > gemsBefore, '冲撞击杀掉落经验宝石')
 ok('冲撞：附带元素概率结算 + 击杀统一结算（不再漏掉宝石/计数）')
 
-// —— 5. 自由变异（null）回到原玩法 ——
-engine.applyStartingSpec(null)
+// —— 5. 重开统一回到 Lv.1 自由探索期 ——
 engine.reset()
-assert.equal(engine.primarySpec, null, '自由变异：主专精为空')
+assert.equal(engine.primarySpec, null, '重开后主专精为空')
 assert.equal(engine.skillLevels['gat_multishot'] || 0, 0, '无附赠 T1')
 assert.equal(engine.weaponSystem.projectileCount, 1, '无觉醒加成')
-ok('自由变异：null 预选完全回到原玩法')
+ok('重开回到自由探索期，等待 Lv.5 再次觉醒')
 
 engine.destroy()
 console.log(`\n改动验证全部通过：${n} 组 ✓`)

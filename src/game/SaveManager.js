@@ -10,7 +10,9 @@ import {
 } from './RunRules.js'
 
 const KEY = 'slime-rampage-save'
+const CATALOG_VERSION = 5
 export const BOARD_SIZE = 8
+export const SAVE_SLOT_COUNT = 3
 
 const emptyBest = () => ({
   score: 0,
@@ -44,12 +46,12 @@ export const defaultSave = () => ({
   sound: { muted: false },
 })
 
-function sanitizeRun(run, selection = run) {
+export function sanitizeRun(run, selection = run) {
   const selected = normalizeRunSelection(selection)
   return {
     mode: selected.mode,
     difficulty: selected.difficulty,
-    result: run?.result === 'victory' ? 'victory' : 'defeat',
+    result: ['victory', 'extracted'].includes(run?.result) ? run.result : 'defeat',
     // 远征关数随难度递增（6/8/10/12 关），按本局难度的实际关卡表截断
     stage: Math.max(
       1,
@@ -113,7 +115,7 @@ function sanitizeEntry(value, selection) {
   }
 }
 
-function compareEntries(a, b, mode) {
+export function compareEntries(a, b, mode) {
   if ((mode === 'timed' || mode === 'expedition') && a.result !== b.result) {
     return a.result === 'victory' ? -1 : 1
   }
@@ -209,40 +211,146 @@ function inferHighestMode(source, records) {
   return 'expedition'
 }
 
-export function loadSave() {
+export function sanitizeSave(source) {
+  if (!source) return defaultSave()
+  if (!source.records || Number(source.version) < 3) return migrateLegacy(source)
+
+  const save = defaultSave()
+  save.drops = Number(source.drops) > 0 ? Number(source.drops) : 0
+  save.genes = source.genes && typeof source.genes === 'object' ? source.genes : {}
+  save.sound.muted = !!source.sound?.muted
+  save.preferences = normalizeRunSelection(source.preferences)
+  save.progression.highestDifficulty = DIFFICULTY_IDS.includes(
+    source.progression?.highestDifficulty
+  )
+    ? source.progression.highestDifficulty
+    : 'normal'
+  for (const mode of MODE_IDS) {
+    for (const difficulty of DIFFICULTY_IDS) {
+      const selection = { mode, difficulty }
+      save.records[runKey(selection)] = sanitizeRecord(
+        source.records[runKey(selection)],
+        selection
+      )
+    }
+  }
+  save.progression.highestMode = inferHighestMode(source, save.records)
+  if (!isModeUnlocked(save.progression, save.preferences.mode)) {
+    save.preferences.mode = save.progression.highestMode
+  }
+  return save
+}
+
+const slotId = (index) => `slot-${index + 1}`
+const slotName = (index) => `史莱姆档案 ${index + 1}`
+const now = () => new Date().toISOString()
+
+function makeSlot(index, data = defaultSave(), metadata = {}) {
+  const timestamp = now()
+  return {
+    id: slotId(index),
+    name: slotName(index),
+    createdAt: typeof metadata.createdAt === 'string' ? metadata.createdAt : timestamp,
+    lastPlayedAt: typeof metadata.lastPlayedAt === 'string' ? metadata.lastPlayedAt : timestamp,
+    data: sanitizeSave(data),
+  }
+}
+
+export function normalizeCatalog(source) {
+  if (Number(source?.version) === CATALOG_VERSION && Array.isArray(source.slots)) {
+    const slots = Array.from({ length: SAVE_SLOT_COUNT }, (_, index) => {
+      const stored = source.slots[index]
+      return stored?.data ? makeSlot(index, stored.data, stored) : null
+    })
+    if (!slots.some(Boolean)) slots[0] = makeSlot(0)
+    const activeSlotId = slots.some((slot) => slot?.id === source.activeSlotId)
+      ? source.activeSlotId
+      : slots.find(Boolean).id
+    return {
+      version: CATALOG_VERSION,
+      activeSlotId,
+      settings: { sound: { muted: !!source.settings?.sound?.muted } },
+      slots,
+    }
+  }
+
+  const migrated = sanitizeSave(source)
+  return {
+    version: CATALOG_VERSION,
+    activeSlotId: slotId(0),
+    settings: { sound: { muted: !!source?.sound?.muted } },
+    slots: [makeSlot(0, migrated), ...Array(SAVE_SLOT_COUNT - 1).fill(null)],
+  }
+}
+
+/** 读取三槽档案目录；V4 及更早的单档会自动放入档案 1。 */
+export function loadSaveCatalog() {
   try {
     const raw = localStorage.getItem(KEY)
-    if (!raw) return defaultSave()
-    const source = JSON.parse(raw)
-    if (!source?.records || Number(source.version) < 3) return migrateLegacy(source)
-
-    const save = defaultSave()
-    save.drops = Number(source.drops) > 0 ? Number(source.drops) : 0
-    save.genes = source.genes && typeof source.genes === 'object' ? source.genes : {}
-    save.sound.muted = !!source.sound?.muted
-    save.preferences = normalizeRunSelection(source.preferences)
-    save.progression.highestDifficulty = DIFFICULTY_IDS.includes(
-      source.progression?.highestDifficulty
-    )
-      ? source.progression.highestDifficulty
-      : 'normal'
-    for (const mode of MODE_IDS) {
-      for (const difficulty of DIFFICULTY_IDS) {
-        const selection = { mode, difficulty }
-        save.records[runKey(selection)] = sanitizeRecord(
-          source.records[runKey(selection)],
-          selection
-        )
-      }
-    }
-    save.progression.highestMode = inferHighestMode(source, save.records)
-    if (!isModeUnlocked(save.progression, save.preferences.mode)) {
-      save.preferences.mode = save.progression.highestMode
-    }
-    return save
+    return normalizeCatalog(raw ? JSON.parse(raw) : null)
   } catch {
-    return defaultSave()
+    return normalizeCatalog(null)
   }
+}
+
+export function getActiveSaveSlot(catalog) {
+  return catalog?.slots?.find((slot) => slot?.id === catalog.activeSlotId) || null
+}
+
+export function getActiveSave(catalog) {
+  return getActiveSaveSlot(catalog)?.data || defaultSave()
+}
+
+/** 在指定空位创建全新进度并立即切换过去。 */
+export function createSaveSlot(catalog, index) {
+  if (!catalog || index < 0 || index >= SAVE_SLOT_COUNT || catalog.slots[index]) return null
+  const slot = makeSlot(index)
+  catalog.slots[index] = slot
+  catalog.activeSlotId = slot.id
+  return slot
+}
+
+export function switchSaveSlot(catalog, id) {
+  const slot = catalog?.slots?.find((entry) => entry?.id === id)
+  if (!slot) return null
+  catalog.activeSlotId = slot.id
+  slot.lastPlayedAt = now()
+  return slot
+}
+
+/** 至少保留一个有效档案；删除当前档时会自动切换到其余档案。 */
+export function deleteSaveSlot(catalog, id) {
+  const occupied = catalog?.slots?.filter(Boolean) || []
+  const index = catalog?.slots?.findIndex((slot) => slot?.id === id) ?? -1
+  if (occupied.length <= 1 || index < 0) return false
+  catalog.slots[index] = null
+  if (catalog.activeSlotId === id) {
+    const fallback = catalog.slots.find(Boolean)
+    catalog.activeSlotId = fallback.id
+    fallback.lastPlayedAt = now()
+  }
+  return true
+}
+
+export function updateActiveSave(catalog, save) {
+  const slot = getActiveSaveSlot(catalog)
+  if (!slot) return null
+  slot.data = save
+  slot.lastPlayedAt = now()
+  return slot
+}
+
+export function saveSaveCatalog(catalog) {
+  try {
+    localStorage.setItem(KEY, JSON.stringify({ ...catalog, version: CATALOG_VERSION }))
+  } catch {
+    /* localStorage 不可用时游戏仍可继续。 */
+  }
+}
+
+/** 兼容旧调用：返回当前档案的数据，而不是档案目录。 */
+export function loadSave() {
+  return getActiveSave(loadSaveCatalog())
 }
 
 export function getRunRecord(save, selection) {
@@ -313,9 +421,7 @@ export function pushScore(save, selection, run) {
 }
 
 export function saveSave(save) {
-  try {
-    localStorage.setItem(KEY, JSON.stringify({ ...save, version: 4 }))
-  } catch {
-    /* localStorage 不可用时游戏仍可继续。 */
-  }
+  const catalog = loadSaveCatalog()
+  updateActiveSave(catalog, { ...save, version: 4 })
+  saveSaveCatalog(catalog)
 }

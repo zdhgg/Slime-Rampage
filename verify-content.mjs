@@ -3,7 +3,12 @@ import assert from 'node:assert/strict'
 import { DialogueManager } from './src/game/DialogueManager.js'
 import { STORY_DIALOGUE } from './src/game/DialogueData.js'
 import { MAP_THEME_IDS, generateDecor } from './src/game/MapDecor.js'
-import { EXPEDITION_STAGES, getExpeditionStages } from './src/game/RunRules.js'
+import {
+  EXPEDITION_BOSSES,
+  EXPEDITION_STAGES,
+  MODES,
+  getExpeditionStages,
+} from './src/game/RunRules.js'
 import { WeaponSystem } from './src/game/WeaponSystem.js'
 import { Projectile } from './src/game/entities/Projectile.js'
 import { resolveWeaponVisual, splitWeaponVisual } from './src/game/WeaponVisuals.js'
@@ -56,6 +61,30 @@ const interludeSignatures = [
 assert.equal(new Set(interludeSignatures).size, 6)
 assert.equal(new Set([...interludeSignatures, ...signatures]).size, 12)
 ok('远征关卡数随难度递增（6/8/10/12），插章拥有独立变体、叙事与场景构成')
+
+assert.equal(MODES.expedition.name, '王庭逆袭')
+assert.deepEqual(
+  stageLists.hell.map((item) => item.title),
+  [
+    '害兽讨伐令',
+    '断讯的信标',
+    '猎人与猎物',
+    '巢心净火',
+    '王城缺口',
+    '被藏起的圣物',
+    '燃尽的圣殿',
+    '不眠王陵',
+    '原初封印',
+    '无人的王座',
+    '最后点兵',
+    '王庭真相',
+  ]
+)
+assert.equal(EXPEDITION_BOSSES.court_commander.name, '讨伐统帅 雷欧尼斯')
+assert.equal(new Set(stageLists.hell.map((item) => item.brief)).size, stageLists.hell.length)
+assert.ok(stageLists.hell.every((item) => item.brief.trim().length > 0))
+assert.ok(!stageLists.hell.some((item) => ['击退勇者先锋', '击退守军并完成地图事件', '击败远征统帅'].includes(item.brief)))
+ok('远征命名沿讨伐令、反猎、守巢、破城与封印真相形成完整剧情线')
 
 const stage = EXPEDITION_STAGES[3]
 const compact = generateDecor(1600, 1200, { seed: 42, themeId: stage.theme, variant: stage.variant })

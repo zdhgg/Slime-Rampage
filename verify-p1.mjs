@@ -33,6 +33,7 @@ globalThis.requestAnimationFrame = () => 0
 globalThis.cancelAnimationFrame = () => {}
 
 const { GameEngine } = await import('./src/game/GameEngine.js')
+const { getNextExpThreshold, STARTING_EXP_THRESHOLD } = await import('./src/game/entities/Player.js')
 const { SKILL_DATABASE, rollSkills } = await import('./src/game/SkillPool.js')
 
 const engine = GameEngine.create(canvasStub)
@@ -77,25 +78,39 @@ engine.player.dashCd = 0.3
 engine._pushCooldown()
 assert.ok(lastCd && typeof lastCd.dashCd === 'number' && typeof lastCd.cast === 'number')
 assert.ok(Math.abs(lastCd.dashMax - 0.6) < 1e-9, 'dashMax = 1.2 × 冷却缩减 × 基因缩减')
+assert.equal(lastCd.formationBreak, 0)
+assert.equal(lastCd.formationBreakMax, 8)
 // _tick 累积到 0.1s 触发推送
 engine._cdAcc = 0.1
 engine._tick(performance.now ? 0 : 0) // rAF 桩返回 0；dt 首帧为 0，靠 _cdAcc 门槛
 engine.onCooldown = null
 engine.player.dashCdMultiplier = 1
-ok('冷却通道：onCooldown 携带 dashCd/dashMax/cast，公式与 2Hz 快照一致')
+ok('冷却通道：冲刺、施法与破阵追击进度独立于 2Hz 快照')
 
-// —— 3. 经验曲线：首级阈值 28、倍率 1.4 不变 ——
-assert.equal(engine.player.maxExp, 28, '开局阈值 28')
-engine.player.gainExp(27)
-assert.equal(engine.player.level, 1, '27 经验不足以前期 1 级（原曲线 20 会升级）')
+// —— 3. 经验曲线：Lv.5 前放慢选择密度，Lv.10 收敛回原中期曲线 ——
+assert.equal(engine.player.maxExp, STARTING_EXP_THRESHOLD, '开局阈值 40')
+engine.player.gainExp(39)
+assert.equal(engine.player.level, 1, '39 经验不足以升到 2 级')
 engine.player.gainExp(1)
 assert.equal(engine.player.level, 2)
-assert.equal(engine.player.maxExp, Math.floor(28 * 1.4), '升级倍率 1.4 保持')
+assert.equal(engine.player.maxExp, 55, '2 → 3 级需要 55 经验')
+assert.deepEqual(
+  [2, 3, 4, 5, 6, 7, 8, 9].map((level) => getNextExpThreshold(0, level)),
+  [55, 75, 100, 130, 170, 220, 290, 400],
+  '引导阈值逐级递增并在 9 级收敛到 400'
+)
+assert.equal(STARTING_EXP_THRESHOLD + 55 + 75 + 100, 270, '升到 5 级累计需要 270 经验')
+engine.player.level = 9
+engine.player.exp = 0
+engine.player.maxExp = 401
+engine.player.gainExp(401)
+assert.equal(engine.player.level, 10)
+assert.equal(engine.player.maxExp, Math.floor(401 * 1.32), '10 级起倍率降至 1.32')
 engine.onLevelUp = () => {} // 吞掉升级面板（暂停）
 engine.player.level = 1
 engine.player.exp = 0
-engine.player.maxExp = 28
-ok('经验曲线：前期阈值 +40%（打断频率下降），倍率不变')
+engine.player.maxExp = STARTING_EXP_THRESHOLD
+ok('经验曲线：Lv.5 前累计需求提高至 270，Lv.10 后沿用中后期增幅')
 
 // —— 4. 肾上腺素：受击触发移速爆发、随时间衰减、重开清零 ——
 const adSkill = SKILL_DATABASE.common.find((s) => s.id === 'com_adrenaline')
@@ -113,9 +128,9 @@ engine.reset()
 assert.equal(engine.player.adrenalineSpeed, 0, '重开清空肾上腺素等级')
 ok('肾上腺素：受击 → 3s 移速爆发 → 衰减，重开清零')
 
-// —— 5. Capstone 门槛：Lv.14 / 第 10 波前不进候选，之后排在首位 ——
-engine.applyStartingSpec('gatling')
+// —— 5. Capstone 门槛：Lv.14 且达到战局进度后才进入候选 ——
 engine.reset()
+engine.primarySpec = 'gatling'
 engine.secondarySpec = 'elemental' // 跳过 Lv.9 副专精里程碑，直接测常规抽取
 // 点满前置链（T1×2、T2、T3 各 1 级即满足 requires）
 for (const id of ['gat_multishot', 'gat_velocity', 'gat_split', 'gat_chain']) {
@@ -127,12 +142,23 @@ let opts = rollSkills(engine, 3)
 assert.ok(opts.length > 0 && opts.every((o) => !o.isCapstone), 'Lv.12 / 波 6：大招未开放')
 engine.player.level = 14
 opts = rollSkills(engine, 3)
-assert.ok(opts[0].isCapstone, 'Lv.14 起大招进入候选且排首位')
+assert.ok(opts.every((o) => !o.isCapstone), '仅 Lv.14、波 6：大招仍未开放')
 engine.player.level = 12
 engine.enemyManager.wave = 10
 opts = rollSkills(engine, 3)
-assert.ok(opts[0].isCapstone, '或第 10 波起开放（满足其一即可）')
-ok('Capstone 门槛：Lv.14 / 波 10 前不出现——后半局才有质变大招')
+assert.ok(opts.every((o) => !o.isCapstone), '仅第 10 波、Lv.12：大招仍未开放')
+engine.player.level = 14
+opts = rollSkills(engine, 3)
+assert.ok(opts[0].isCapstone, 'Lv.14 且第 10 波：大招进入候选并排首位')
+engine.runSelection = { mode: 'expedition', difficulty: 'normal' }
+engine.expeditionStage = 4
+opts = rollSkills(engine, 3)
+assert.ok(opts.every((o) => !o.isCapstone), '远征第 4 关：大招仍未开放')
+engine.expeditionStage = 5
+opts = rollSkills(engine, 3)
+assert.ok(opts[0].isCapstone, '远征 Lv.14 且第 5 关：大招开放')
+engine.runSelection = { mode: 'timed', difficulty: 'normal' }
+ok('Capstone 门槛：等级与战局进度必须同时达标')
 
 // —— 6. 技能池耗尽：不再静默，转化为治愈 + 浮字 ——
 for (const [specKey, tree] of Object.entries(SKILL_DATABASE)) {

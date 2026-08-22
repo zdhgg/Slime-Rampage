@@ -3,9 +3,21 @@ import { Projectile } from './entities/Projectile.js'
 import { Particle } from './effects/Particle.js'
 import { getPaletteMid } from './entities/Enemy.js'
 import { CELL_SIZE, GRID_KEY_SCALE } from './EnemyManager.js' // 复用分离阶段的空间哈希（碰撞粗筛）
+import { ENDLESS_FORMATION_BREAK_ATTACK_INTERVAL_MUL } from './EndlessMode.js'
 import { resolveWeaponVisual, splitWeaponVisual, tintedWeaponVisual } from './WeaponVisuals.js'
 
 const TAU = Math.PI * 2
+export const COMMON_LOOT_CHANCE = 0.1
+
+export function getLootDropCount(enemy, random = Math.random) {
+  if (enemy.isBoss) {
+    if (enemy.isExpeditionStageBoss && !enemy.isExpeditionBoss) return 1
+    if (enemy.isBossSquadMember) return Math.max(0, enemy.bossLootDrops ?? 1)
+    return 3
+  }
+  if (enemy.isElite) return 1
+  return random() < COMMON_LOOT_CHANCE ? 1 : 0
+}
 
 /**
  * 等级攻击力成长（阶段十二）：每次升级自动 ×1.08（乘算）。
@@ -60,7 +72,7 @@ export class WeaponSystem extends Entity {
     // 连杀计数（阶段十二）：1.8s 窗口内连续击杀数，驱动击杀音高爬升
     this._combo = 0
     this._comboTimer = 0
-    this.drops = { knight: 0, mage: 0, archer: 0, assassin: 0, priest: 0, berserker: 0 } // 本局勇者掉落物计数
+    this.drops = { knight: 0, mage: 0, archer: 0, assassin: 0, priest: 0, berserker: 0, hound: 0, golem: 0, wraith: 0 } // 本局勇者掉落物计数
     this.berserkBuffTimer = 0 // 狂暴连击 BUFF（吞噬狂战士获得）
 
     // —— 专精系统字段（阶段十八：流派体系） ——
@@ -120,7 +132,7 @@ export class WeaponSystem extends Entity {
     this.bossKills = 0
     this._combo = 0
     this._comboTimer = 0
-    this.drops = { knight: 0, mage: 0, archer: 0, assassin: 0, priest: 0, berserker: 0 }
+    this.drops = { knight: 0, mage: 0, archer: 0, assassin: 0, priest: 0, berserker: 0, hound: 0, golem: 0, wraith: 0 }
     this.berserkBuffTimer = 0
     this.reactionDmgMul = 1.0
     this.reactionShockwave = 0
@@ -322,7 +334,10 @@ export class WeaponSystem extends Entity {
     // 1) 冷却计时 → 自动索敌 → 发射
     this.cooldown -= dt
     if (this.cooldown <= 0) {
-      const curInterval = this.fireInterval * (this.berserkBuffTimer > 0 ? 0.6 : 1)
+      const formationMul = this.game.endlessFormationBreakTimer > 0
+        ? ENDLESS_FORMATION_BREAK_ATTACK_INTERVAL_MUL
+        : 1
+      const curInterval = this.fireInterval * (this.berserkBuffTimer > 0 ? 0.6 : 1) * formationMul
       this.cooldown += curInterval
       const target = this._findNearest()
       if (target) this.fire(target)
@@ -641,14 +656,28 @@ export class WeaponSystem extends Entity {
 
     if (e.isBoss) {
       this.game.dialogue?.sayBoss(e, 'defeat')
-      // Boss 大爆：6 颗大经验宝石（合计 expValue）+ 3 个随机元素核心 + 王级秘籍 + 哀鸣
-      const v = Math.max(5, Math.round(e.expValue / 6))
-      for (let i = 0; i < 6; i++) this.game.gemManager.spawn(e.x, e.y, v)
+      const chapterGuardian = e.isExpeditionStageBoss && !e.isExpeditionBoss
+      const squadMember = e.isBossSquadMember
+      const squadLast = squadMember &&
+        this.game.enemyManager.activeBossCount === 0 &&
+        this.game.enemyManager.pendingBossCount === 0
+      // 每关守将采用轻量战利品，避免连续 Boss 的秘籍与核心把成长曲线推爆；
+      // 首领编队按整队共享旧单 Boss 预算，秘籍只由最后一名成员掉落。
+      const gemCount = chapterGuardian
+        ? 3
+        : squadMember ? squadLast ? Math.max(2, 8 - e.bossGroupSize * 2) : 2 : 6
+      const coreCount = chapterGuardian
+        ? 1
+        : squadMember ? squadLast ? Math.max(1, 4 - e.bossGroupSize) : 1 : 3
+      const v = Math.max(5, Math.round(e.expValue / gemCount))
+      for (let i = 0; i < gemCount; i++) this.game.gemManager.spawn(e.x, e.y, v)
       const els = ['fire', 'water', 'poison', 'lightning']
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < coreCount; i++) {
         this.game.gemManager.spawn(e.x, e.y, 0, els[(Math.random() * 4) | 0])
       }
-      this.game.gemManager.spawn(e.x, e.y, 0, 'tome') // 王级秘籍：免费技能选择
+      if (!chapterGuardian && (!squadMember || squadLast)) {
+        this.game.gemManager.spawn(e.x, e.y, 0, 'tome')
+      }
       this.game.sound.bossDeath()
       this.game.shakeScreen(8, 0.45) // Boss 阵亡大震动（阶段十五美化）
     } else {
@@ -662,9 +691,9 @@ export class WeaponSystem extends Entity {
       }
     }
 
-    // 勇者物品（黑市货币，按职业计数）：Boss 必掉 3、精英必掉 1、普通 25%
+    // 勇者物品（黑市货币，按职业计数）：单 Boss 3、编队共享至多 3、精英必掉、普通 10%。
     const dropKey = e.isBoss ? e.dropType || e.type.slice(5) : e.type // 复合 Boss 使用指定职业战利品
-    const dropCount = e.isBoss ? 3 : e.isElite ? 1 : Math.random() < 0.25 ? 1 : 0
+    const dropCount = getLootDropCount(e)
     if (dropCount > 0) {
       this.drops[dropKey] = (this.drops[dropKey] || 0) + dropCount
     }

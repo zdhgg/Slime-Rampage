@@ -15,9 +15,9 @@ const ICONS = {
 <template>
   <div class="reward-overlay">
     <section class="reward-panel" role="dialog" aria-modal="true" aria-labelledby="reward-title">
-      <div class="reward-kicker">关卡 {{ info.stage }} / 6 完成</div>
-      <h2 id="reward-title">选择远征补给</h2>
-      <p>选择立即生效，随后进入第 {{ info.nextStage }} 关。</p>
+      <div class="reward-kicker">第 {{ info.stage }} 章 · {{ info.stageTitle }} 完成</div>
+      <h2 id="reward-title">选择章间补给</h2>
+      <p>下一章 · {{ info.nextTitle }} / {{ info.nextRegion }}</p>
 
       <div class="reward-options">
         <button

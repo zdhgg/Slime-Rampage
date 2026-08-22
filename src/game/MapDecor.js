@@ -87,52 +87,86 @@ export function generateDecor(w, h, options = {}) {
   const bg = []
   const fg = []
 
-  if (variant === 'camp-road') {
+  if (variant === 'nest-border') {
+    bg.push({ type: 'road', x: w / 2, y: h / 2, length: Math.max(w, h) * 1.35, angle: -0.36, width: 105 })
+    bg.push({ type: 'nest', x: w / 2, y: h / 2, s: 1.4, phase: 0, state: 'intact' })
+    scatter(bg, rng, 'slime-vein', 12, w, h, 90, [0.9, 1.55])
+    scatter(bg, rng, 'boundary-stone', 10, w, h, 130, [0.8, 1.2])
+  } else if (variant === 'camp-road') {
     bg.push({ type: 'road', x: w / 2, y: h / 2, length: Math.max(w, h) * 1.35, angle: -0.42, width: 150 })
+    bg.push({ type: 'camp', x: w / 2, y: h / 2, s: 1.25, phase: -0.42 })
     scatter(bg, rng, 'stake', 12, w, h, 90, [0.8, 1.2])
     scatter(bg, rng, 'rune', 5, w, h, 160, [0.8, 1.25])
-  } else if (variant === 'slime-nest') {
-    bg.push({ type: 'nest', x: w / 2, y: h / 2, s: 1.35, phase: 0 })
+  } else if (variant === 'slime-nest' || variant === 'slime-nest-sieged') {
+    bg.push({
+      type: 'nest',
+      x: w / 2,
+      y: h / 2,
+      s: 1.35,
+      phase: 0,
+      state: variant === 'slime-nest-sieged' ? 'sieged' : 'intact',
+    })
+    if (variant === 'slime-nest-sieged') {
+      for (let i = 0; i < 6; i++) {
+        const angle = (i / 6) * TAU + Math.PI / 6
+        bg.push({
+          type: 'purifier-stake',
+          x: w / 2 + Math.cos(angle) * 165,
+          y: h / 2 + Math.sin(angle) * 125,
+          s: 0.9 + (i % 2) * 0.12,
+          phase: angle,
+        })
+      }
+    }
     scatter(bg, rng, 'slime-vein', 15, w, h, 80, [0.9, 1.7])
   } else if (variant === 'outer-bailey') {
     bg.push({ type: 'road', x: w / 2, y: h / 2, length: Math.max(w, h) * 1.4, angle: 0.08, width: 190 })
+    bg.push({ type: 'gate-breach', x: w * 0.56, y: h / 2, s: 1.35, phase: 0.08 })
     scatter(bg, rng, 'rubble', 18, w, h, 60, [0.7, 1.35])
     scatter(bg, rng, 'banner-pole', 8, w, h, 130, [0.9, 1.2])
   } else if (variant === 'shattered-court') {
     bg.push({ type: 'court', x: w / 2, y: h / 2, s: 1.5, phase: 0 })
+    bg.push({ type: 'throne', x: w / 2, y: h / 2 - 95, s: 1.3, phase: 0 })
     scatter(bg, rng, 'rubble', 22, w, h, 60, [0.65, 1.3])
     scatter(bg, rng, 'sigil', 7, w, h, 150, [0.75, 1.25])
   } else if (variant === 'blight-garden') {
+    bg.push({ type: 'hunter-camp', x: w / 2, y: h / 2, s: 1.25, phase: 0 })
     scatter(bg, rng, 'fissure', 14, w, h, 70, [0.8, 1.5])
     scatter(bg, rng, 'bone', 16, w, h, 60, [0.7, 1.25])
   } else if (variant === 'reliquary') {
     // 圣物洗劫（远征插章）：倾倒的圣物与崩落的石雕
+    bg.push({ type: 'reliquary-vault', x: w / 2, y: h / 2, s: 1.25, phase: 0 })
     scatter(bg, rng, 'rubble', 15, w, h, 60, [0.7, 1.3])
     scatter(bg, rng, 'sigil', 10, w, h, 140, [0.8, 1.2])
     scatter(bg, rng, 'banner-pole', 6, w, h, 130, [0.9, 1.15])
   } else if (variant === 'sanctum') {
     // 圣殿禁卫（远征插章）：中央祭坛 + 环列符文
     bg.push({ type: 'court', x: w / 2, y: h / 2, s: 1.1, phase: 0 })
+    bg.push({ type: 'sanctum-altar', x: w / 2, y: h / 2, s: 1.15, phase: 0 })
     scatter(bg, rng, 'rune', 12, w, h, 120, [0.8, 1.25])
     scatter(bg, rng, 'sigil', 8, w, h, 150, [0.75, 1.2])
   } else if (variant === 'throne-gallery') {
     // 王座回廊（远征插章）：十字长廊 + 密集军旗
     bg.push({ type: 'road', x: w / 2, y: h / 2, length: Math.max(w, h) * 1.4, angle: 0.55, width: 170 })
     bg.push({ type: 'road', x: w / 2, y: h / 2, length: Math.max(w, h) * 1.4, angle: 0.55 + Math.PI / 2, width: 170 })
+    bg.push({ type: 'throne', x: w / 2, y: h / 2, s: 1.18, phase: 0 })
     scatter(bg, rng, 'banner-pole', 14, w, h, 120, [0.9, 1.2])
     scatter(bg, rng, 'sigil', 9, w, h, 150, [0.75, 1.2])
   } else if (variant === 'royal-crypt') {
     // 王陵惊魂（远征插章）：先王石棺群与裂开的墓道
+    bg.push({ type: 'royal-tomb', x: w / 2, y: h / 2, s: 1.24, phase: -0.12 })
     scatter(bg, rng, 'bone', 20, w, h, 60, [0.7, 1.25])
     scatter(bg, rng, 'fissure', 10, w, h, 80, [0.8, 1.4])
     scatter(bg, rng, 'sigil', 6, w, h, 150, [0.75, 1.15])
   } else if (variant === 'seal-chamber') {
     // 地窖封印（远征插章）：中央黏液巢口 + 环列封印符文
     bg.push({ type: 'nest', x: w / 2, y: h / 2, s: 1.15, phase: 0 })
+    bg.push({ type: 'seal-obelisk', x: w / 2, y: h / 2 - 82, s: 1.05, phase: 0 })
     scatter(bg, rng, 'rune', 10, w, h, 130, [0.8, 1.25])
     scatter(bg, rng, 'fissure', 12, w, h, 70, [0.8, 1.45])
   } else if (variant === 'war-camp') {
     // 终焉动员（远征插章）：拒马防线与连营军旗
+    bg.push({ type: 'war-table', x: w / 2, y: h / 2, s: 1.2, phase: 0.08 })
     scatter(bg, rng, 'stake', 14, w, h, 90, [0.8, 1.2])
     scatter(bg, rng, 'banner-pole', 12, w, h, 120, [0.9, 1.2])
     scatter(bg, rng, 'rubble', 10, w, h, 60, [0.65, 1.2])
@@ -161,6 +195,26 @@ export function generateDecor(w, h, options = {}) {
   } else {
     scatter(bg, rng, 'stone-slab', 26, w, h, 45, [0.65, 1.25])
     scatter(fg, rng, 'torn-banner', 6, w, h, 120, [0.8, 1.15])
+  }
+
+  // 出生点是战斗可读性的空白区：保留主地标与道路，其余随机装饰推离中心。
+  // 只调整坐标不删项，确保同一 seed 在不同尺寸下的装饰拓扑稳定。
+  const spawnX = (options.spawn?.x ?? 0.5) * w
+  const spawnY = (options.spawn?.y ?? 0.5) * h
+  const safeRadius = 150
+  const anchored = new Set([
+    'road', 'nest', 'court', 'purifier-stake', 'camp', 'hunter-camp', 'gate-breach',
+    'throne', 'reliquary-vault', 'sanctum-altar', 'royal-tomb', 'seal-obelisk', 'war-table',
+  ])
+  for (const item of [...bg, ...fg]) {
+    if (anchored.has(item.type)) continue
+    const dx = item.x - spawnX
+    const dy = item.y - spawnY
+    const d2 = dx * dx + dy * dy
+    if (d2 >= safeRadius * safeRadius) continue
+    const angle = d2 > 1 ? Math.atan2(dy, dx) : item.phase || 0
+    item.x = Math.max(35, Math.min(w - 35, spawnX + Math.cos(angle) * safeRadius))
+    item.y = Math.max(35, Math.min(h - 35, spawnY + Math.sin(angle) * safeRadius))
   }
 
   return { bg, fg }
@@ -289,15 +343,58 @@ export function drawBgItem(ctx, item, themeId = 'frontier') {
       ctx.quadraticCurveTo(0, -10, 25, 5)
       ctx.stroke()
       break
+    case 'boundary-stone':
+      ctx.rotate(item.phase * 0.15)
+      ctx.fillStyle = 'rgba(31, 43, 36, 0.82)'
+      ctx.fillRect(-8, -11, 16, 22)
+      ctx.strokeStyle = 'rgba(144, 187, 109, 0.25)'
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      ctx.moveTo(-4, 5)
+      ctx.lineTo(0, -6)
+      ctx.lineTo(4, 5)
+      ctx.stroke()
+      break
+    case 'purifier-stake':
+      ctx.rotate(item.phase + Math.PI / 2)
+      ctx.fillStyle = '#594b3c'
+      ctx.fillRect(-3, -22, 6, 35)
+      ctx.fillStyle = 'rgba(197, 112, 68, 0.48)'
+      ctx.beginPath()
+      ctx.moveTo(0, -30)
+      ctx.lineTo(8, -18)
+      ctx.lineTo(0, -10)
+      ctx.lineTo(-8, -18)
+      ctx.closePath()
+      ctx.fill()
+      ctx.strokeStyle = 'rgba(255, 202, 120, 0.48)'
+      ctx.lineWidth = 1.5
+      ctx.stroke()
+      break
     case 'nest':
-      ctx.fillStyle = 'rgba(93, 139, 58, 0.16)'
+      ctx.fillStyle = item.state === 'sieged' ? 'rgba(77, 93, 54, 0.18)' : 'rgba(93, 139, 58, 0.2)'
       ellipse(ctx, 0, 0, 90, 58)
-      ctx.strokeStyle = 'rgba(159, 211, 102, 0.23)'
+      ctx.strokeStyle = item.state === 'sieged' ? 'rgba(179, 119, 72, 0.27)' : 'rgba(159, 211, 102, 0.28)'
       ctx.lineWidth = 6
       for (let i = 0; i < 3; i++) {
         ctx.beginPath()
         ctx.arc(0, 0, 32 + i * 18, 0, TAU)
         ctx.stroke()
+      }
+      ctx.fillStyle = item.state === 'sieged' ? 'rgba(47, 35, 31, 0.7)' : 'rgba(70, 112, 46, 0.52)'
+      ellipse(ctx, 0, 2, 28, 19)
+      if (item.state === 'sieged') {
+        ctx.strokeStyle = 'rgba(218, 135, 77, 0.42)'
+        ctx.lineWidth = 3
+        for (let i = 0; i < 4; i++) {
+          ctx.beginPath()
+          ctx.moveTo(-10 + i * 7, -12)
+          ctx.lineTo(-18 + i * 11, -35 - (i % 2) * 8)
+          ctx.stroke()
+        }
+      } else {
+        ctx.fillStyle = 'rgba(196, 238, 137, 0.28)'
+        ellipse(ctx, -8, -5, 8, 5, -0.3)
       }
       break
     case 'fungus-stem':
@@ -336,6 +433,139 @@ export function drawBgItem(ctx, item, themeId = 'frontier') {
         ctx.arc(0, 0, 55 + i * 31, 0, TAU)
         ctx.stroke()
       }
+      break
+    case 'camp':
+    case 'hunter-camp': {
+      const hunter = item.type === 'hunter-camp'
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.28)'
+      ellipse(ctx, 0, 12, 68, 25)
+      ctx.fillStyle = hunter ? 'rgba(76, 55, 61, 0.78)' : 'rgba(78, 68, 52, 0.78)'
+      ctx.beginPath()
+      ctx.moveTo(-48, 13)
+      ctx.lineTo(-17, -31)
+      ctx.lineTo(15, 13)
+      ctx.closePath()
+      ctx.fill()
+      ctx.strokeStyle = hunter ? '#80545f' : '#8b7657'
+      ctx.lineWidth = 3
+      ctx.stroke()
+      ctx.fillStyle = 'rgba(24, 19, 18, 0.72)'
+      ctx.fillRect(-18, -4, 17, 18)
+      ctx.fillStyle = hunter ? 'rgba(132, 67, 67, 0.58)' : 'rgba(164, 112, 58, 0.46)'
+      ctx.fillRect(24, -25, 25, 12)
+      ctx.fillStyle = '#62503a'
+      ctx.fillRect(20, -31, 3, 46)
+      ctx.fillStyle = 'rgba(206, 116, 65, 0.55)'
+      ellipse(ctx, 31, 9, 10, 5)
+      break
+    }
+    case 'gate-breach':
+      ctx.rotate(item.phase)
+      ctx.fillStyle = 'rgba(38, 41, 47, 0.86)'
+      ctx.fillRect(-98, -62, 64, 124)
+      ctx.fillRect(34, -62, 64, 124)
+      ctx.fillStyle = 'rgba(91, 96, 105, 0.45)'
+      for (let y = -54; y < 55; y += 24) {
+        ctx.fillRect(-91 + ((y / 24) % 2) * 8, y, 48, 14)
+        ctx.fillRect(43 - ((y / 24) % 2) * 8, y, 48, 14)
+      }
+      ctx.fillStyle = 'rgba(23, 25, 29, 0.72)'
+      ctx.beginPath()
+      ctx.moveTo(-35, -62)
+      ctx.lineTo(-12, -48)
+      ctx.lineTo(0, -63)
+      ctx.lineTo(16, -43)
+      ctx.lineTo(34, -62)
+      ctx.lineTo(34, 62)
+      ctx.lineTo(-35, 62)
+      ctx.closePath()
+      ctx.fill()
+      break
+    case 'throne':
+      ctx.fillStyle = 'rgba(8, 9, 12, 0.3)'
+      ellipse(ctx, 0, 23, 48, 16)
+      ctx.fillStyle = 'rgba(72, 66, 62, 0.58)'
+      ctx.fillRect(-35, 14, 70, 12)
+      ctx.fillRect(-27, 2, 54, 12)
+      ctx.fillStyle = 'rgba(91, 72, 58, 0.72)'
+      ctx.fillRect(-20, -27, 40, 32)
+      ctx.fillRect(-24, -49, 9, 54)
+      ctx.fillRect(15, -49, 9, 54)
+      ctx.strokeStyle = 'rgba(183, 151, 89, 0.38)'
+      ctx.lineWidth = 2
+      ctx.strokeRect(-20, -27, 40, 32)
+      break
+    case 'reliquary-vault':
+      ctx.fillStyle = 'rgba(61, 63, 69, 0.76)'
+      ctx.fillRect(-48, -28, 96, 56)
+      ctx.fillStyle = 'rgba(18, 20, 24, 0.66)'
+      ctx.fillRect(-39, -19, 78, 38)
+      ctx.strokeStyle = 'rgba(187, 151, 83, 0.48)'
+      ctx.lineWidth = 4
+      ctx.strokeRect(-48, -28, 96, 56)
+      ctx.beginPath()
+      ctx.moveTo(0, -25)
+      ctx.lineTo(0, 24)
+      ctx.stroke()
+      break
+    case 'sanctum-altar':
+      ctx.fillStyle = 'rgba(79, 80, 84, 0.72)'
+      ctx.fillRect(-50, 10, 100, 18)
+      ctx.fillRect(-37, -4, 74, 15)
+      ctx.fillStyle = 'rgba(190, 148, 75, 0.26)'
+      ellipse(ctx, 0, -8, 27, 12)
+      ctx.strokeStyle = 'rgba(233, 190, 98, 0.44)'
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      ctx.arc(0, -8, 18, 0, TAU)
+      ctx.stroke()
+      break
+    case 'royal-tomb':
+      ctx.rotate(item.phase)
+      ctx.fillStyle = 'rgba(42, 45, 49, 0.76)'
+      ctx.fillRect(-54, -28, 108, 56)
+      ctx.fillStyle = 'rgba(84, 87, 90, 0.5)'
+      ctx.fillRect(-45, -35, 90, 15)
+      ctx.strokeStyle = 'rgba(170, 170, 151, 0.28)'
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      ctx.moveTo(-16, -20)
+      ctx.lineTo(0, 7)
+      ctx.lineTo(16, -20)
+      ctx.stroke()
+      break
+    case 'seal-obelisk':
+      ctx.fillStyle = 'rgba(34, 37, 43, 0.84)'
+      ctx.beginPath()
+      ctx.moveTo(0, -43)
+      ctx.lineTo(18, 24)
+      ctx.lineTo(-18, 24)
+      ctx.closePath()
+      ctx.fill()
+      ctx.strokeStyle = 'rgba(91, 148, 164, 0.45)'
+      ctx.lineWidth = 3
+      ctx.beginPath()
+      ctx.moveTo(0, -25)
+      ctx.lineTo(8, 3)
+      ctx.lineTo(0, 14)
+      ctx.lineTo(-8, 3)
+      ctx.closePath()
+      ctx.stroke()
+      break
+    case 'war-table':
+      ctx.rotate(item.phase)
+      ctx.fillStyle = 'rgba(62, 46, 34, 0.84)'
+      ctx.fillRect(-52, -31, 104, 62)
+      ctx.fillStyle = 'rgba(132, 113, 78, 0.32)'
+      ctx.fillRect(-45, -24, 90, 48)
+      ctx.strokeStyle = 'rgba(177, 61, 55, 0.48)'
+      ctx.lineWidth = 3
+      ctx.beginPath()
+      ctx.moveTo(-31, 13)
+      ctx.lineTo(-8, -12)
+      ctx.lineTo(16, 5)
+      ctx.lineTo(35, -17)
+      ctx.stroke()
       break
   }
   ctx.restore()

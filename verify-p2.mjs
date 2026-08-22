@@ -33,7 +33,7 @@ globalThis.cancelAnimationFrame = () => {}
 const { GameEngine, createDefaultStats } = await import('./src/game/GameEngine.js')
 const { Enemy } = await import('./src/game/entities/Enemy.js')
 const { sumDrops } = await import('./src/game/RunRules.js')
-const { applyGenes, GENES } = await import('./src/game/GenePool.js')
+const { applyGenes, GENES, getGeneCost } = await import('./src/game/GenePool.js')
 
 const engine = GameEngine.create(canvasStub)
 for (const k of ['onStats', 'onLevelUp', 'onGameOver', 'onBossSpawn', 'onWaveChanged', 'onEvolution', 'onCooldown']) {
@@ -97,11 +97,43 @@ engine.reset()
 assert.equal(ws.devourDamageMul, 1, '重开复位')
 ok('捕食原核：吞噬永久 +3% 攻击（封顶 ×2），未购不生效，重开复位')
 
-// —— 3. sumDrops：空值安全 + 与六类口径一致 ——
+// —— 3. sumDrops：空值安全 + 与九类口径一致 ——
 assert.equal(sumDrops(null), 0)
 assert.equal(sumDrops({}), 0)
-assert.equal(sumDrops({ knight: 2, mage: 1, archer: 3, assassin: 0, priest: 1, berserker: 4 }), 11)
-ok('sumDrops：空值安全，六类求和正确')
+assert.equal(
+  sumDrops({ knight: 2, mage: 1, archer: 3, assassin: 0, priest: 1, berserker: 4, hound: 5, golem: 6, wraith: 7 }),
+  29
+)
+ok('sumDrops：空值安全，九类求和正确')
+
+// —— 4. 黑市成本后段加速：首级可触达，高级节点与原核承担长期消耗 ——
+{
+  const expectedCosts = {
+    giant: [12, 24, 40, 64],
+    regen: [18, 36, 60],
+    predator_origin: [120],
+    swift: [10, 20, 34, 52],
+    split: [24, 50],
+    kinetic_origin: [120],
+    lore: [12, 24, 40, 64],
+    resonance: [30, 60, 100],
+    element_origin: [140],
+  }
+  for (const gene of GENES) {
+    assert.deepEqual(
+      Array.from({ length: gene.maxLevel }, (_, level) => getGeneCost(gene, level)),
+      expectedCosts[gene.id],
+      `${gene.name} 逐级价格`
+    )
+  }
+  const basicTotal = GENES.filter((gene) => !gene.isCapstone)
+    .reduce((sum, gene) => sum + gene.costs.reduce((branch, cost) => branch + cost, 0), 0)
+  assert.equal(basicTotal, 774)
+  assert.equal(basicTotal + expectedCosts.predator_origin[0], 894)
+  assert.equal(basicTotal + expectedCosts.kinetic_origin[0], 894)
+  assert.equal(basicTotal + expectedCosts.element_origin[0], 914)
+  ok('黑市基础路线总价 774，选择终点原核后总价为 894～914')
+}
 
 engine.destroy()
 console.log(`\nP2 批次验证全部通过：${n} 组 ✓`)

@@ -219,15 +219,27 @@ engine.elapsed = 720
 engine.update(1 / 60)
 assert.equal(engine.runState, 'finale')
 assert.equal(engine.worldEvents.current, null)
-assert.equal(em.enemies.length, 1)
+assert.equal(em.enemies.length, 2)
 assert.equal(em._bullets.length, 0)
-assert.equal(em._boss.isFinalBoss, true)
+assert.equal(em.activeBossCount, 2)
+assert.equal(em.pendingBossCount, 1)
+assert.ok(em._bosses.every((boss) => boss.bossEncounterFinal))
 // 终局审判：战场切入王城决战场
 assert.equal(engine._mapThemeId, 'royal')
 assert.equal(engine._mapVariant, 'shattered-court')
 engine.update(0.5)
 assert.equal(engine.finaleTime, 0.5)
-engine.weaponSystem._settleKill(em._boss)
+const firstFinaleBoss = em._bosses.find((boss) => boss.active)
+firstFinaleBoss.destroy()
+engine.weaponSystem._settleKill(firstFinaleBoss)
+assert.equal(engine.runState, 'finale')
+assert.equal(em.activeBossCount, 2, '先遣阵亡后终审勇者补位，场上仍为两名')
+assert.equal(em.pendingBossCount, 0)
+assert.ok(em._bosses.some((boss) => boss.active && boss.type === 'boss-final'))
+for (const boss of em._bosses.filter((member) => member.active)) {
+  boss.destroy()
+  engine.weaponSystem._settleKill(boss)
+}
 assert.equal(engine.runState, 'victory')
 assert.equal(settlement.result, 'victory')
 assert.equal(settlement.mode, 'timed')
@@ -280,7 +292,7 @@ engine.applyStartingStrain('origin')
 engine.reset()
 console.log('✓ 史莱姆血统：岩壳/电光/贪噬先天属性正确叠加（生命/移速/攻击/吞噬口径）')
 
-// 章节远征：六类目标、关间补给、技能选择与章节 Boss 必须形成完整状态闭环。
+// 章节远征：六类目标、逐关首领、关间补给、技能选择与最终统帅必须形成完整状态闭环。
 const rewards = []
 let offeredSkills = null
 settlement = null
@@ -291,11 +303,28 @@ engine.onLevelUp = (options) => {
 engine.configureRun({ mode: 'expedition', difficulty: 'normal' })
 engine.reset()
 assert.equal(engine.expeditionStage, 1)
-assert.equal(engine.runState, 'active')
+assert.equal(engine.runState, 'expedition-intro')
 assert.equal(engine._mapThemeId, 'frontier')
-assert.equal(engine._mapVariant, 'marsh-edge')
+assert.equal(engine._mapVariant, 'nest-border')
 assert.equal(engine.canStartWorldEvent, false)
 assert.equal(engine._expeditionProgress().definition.type, 'kills')
+
+/** 换章先展示章节过场，过场结束才生成本章目标；每章波次均从 1 开始。 */
+const finishStageIntro = (expectedState = 'active') => {
+  assert.equal(engine.runState, 'expedition-intro')
+  assert.equal(em.wave, 1)
+  engine.expeditionIntroTime = 10
+  engine.update(0)
+  assert.equal(engine.runState, expectedState)
+  assert.equal(em.wave, 1)
+}
+
+finishStageIntro()
+em._waveTimer = 29.99
+em._spawnTimer = Infinity
+em.update(0.02)
+assert.equal(em.wave, 1, '远征停留超过一个导演周期也不得延续到第 2 波')
+const stageOneEscort = em.spawnAt(engine.player.x + 180, engine.player.y, 'knight')
 
 /** 过关推进：先进入 0.6s 残敌溃散演出，跳满计时后落进补给结算 */
 const finishStageClearing = () => {
@@ -305,18 +334,32 @@ const finishStageClearing = () => {
   assert.equal(engine.runState, 'stage-reward')
 }
 
+const defeatStageGuardian = () => {
+  assert.equal(engine.runState, 'expedition-guardian', '目标完成后必须进入本关首领战')
+  assert.ok(em._boss?.isExpeditionStageBoss)
+  assert.equal(em._boss.isExpeditionBoss, false)
+  em._boss.destroy()
+  engine.weaponSystem._settleKill(em._boss)
+  assert.equal(engine.runState, 'stage-clearing')
+}
+
 engine.weaponSystem.kills += 60
 engine.update(0)
+assert.ok(em.enemies.includes(stageOneEscort), '章节首领登场时残余小兵应留在战场')
+assert.ok(em.enemies.includes(em._boss), '章节首领应加入现有敌群而不是替换敌群')
+defeatStageGuardian()
 finishStageClearing()
 assert.equal(rewards.at(-1).nextStage, 2)
 engine.player.hp = 1
 engine.resolveExpeditionReward('rest')
 assert.equal(engine.expeditionStage, 2)
 assert.equal(engine.player.hp, engine.player.maxHp)
+finishStageIntro()
 assert.equal(engine.worldEvents.current.type, 'beacon')
 
 engine.worldEvents.completed++
 engine.update(0)
+defeatStageGuardian()
 finishStageClearing()
 const hpBeforeBlood = engine.player.maxHp
 const dmgBeforeBlood = engine.weaponSystem.damage
@@ -324,62 +367,72 @@ engine.resolveExpeditionReward('blood')
 assert.equal(engine.expeditionStage, 3)
 assert.equal(engine.player.maxHp, hpBeforeBlood - 1)
 assert.equal(engine.weaponSystem.damage, dmgBeforeBlood * 1.2)
+finishStageIntro()
 assert.equal(em.enemies.filter((enemy) => enemy.isElite).length, 7)
 
 engine.weaponSystem.eliteKills += 7
 engine.update(0)
+defeatStageGuardian()
 finishStageClearing()
 engine.resolveExpeditionReward('rest')
 assert.equal(engine.expeditionStage, 4)
 assert.equal(engine._mapThemeId, 'blight')
-assert.equal(engine._mapVariant, 'slime-nest')
+assert.equal(engine._mapVariant, 'slime-nest-sieged')
+finishStageIntro()
 engine.expeditionStageElapsed = 90
 engine.update(0)
+defeatStageGuardian()
 finishStageClearing()
 engine.resolveExpeditionReward('rest')
 assert.equal(engine.expeditionStage, 5)
+finishStageIntro()
 assert.equal(engine.worldEvents.current.type, 'surge')
 
 engine.weaponSystem.kills += 75
 engine.worldEvents.completed++
 engine.update(0)
+defeatStageGuardian()
 finishStageClearing()
 engine.resolveExpeditionReward('tome')
 assert.ok(offeredSkills?.length > 0)
 assert.equal(engine._pendingExpeditionStage, 6)
 engine.applySkill(offeredSkills[0])
-// 普通难度为 8 关：第 6/7 关是插章「圣物洗劫」「圣殿禁卫」，第 8 关才是统帅决战
+// 普通难度为 8 章：第 6/7 章是「被藏起的圣物」「燃尽的圣殿」，第 8 章才揭开王庭真相
 assert.equal(engine.expeditionStage, 6)
-assert.equal(engine.runState, 'active')
 assert.equal(engine._mapThemeId, 'royal')
 assert.equal(engine._mapVariant, 'reliquary')
+finishStageIntro()
 assert.equal(engine.worldEvents.current.type, 'surge')
 
 engine.weaponSystem.kills += 90
 engine.worldEvents.completed++
 engine.update(0)
+defeatStageGuardian()
 finishStageClearing()
 engine.resolveExpeditionReward('rest')
 assert.equal(engine.expeditionStage, 7)
-assert.equal(engine.runState, 'active')
 assert.equal(engine._mapVariant, 'sanctum')
+finishStageIntro()
 assert.equal(em.enemies.filter((enemy) => enemy.isElite).length, 9)
 
 engine.weaponSystem.eliteKills += 9
 engine.update(0)
+defeatStageGuardian()
 finishStageClearing()
 engine.resolveExpeditionReward('rest')
 assert.equal(engine.expeditionStage, 8)
-assert.equal(engine.runState, 'expedition-boss')
 assert.equal(engine._mapThemeId, 'royal')
 assert.equal(engine._mapVariant, 'shattered-court')
+finishStageIntro('expedition-boss')
 assert.equal(em.enemies.length, 1)
 assert.equal(em._boss.isExpeditionBoss, true)
+assert.equal(em._boss.stageBossId, 'court_commander')
+em._boss.destroy()
 engine.weaponSystem._settleKill(em._boss)
 assert.equal(engine.runState, 'victory')
 assert.equal(settlement.mode, 'expedition')
 assert.equal(settlement.stage, 8)
 assert.equal(settlement.totalStages, 8)
 assert.equal(settlement.epilogue.text, '原来一路进犯的……是我们。')
-console.log('✓ 章节远征完成八关目标（含难度插章）、三类补给、技能衔接、统帅 Boss 与胜利结算闭环')
+console.log('✓ 王庭逆袭完成八章独立目标、章节过场、逐章首领、补给与王庭真相闭环')
 console.log('\n无头渲染可见性测试通过 ✓')

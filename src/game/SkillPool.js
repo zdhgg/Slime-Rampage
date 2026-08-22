@@ -18,7 +18,7 @@ export const SPEC_INFO = {
     desc: '近战冲撞 · 胃袋吞噬 · 自愈肉盾',
     bonus: '👑 觉醒赋能：吞噬阈值提升至 28% · 生命上限 +1',
     roadmap: [
-      'T1: 深渊胃囊 (放宽阈值/吸附半径) / 硬化甲壳 (受击反震)',
+      'T1: 深渊胃囊 (吞噬强化 · 攻击逐级降低) / 硬化甲壳 (受击反震)',
       'T2: 腐蚀重碾 (冲刺冷却大幅缩短 & 撞击 4 倍伤害)',
       'T3: 胃酸迸发 (吞噬向周围喷发 10 团强酸弹)',
       '🌟 终极觉醒: 荒古吞噬领主 (体型+30% · 冲刺无敌且秒杀吞噬 <=50% 残血怪)',
@@ -84,17 +84,22 @@ export const SKILL_DATABASE = {
         tier: 1,
         name: '深渊胃囊',
         icon: '🕳️',
-        desc: '放宽吞噬生命阈值，并大幅增大吞噬引力范围',
+        desc: '主动抑制攻击强度，换取更高吞噬线与更大的吞噬引力范围',
         tags: ['暴食·T1', '吞噬'],
         maxLevel: 3,
         stats(lv) {
           const t = [28, 32, 36][lv] || 36
           const r = [20, 40, 60][lv] || 60
-          return `吞噬阈值 ${t}% · 吸附半径 +${r}%`
+          const damagePenalty = [10, 20, 30][lv] || 30
+          return `吞噬阈值 ${t}% · 吸附 +${r}% · 攻击 -${damagePenalty}%`
         },
         apply(game, lv) {
+          const damageMultipliers = [0.9, 0.8, 0.7]
+          const previousDamageMul = lv > 1 ? damageMultipliers[lv - 2] : 1
+          const nextDamageMul = damageMultipliers[lv - 1]
           game.devourThreshold = [0.28, 0.32, 0.36][lv - 1]
           game.player.devourRadiusBonus = [1.2, 1.4, 1.6][lv - 1]
+          game.weaponSystem.damage *= nextDamageMul / previousDamageMul
         },
       },
       {
@@ -689,15 +694,6 @@ export const SKILL_DATABASE = {
 }
 
 /**
- * 开局流派预选附赠的首个 T1 技能（UI 预览与引擎应用共用同一来源，
- * 防止展示与实际赠送的技能漂移）。
- */
-export function getStartingGift(spec) {
-  const tree = SKILL_DATABASE[spec]
-  return tree ? tree.primary.find((s) => s.tier === 1) || null : null
-}
-
-/**
  * 智能抽取算法（支持里程碑觉醒机制）
  */
 export function rollSkills(game, count = 3) {
@@ -787,12 +783,14 @@ export function rollSkills(game, count = 3) {
         const curLv = levels[s.id] || 0
         if (curLv >= s.maxLevel) continue
 
-        // 终极觉醒（Capstone）门槛后移：技能链 12 点在第 5~7 波即可点完，
-        // 后半局（高压期）反而没有质变点——Lv.14 或第 10 波起才进入候选
+        // 终极觉醒需要构筑深度和战局进度同时达标，防止单次经验暴涨或慢打
+        // 单独提前大招；远征用关卡进度替代计时波次。
         if (s.isCapstone) {
           const pLevel = game.player?.level || 1
           const wave = game.enemyManager?.wave || 1
-          if (pLevel < 14 && wave < 10) continue
+          const expedition = game.runSelection?.mode === 'expedition'
+          const progressReady = expedition ? (game.expeditionStage || 1) >= 5 : wave >= 10
+          if (pLevel < 14 || !progressReady) continue
         }
 
         // 检查前置条件

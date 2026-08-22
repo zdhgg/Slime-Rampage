@@ -5,7 +5,7 @@ import { Player } from './src/game/entities/Player.js'
 import { Enemy } from './src/game/entities/Enemy.js'
 import { Boss } from './src/game/entities/Boss.js'
 import { EnemyManager } from './src/game/EnemyManager.js'
-import { WeaponSystem } from './src/game/WeaponSystem.js'
+import { COMMON_LOOT_CHANCE, WeaponSystem, getLootDropCount } from './src/game/WeaponSystem.js'
 import {
   ELEMENT_CORE_LIFETIME,
   MAX_ELEMENT_CORES,
@@ -135,9 +135,11 @@ e1.attach(game)
 enemyManager._enemies.push(e1)
 e1.hp = 1
 e1.devourable = true
+const lootBeforeDevour = weaponSystem.drops.knight
 enemyManager._startDevour(e1) // onDevoured 结算一次
 const killsAfterDevour = weaponSystem.kills
 assert.equal(killsAfterDevour, 1)
+assert.equal(weaponSystem.drops.knight, lootBeforeDevour + 1)
 weaponSystem._settleKill(e1) // 吞噬中再被「击杀」→ 应被 _settled 拦下
 weaponSystem.onDevoured(e1)
 assert.equal(weaponSystem.kills, killsAfterDevour)
@@ -500,7 +502,7 @@ assert.equal(player.killRushSpeed, 0)
 assert.equal(player.devourDamageReduction, 0)
 ok('专精行为：替身可嘲讽、击杀/吞噬增益有限时且重开状态可清理')
 
-// 24) 地图事件：抵达精英巢穴后生成 3 名事件精英，击败后发奖并可完整重置
+// 24) 地图事件：抵达讨伐队猎营后生成 3 名事件精英，击败后发奖并可完整重置
 enemyManager.reset()
 gemManager.reset()
 worldEvents.reset()
@@ -756,7 +758,7 @@ ok('章节远征计分与模式推进：困难闯关解锁限时，困难限时�
 const expeditionIntro = getRunIntro({ mode: 'expedition', difficulty: 'normal' })
 const timedHardIntro = getRunIntro({ mode: 'timed', difficulty: 'hard' })
 const endlessHellIntro = getRunIntro({ mode: 'endless', difficulty: 'hell' })
-assert.equal(expeditionIntro.location, '湿苔边境 · 破晓前')
+assert.equal(expeditionIntro.location, '史莱姆巢界 · 破晓前')
 assert.match(timedHardIntro.threatReport, /精英比例提升/)
 assert.equal(timedHardIntro.rewardMultiplier, 1.25)
 assert.match(endlessHellIntro.signal, /第二十波/)
@@ -867,6 +869,7 @@ knightBoss.hit(10)
 assert.equal(knightBoss.hp, bossHpBeforeBreak - 13.5)
 assert.equal(enemyManager.bossInfo.state, '破绽暴露')
 ok('骑士王强招：预警锁线不追踪、冲锋后暴露破绽且承伤 +35%')
+enemyManager.releaseBossCast(knightBoss)
 
 enemyManager._bullets.length = 0
 player.x = 650
@@ -885,6 +888,7 @@ assert.deepEqual({ x: mageBoss.targetX, y: mageBoss.targetY }, mageTarget)
 assert.equal(player.hp, hpBeforeMageBlast)
 assert.equal(enemyManager._bullets.length, 12)
 assert.ok(enemyManager._bullets.every((bullet) => bullet.isBoss))
+enemyManager.releaseBossCast(mageBoss)
 
 enemyManager._bullets.length = 0
 const archerBoss = new Boss({ x: 360, y: 500, wave: 5, type: 'boss-archer' })
@@ -900,9 +904,16 @@ enemyManager.reset()
 enemyManager.spawnAt(player.x + 80, player.y, 'knight')
 enemyManager.spawnAt(player.x + 100, player.y, 'mage')
 enemyManager.spawnBullet(player.x, player.y, 0, 'mage')
-const finalBoss = enemyManager.beginFinale()
-assert.equal(enemyManager.enemies.length, 1)
+const finaleVanguard = enemyManager.beginFinale()
+assert.equal(enemyManager.enemies.length, 2)
 assert.equal(enemyManager._bullets.length, 0)
+assert.equal(enemyManager.activeBossCount, 2)
+assert.equal(enemyManager.pendingBossCount, 1)
+assert.equal(finaleVanguard.bossEncounterFinal, true)
+finaleVanguard.destroy()
+enemyManager.advanceBossEncounter(finaleVanguard)
+const finalBoss = enemyManager._bosses.find((boss) => boss.active && boss.type === 'boss-final')
+assert.ok(finalBoss)
 assert.equal(finalBoss.isFinalBoss, true)
 assert.equal(finalBoss.type, 'boss-final')
 finalBoss.patternBonus = 2
@@ -920,23 +931,28 @@ assert.equal(finalBoss.specialDuration, 0.95)
 enemyManager._bullets.length = 0
 finalBoss.update(0.96)
 assert.equal(enemyManager._bullets.length, 16)
-ok('限时终局 Boss：清场后确定性轮转三职业招式，强化弹幕不缩短预警')
+ok('限时终局首领编队：先遣双首领、终审增援与三职业轮转均正常')
 
 // 31) Boss 半血第二阶段：统一转阶段停顿、解控与攻击节奏强化
-enemyManager._boss = knightBoss
-knightBoss.specialState = 'idle'
-knightBoss.vulnerableTimer = 0
-knightBoss.hp = knightBoss.maxHp * 0.5
-knightBoss.freeze = 5
-const phaseOneSpeed = knightBoss.speed
-const phaseOneInterval = knightBoss.attackInterval
-knightBoss.update(0.016)
-assert.equal(knightBoss.phase, 2)
-assert.equal(knightBoss.enraged, true)
-assert.ok(knightBoss.phaseShift > 0)
-assert.ok(knightBoss.speed > phaseOneSpeed)
-assert.ok(knightBoss.attackInterval < phaseOneInterval)
-assert.equal(knightBoss.freeze, 0)
+enemyManager.reset()
+const phaseBoss = new Boss({ x: 500, y: 500, wave: 5, type: 'boss-knight' })
+phaseBoss.attach(game)
+enemyManager._enemies.push(phaseBoss)
+enemyManager._bosses.push(phaseBoss)
+enemyManager._boss = phaseBoss
+phaseBoss.specialState = 'idle'
+phaseBoss.vulnerableTimer = 0
+phaseBoss.hp = phaseBoss.maxHp * 0.5
+phaseBoss.freeze = 5
+const phaseOneSpeed = phaseBoss.speed
+const phaseOneInterval = phaseBoss.attackInterval
+phaseBoss.update(0.016)
+assert.equal(phaseBoss.phase, 2)
+assert.equal(phaseBoss.enraged, true)
+assert.ok(phaseBoss.phaseShift > 0)
+assert.ok(phaseBoss.speed > phaseOneSpeed)
+assert.ok(phaseBoss.attackInterval < phaseOneInterval)
+assert.equal(phaseBoss.freeze, 0)
 assert.equal(enemyManager.bossInfo.phaseName, '血誓狂袭')
 ok('Boss 半血统一进入第二阶段：短暂停顿、解控、加速并缩短攻击间隔')
 
@@ -991,5 +1007,14 @@ const compactedExp = gemManager._gems.filter((g) => g.type === 'exp')
 assert.equal(compactedExp.length, MAX_EXP_GEMS)
 assert.equal(compactedExp.reduce((sum, g) => sum + g.value, 0), expTotal)
 ok('掉落预算：元素核心封顶 36 个，经验宝石封顶 180 个且经验总值守恒')
+
+// 34) 黑市战利品：普通击杀 10% 边界明确，主动吞噬仍保持必掉。
+assert.equal(COMMON_LOOT_CHANCE, 0.1)
+const commonLootProbe = new Enemy({ x: 100, y: 100, speed: 80, hp: 1, type: 'knight' })
+const eliteLootProbe = new Enemy({ x: 120, y: 100, speed: 80, hp: 1, type: 'knight', elite: true })
+assert.equal(getLootDropCount(commonLootProbe, () => COMMON_LOOT_CHANCE - 0.001), 1)
+assert.equal(getLootDropCount(commonLootProbe, () => COMMON_LOOT_CHANCE), 0)
+assert.equal(getLootDropCount(eliteLootProbe, () => 1), 1)
+ok('黑市战利品：普通击杀降至 10%，吞噬与精英的确定性收益保留')
 
 console.log(`\n全部通过：${n} 组断言 ✓`)

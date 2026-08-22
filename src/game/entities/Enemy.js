@@ -87,6 +87,7 @@ export class Enemy extends Entity {
     affix = null,
     affixes = null,
     attackTempo = 1,
+    speedCap = Infinity,
   }) {
     super()
     this.x = x
@@ -98,10 +99,13 @@ export class Enemy extends Entity {
     // 职业系数在此应用（速度/血量），spawn 只需传基础值
     this.speed = speed * CLASSES[type].speedMul * (elite ? 1.2 : 1) // px/s
     if (this.hasAffix('swift')) this.speed *= 1.5 // 迅捷词缀：移速再 ×1.5
+    this.speed = Math.min(this.speed, speedCap)
     this.hp = Math.round(hp * CLASSES[type].hpMul * (elite ? 3 : 1)) // 生命值
     this.maxHp = this.hp // 记录满血（精英/Boss 血条用）
-    this.expValue =
-      Math.round(rewardHp * CLASSES[type].hpMul * (elite ? 3 : 1)) * 5 * (elite ? 3 : 1)
+    const baseExp = Math.round(rewardHp * CLASSES[type].hpMul) * 5
+    // 精英生命约为 3 倍，并额外承担词缀风险；固定 5 倍经验既有奖励感，
+    // 又避免旧公式的约 9 倍收益让随机精英密度直接制造等级暴冲。
+    this.expValue = baseExp * (elite ? 5 : 1)
     this.radius = CLASSES[type].radius + (elite ? 3 : 0) // 碰撞半径
     this.range = CLASSES[type].range // 远程射程（骑士为 0 = 纯近战）
     this.attackInterval = CLASSES[type].attackInterval / Math.max(0.1, attackTempo)
@@ -110,6 +114,7 @@ export class Enemy extends Entity {
     this.flash = 0 // 受击白闪计时（秒）
     this.damage = type === 'golem' ? 2 : 1 // 攻击伤害（魔像重击 2 点 / 其余 1 点）
     this.attackCd = Math.random() * 0.6 // 攻击冷却（秒），随机错峰开局
+    this.objectiveTarget = null // 守巢章节的指定近战兵会改为攻击巢心
 
     // —— 吞噬系统（评审改造：残血可吞噬，吞噬是核心爽点） ——
     this.devourable = false // 残血（<25%）且非 Boss → 可被史莱姆吞噬
@@ -257,7 +262,8 @@ export class Enemy extends Entity {
   }
 
   _hitTarget(target, player, damage) {
-    if (target.isDecoy) player.hitDecoy(target, damage)
+    if (target.isMapObjective) target.hit?.(damage, this)
+    else if (target.isDecoy) player.hitDecoy(target, damage)
     else player.hit(damage)
   }
 
@@ -265,7 +271,7 @@ export class Enemy extends Entity {
     if (this.devouring) return // 正在被史莱姆吸入：不行动
     if (!this._tickStatus(dt)) return
     const player = this.game.player
-    const target = player.getEnemyTarget?.(this) || player
+    const target = this.game.mapFeatures?.getEnemyTarget(this) || player.getEnemyTarget?.(this) || player
     const targetRadius = target.radius || player.radius
     const dx = target.x - this.x
     const dy = target.y - this.y
@@ -279,7 +285,8 @@ export class Enemy extends Entity {
     // —— 职业行为 ——
     const ux = dx / (dist || 1)
     const uy = dy / (dist || 1)
-    const spd = this.speed * (this.slow > 0 ? SLOW_MUL : 1)
+    const terrainMul = this.game.mapFeatures?.speedMultiplierAt(this.x, this.y, 'enemy') || 1
+    const spd = this.speed * (this.slow > 0 ? SLOW_MUL : 1) * terrainMul
     this._moving = false
 
     if (
