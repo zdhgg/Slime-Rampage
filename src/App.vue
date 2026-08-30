@@ -69,6 +69,7 @@ const publicLeaderboard = ref(null)
 const publicLeaderboardKey = ref('')
 let toastTimer = 0
 let evolutionTimer = 0
+let lanBoardTimer = 0
 
 /** 音效快捷访问（引擎未就绪时静默） */
 const snd = () => engine.value?.sound
@@ -376,6 +377,21 @@ async function loadPublicLeaderboard(selection = selectedRun.value) {
   } catch {
     if (publicLeaderboardKey.value === key) publicLeaderboard.value = null
   }
+}
+
+/** 停留在开始界面时每 20s 轮询公共榜：朋友的新成绩无需手动刷新（隐藏标签页不请求）。 */
+function startLanBoardPolling() {
+  stopLanBoardPolling()
+  lanBoardTimer = setInterval(() => {
+    if (!document.hidden && lanStatus.value.online && !started.value && !showMarket.value) {
+      loadPublicLeaderboard(selectedRun.value)
+    }
+  }, 20000)
+}
+
+function stopLanBoardPolling() {
+  clearInterval(lanBoardTimer)
+  lanBoardTimer = 0
 }
 
 async function refreshLanSession() {
@@ -792,9 +808,11 @@ function onKeydown(e) {
 onMounted(() => {
   window.addEventListener('keydown', onKeydown)
   refreshLanSession()
+  startLanBoardPolling()
 })
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeydown)
+  stopLanBoardPolling()
 })
 </script>
 

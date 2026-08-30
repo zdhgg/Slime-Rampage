@@ -20,6 +20,9 @@ const closeButton = ref(null)
 const isOnline = computed(() => !!props.status?.online)
 const canRegister = computed(() => isOnline.value && props.status?.registrationEnabled !== false)
 const canSubmit = computed(() => isOnline.value && username.value.trim().length >= 3 && password.value.length >= 6 && !props.busy)
+const hostAddress = computed(() => window.location.origin)
+const copied = ref(false)
+let copiedTimer = 0
 const localSummary = computed(() => {
   const save = props.localSlot?.data
   if (!save) return '暂无可导入的本地档案'
@@ -41,6 +44,34 @@ function switchMode(nextMode) {
   nextTick(() => firstInput.value?.focus())
 }
 
+async function copyAddress() {
+  const text = hostAddress.value
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+  } catch {
+    // 局域网 http 地址不是安全上下文，剪贴板 API 可能不可用，退回 execCommand
+    const area = document.createElement('textarea')
+    area.value = text
+    area.setAttribute('readonly', '')
+    area.style.position = 'fixed'
+    area.style.opacity = '0'
+    document.body.appendChild(area)
+    area.select()
+    try {
+      document.execCommand('copy')
+    } catch {
+      /* 复制失败：保持按钮原样，不伪装成功 */
+    }
+    area.remove()
+  }
+  copied.value = true
+  clearTimeout(copiedTimer)
+  copiedTimer = setTimeout(() => {
+    copied.value = false
+  }, 1600)
+}
+
 function onKeydown(event) {
   if (event.code === 'Escape') emit('close')
 }
@@ -55,7 +86,10 @@ onMounted(() => {
   nextTick(() => (props.account ? closeButton.value?.focus() : firstInput.value?.focus()))
 })
 
-onUnmounted(() => window.removeEventListener('keydown', onKeydown))
+onUnmounted(() => {
+  window.removeEventListener('keydown', onKeydown)
+  clearTimeout(copiedTimer)
+})
 </script>
 
 <template>
@@ -70,6 +104,12 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
       </header>
 
       <div v-if="message" class="lan-message" role="status">{{ message }}</div>
+
+      <div v-if="isOnline" class="lan-address">
+        <span>主机地址</span>
+        <code>{{ hostAddress }}</code>
+        <button type="button" class="ghost-button" @click="copyAddress">{{ copied ? '已复制' : '复制' }}</button>
+      </div>
 
       <div v-if="account" class="account-panel">
         <div class="account-card">
@@ -138,7 +178,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
           />
         </label>
 
-        <p v-if="!isOnline" class="auth-note">请先启动局域网主机，再从同一地址打开游戏。</p>
+        <p v-if="!isOnline" class="auth-note">请先启动局域网主机（npm run lan），再从同一地址打开游戏；仍无法连接时，检查主机防火墙是否放行了 4173 端口。</p>
         <p v-else-if="mode === 'register' && !canRegister" class="auth-note">主机暂时关闭了新账号注册。</p>
         <p v-else class="auth-note">登录后使用远程三档案，结算会进入全员排行榜。</p>
 
@@ -228,6 +268,38 @@ input {
   background: rgba(215, 166, 87, 0.08);
   font-size: 12px;
   line-height: 1.5;
+}
+
+.lan-address {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 16px 22px 0;
+  padding: 9px 12px;
+  border: 1px dashed rgba(238, 214, 180, 0.22);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.lan-address span {
+  color: #b98747;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.lan-address code {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: rgba(244, 238, 230, 0.8);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lan-address .ghost-button {
+  min-height: 30px;
+  padding: 0 12px;
 }
 
 .account-panel,

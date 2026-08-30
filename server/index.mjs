@@ -30,6 +30,10 @@ const server = app.listen(port, host, () => {
     }
   }
   console.log(`  数据  ${dataDir}`)
+  if (process.platform === 'win32') {
+    console.log('  提示  若其他设备无法连接，多为 Windows 防火墙拦截，可用管理员终端放行：')
+    console.log(`        netsh advfirewall firewall add rule name="SlimeRampage-LAN" dir=in action=allow protocol=TCP localport=${port}`)
+  }
 })
 
 function shutdown(signal) {

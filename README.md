@@ -29,6 +29,18 @@ npm run lan     # 构建并启动局域网主机
 
 单机档案保存在当前站点域名对应的 `localStorage` 中；更换域名或清理浏览器站点数据会产生一份新档案目录。局域网主机数据默认保存在项目根目录 `data/`，可通过 `SLIME_DATA_DIR` 调整。
 
+### 局域网主机
+
+```bash
+npm run lan    # 构建并启动局域网主机（默认端口 4173）
+```
+
+启动后控制台会打印本机与局域网访问地址，其他设备在浏览器打开同一地址即可加入：局域网账号注册/登录、远程三槽档案、全员排行榜与结算同步均由主机提供；不登录也可直接游玩和查看榜单。
+
+**Windows 防火墙**：首次启动会弹出授权框，请选择"允许访问"。若误点取消，其他设备将无法连接，可在管理员终端执行
+`netsh advfirewall firewall add rule name="SlimeRampage-LAN" dir=in action=allow protocol=TCP localport=4173`
+放行（端口以 `SLIME_PORT` 为准）。
+
 ## 发布
 
 - 推送到 `main` 后，`CI` 工作流会执行干净安装、全量测试、生产构建，并保存 `dist` 构建产物。

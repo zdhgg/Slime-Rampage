@@ -135,6 +135,7 @@ const lanLabel = computed(() => {
   return props.lanStatus?.checked ? '离线单机' : '检测中'
 })
 const publicEntries = computed(() => props.publicLeaderboard?.entries || [])
+const hostAddress = window.location.origin
 const record = computed(() => props.records[runKey(selection.value)] || {
   best: { wave: 1, stage: 1, kills: 0, time: 0, score: 0, clears: 0, fastestFinale: null, fastestClear: null },
   board: [],
@@ -355,6 +356,9 @@ watch(
           </div>
           <p v-else class="public-board-empty">
             {{ props.lanStatus?.online ? '这套规则还没有公共成绩。' : '启动局域网主机后，全员榜会显示在这里。' }}
+          </p>
+          <p v-if="props.lanStatus?.online" class="public-board-hint">
+            主机地址 <code>{{ hostAddress }}</code> · 其他设备打开同一地址即可加入
           </p>
         </section>
 
@@ -1047,6 +1051,18 @@ watch(
   color: rgba(244, 238, 230, 0.42);
   font-size: 11px;
   line-height: 1.6;
+}
+
+.public-board-hint {
+  margin-top: 9px;
+  color: rgba(244, 238, 230, 0.48);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.public-board-hint code {
+  color: rgba(236, 196, 119, 0.88);
+  font-family: inherit;
 }
 
 .config-step {
