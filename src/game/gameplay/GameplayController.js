@@ -3,7 +3,7 @@
  *
  * Gameplay 描述一局的「游戏空间与核心操作规则」：
  *  - arena  = 开放地图割草（现有玩法：视口外刷怪、自动索敌、8 向移动）
- *  - runner = 三线推进射击（未来玩法，尚未实现；本契约即其接入点）
+ *  - runner = 三线推进射击（最小空壳：自有背景与通道渲染，玩法逻辑后续接入）
  *
  * 与 RunRules 的正交关系：runSelection.mode（expedition/timed/endless）
  * 表达一局的规则目标与结算口径，gameplay 表达空间与操作范式；

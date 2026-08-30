@@ -37,12 +37,14 @@ globalThis.cancelAnimationFrame = () => {}
 const { GameEngine } = await import('./src/game/GameEngine.js')
 const { GameplayController } = await import('./src/game/gameplay/GameplayController.js')
 const { ArenaGameplay } = await import('./src/game/gameplay/ArenaGameplay.js')
+const { RunnerGameplay } = await import('./src/game/gameplay/RunnerGameplay.js')
 const { createGameplay } = await import('./src/game/gameplay/GameplayFactory.js')
 
-// 工厂：arena → ArenaGameplay；未知 id（如尚未实装的 runner）安全回落 arena
+// 工厂：arena/runner 命中对应 Controller；未知 id 安全回落 arena
 assert.ok(createGameplay('arena') instanceof ArenaGameplay)
-assert.ok(createGameplay('runner') instanceof ArenaGameplay)
-console.log('✓ GameplayFactory：arena 命中，未知 id 安全回落 arena')
+assert.ok(createGameplay('runner') instanceof RunnerGameplay)
+assert.ok(createGameplay('unknown-mode') instanceof ArenaGameplay)
+console.log('✓ GameplayFactory：arena/runner 命中，未知 id 安全回落 arena')
 
 // 默认 gameplay = arena，且已注入引擎上下文
 const engine = GameEngine.create(canvasStub)
@@ -92,7 +94,7 @@ assert.equal(standalone.game, null)
 console.log('✓ ArenaGameplay 可独立 attach/reset/destroy')
 
 // 显式入口 configureGameplay：重建 Controller 并重新 attach；未知 id 回落 arena
-const swapped = engine.configureGameplay('runner')
+const swapped = engine.configureGameplay('does-not-exist')
 assert.equal(engine.gameplayId, 'arena')
 assert.ok(swapped instanceof ArenaGameplay)
 assert.equal(swapped.game, engine)
@@ -155,6 +157,48 @@ for (const key of [
 delete engine._updateArenaFrame
 delete engine._renderArenaFrame
 console.log('✓ Execution Boundary：自定义 Gameplay 可完全跳过 Arena 每帧 update/render')
+
+// RunnerGameplay 最小空壳：configureGameplay('runner') 可切换；不走 Arena 管线，
+// updateWorld/renderWorld 接管每帧；可随时切回 arena 恢复默认管线。
+const runnerEntry = engine.configureGameplay('runner')
+assert.equal(engine.gameplayId, 'runner')
+assert.ok(runnerEntry instanceof RunnerGameplay)
+assert.ok(runnerEntry instanceof GameplayController)
+assert.equal(runnerEntry.usesArenaFramePipeline(), false)
+assert.equal(runnerEntry.game, engine)
+const runnerSpies = { arenaUpdate: 0, arenaRender: 0, worldUpdate: 0, worldRender: 0 }
+engine._updateArenaFrame = () => {
+  runnerSpies.arenaUpdate++
+}
+engine._renderArenaFrame = () => {
+  runnerSpies.arenaRender++
+}
+runnerEntry.updateWorld = (dt) => {
+  runnerSpies.worldUpdate += dt
+}
+runnerEntry.renderWorld = () => {
+  runnerSpies.worldRender++
+}
+engine.update(1 / 60)
+engine.render()
+assert.equal(runnerSpies.arenaUpdate, 0, 'runner 不得执行 Arena update helper')
+assert.equal(runnerSpies.arenaRender, 0, 'runner 不得执行 Arena render helper')
+assert.ok(Math.abs(runnerSpies.worldUpdate - 1 / 60) < 1e-9, 'updateWorld 应按帧收到 dt')
+assert.equal(runnerSpies.worldRender, 1, 'renderWorld 应每帧执行')
+delete engine._updateArenaFrame
+delete engine._renderArenaFrame
+delete runnerEntry.updateWorld
+delete runnerEntry.renderWorld
+
+// 切回 arena：默认管线与 Engine 上下文恢复，旧 runner 实例随切换销毁
+const backToArena = engine.configureGameplay('arena')
+assert.equal(engine.gameplayId, 'arena')
+assert.ok(backToArena instanceof ArenaGameplay)
+assert.equal(backToArena.usesArenaFramePipeline(), true)
+assert.equal(runnerEntry.game, null, '切回 arena 后旧 runner 实例已销毁')
+engine.update(1 / 60) // 切回后 Arena 管线照常运转
+engine.render()
+console.log('✓ RunnerGameplay 空壳：创建/接管每帧/切回 arena 全链可用')
 
 // 引擎销毁同步销毁 gameplay，单例复位；销毁后可再次初始化（HMR 场景）
 const active = engine.gameplay
