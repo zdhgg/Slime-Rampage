@@ -109,6 +109,7 @@ active.destroy = () => {
 }
 engine.destroy()
 assert.ok(destroyed, 'engine.destroy 应调用 gameplay.destroy')
+assert.equal(active.game, null, 'destroy 后 gameplay 的 Engine 上下文应已清空')
 assert.equal(GameEngine.getInstance(), null)
 const revived = GameEngine.create(canvasStub)
 assert.equal(revived.gameplayId, 'arena')

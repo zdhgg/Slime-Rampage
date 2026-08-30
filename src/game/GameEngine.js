@@ -185,9 +185,9 @@ export class GameEngine {
     // Gameplay 层：描述「游戏空间与核心操作规则」，与 runSelection.mode 正交。
     // 默认 arena（现有开放地图割草）；未来 runner 走 configureGameplay 显式切换，
     // 现有启动流程无需感知。Controller 不是 Entity，不进入 entities 列表。
+    // 创建即刻完成，attach 推迟到构造末尾（见 constructor 尾部）。
     this.gameplayId = 'arena'
     this.gameplay = createGameplay(this.gameplayId)
-    this.gameplay.attach(this)
     this.runState = 'idle'
     this.finaleTime = 0
     this.runFinished = false
@@ -307,6 +307,12 @@ export class GameEngine {
     this.addEntity(this.weaponSystem)
     // 战斗对白最后绘制，确保短气泡不被弹幕、伤害字或角色遮挡。
     this.addEntity(this.dialogue)
+
+    // Gameplay attach 放在构造末尾：字段、resize（画布/世界尺寸）与全部 Entity
+    // 注册均已就绪。attach 即「GameEngine 已完整构造，Gameplay 现在获得一个
+    // 可安全使用的 Engine 上下文」——未来 RunnerGameplay.attach 可直接依赖
+    // player / weaponSystem / width / entities 等，而无需自查初始化进度。
+    this.gameplay.attach(this)
   }
 
   // ------------------------------------------------------------
@@ -1212,9 +1218,11 @@ export class GameEngine {
     document.removeEventListener('visibilitychange', this._onVisibility)
     window.removeEventListener('keydown', this._unlockAudio)
     window.removeEventListener('click', this._unlockAudio)
+    // Gameplay 是上层生命周期对象：在 Input / entities / 回调等 Engine 基础设施
+    // 仍完整时先给销毁机会，未来 Gameplay 可在此注销自有资源或清理自有 Entity。
+    this.gameplay?.destroy()
     this.input.destroy()
     this.entities.length = 0
-    this.gameplay?.destroy() // Gameplay Controller 一并释放（arena 无资源，安全空转）
     this.onStats = null
     this.onCooldown = null
     this.onLevelUp = null

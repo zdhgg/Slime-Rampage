@@ -38,7 +38,8 @@ export class GameplayController {
   /** 每帧：实体更新、相机与主题推进之后调用 */
   afterUpdate(_dt) {}
 
-  /** 每帧：世界渲染之前调用（DPR 变换已就位，适合玩法自有底层画面） */
+  /** 每帧：世界渲染流程开始前调用（DPR 变换已就位）。当前 Arena 世界仍会随后
+   *  绘制并覆盖画面；Gameplay 自主管理完整世界渲染需要后续 Execution Boundary 支持。 */
   beforeRender(_ctx) {}
 
   /** 每帧：全部渲染（含暗角）之后调用，适合玩法自有屏幕空间覆盖层 */
