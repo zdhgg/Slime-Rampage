@@ -1,7 +1,8 @@
 // Gameplay 架构 smoke test：验证 gameplay 层默认值、工厂回落、
 // hooks 接线（reset/update/render/destroy）、Execution Boundary（每帧
-// update/render 执行边界）、Runner 空壳与三通道移动、Engine 初始化销毁不受损。
-// 纯 Node 运行（无头桩与 engine-smoke.mjs 同源），npm test 链内执行。
+// update/render 执行边界）、Runner 空壳/三通道移动/原型射击闭环、
+// Engine 初始化销毁不受损。纯 Node 运行（无头桩与 engine-smoke.mjs 同源），
+// npm test 链内执行。
 import assert from 'node:assert/strict'
 
 // —— 浏览器环境桩（与 engine-smoke.mjs 相同的最小桩） ——
@@ -266,9 +267,81 @@ canvasStub.getBoundingClientRect = previousRect
 engine._onResize()
 engine.update(1 / 60)
 
-// 恢复 arena，交还后续销毁测试的默认上下文
+// 恢复 arena，交还后续测试的默认上下文
 engine.configureGameplay('arena')
 console.log('✓ Runner lane 移动：边沿切换/边界钳制/按住不连跳/平滑过渡/resize 自适应全链可用')
+
+// Runner 原型射击闭环：固定射速自动射击、子弹保持发射 lane、只命中同 lane
+// 靶、命中扣血、归零消失、切 lane 后新子弹跟随新 lane。
+const sg = engine.configureGameplay('runner')
+assert.equal(sg._targets.length, 3, '三条 lane 应各有一个测试靶')
+assert.ok(sg._targets.every((t) => t.hp === t.maxHp && t.hp > 0), '靶子初始满血')
+
+// 固定射速：首帧立即 1 发，间隔 0.2s 后再射第 2 发（浮点下取第 14 帧 @60fps）
+engine.update(1 / 60)
+assert.equal(sg._bullets.length, 1, '首帧应立即射出 1 发')
+for (let i = 0; i < 13; i++) engine.update(1 / 60) // 0.2s 间隔 + 浮点余差
+assert.equal(sg._bullets.length, 2, '固定射速应每 0.2s 追加 1 发')
+
+// 子弹向上移动、直线飞行、保持发射时的 lane（初始在 lane 1）
+const firstBullet = sg._bullets[0]
+assert.equal(firstBullet.lane, 1)
+const bulletY = firstBullet.y
+const bulletX = firstBullet.x
+engine.update(1 / 60)
+assert.ok(firstBullet.y < bulletY, '子弹应向上移动')
+assert.equal(firstBullet.x, bulletX, '子弹应沿所属 lane 直线飞行')
+
+// 只命中同 lane 目标：lane 1 的子弹打到中靶，左右靶不受影响
+for (let i = 0; i < 60 && sg._targets[1].hp === sg._targets[1].maxHp; i++) engine.update(1 / 60)
+assert.equal(sg._targets[1].hp, sg._targets[1].maxHp - 1, '同 lane 命中应扣血')
+assert.equal(sg._targets[0].hp, sg._targets[0].maxHp, '左 lane 靶不应被命中')
+assert.equal(sg._targets[2].hp, sg._targets[2].maxHp, '右 lane 靶不应被命中')
+assert.ok(!sg._bullets.includes(firstBullet), '命中后的子弹应被移除')
+
+// 持续射击至 HP 归零：目标消失（渲染跳过）
+for (let i = 0; i < 400 && sg._targets[1].hp > 0; i++) engine.update(1 / 60)
+assert.equal(sg._targets[1].hp, 0, '持续命中应把靶子打到 HP 归零')
+assert.equal(sg._targets[0].hp, sg._targets[0].maxHp, '邻 lane 靶依旧不受影响')
+
+// 切换 lane 后：新子弹跟随新 lane，旧子弹保持发射时的 lane
+for (let i = 0; i < 60 && sg._bullets.length > 0; i++) engine.update(1 / 60) // 清空场上的 lane 1 旧弹
+engine.input.state.left = true
+engine.update(1 / 60)
+engine.input.state.left = false
+engine.update(1 / 60)
+assert.equal(sg.currentLane, 0, '应切换到左 lane')
+for (let i = 0; i < 13 && !sg._bullets.some((b) => b.lane === 0); i++) engine.update(1 / 60)
+assert.ok(sg._bullets.some((b) => b.lane === 0), '切 lane 后新子弹应属于新 lane')
+assert.ok(
+  sg._bullets.every((b) => b.lane === 0 || b.lane === 1),
+  '子弹不应出现在从未射击的 lane 2'
+)
+
+// resize 后子弹 X 仍对齐所属 lane 中心
+const flyingBullet = sg._bullets[sg._bullets.length - 1]
+const previousBulletLane = flyingBullet.lane
+const previousBulletCenter = sg.laneCenterX(previousBulletLane)
+assert.ok(
+  Math.abs(flyingBullet.x - previousBulletCenter) < sg._laneW / 2,
+  '子弹应位于所属 lane 横向范围内（出生时可能仍在平滑过渡途中）'
+)
+canvasStub.getBoundingClientRect = () => ({ width: 820, height: 640 })
+engine._onResize()
+engine.update(1 / 60)
+assert.notEqual(sg.laneCenterX(previousBulletLane), previousBulletCenter, 'lane 中心应随视口变化')
+assert.ok(
+  Math.abs(flyingBullet.x - sg.laneCenterX(flyingBullet.lane)) < 1e-6,
+  'resize 后子弹 X 应回到所属 lane 中心'
+)
+canvasStub.getBoundingClientRect = previousRect
+engine._onResize()
+engine.update(1 / 60)
+engine.render() // 射击渲染冒烟（靶/血条/HP 数值/子弹）
+
+// 恢复 arena，交还后续销毁测试的默认上下文
+engine.configureGameplay('arena')
+console.log('✓ Runner 射击闭环：固定射速/lane 隔离命中/扣血/摧毁/切 lane 跟随/resize 自适应全链可用')
 
 // 引擎销毁同步销毁 gameplay，单例复位；销毁后可再次初始化（HMR 场景）
 const active = engine.gameplay
