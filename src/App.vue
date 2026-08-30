@@ -96,6 +96,7 @@ const cooldown = ref({
 const gameOverInfo = ref(null) // 游戏结束统计（null = 游戏中）
 const isNewRecord = ref(false) // 本局是否刷新了最高纪录
 const paused = ref(false) // 手动暂停状态（引擎已暂停，画面冻结）
+const runnerActive = ref(false) // Runner 试玩进行中：隐藏 Arena HUD（Canvas 内自绘 Runner HUD）
 const reactionChoice = ref(null) // 副反应替换面板数据（null = 不显示；阶段十六槽位经济）
 const fusionConfirm = ref(null) // 首融确认面板数据（null = 不显示；阶段十六追加设计）
 const expeditionReward = ref(null)
@@ -553,6 +554,7 @@ async function onDeployRun() {
     lanRunTicket.value = null
   }
   snd()?.gameStart()
+  runnerActive.value = false
   gameOverInfo.value = null
   paused.value = false
   expeditionReward.value = null
@@ -587,6 +589,7 @@ function onStartRunner() {
   evolution.value = null
   elementToast.value = ''
   lanRunTicket.value = null
+  runnerActive.value = true
   engine.value.stop()
   const runner = engine.value.configureGameplay('runner')
   runner.restart()
@@ -762,6 +765,7 @@ function onChangeRules() {
   snd()?.uiClick()
   engine.value?.stop()
   lanRunTicket.value = null
+  runnerActive.value = false
   levelUpOptions.value = null
   gameOverInfo.value = null
   paused.value = false
@@ -853,6 +857,7 @@ onUnmounted(() => {
       v-if="started"
       :stats="stats"
       :cooldown="cooldown"
+      :variant="runnerActive ? 'runner' : 'arena'"
       :muted="muted"
       :paused="paused"
       :buttons-visible="!levelUpOptions && !gameOverInfo && !expeditionReward && !endlessDecision"

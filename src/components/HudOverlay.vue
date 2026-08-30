@@ -19,6 +19,8 @@ const props = defineProps({
   toast: { type: String, default: '' },
   toastKind: { type: String, default: 'info' },
   evolution: { type: Object, default: null },
+  // arena = 完整战斗 HUD；runner = 仅保留右上角暂停/静音（Runner 用 Canvas 内自绘 HUD）
+  variant: { type: String, default: 'arena' },
 })
 const emit = defineEmits(['toggle-mute', 'toggle-pause', 'toggle-resume'])
 const WEAPON_MUTATIONS = new Set(['gluttony', 'gatling', 'elemental', 'assassin'])
@@ -128,6 +130,7 @@ const elementLevel = (id) => props.stats.elements.find((e) => e.id === id)?.lv |
       'has-boss': stats.boss,
       'has-boss-formation': stats.boss?.formation,
       'has-bounty': stats.run?.bounty,
+      'hud--runner': variant === 'runner',
     }"
   >
     <div class="hud-title">
@@ -364,6 +367,23 @@ const elementLevel = (id) => props.stats.elements.find((e) => e.id === id)?.lv |
   position: absolute;
   inset: 0;
   pointer-events: none; /* 关键：UI 层不拦截游戏输入 */
+}
+
+/* Runner 试玩模式：隐藏全部 Arena 专属信息（等级/生命/波次/提示/统计/Boss/事件/
+   悬赏/章节演出），仅保留右上角暂停与静音按钮；Runner 的生命/时间由 Canvas 自绘 */
+.hud--runner .hud-title,
+.hud--runner .hud-level,
+.hud--runner .expedition-hud,
+.hud--runner .hud-hint,
+.hud--runner .hud-stats,
+.hud--runner .hud-action,
+.hud--runner .formation-break-hud,
+.hud--runner .boss-hud,
+.hud--runner .objective-hud,
+.hud--runner .endless-bounty-hud,
+.hud--runner .chapter-intro,
+.hud--runner .combo-toast {
+  display: none;
 }
 
 .hud-title {
