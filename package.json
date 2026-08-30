@@ -14,7 +14,7 @@
     "lan": "npm run build && npm run lan:serve",
     "lan:serve": "node server/index.mjs",
     "lan:backup": "node server/backup.mjs",
-    "test": "node smoke-test.mjs && node save-slots-test.mjs && node engine-smoke.mjs && node verify-changes.mjs && node verify-p1.mjs && node verify-p2.mjs && node verify-content.mjs && node verify-expedition-bosses.mjs && node verify-boss-squads.mjs && node verify-balance.mjs && node verify-map-features.mjs && node verify-endless-decisions.mjs && node lan-server-test.mjs"
+    "test": "node smoke-test.mjs && node save-slots-test.mjs && node engine-smoke.mjs && node gameplay-smoke.mjs && node verify-changes.mjs && node verify-p1.mjs && node verify-p2.mjs && node verify-content.mjs && node verify-expedition-bosses.mjs && node verify-boss-squads.mjs && node verify-balance.mjs && node verify-map-features.mjs && node verify-endless-decisions.mjs && node lan-server-test.mjs"
   },
   "dependencies": {
     "express": "^5.2.1",
