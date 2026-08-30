@@ -1,7 +1,14 @@
 import { GameplayController } from './GameplayController.js'
 
-const LANE_COUNT = 3 // 三线推进：三条纵向通道（左/中/右）
+const LANE_COUNT = 3 // 三线推进：三条纵向通道
 const TAU = Math.PI * 2
+
+// —— 三条通道的固定职责（原型约定，勿散落 0/1/2）——
+export const MONSTER_LANE = 0 // 怪物通道：只有怪物向玩家逼近
+export const BUFF_LANE = 1 // 普通增益通道：ATK Gate（打爆攻击永久 +1）
+export const SPECIAL_LANE = 2 // 特殊增益通道：Rapid Gate（打爆临时急速射击）
+const GATE_LANES = [BUFF_LANE, SPECIAL_LANE]
+const LANE_LABELS = ['MONSTER', 'ATK', 'RAPID'] // 通道顶部职责标识（原型调试用）
 
 // 通道几何比例（唯一计算入口在 _ensureLayout / laneCenterX，禁止散落 width * xxx）
 const LANE_WIDTH_RATIO = 0.16
@@ -17,11 +24,13 @@ const LANE_LERP_PER_FRAME = 0.22
 
 // 最小射击闭环：固定射速自动射击（无需射击键）
 const FIRE_INTERVAL = 1 / 5 // 每秒 5 发
+const RAPID_FIRE_RATE_MUL = 2 // Rapid Gate 效果：射速 ×2
+const RAPID_FIRE_DURATION = 6 // Rapid Gate 效果持续（秒）
 const BULLET_SPEED = 900 // 子弹上飞速度（px/s）
 const BULLET_RADIUS = 5
 const BULLET_MARGIN = 40 // 子弹飞出通道顶部后的清除余量
 
-// 原型怪物：从通道顶部直线逼近玩家（无 AI）；被击杀或突破后短暂间隔重生
+// 原型怪物：从 MONSTER_LANE 顶部直线逼近玩家（无 AI）；被击杀或突破后短暂间隔重生
 const MONSTER_HP = 5
 const MONSTER_SPEED_BASE = 70 // 逼近速度下限（px/s）
 const MONSTER_SPEED_VARIANCE = 50 // 速度随机幅度（70~120 px/s）
@@ -29,14 +38,16 @@ const MONSTER_RADIUS_RATIO = 0.24 // 怪物身体半径（相对通道宽）
 const MONSTER_SPAWN_MARGIN = 20 // 出生点在通道顶部上方的余量
 const RESPAWN_DELAY = 1.2 // 击杀/突破后到重新生成的间隔（秒）
 
-// 增益 Gate：固定在通道前方，打爆后攻击永久 +1，一段时间后重生；
-// 与怪物分居不同 lane 时形成「打门强化 vs 打怪防守」的火力取舍
+// 增益 Gate：固定在所属通道前方，打爆后获得增益并按冷却重生
 const GATE_HP = 12
 const GATE_Y_RATIO = 0.42 // Gate 纵向位置（怪物生成区与玩家之间）
 const GATE_RESPAWN_DELAY = 4 // 打爆后到重新生成的间隔（秒）
 const GATE_BODY = '#7cd7ff'
 const GATE_EDGE = '#2a86b8'
+const RAPID_GATE_BODY = '#c9a2ff'
+const RAPID_GATE_EDGE = '#7a4bb8'
 const GATE_FONT = 'bold 13px sans-serif'
+const LANE_LABEL_FONT = 'bold 11px sans-serif'
 // 自动射击补发：单帧 dt 跨多个射击间隔时补齐，但封顶防异常大 dt 爆发
 const MAX_CATCH_UP_SHOTS = 3
 
@@ -44,7 +55,8 @@ const MAX_CATCH_UP_SHOTS = 3
 const RUNNER_BG = '#0d1520'
 const LANE_FILL = 'rgba(122, 178, 255, 0.06)'
 const LANE_EDGE = 'rgba(122, 178, 255, 0.35)'
-// 玩家/子弹/怪物配色（沿用 Arena 基础色系；怪物用敌意暖色、Gate 用青色菱形）
+const LANE_LABEL_COLOR = 'rgba(244, 238, 230, 0.35)'
+// 玩家/子弹/怪物/Gate 配色（沿用 Arena 基础色系；怪物敌意暖色、Gate 冷色系）
 const SLIME_BODY = '#8ae84a'
 const SLIME_EDGE = '#2f9e3a'
 const BULLET_COLOR = '#ffd166'
@@ -54,18 +66,18 @@ const HP_BAR_FULL = '#8ae84a'
 const HP_BAR_LOW = '#ff6b4a'
 
 /**
- * Runner 玩法（原型怪物阶段）：三线推进射击的空间范式。
+ * Runner 玩法（通道职责阶段）：三线推进射击的空间范式。
  *
- * 已实现：三通道玩家移动（边沿触发/边界钳制/平滑过渡）+ 射击闭环——
- * 固定射速自动射击（冷却保留时间余量，平均射速不受帧率影响；单帧跨多间隔
- * 时补发但封顶），子弹从玩家位置沿发射 lane 上飞、以 attackDamage 对同 lane
- * 目标结算，单发只命中路径上最近的一个目标；怪物从通道顶部直线逼近玩家，
- * 命中扣血（头顶血条），HP 归零消失；被消灭或突破到玩家区域都会在短暂
- * 间隔后于原 lane 顶部重生，突破额外记录 breachCount（暂无失败结算）；
- * 增益 Gate 固定在通道前方，打爆后 attackDamage 永久 +1 并在一段时间后
- * 重生——Gate 与怪物分居不同 lane 时形成火力取舍；切 lane 后新子弹跟随
- * 新 lane；resize 后子弹/怪物/Gate 的 lane X 保持对齐。
- * 仍未实现：正式失败结算/WeaponSystem 接入/特殊技能 Gate/Buff/开始界面入口。
+ * 三条通道各司其职（常量 MONSTER_LANE / BUFF_LANE / SPECIAL_LANE，通道顶部
+ * 绘制 MONSTER / ATK / RAPID 标识）：
+ *  - MONSTER_LANE：唯一的怪物通道，怪物直线逼近玩家，击杀/突破后重生，
+ *    突破记录 breachCount（暂无失败结算）；
+ *  - BUFF_LANE：ATK Gate，打爆后 attackDamage 永久 +1；
+ *  - SPECIAL_LANE：Rapid Gate，打爆后射速 ×2 持续 6 秒，到期自动恢复。
+ * 自动射击固定射速（冷却保留时间余量不受帧率影响，单帧跨多间隔补发但封顶），
+ * 子弹以 attackDamage 结算、沿发射 lane 上飞、只命中同 lane 目标，单发只命中
+ * 路径上最近的一个；切 lane = 切换火力方向；resize 后所有实体 lane X 保持对齐。
+ * 仍未实现：波次/正式失败结算/WeaponSystem 接入/元素基因/Boss/开始界面入口。
  * 不接 RunRules.MODE_IDS，仅可通过 configureGameplay('runner') 进入。
  */
 export class RunnerGameplay extends GameplayController {
@@ -74,16 +86,17 @@ export class RunnerGameplay extends GameplayController {
     this.currentLane = 1 // 默认中间通道
     this.playerX = 0 // 玩家显示 X（平滑过渡中的当前值，CSS 像素）
     this.playerY = 0 // 玩家显示 Y（随视口高度固定在下方区域）
-    this.attackDamage = 1 // 基础战斗属性：单发子弹伤害（打爆 Gate 永久 +1）
+    this.attackDamage = 1 // 基础战斗属性：单发子弹伤害（打爆 ATK Gate 永久 +1）
+    this.rapidFireTimer = 0 // Rapid Fire 剩余时间（秒；0 = 正常射速）
     this.breachCount = 0 // 怪物到达玩家区域的累计次数（原型计数，暂不结算）
     this._prevLeft = false // 上一帧左键状态（边沿触发用）
     this._prevRight = false // 上一帧右键状态
     this._fireCooldown = 0 // 距下次自动射击的计时（秒）
     this._bullets = [] // 玩家子弹：{ lane, x, y }（lane 为发射时所属，不可变）
-    this._monsterByLane = [null, null, null] // 每 lane 至多一只逼近怪物
-    this._respawnTimers = [0, 0, 0] // 空 lane 的重生倒计时（秒；0 = 立即生成）
+    this._monsterByLane = [null, null, null] // 仅 MONSTER_LANE 会持有怪物
+    this._respawnTimers = [0, 0, 0] // 空 lane 的怪物重生倒计时（秒；0 = 立即生成）
     this._monstersReady = false // 怪物是否已随首次布局生成
-    this._gateByLane = [null, null, null] // 每 lane 至多一个增益 Gate
+    this._gateByLane = [null, null, null] // 仅 BUFF_LANE / SPECIAL_LANE 持有 Gate
     this._gateRespawnTimers = [0, 0, 0] // 空 lane 的 Gate 重生倒计时（秒）
     this._gatesReady = false // Gate 是否已随首次布局生成
     // 视口几何缓存（_ensureLayout 更新；热路径只读数值，零分配）
@@ -108,7 +121,7 @@ export class RunnerGameplay extends GameplayController {
   }
 
   /**
-   * 世界更新：通道切换输入 → 玩家 X 平滑过渡 → 怪物逼近 → 射击与命中。
+   * 世界更新：通道切换输入 → 玩家 X 平滑过渡 → 怪物逼近 → Gate 重生 → 射击。
    * 边沿触发：只在「上一帧未按、本帧按下」的瞬间切换，按住不连跳。
    */
   updateWorld(dt) {
@@ -140,28 +153,27 @@ export class RunnerGameplay extends GameplayController {
     return this._laneStartX + lane * (this._laneW + this._laneGap) + this._laneW / 2
   }
 
-  /** 怪物逼近：直线向下移动；到达玩家区域记一次突破并排队重生；空 lane 倒计时重生 */
+  /** 怪物逼近（仅 MONSTER_LANE）：直线向下；到达玩家区域记一次突破并排队重生 */
   _updateMonsters(dt) {
+    const lane = MONSTER_LANE
+    const monster = this._monsterByLane[lane]
+    if (!monster) {
+      this._respawnTimers[lane] -= dt
+      if (this._respawnTimers[lane] <= 0) this._spawnMonster(lane)
+      return
+    }
+    monster.y += monster.speed * dt
     const breachY = this.playerY - this._laneW * PLAYER_RADIUS_RATIO
-    for (let lane = 0; lane < LANE_COUNT; lane++) {
-      const monster = this._monsterByLane[lane]
-      if (!monster) {
-        this._respawnTimers[lane] -= dt
-        if (this._respawnTimers[lane] <= 0) this._spawnMonster(lane)
-        continue
-      }
-      monster.y += monster.speed * dt
-      if (monster.y >= breachY) {
-        this._monsterByLane[lane] = null
-        this._respawnTimers[lane] = RESPAWN_DELAY
-        this.breachCount++
-      }
+    if (monster.y >= breachY) {
+      this._monsterByLane[lane] = null
+      this._respawnTimers[lane] = RESPAWN_DELAY
+      this.breachCount++
     }
   }
 
   /** Gate 重生：打爆后按倒计时在原 lane 重新生成 */
   _updateGates(dt) {
-    for (let lane = 0; lane < LANE_COUNT; lane++) {
+    for (const lane of GATE_LANES) {
       if (this._gateByLane[lane]) continue
       this._gateRespawnTimers[lane] -= dt
       if (this._gateRespawnTimers[lane] <= 0) this._spawnGate(lane)
@@ -170,6 +182,11 @@ export class RunnerGameplay extends GameplayController {
 
   /** 自动射击（带补发上限）+ 子弹推进 + 同 lane「最近目标」命中判定 */
   _updateShooting(dt) {
+    // Rapid Fire 效果期间射速 ×2；到期自动恢复正常射速
+    this.rapidFireTimer = Math.max(0, this.rapidFireTimer - dt)
+    const interval =
+      this.rapidFireTimer > 0 ? FIRE_INTERVAL / RAPID_FIRE_RATE_MUL : FIRE_INTERVAL
+
     // 固定射速：触发后保留时间余量（+= 而非重置），平均节拍不随帧率漂移；
     // dt 跨多个间隔时补齐应发数量，但单帧封顶——超出部分直接丢弃，
     // 防止异常大 dt（切后台恢复等）瞬间喷出大量子弹
@@ -177,10 +194,10 @@ export class RunnerGameplay extends GameplayController {
     let shots = 0
     while (this._fireCooldown <= 0) {
       if (shots >= MAX_CATCH_UP_SHOTS) {
-        this._fireCooldown = FIRE_INTERVAL
+        this._fireCooldown = interval
         break
       }
-      this._fireCooldown += FIRE_INTERVAL
+      this._fireCooldown += interval
       this._bullets.push({
         lane: this.currentLane, // 发射时所属 lane，此后不可变
         x: this.playerX, // 出生于玩家当前位置
@@ -217,10 +234,11 @@ export class RunnerGameplay extends GameplayController {
         this._bullets.splice(i, 1)
         gate.hp -= this.attackDamage
         if (gate.hp <= 0) {
-          // 打爆 Gate：本局攻击永久 +1，Gate 消失并按倒计时重生
+          // 打爆 Gate：按类型发放增益，Gate 消失并按倒计时重生
           this._gateByLane[gate.lane] = null
           this._gateRespawnTimers[gate.lane] = GATE_RESPAWN_DELAY
-          this.attackDamage += 1
+          if (gate.kind === 'rapid') this.rapidFireTimer = RAPID_FIRE_DURATION
+          else this.attackDamage += 1
         }
         continue
       }
@@ -238,7 +256,7 @@ export class RunnerGameplay extends GameplayController {
     }
   }
 
-  /** 在 lane 顶部生成一只怪物（速度带随机幅度，制造推进节奏差） */
+  /** 在 MONSTER_LANE 顶部生成一只怪物（速度带随机幅度，制造推进节奏差） */
   _spawnMonster(lane) {
     this._monsterByLane[lane] = {
       lane,
@@ -249,16 +267,17 @@ export class RunnerGameplay extends GameplayController {
     }
   }
 
-  /** 在 lane 固定位置生成一个增益 Gate */
+  /** 在 lane 固定位置生成一个增益 Gate（类型由通道职责决定） */
   _spawnGate(lane) {
     this._gateByLane[lane] = {
       lane,
+      kind: lane === SPECIAL_LANE ? 'rapid' : 'attack',
       hp: GATE_HP,
       maxHp: GATE_HP,
     }
   }
 
-  /** 世界渲染：夜色走廊 + 三条纵向通道 + 怪物 + 玩家史莱姆 + 子弹 */
+  /** 世界渲染：夜色走廊 + 三条纵向通道 + 职责标识 + 怪物 + Gate + 玩家 + 子弹 */
   renderWorld(ctx) {
     const game = this.game
     if (!game) return
@@ -280,46 +299,19 @@ export class RunnerGameplay extends GameplayController {
       ctx.strokeRect(x, this._laneTop, this._laneW, this._laneH)
     }
 
+    // 通道职责标识（原型调试用）
+    ctx.fillStyle = LANE_LABEL_COLOR
+    ctx.font = LANE_LABEL_FONT
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    for (let lane = 0; lane < LANE_COUNT; lane++) {
+      ctx.fillText(LANE_LABELS[lane], this.laneCenterX(lane), this._laneTop + 12)
+    }
+
     this._renderMonsters(ctx)
     this._renderGates(ctx)
     this._renderPlayerPlaceholder(ctx)
     this._renderBullets(ctx)
-  }
-
-  /** 增益 Gate：青色菱形门体 + 「ATK +1」标签 + 血条（x 每帧由 lane 现算） */
-  _renderGates(ctx) {
-    for (const gate of this._gateByLane) {
-      if (!gate || gate.hp <= 0) continue
-      const x = this.laneCenterX(gate.lane)
-      const y = this._gateY
-      const w = this._laneW * 0.3
-      const h = w * 1.1
-
-      ctx.fillStyle = GATE_BODY
-      ctx.beginPath()
-      ctx.moveTo(x, y - h)
-      ctx.lineTo(x + w, y)
-      ctx.lineTo(x, y + h)
-      ctx.lineTo(x - w, y)
-      ctx.closePath()
-      ctx.fill()
-      ctx.strokeStyle = GATE_EDGE
-      ctx.stroke()
-
-      ctx.fillStyle = 'rgba(244, 238, 230, 0.92)'
-      ctx.font = GATE_FONT
-      ctx.textAlign = 'center'
-      ctx.textBaseline = 'middle'
-      ctx.fillText('ATK +1', x, y + h + 12)
-
-      const barW = this._laneW * 0.5
-      const barY = y - h - 10
-      const ratio = gate.hp / gate.maxHp
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.14)'
-      ctx.fillRect(x - barW / 2, barY, barW, 4)
-      ctx.fillStyle = ratio > 0.4 ? HP_BAR_FULL : HP_BAR_LOW
-      ctx.fillRect(x - barW / 2, barY, barW * ratio, 4)
-    }
   }
 
   /** 怪物占位图形：敌意暖色圆体 + 双眼 + 头顶血条（x 每帧由 lane 现算） */
@@ -355,6 +347,43 @@ export class RunnerGameplay extends GameplayController {
     }
   }
 
+  /** 增益 Gate：菱形门体（ATK 青 / RAPID 紫）+ 增益标签 + 血条 */
+  _renderGates(ctx) {
+    for (const gate of this._gateByLane) {
+      if (!gate || gate.hp <= 0) continue
+      const x = this.laneCenterX(gate.lane)
+      const y = this._gateY
+      const w = this._laneW * 0.3
+      const h = w * 1.1
+      const isRapid = gate.kind === 'rapid'
+
+      ctx.fillStyle = isRapid ? RAPID_GATE_BODY : GATE_BODY
+      ctx.beginPath()
+      ctx.moveTo(x, y - h)
+      ctx.lineTo(x + w, y)
+      ctx.lineTo(x, y + h)
+      ctx.lineTo(x - w, y)
+      ctx.closePath()
+      ctx.fill()
+      ctx.strokeStyle = isRapid ? RAPID_GATE_EDGE : GATE_EDGE
+      ctx.stroke()
+
+      ctx.fillStyle = 'rgba(244, 238, 230, 0.92)'
+      ctx.font = GATE_FONT
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(isRapid ? 'RAPID FIRE' : 'ATK +1', x, y + h + 12)
+
+      const barW = this._laneW * 0.5
+      const barY = y - h - 10
+      const ratio = gate.hp / gate.maxHp
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.14)'
+      ctx.fillRect(x - barW / 2, barY, barW, 4)
+      ctx.fillStyle = ratio > 0.4 ? HP_BAR_FULL : HP_BAR_LOW
+      ctx.fillRect(x - barW / 2, barY, barW * ratio, 4)
+    }
+  }
+
   /** 史莱姆占位图形（Canvas 基础图形）：椭圆身体 + 高光 + 双眼 */
   _renderPlayerPlaceholder(ctx) {
     const r = this._laneW * PLAYER_RADIUS_RATIO
@@ -382,7 +411,7 @@ export class RunnerGameplay extends GameplayController {
     ctx.fill()
   }
 
-  /** 子弹：圆形弹体，绘制在怪物与玩家之上 */
+  /** 子弹：圆形弹体，绘制在怪物/Gate 与玩家之上 */
   _renderBullets(ctx) {
     ctx.fillStyle = BULLET_COLOR
     for (const bullet of this._bullets) {
@@ -419,14 +448,14 @@ export class RunnerGameplay extends GameplayController {
     this.playerX = this.laneCenterX(this.currentLane)
     for (const bullet of this._bullets) bullet.x = this.laneCenterX(bullet.lane)
     if (!this._monstersReady) {
-      // 首次布局即在三 lane 各生成一只怪物（此后死亡/突破走重生倒计时）
+      // 首次布局只在 MONSTER_LANE 生成怪物（此后死亡/突破走重生倒计时）
       this._monstersReady = true
-      for (let lane = 0; lane < LANE_COUNT; lane++) this._spawnMonster(lane)
+      this._spawnMonster(MONSTER_LANE)
     }
     if (!this._gatesReady) {
-      // 首次布局即在三 lane 各生成一个增益 Gate（此后打爆走重生倒计时）
+      // 首次布局只在 BUFF_LANE / SPECIAL_LANE 生成 Gate（打爆走重生倒计时）
       this._gatesReady = true
-      for (let lane = 0; lane < LANE_COUNT; lane++) this._spawnGate(lane)
+      for (const lane of GATE_LANES) this._spawnGate(lane)
     }
   }
 }
