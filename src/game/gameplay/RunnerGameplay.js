@@ -4,7 +4,7 @@ const LANE_COUNT = 3 // 三线推进：三条纵向通道
 const TAU = Math.PI * 2
 
 // —— 三条通道的固定职责（原型约定，勿散落 0/1/2）——
-export const MONSTER_LANE = 0 // 怪物通道：只有怪物向玩家逼近
+export const MONSTER_LANE = 0 // 怪物通道：怪物群持续逼近玩家
 export const BUFF_LANE = 1 // 普通增益通道：ATK Gate（打爆攻击永久 +1）
 export const SPECIAL_LANE = 2 // 特殊增益通道：Rapid Gate（打爆临时急速射击）
 const GATE_LANES = [BUFF_LANE, SPECIAL_LANE]
@@ -30,13 +30,21 @@ const BULLET_SPEED = 900 // 子弹上飞速度（px/s）
 const BULLET_RADIUS = 5
 const BULLET_MARGIN = 40 // 子弹飞出通道顶部后的清除余量
 
-// 原型怪物：从 MONSTER_LANE 顶部直线逼近玩家（无 AI）；被击杀或突破后短暂间隔重生
-const MONSTER_HP = 5
-const MONSTER_SPEED_BASE = 70 // 逼近速度下限（px/s）
-const MONSTER_SPEED_VARIANCE = 50 // 速度随机幅度（70~120 px/s）
+// 怪物压力曲线：MONSTER_LANE 持续刷怪，随 elapsedTime 逐渐增强；
+// 前 PRESSURE_RAMP_DELAY 秒完全温和（基线值），之后线性爬坡并封顶
+export const MAX_MONSTERS = 8 // 场上同时存在上限
+const PRESSURE_RAMP_DELAY = 30 // 压力增长起始时间（秒）：前 30 秒保持基线
+const PRESSURE_HP_STEP = 30 // 此后每 30 秒 maxHp +1
+const MONSTER_HP = 5 // 基线 maxHp
+const MONSTER_SPEED_BASE = 70 // 基线速度下限（px/s）
+const MONSTER_SPEED_VARIANCE = 50 // 速度随机幅度（基线 70~120 px/s）
+const MONSTER_SPEED_RAMP = 0.8 // 起坡后每秒 +0.8 px/s
+const MONSTER_SPEED_BONUS_CAP = 130 // 速度加成封顶（最终 ≤250 px/s）
+const MONSTER_SPAWN_INTERVAL_BASE = 2.4 // 基线生成间隔（秒）
+const MONSTER_SPAWN_INTERVAL_MIN = 0.6 // 生成间隔下限（秒）
+const MONSTER_SPAWN_RAMP = 0.012 // 起坡后每秒间隔缩短 0.012s
 const MONSTER_RADIUS_RATIO = 0.24 // 怪物身体半径（相对通道宽）
 const MONSTER_SPAWN_MARGIN = 20 // 出生点在通道顶部上方的余量
-const RESPAWN_DELAY = 1.2 // 击杀/突破后到重新生成的间隔（秒）
 
 // 增益 Gate：固定在所属通道前方，打爆后获得增益并按冷却重生
 const GATE_HP = 12
@@ -66,12 +74,14 @@ const HP_BAR_FULL = '#8ae84a'
 const HP_BAR_LOW = '#ff6b4a'
 
 /**
- * Runner 玩法（通道职责阶段）：三线推进射击的空间范式。
+ * Runner 玩法（怪物压力阶段）：三线推进射击的空间范式。
  *
  * 三条通道各司其职（常量 MONSTER_LANE / BUFF_LANE / SPECIAL_LANE，通道顶部
  * 绘制 MONSTER / ATK / RAPID 标识）：
- *  - MONSTER_LANE：唯一的怪物通道，怪物直线逼近玩家，击杀/突破后重生，
- *    突破记录 breachCount（暂无失败结算）；
+ *  - MONSTER_LANE：怪物数组持续从顶部生成并向玩家逼近，同时存在数量受
+ *    MAX_MONSTERS 封顶；maxHp/速度/生成间隔随 elapsedTime 线性爬坡
+ *    （前 30 秒保持基线，保证可玩）；击杀从数组移除，突破移除并记录
+ *    breachCount（暂无失败结算），均由持续生成自然补充；
  *  - BUFF_LANE：ATK Gate，打爆后 attackDamage 永久 +1；
  *  - SPECIAL_LANE：Rapid Gate，打爆后射速 ×2 持续 6 秒，到期自动恢复。
  * 自动射击固定射速（冷却保留时间余量不受帧率影响，单帧跨多间隔补发但封顶），
@@ -89,13 +99,14 @@ export class RunnerGameplay extends GameplayController {
     this.attackDamage = 1 // 基础战斗属性：单发子弹伤害（打爆 ATK Gate 永久 +1）
     this.rapidFireTimer = 0 // Rapid Fire 剩余时间（秒；0 = 正常射速）
     this.breachCount = 0 // 怪物到达玩家区域的累计次数（原型计数，暂不结算）
+    this.elapsedTime = 0 // 本局已进行时间（秒），驱动怪物压力曲线
     this._prevLeft = false // 上一帧左键状态（边沿触发用）
     this._prevRight = false // 上一帧右键状态
     this._fireCooldown = 0 // 距下次自动射击的计时（秒）
     this._bullets = [] // 玩家子弹：{ lane, x, y }（lane 为发射时所属，不可变）
-    this._monsterByLane = [null, null, null] // 仅 MONSTER_LANE 会持有怪物
-    this._respawnTimers = [0, 0, 0] // 空 lane 的怪物重生倒计时（秒；0 = 立即生成）
-    this._monstersReady = false // 怪物是否已随首次布局生成
+    this.monsters = [] // MONSTER_LANE 的怪物数组：{ lane, y, hp, maxHp, speed }
+    this._monsterSpawnTimer = 0 // 距下次生成的计时（秒；0 = 立即生成）
+    this._monstersReady = false // 怪物系统是否已随首次布局初始化
     this._gateByLane = [null, null, null] // 仅 BUFF_LANE / SPECIAL_LANE 持有 Gate
     this._gateRespawnTimers = [0, 0, 0] // 空 lane 的 Gate 重生倒计时（秒）
     this._gatesReady = false // Gate 是否已随首次布局生成
@@ -121,7 +132,7 @@ export class RunnerGameplay extends GameplayController {
   }
 
   /**
-   * 世界更新：通道切换输入 → 玩家 X 平滑过渡 → 怪物逼近 → Gate 重生 → 射击。
+   * 世界更新：通道切换输入 → 玩家 X 平滑过渡 → 怪物群 → Gate 重生 → 射击。
    * 边沿触发：只在「上一帧未按、本帧按下」的瞬间切换，按住不连跳。
    */
   updateWorld(dt) {
@@ -129,6 +140,7 @@ export class RunnerGameplay extends GameplayController {
     if (!game) return
     this._ensureLayout()
     if (dt <= 0) return // 首帧 dt=0：无需推进任何时间相关状态
+    this.elapsedTime += dt
 
     const state = game.input.state
     const left = !!state.left
@@ -153,22 +165,62 @@ export class RunnerGameplay extends GameplayController {
     return this._laneStartX + lane * (this._laneW + this._laneGap) + this._laneW / 2
   }
 
-  /** 怪物逼近（仅 MONSTER_LANE）：直线向下；到达玩家区域记一次突破并排队重生 */
+  // ------------------------------------------------------------
+  // 怪物压力曲线（elapsedTime 驱动；前 30 秒保持基线，温和起步）
+  // ------------------------------------------------------------
+
+  /** 当前生成的怪物 maxHp：起坡后每 PRESSURE_HP_STEP 秒 +1 */
+  monsterMaxHp() {
+    return MONSTER_HP + Math.floor(Math.max(0, this.elapsedTime - PRESSURE_RAMP_DELAY) / PRESSURE_HP_STEP)
+  }
+
+  /** 当前生成的怪物速度：基线随机幅度 + 起坡后线性加成（封顶） */
+  monsterSpeed() {
+    const bonus = Math.min(
+      MONSTER_SPEED_BONUS_CAP,
+      Math.max(0, this.elapsedTime - PRESSURE_RAMP_DELAY) * MONSTER_SPEED_RAMP
+    )
+    return MONSTER_SPEED_BASE + Math.random() * MONSTER_SPEED_VARIANCE + bonus
+  }
+
+  /** 当前生成间隔：基线起随 elapsedTime 线性缩短（下限封底） */
+  monsterSpawnInterval() {
+    return Math.max(
+      MONSTER_SPAWN_INTERVAL_MIN,
+      MONSTER_SPAWN_INTERVAL_BASE - Math.max(0, this.elapsedTime - PRESSURE_RAMP_DELAY) * MONSTER_SPAWN_RAMP
+    )
+  }
+
+  /** 怪物群：持续生成（受上限约束）→ 直线逼近 → 突破移除并计数 */
   _updateMonsters(dt) {
-    const lane = MONSTER_LANE
-    const monster = this._monsterByLane[lane]
-    if (!monster) {
-      this._respawnTimers[lane] -= dt
-      if (this._respawnTimers[lane] <= 0) this._spawnMonster(lane)
-      return
+    this._monsterSpawnTimer -= dt
+    if (this._monsterSpawnTimer <= 0 && this.monsters.length < MAX_MONSTERS) {
+      this._monsterSpawnTimer = this.monsterSpawnInterval()
+      this._spawnMonster()
     }
-    monster.y += monster.speed * dt
+
     const breachY = this.playerY - this._laneW * PLAYER_RADIUS_RATIO
-    if (monster.y >= breachY) {
-      this._monsterByLane[lane] = null
-      this._respawnTimers[lane] = RESPAWN_DELAY
-      this.breachCount++
+    for (let i = this.monsters.length - 1; i >= 0; i--) {
+      const monster = this.monsters[i]
+      monster.y += monster.speed * dt
+      if (monster.y >= breachY) {
+        // 突破：移除并计数，由持续生成自然补充（无需重生等待）
+        this.monsters.splice(i, 1)
+        this.breachCount++
+      }
     }
+  }
+
+  /** 在 MONSTER_LANE 顶部生成一只怪物（按当前压力曲线取属性） */
+  _spawnMonster() {
+    const maxHp = this.monsterMaxHp()
+    this.monsters.push({
+      lane: MONSTER_LANE,
+      y: this._laneTop - MONSTER_SPAWN_MARGIN,
+      hp: maxHp,
+      maxHp,
+      speed: this.monsterSpeed(),
+    })
   }
 
   /** Gate 重生：打爆后按倒计时在原 lane 重新生成 */
@@ -206,17 +258,25 @@ export class RunnerGameplay extends GameplayController {
       shots++
     }
 
-    // 子弹推进；同 lane 内可能同时越过 Gate 与怪物——
+    // 子弹推进；同 lane 内可能同时越过多个目标（怪群/Gate）——
     // 只命中子弹最先到达的一个（y 更大者 = 更靠近玩家），单发绝不双命中
     for (let i = this._bullets.length - 1; i >= 0; i--) {
       const bullet = this._bullets[i]
       const prevY = bullet.y
       bullet.y -= BULLET_SPEED * dt
       let hitY = -Infinity // 已越过候选目标中最靠近玩家者的 y
-      let hitGate = false
-      const monster = this._monsterByLane[bullet.lane]
-      if (monster && monster.hp > 0 && prevY >= monster.y && bullet.y <= monster.y) {
-        hitY = monster.y
+      let hitKind = null // 'monster' | 'gate'
+      let hitIndex = -1
+      if (bullet.lane === MONSTER_LANE) {
+        for (let j = 0; j < this.monsters.length; j++) {
+          const monster = this.monsters[j]
+          if (monster.hp <= 0) continue
+          if (prevY >= monster.y && bullet.y <= monster.y && monster.y > hitY) {
+            hitY = monster.y
+            hitKind = 'monster'
+            hitIndex = j
+          }
+        }
       }
       const gate = this._gateByLane[bullet.lane]
       if (
@@ -226,11 +286,10 @@ export class RunnerGameplay extends GameplayController {
         bullet.y <= this._gateY &&
         this._gateY > hitY
       ) {
-        hitY = this._gateY
-        hitGate = true
+        hitKind = 'gate'
       }
 
-      if (hitGate) {
+      if (hitKind === 'gate') {
         this._bullets.splice(i, 1)
         gate.hp -= this.attackDamage
         if (gate.hp <= 0) {
@@ -242,28 +301,14 @@ export class RunnerGameplay extends GameplayController {
         }
         continue
       }
-      if (hitY > -Infinity) {
+      if (hitKind === 'monster') {
         this._bullets.splice(i, 1)
+        const monster = this.monsters[hitIndex]
         monster.hp -= this.attackDamage
-        if (monster.hp <= 0) {
-          // 击杀：怪物消失，短暂间隔后在原 lane 顶部重生
-          this._monsterByLane[monster.lane] = null
-          this._respawnTimers[monster.lane] = RESPAWN_DELAY
-        }
+        if (monster.hp <= 0) this.monsters.splice(hitIndex, 1) // 击杀：从数组移除
         continue
       }
       if (bullet.y < this._laneTop - BULLET_MARGIN) this._bullets.splice(i, 1)
-    }
-  }
-
-  /** 在 MONSTER_LANE 顶部生成一只怪物（速度带随机幅度，制造推进节奏差） */
-  _spawnMonster(lane) {
-    this._monsterByLane[lane] = {
-      lane,
-      y: this._laneTop - MONSTER_SPAWN_MARGIN,
-      hp: MONSTER_HP,
-      maxHp: MONSTER_HP,
-      speed: MONSTER_SPEED_BASE + Math.random() * MONSTER_SPEED_VARIANCE,
     }
   }
 
@@ -277,7 +322,7 @@ export class RunnerGameplay extends GameplayController {
     }
   }
 
-  /** 世界渲染：夜色走廊 + 三条纵向通道 + 职责标识 + 怪物 + Gate + 玩家 + 子弹 */
+  /** 世界渲染：夜色走廊 + 三条纵向通道 + 职责标识 + 怪物群 + Gate + 玩家 + 子弹 */
   renderWorld(ctx) {
     const game = this.game
     if (!game) return
@@ -314,11 +359,11 @@ export class RunnerGameplay extends GameplayController {
     this._renderBullets(ctx)
   }
 
-  /** 怪物占位图形：敌意暖色圆体 + 双眼 + 头顶血条（x 每帧由 lane 现算） */
+  /** 怪物占位图形：敌意暖色圆体 + 双眼 + 各自血条（x 每帧由 lane 现算） */
   _renderMonsters(ctx) {
     const r = this._laneW * MONSTER_RADIUS_RATIO
-    for (const monster of this._monsterByLane) {
-      if (!monster || monster.hp <= 0) continue
+    for (const monster of this.monsters) {
+      if (monster.hp <= 0) continue
       const x = this.laneCenterX(monster.lane)
       const y = monster.y
 
@@ -448,9 +493,10 @@ export class RunnerGameplay extends GameplayController {
     this.playerX = this.laneCenterX(this.currentLane)
     for (const bullet of this._bullets) bullet.x = this.laneCenterX(bullet.lane)
     if (!this._monstersReady) {
-      // 首次布局只在 MONSTER_LANE 生成怪物（此后死亡/突破走重生倒计时）
+      // 首次布局即生成第一只怪物，之后由持续生成系统按间隔补怪
       this._monstersReady = true
-      this._spawnMonster(MONSTER_LANE)
+      this._spawnMonster()
+      this._monsterSpawnTimer = this.monsterSpawnInterval()
     }
     if (!this._gatesReady) {
       // 首次布局只在 BUFF_LANE / SPECIAL_LANE 生成 Gate（打爆走重生倒计时）

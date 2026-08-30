@@ -43,6 +43,7 @@ const {
   MONSTER_LANE,
   BUFF_LANE,
   SPECIAL_LANE,
+  MAX_MONSTERS,
 } = await import('./src/game/gameplay/RunnerGameplay.js')
 const { createGameplay } = await import('./src/game/gameplay/GameplayFactory.js')
 
@@ -299,21 +300,29 @@ assert.ok(Math.abs(shotsAt60 - 10) <= 1, '2 秒内应射出约 10 发（5 发/�
 
 const sg = engine.configureGameplay('runner')
 
-// —— 通道职责：怪物只在 MONSTER_LANE，Gate 只在 BUFF/SPECIAL lane ——
+// —— 通道职责：怪物群只在 MONSTER_LANE，Gate 只在 BUFF/SPECIAL lane ——
+assert.equal(sg.monsters.length, 1, '开局 MONSTER_LANE 应有一只怪物')
 assert.ok(
-  sg._monsterByLane[MONSTER_LANE] &&
-    sg._monsterByLane[MONSTER_LANE].hp === sg._monsterByLane[MONSTER_LANE].maxHp &&
-    sg._monsterByLane[MONSTER_LANE].speed > 0,
-  'MONSTER_LANE 应有一只满血、带速度的怪物'
+  sg.monsters[0].hp === sg.monsters[0].maxHp && sg.monsters[0].speed > 0,
+  '初始怪物应满血、带速度'
 )
-assert.ok(sg._monsterByLane[MONSTER_LANE].y < engine.height * 0.3, '怪物应从通道顶部生成')
-assert.equal(sg._monsterByLane[BUFF_LANE], null, 'ATK lane 不应有怪物')
-assert.equal(sg._monsterByLane[SPECIAL_LANE], null, 'Rapid lane 不应有怪物')
+assert.ok(sg.monsters[0].y < engine.height * 0.3, '怪物应从通道顶部生成')
+assert.ok(sg.monsters.every((m) => m.lane === MONSTER_LANE), '所有怪物都应属于 MONSTER_LANE')
 assert.equal(sg._gateByLane[MONSTER_LANE], null, '怪物 lane 不应有 Gate')
 assert.equal(sg._gateByLane[BUFF_LANE].kind, 'attack', 'ATK lane 应是 attack Gate')
 assert.equal(sg._gateByLane[SPECIAL_LANE].kind, 'rapid', 'Rapid lane 应是 rapid Gate')
 assert.equal(sg.attackDamage, 1, '初始攻击力应为 1')
 assert.equal(sg.rapidFireTimer, 0, '初始无急速效果')
+assert.equal(sg.elapsedTime, 0, '初始无已进行时间')
+
+// —— 压力曲线基线：前 30 秒完全温和（HP/速度/间隔不增长）——
+const earlyMaxHp = sg.monsters[0].maxHp
+const earlySpeed = sg.monsters[0].speed
+const earlyInterval = sg.monsterSpawnInterval()
+sg.elapsedTime = 25
+assert.equal(sg.monsterMaxHp(), earlyMaxHp, '前 30 秒怪物 HP 应保持基线')
+assert.equal(sg.monsterSpawnInterval(), earlyInterval, '前 30 秒生成间隔应保持基线')
+sg.elapsedTime = 0
 
 // 统计射击次数（节拍/急速验证共用）
 let shotCount = 0
@@ -326,10 +335,9 @@ sg._bullets.push = (bullet) => {
 // 首帧立即射击 1 发；怪物持续向玩家方向（下方）移动
 engine.update(1 / 60)
 assert.equal(shotCount, 1, '首帧应立即射出 1 发')
-const probe = sg._monsterByLane[MONSTER_LANE]
-const probeY = probe.y
+const probeY = sg.monsters[0].y
 for (let i = 0; i < 5; i++) engine.update(1 / 60)
-assert.ok(sg._monsterByLane[MONSTER_LANE].y > probeY, '怪物应持续向下移动')
+assert.ok(sg.monsters[0].y > probeY, '怪物应持续向下移动')
 
 // 首发子弹向上、直线、保持发射时的 lane（初始在 BUFF_LANE）
 const firstBullet = sg._bullets[0]
@@ -340,62 +348,85 @@ engine.update(1 / 60)
 assert.ok(firstBullet.y < bulletY, '子弹应向上移动')
 assert.equal(firstBullet.x, bulletX, '子弹应沿所属 lane 直线飞行')
 
-// 切到 MONSTER_LANE 射击：怪物扣血，两条增益 lane 的 Gate 完全不受影响
-// （先清空在途子弹：首发子弹正飞向 ATK Gate，会污染 Gate 快照）
-sg._bullets.length = 0
-const atkGateHpSnapshot = sg._gateByLane[BUFF_LANE].hp
-const rapidGateHpSnapshot = sg._gateByLane[SPECIAL_LANE].hp
+// —— 多怪命中/最近目标/击杀移除/突破：用两只受控怪物精确验证 ——
 engine.input.state.left = true
 engine.update(1 / 60)
 engine.input.state.left = false
 engine.update(1 / 60)
 assert.equal(sg.currentLane, MONSTER_LANE, '应切换到怪物 lane')
-const monsterHp0 = sg._monsterByLane[MONSTER_LANE].hp
-for (
-  let i = 0;
-  i < 200 && sg._monsterByLane[MONSTER_LANE] && sg._monsterByLane[MONSTER_LANE].hp === monsterHp0;
-  i++
-) {
-  engine.update(1 / 60)
-}
-assert.ok(
-  sg._monsterByLane[MONSTER_LANE] &&
-    sg._monsterByLane[MONSTER_LANE].hp === monsterHp0 - sg.attackDamage,
-  '同 lane 怪物应被命中扣血'
-)
+sg._bullets.length = 0 // 清空在途子弹：首发子弹正飞向 ATK Gate，会污染 Gate 快照
+const atkGateHpSnapshot = sg._gateByLane[BUFF_LANE].hp
+const rapidGateHpSnapshot = sg._gateByLane[SPECIAL_LANE].hp
+sg.monsters.length = 0
+sg._monsterSpawnTimer = 999 // 冻结持续生成，排除干扰
+const nearMonster = { lane: MONSTER_LANE, y: 380, hp: 5, maxHp: 5, speed: 60 } // 更靠近玩家
+const farMonster = { lane: MONSTER_LANE, y: 200, hp: 5, maxHp: 5, speed: 60 }
+sg.monsters.push(nearMonster, farMonster)
+
+// 子弹只命中弹道上最靠近玩家的怪物，单发只命中一个目标
+for (let i = 0; i < 60 && nearMonster.hp === 5; i++) engine.update(1 / 60)
+assert.ok(nearMonster.hp === 5 - sg.attackDamage, '子弹应命中更靠近玩家的怪物')
+assert.equal(farMonster.hp, 5, '远端怪物不应被命中')
 assert.equal(sg._gateByLane[BUFF_LANE].hp, atkGateHpSnapshot, '怪物 lane 的子弹不应命中 ATK Gate')
 assert.equal(sg._gateByLane[SPECIAL_LANE].hp, rapidGateHpSnapshot, '怪物 lane 的子弹不应命中 Rapid Gate')
 
-// 突破：怪物到达玩家区域 → 移除 + breachCount 记录一次
+// 击杀：HP 归零后从数组移除
+nearMonster.hp = 1 // 快进：下一发命中即击杀
+const killBreachBefore = sg.breachCount
+for (let i = 0; i < 120 && sg.monsters.includes(nearMonster); i++) engine.update(1 / 60)
+assert.ok(!sg.monsters.includes(nearMonster), '击杀后怪物应从数组移除')
+assert.equal(farMonster.hp, 5, '击杀不影响远端怪物')
+assert.equal(sg.breachCount, killBreachBefore, '应记为击杀而非突破（未到达玩家区域）')
+
+// 突破：到达玩家区域 → 移除 + breachCount 只增加一次
 const breachBefore = sg.breachCount
-sg._monsterByLane[MONSTER_LANE].y = sg.playerY - 10 // 直接拉到玩家区域，模拟到达
+farMonster.y = sg.playerY - 10 // 直接拉到玩家区域，模拟到达
 engine.update(1 / 60)
 assert.equal(sg.breachCount, breachBefore + 1, '怪物到达玩家区域应记录一次突破')
-assert.equal(sg._monsterByLane[MONSTER_LANE], null, '突破的怪物应被移除')
-for (let i = 0; i < 240 && !sg._monsterByLane[MONSTER_LANE]; i++) engine.update(1 / 60)
-assert.ok(sg._monsterByLane[MONSTER_LANE], '短暂间隔后怪物应在 MONSTER_LANE 重新生成')
-assert.equal(sg._monsterByLane[MONSTER_LANE].hp, sg._monsterByLane[MONSTER_LANE].maxHp, '重生怪物应满血')
-assert.ok(sg._monsterByLane[MONSTER_LANE].y < engine.height * 0.3, '重生位置应回到通道顶部')
+assert.ok(!sg.monsters.includes(farMonster), '突破的怪物应被移除')
+engine.update(1 / 60)
+assert.equal(sg.breachCount, breachBefore + 1, '突破只应记录一次（不会重复计数）')
 
-// 击杀：HP 归零怪物消失（而非突破），随后重新生成新怪物
-sg._monsterByLane[MONSTER_LANE].hp = 1 // 快进：下一发命中即击杀
-const killBreachBefore = sg.breachCount
-const dyingMonster = sg._monsterByLane[MONSTER_LANE]
-for (let i = 0; i < 120 && sg._monsterByLane[MONSTER_LANE]; i++) engine.update(1 / 60)
-assert.equal(sg._monsterByLane[MONSTER_LANE], null, 'HP 归零后怪物应消失')
-assert.equal(sg.breachCount, killBreachBefore, '应记为击杀而非突破（未到达玩家区域）')
-for (let i = 0; i < 240 && !sg._monsterByLane[MONSTER_LANE]; i++) engine.update(1 / 60)
-assert.ok(
-  sg._monsterByLane[MONSTER_LANE] && sg._monsterByLane[MONSTER_LANE] !== dyingMonster,
-  '击杀后应重新生成新怪物'
-)
-
-// —— ATK Gate（BUFF_LANE）：扣血 / 打爆强化 / 重生 ——
+// —— 持续生成：多怪同屏 + 数量上限 + 时间压力曲线 ——
 engine.input.state.right = true
 engine.update(1 / 60)
 engine.input.state.right = false
 engine.update(1 / 60)
-assert.equal(sg.currentLane, BUFF_LANE, '应切回 ATK lane')
+assert.equal(sg.currentLane, BUFF_LANE, '应切到 ATK lane 停止打怪，让怪物自然累积')
+sg._bullets.length = 0
+sg.monsters.length = 0
+sg._monsterSpawnTimer = 0
+for (let i = 0; i < 600 && sg.monsters.length < 3; i++) engine.update(1 / 60)
+assert.ok(sg.monsters.length >= 3, '应能同时存在多只怪物')
+assert.ok(sg.monsters.every((m) => m.lane === MONSTER_LANE && m.hp > 0 && m.speed > 0), '每只怪物数据应有效')
+
+// 数量上限：强制连续生成也不超过 MAX_MONSTERS
+sg.monsters.length = 0
+for (let i = 0; i < 30; i++) {
+  sg._monsterSpawnTimer = 0
+  engine.update(1 / 60)
+}
+assert.equal(sg.monsters.length, MAX_MONSTERS, '持续生成应被数量上限封顶')
+
+// 时间曲线：elapsedTime 越大，怪物 HP/速度更高、生成间隔更短
+sg.elapsedTime = 180
+sg.monsters.length = 0
+sg._monsterSpawnTimer = 0
+engine.update(1 / 60)
+const lateMonster = sg.monsters[0]
+assert.ok(lateMonster && lateMonster.maxHp > earlyMaxHp, '时间越长怪物 HP 应越高')
+assert.ok(lateMonster.speed > earlySpeed, '时间越长怪物速度应越高')
+assert.ok(sg.monsterSpawnInterval() < earlyInterval, '时间越长生成间隔应越短')
+assert.ok(sg.monsters.length <= MAX_MONSTERS, '后期生成同样受上限约束')
+
+// —— ATK Gate（BUFF_LANE）：扣血 / 打爆强化 / 重生 ——
+assert.equal(sg.currentLane, BUFF_LANE, '应已在 ATK lane')
+// 压力测试期间玩家一直停在 ATK lane 射击，Gate 可能正处于重生窗口；
+// 强制立即重生后再做 ATK Gate 专项验证
+sg._gateByLane[BUFF_LANE] = null
+sg._gateRespawnTimers[BUFF_LANE] = 0
+for (let i = 0; i < 30 && !sg._gateByLane[BUFF_LANE]; i++) engine.update(1 / 60)
+assert.ok(sg._gateByLane[BUFF_LANE], 'ATK Gate 应重生就位')
 const atkGateHpBefore = sg._gateByLane[BUFF_LANE].hp
 for (let i = 0; i < 40 && sg._gateByLane[BUFF_LANE].hp === atkGateHpBefore; i++) engine.update(1 / 60)
 assert.ok(sg._gateByLane[BUFF_LANE].hp < atkGateHpBefore, 'ATK lane 子弹应命中 ATK Gate 扣血')
@@ -459,25 +490,21 @@ assert.ok(
 )
 engine.render() // 渲染冒烟（怪物/双 Gate/职责标识/子弹）
 
-// —— 切 lane 后：新子弹跟随新 lane（两次左切回到 MONSTER_LANE）——
-engine.input.state.left = true
+// —— 切 lane 后：新子弹跟随新 lane（右切到 ATK lane）——
+engine.input.state.right = true
 engine.update(1 / 60)
-engine.input.state.left = false
+engine.input.state.right = false
 engine.update(1 / 60)
-engine.input.state.left = true
-engine.update(1 / 60)
-engine.input.state.left = false
-engine.update(1 / 60)
-assert.equal(sg.currentLane, MONSTER_LANE, '两次左切应回到怪物 lane')
+assert.equal(sg.currentLane, BUFF_LANE, '应切到 ATK lane')
 // 等待上限放宽到 30 帧：覆盖「切换前冷却刚好重置」的最坏相位
 for (
   let i = 0;
-  i < 30 && !sg._bullets.some((b) => b.lane === MONSTER_LANE);
+  i < 30 && !sg._bullets.some((b) => b.lane === BUFF_LANE);
   i++
 ) {
   engine.update(1 / 60)
 }
-assert.ok(sg._bullets.some((b) => b.lane === MONSTER_LANE), '切 lane 后新子弹应属于新 lane')
+assert.ok(sg._bullets.some((b) => b.lane === BUFF_LANE), '切 lane 后新子弹应属于新 lane')
 
 // —— resize 后子弹 X 吸附所属 lane 中心，怪物仍归属原 lane ——
 const flyingBullet = sg._bullets[sg._bullets.length - 1]
@@ -503,8 +530,8 @@ canvasStub.getBoundingClientRect = previousRect
 engine._onResize()
 engine.update(1 / 60)
 assert.ok(
-  sg._monsterByLane.filter(Boolean).every((m) => sg._monsterByLane[m.lane] === m),
-  'resize 后在场怪物仍归属原 lane（空 slot 属于重生间隔）'
+  sg.monsters.every((m) => m.lane === MONSTER_LANE),
+  'resize 后在场怪物仍归属 MONSTER_LANE'
 )
 engine.render() // 射击渲染冒烟（怪物/血条/子弹）
 
@@ -527,7 +554,7 @@ assert.equal(catchUpShots, shotsBeforeNextFrame, '上限触发后下一帧不应
 
 // 恢复 arena，交还后续销毁测试的默认上下文
 engine.configureGameplay('arena')
-console.log('✓ Runner 通道职责：怪物/ATK/Rapid 各居其 lane、帧率无关节拍、击杀重生/突破记录、急速射击到期恢复、resize 自适应全链可用')
+console.log('✓ Runner 怪物压力：多怪同屏/上限封顶/时间曲线/最近命中/击杀移除/突破一次性/Gate 不受影响全链可用')
 
 // 引擎销毁同步销毁 gameplay，单例复位；销毁后可再次初始化（HMR 场景）
 const active = engine.gameplay
