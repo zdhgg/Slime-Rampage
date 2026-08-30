@@ -1368,8 +1368,23 @@ export class GameEngine {
     this._statAcc = 0
   }
 
+  /**
+   * 每帧执行边界（Execution Boundary）：beforeUpdate 后按 Gameplay 的
+   * usesArenaFramePipeline() 决定走向——Arena 默认管线（_updateArenaFrame）
+   * 或由 Gameplay 完全接管（updateWorld）。之后统一 afterUpdate。
+   */
   update(dt) {
     this.gameplay?.beforeUpdate(dt)
+    if (this.gameplay?.usesArenaFramePipeline()) this._updateArenaFrame(dt)
+    else this.gameplay?.updateWorld(dt)
+    this.gameplay?.afterUpdate(dt)
+  }
+
+  /**
+   * Arena 默认帧管线（update）：震屏计时 → 规则状态机 → 实体更新 →
+   * 相机 → 环境氛围 → 换景淡化推进。原 update() 主体原样提取，顺序零改动。
+   */
+  _updateArenaFrame(dt) {
     if (this._shakeT > 0) this._shakeT -= dt // 屏幕震动计时衰减
     this._updateRunState(dt)
     if (this.runState !== 'stage-reward' && this.runState !== 'expedition-intro') {
@@ -1384,13 +1399,28 @@ export class GameEngine {
       this._themeFadeT += dt
       if (this._themeFadeT >= 0.8) this._worldBgPrev = null
     }
-    this.gameplay?.afterUpdate(dt)
   }
 
+  /**
+   * 每帧执行边界（Execution Boundary）：DPR 变换与 beforeRender 后按
+   * usesArenaFramePipeline() 决定走向——Arena 默认渲染管线（_renderArenaFrame）
+   * 或由 Gameplay 完全接管（renderWorld）。之后统一 afterRender。
+   */
   render() {
     const { ctx, width, height, dpr } = this
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0) // CSS 像素坐标系 + DPR 适配
     this.gameplay?.beforeRender(ctx)
+    if (this.gameplay?.usesArenaFramePipeline()) this._renderArenaFrame(ctx)
+    else this.gameplay?.renderWorld(ctx)
+    this.gameplay?.afterRender(ctx)
+  }
+
+  /**
+   * Arena 默认渲染管线：世界背景 → 时段色调与环境粒子 → 实体 → 前景装饰 →
+   * 对白 → 暗角。原 render() 主体原样提取，绘制顺序零改动。
+   */
+  _renderArenaFrame(ctx) {
+    const { width, height } = this
 
     // 屏幕震动（阶段十五美化）：随机抖动随剩余时间衰减
     let jx = 0
@@ -1451,7 +1481,6 @@ export class GameEngine {
     // 暗角（屏幕坐标系，视线始终聚焦屏幕中心）
     ctx.fillStyle = this._vignette
     ctx.fillRect(0, 0, width, height)
-    this.gameplay?.afterRender(ctx)
   }
 
   // ------------------------------------------------------------

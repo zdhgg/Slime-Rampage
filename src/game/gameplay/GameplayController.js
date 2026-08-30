@@ -49,4 +49,20 @@ export class GameplayController {
   destroy() {
     this.game = null
   }
+
+  /**
+   * Execution Boundary（每帧执行边界）：返回 true 时由 Engine 执行 Arena 默认
+   * 帧管线（_updateArenaFrame / _renderArenaFrame）；返回 false 时每帧改调
+   * updateWorld / renderWorld，由 Gameplay 完全接管世界更新与渲染。
+   * 每帧读取一次，实现必须稳定、无副作用。
+   */
+  usesArenaFramePipeline() {
+    return true
+  }
+
+  /** 自定义世界更新（usesArenaFramePipeline() 为 false 时每帧调用，dt 为秒） */
+  updateWorld(_dt) {}
+
+  /** 自定义世界渲染（usesArenaFramePipeline() 为 false 时每帧调用；DPR 变换已就位） */
+  renderWorld(_ctx) {}
 }

@@ -1,5 +1,6 @@
 // Gameplay 架构 smoke test：验证 gameplay 层默认值、工厂回落、
-// hooks 接线（reset/update/render/destroy）与 Engine 初始化销毁不受损。
+// hooks 接线（reset/update/render/destroy）、Execution Boundary（每帧
+// update/render 执行边界）与 Engine 初始化销毁不受损。
 // 纯 Node 运行（无头桩与 engine-smoke.mjs 同源），npm test 链内执行。
 import assert from 'node:assert/strict'
 
@@ -98,6 +99,62 @@ assert.equal(swapped.game, engine)
 assert.notEqual(swapped, gp, 'configureGameplay 应重建 Controller')
 assert.equal(gp.game, null, '旧 Controller 已被销毁（上下文清空）')
 console.log('✓ configureGameplay 显式入口可用（未知 id 回落 arena 并重建）')
+
+// Execution Boundary：默认走 Arena 帧管线；usesArenaFramePipeline() 返回 false 时
+// Arena update/render helper 不执行，改由 updateWorld/renderWorld 完全接管，
+// before/after hooks 仍然触发（无假 gameplay 类型，仅在实例上临时覆写）。
+const bp = engine.gameplay
+assert.equal(bp.usesArenaFramePipeline(), true, '默认应使用 Arena frame pipeline')
+const frameSpies = { arenaUpdate: 0, arenaRender: 0, worldUpdate: [], worldRender: [] }
+engine._updateArenaFrame = () => {
+  frameSpies.arenaUpdate++
+}
+engine._renderArenaFrame = () => {
+  frameSpies.arenaRender++
+}
+const boundaryHooks = []
+for (const hook of ['beforeUpdate', 'afterUpdate', 'beforeRender', 'afterRender']) {
+  bp[hook] = () => boundaryHooks.push(hook)
+}
+
+// Arena 管线（默认）：Arena helper 各执行一次，自定义世界入口不执行
+engine.update(1 / 60)
+engine.render()
+assert.equal(frameSpies.arenaUpdate, 1)
+assert.equal(frameSpies.arenaRender, 1)
+assert.equal(frameSpies.worldUpdate.length, 0)
+assert.equal(frameSpies.worldRender.length, 0)
+assert.deepEqual(boundaryHooks, ['beforeUpdate', 'afterUpdate', 'beforeRender', 'afterRender'])
+
+// 自定义管线：Arena helper 不再执行，updateWorld/renderWorld 接管，hooks 照常
+bp.usesArenaFramePipeline = () => false
+bp.updateWorld = (dt) => frameSpies.worldUpdate.push(dt)
+bp.renderWorld = (ctx) => frameSpies.worldRender.push(ctx)
+boundaryHooks.length = 0
+engine.update(1 / 60)
+engine.render()
+assert.equal(frameSpies.arenaUpdate, 1, '自定义管线不得再执行 Arena update helper')
+assert.equal(frameSpies.arenaRender, 1, '自定义管线不得再执行 Arena render helper')
+assert.equal(frameSpies.worldUpdate.length, 1)
+assert.ok(Math.abs(frameSpies.worldUpdate[0] - 1 / 60) < 1e-9, 'updateWorld 应收到 dt')
+assert.equal(frameSpies.worldRender[0], ctx2d, 'renderWorld 应收到 ctx')
+assert.deepEqual(boundaryHooks, ['beforeUpdate', 'afterUpdate', 'beforeRender', 'afterRender'])
+
+// 还原实例级覆写（回到原型默认），不影响后续测试与引擎销毁
+for (const key of [
+  'usesArenaFramePipeline',
+  'updateWorld',
+  'renderWorld',
+  'beforeUpdate',
+  'afterUpdate',
+  'beforeRender',
+  'afterRender',
+]) {
+  delete bp[key]
+}
+delete engine._updateArenaFrame
+delete engine._renderArenaFrame
+console.log('✓ Execution Boundary：自定义 Gameplay 可完全跳过 Arena 每帧 update/render')
 
 // 引擎销毁同步销毁 gameplay，单例复位；销毁后可再次初始化（HMR 场景）
 const active = engine.gameplay
