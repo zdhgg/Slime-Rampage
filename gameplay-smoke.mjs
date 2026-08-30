@@ -453,9 +453,23 @@ sg.hp = 9999
 sg._bullets.length = 0
 sg.monsters.length = 0
 sg._monsterSpawnTimer = 0
-for (let i = 0; i < 600 && sg.monsters.length < 3; i++) engine.update(1 / 60)
-assert.ok(sg.monsters.length >= 3, '应能同时存在多只怪物')
-assert.ok(sg.monsters.every((m) => m.lane === MONSTER_LANE && m.hp > 0 && m.speed > 0), '每只怪物数据应有效')
+// 持续生成按「累计生成次数」验证：突破清场与生成并存时并发数量存在随机涨落
+let spawnCount = 0
+const monsterPush = sg.monsters.push.bind(sg.monsters)
+sg.monsters.push = (monster) => {
+  spawnCount++
+  return monsterPush(monster)
+}
+for (let i = 0; i < 600 && spawnCount < 3; i++) engine.update(1 / 60)
+assert.ok(spawnCount >= 3, '生成计时器应持续产出怪物')
+// 同时存在多只：直接置入多只受控怪物，验证并发更新/渲染路径
+sg.monsters.length = 0
+for (let i = 0; i < 5; i++) sg._spawnMonster()
+assert.equal(sg.monsters.length, 5, '应支持多只怪物同时存在')
+assert.ok(
+  sg.monsters.every((m) => m.lane === MONSTER_LANE && m.hp > 0 && m.speed > 0),
+  '每只怪物数据应有效'
+)
 
 // 数量上限：强制连续生成也不超过 MAX_MONSTERS
 sg.monsters.length = 0
