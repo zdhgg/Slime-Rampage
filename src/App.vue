@@ -557,6 +557,7 @@ async function onDeployRun() {
   paused.value = false
   expeditionReward.value = null
   endlessDecision.value = null
+  engine.value.configureGameplay('arena') // 玩过 Runner 试玩后必须显式切回 Arena 管线
   engine.value.configureRun(plan.selection)
   engine.value.applyStartingStrain(plan.strain)
   engine.value.reset()
@@ -564,6 +565,33 @@ async function onDeployRun() {
   started.value = true
   pendingRun.value = null
   deployingRun.value = false
+}
+
+/**
+ * 独立试玩模式：Runner（三线推进射击）。
+ * 不入档、不上榜、不创建 LAN 行动票据、不改存档 preferences——
+ * 仅切换 Gameplay 到 runner 并用其自管的 restart 恢复初始状态。
+ */
+function onStartRunner() {
+  if (!engine.value) return
+  snd()?.uiSelect()
+  // 清理局内 UI 状态（与 onDeployRun/onChangeRules 同一套复位口径）
+  gameOverInfo.value = null
+  paused.value = false
+  levelUpOptions.value = null
+  reactionChoice.value = null
+  fusionConfirm.value = null
+  expeditionReward.value = null
+  endlessDecision.value = null
+  pendingRun.value = null
+  evolution.value = null
+  elementToast.value = ''
+  lanRunTicket.value = null
+  engine.value.stop()
+  const runner = engine.value.configureGameplay('runner')
+  runner.restart()
+  engine.value.start()
+  started.value = true
 }
 
 function onBackFromIntro() {
@@ -917,6 +945,7 @@ onUnmounted(() => {
       :lan-status="lanStatus"
       :public-leaderboard="publicLeaderboard"
       @prepare="onPrepareRun"
+      @runner="onStartRunner"
       @market="onOpenMarket"
       @profiles="onOpenSaveSlots"
       @account="onOpenLanAccount"

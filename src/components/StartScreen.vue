@@ -17,7 +17,7 @@ import {
 import { getExpeditionStages } from '../game/RunRules.js'
 import { STRAINS, STRAIN_IDS } from '../game/Strains.js'
 
-const emit = defineEmits(['prepare', 'market', 'profiles', 'account', 'leaderboard', 'ui-sound'])
+const emit = defineEmits(['prepare', 'market', 'profiles', 'account', 'leaderboard', 'ui-sound', 'runner'])
 const props = defineProps({
   records: { type: Object, default: () => ({}) },
   progression: {
@@ -288,6 +288,16 @@ watch(
           <i v-if="nextUnlock">下一档案：{{ nextUnlock.name }} · {{ nextUnlock.hint }}</i>
           <i v-else>全部开放 · 三种作战模式均可进入</i>
         </div>
+
+        <!-- 独立试玩入口：Runner 不属于 MODE_IDS，不参与解锁/难度/排行榜 -->
+        <button class="runner-entry" @click="emit('runner')">
+          <span class="runner-tag">独立试玩</span>
+          <span class="runner-copy">
+            <h3>极速突围 · Runner</h3>
+            <p>三线通道射击原型：切道走位、自动射击、打爆增益门。不入档、不上榜、随时可弃。</p>
+          </span>
+          <span class="runner-enter">直接开始 <b aria-hidden="true">→</b></span>
+        </button>
       </section>
 
       <section v-else class="config-view" aria-labelledby="config-title">
@@ -865,6 +875,62 @@ watch(
 .next-unlock i { font-style: normal; }
 .next-unlock.complete { border-left-color: #a8773e; background: rgba(215, 166, 87, 0.05); }
 .next-unlock.complete b { color: var(--accent-bright); }
+
+/* 独立试玩入口（Runner）：与三张模式卡明确区隔的横幅按钮 */
+.runner-entry {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  margin-top: 12px;
+  padding: 13px 18px;
+  border: 1px solid rgba(201, 162, 255, 0.4);
+  border-radius: 10px;
+  background: linear-gradient(120deg, rgba(201, 162, 255, 0.12), rgba(122, 75, 184, 0.07));
+  color: rgba(244, 238, 230, 0.92);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+
+.runner-entry:hover {
+  border-color: rgba(201, 162, 255, 0.75);
+  transform: translateY(-1px);
+}
+
+.runner-tag {
+  flex-shrink: 0;
+  padding: 3px 9px;
+  border: 1px solid rgba(201, 162, 255, 0.5);
+  border-radius: 999px;
+  color: #c9a2ff;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+
+.runner-copy {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.runner-copy h3 { margin: 0; font-size: 15px; }
+
+.runner-copy p {
+  margin: 0;
+  color: rgba(244, 238, 230, 0.55);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.runner-enter {
+  flex-shrink: 0;
+  color: #c9a2ff;
+  font-size: 12px;
+  font-weight: 700;
+}
 
 .config-view {
   position: relative;

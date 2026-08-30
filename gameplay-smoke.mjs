@@ -623,9 +623,41 @@ const shotsBeforeNextFrame = catchUpShots
 engine.update(1 / 60)
 assert.equal(catchUpShots, shotsBeforeNextFrame, '上限触发后下一帧不应继续爆发')
 
+// —— 开始界面接入契约（App 层启动流程的引擎侧模拟）——
+// Runner 试玩：configureGameplay('runner') + restart() + start()，
+// 不调用 configureRun——runSelection/preferences 必须原样保留
+engine.configureRun({ mode: 'expedition', difficulty: 'normal' }) // 档案里保留的规则选择
+const startEntry = engine.configureGameplay('runner')
+assert.equal(engine.gameplayId, 'runner', 'Runner 入口应切换到 runner gameplay')
+assert.equal(startEntry.usesArenaFramePipeline(), false, 'runner 应接管每帧管线')
+const selectionBeforeRunner = { ...engine.runSelection }
+startEntry.restart()
+engine.start()
+engine.update(1 / 60)
+assert.equal(engine.running, true, 'Runner 试玩应启动主循环')
+assert.equal(engine.gameplayId, 'runner', 'Runner 试玩期间 gameplay 应保持 runner')
+assert.deepEqual(engine.runSelection, selectionBeforeRunner, 'Runner 试玩不应改变 runSelection/preferences')
+engine.stop()
+
+// 普通模式部署：onDeployRun 显式切回 arena（保证试玩后一定回到 Arena 管线）
+engine.configureGameplay('arena')
+engine.configureRun({ mode: 'timed', difficulty: 'normal' })
+engine.reset()
+engine.update(1 / 60)
+assert.equal(engine.gameplayId, 'arena', '普通模式部署必须切回 Arena')
+assert.equal(engine.runSelection.mode, 'timed', '普通模式应使用档案选择的规则')
+assert.equal(engine.runState, 'active', 'Arena 流程 reset 后应正常开局')
+// 原有三个 Arena 模式的归一化与玩法挂接不受 Runner 接入影响
+for (const mode of ['expedition', 'timed', 'endless']) {
+  engine.configureRun({ mode, difficulty: 'normal' })
+  assert.equal(engine.runSelection.mode, mode)
+  assert.equal(engine.gameplayId, 'arena')
+}
+engine.reset()
+
 // 恢复 arena，交还后续销毁测试的默认上下文
 engine.configureGameplay('arena')
-console.log('✓ Runner 怪物压力：多怪同屏/上限封顶/时间曲线/最近命中/击杀移除/突破扣血/gameOver 冻结/restart 恢复全链可用')
+console.log('✓ Runner 怪物压力：多怪同屏/上限封顶/时间曲线/最近命中/击杀移除/突破扣血/gameOver 冻结/restart 恢复/开始界面接入契约全链可用')
 
 // 引擎销毁同步销毁 gameplay，单例复位；销毁后可再次初始化（HMR 场景）
 const active = engine.gameplay

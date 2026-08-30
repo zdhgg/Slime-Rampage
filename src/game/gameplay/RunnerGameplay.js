@@ -209,6 +209,9 @@ export class RunnerGameplay extends GameplayController {
     this._gateByLane = [null, null, null]
     this._gateRespawnTimers = [0, 0, 0]
     for (const lane of GATE_LANES) this._spawnGate(lane)
+    // 与 engine.reset 对齐：清空暂停锁。Runner 自管生命周期、不触发 Arena reset，
+    // 若上一局从暂停菜单放弃，残留的锁会让本局 Esc 恢复失效
+    if (this.game) this.game._pauseLock = 0
   }
 
   // ------------------------------------------------------------
