@@ -12,6 +12,7 @@ import { generateDecor, drawBgItem, drawFgItem, getMapTheme } from './MapDecor.j
 import { WorldEventManager } from './WorldEventManager.js'
 import { MapFeatureManager } from './MapFeatureManager.js'
 import { DialogueManager } from './DialogueManager.js'
+import { createGameplay, normalizeGameplayId } from './gameplay/GameplayFactory.js'
 import { AmbientLayer } from './effects/AmbientLayer.js'
 import { STRAIN_IDS, applyStrain } from './Strains.js'
 import {
@@ -181,6 +182,12 @@ export class GameEngine {
     this.elapsed = 0 // 累计游戏时间（秒）
     this.runSelection = normalizeRunSelection()
     this.runProfile = getRunProfile(this.runSelection)
+    // Gameplay 层：描述「游戏空间与核心操作规则」，与 runSelection.mode 正交。
+    // 默认 arena（现有开放地图割草）；未来 runner 走 configureGameplay 显式切换，
+    // 现有启动流程无需感知。Controller 不是 Entity，不进入 entities 列表。
+    this.gameplayId = 'arena'
+    this.gameplay = createGameplay(this.gameplayId)
+    this.gameplay.attach(this)
     this.runState = 'idle'
     this.finaleTime = 0
     this.runFinished = false
@@ -317,6 +324,19 @@ export class GameEngine {
     this.runSelection = normalizeRunSelection(selection)
     this.runProfile = getRunProfile(this.runSelection)
     return this.runSelection
+  }
+
+  /**
+   * 显式玩法入口：按 gameplay id 重建 Gameplay Controller（runner 未来接入点）。
+   * 与 configureRun 正交：切换玩法不改变 expedition/timed/endless 的语义；
+   * 现有启动流程无需调用它（引擎默认已是 arena）。未知 id 安全回落 arena。
+   */
+  configureGameplay(id) {
+    this.gameplay?.destroy()
+    this.gameplayId = normalizeGameplayId(id)
+    this.gameplay = createGameplay(this.gameplayId)
+    this.gameplay.attach(this)
+    return this.gameplay
   }
 
   get endlessModifiers() {
@@ -1174,6 +1194,7 @@ export class GameEngine {
       const variants = { frontier: 'marsh-edge', blight: 'blight-garden' }
       this._setMapTheme(startTheme, variants[startTheme], true, true)
     }
+    this.gameplay?.reset() // Gameplay 层整局重置（arena 空实现，不影响既有 reset 顺序）
   }
 
   /** 设置黑市基因（存档加载/购买后调用），立即生效并持续到后续每局 */
@@ -1193,6 +1214,7 @@ export class GameEngine {
     window.removeEventListener('click', this._unlockAudio)
     this.input.destroy()
     this.entities.length = 0
+    this.gameplay?.destroy() // Gameplay Controller 一并释放（arena 无资源，安全空转）
     this.onStats = null
     this.onCooldown = null
     this.onLevelUp = null
@@ -1339,6 +1361,7 @@ export class GameEngine {
   }
 
   update(dt) {
+    this.gameplay?.beforeUpdate(dt)
     if (this._shakeT > 0) this._shakeT -= dt // 屏幕震动计时衰减
     this._updateRunState(dt)
     if (this.runState !== 'stage-reward' && this.runState !== 'expedition-intro') {
@@ -1353,11 +1376,13 @@ export class GameEngine {
       this._themeFadeT += dt
       if (this._themeFadeT >= 0.8) this._worldBgPrev = null
     }
+    this.gameplay?.afterUpdate(dt)
   }
 
   render() {
     const { ctx, width, height, dpr } = this
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0) // CSS 像素坐标系 + DPR 适配
+    this.gameplay?.beforeRender(ctx)
 
     // 屏幕震动（阶段十五美化）：随机抖动随剩余时间衰减
     let jx = 0
@@ -1418,6 +1443,7 @@ export class GameEngine {
     // 暗角（屏幕坐标系，视线始终聚焦屏幕中心）
     ctx.fillStyle = this._vignette
     ctx.fillRect(0, 0, width, height)
+    this.gameplay?.afterRender(ctx)
   }
 
   // ------------------------------------------------------------
