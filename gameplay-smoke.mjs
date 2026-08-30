@@ -317,6 +317,10 @@ assert.equal(sg.elapsedTime, 0, '初始无已进行时间')
 assert.equal(sg.maxHp, 5, '初始最大生命应为 5')
 assert.equal(sg.hp, 5, '初始生命应满')
 assert.equal(sg.gameOver, false, '初始不应处于失败状态')
+assert.equal(sg.monsterKills, 0, '初始消灭怪物数应为 0')
+assert.equal(sg.attackGateActivations, 0, '初始攻击强化次数应为 0')
+assert.equal(sg.rapidGateActivations, 0, '初始急速强化次数应为 0')
+assert.deepEqual(sg.laneTime, [0, 0, 0], '初始三通道停留时间应全为 0')
 
 // —— 压力曲线基线：前 30 秒完全温和（HP/速度/间隔不增长）——
 const earlyMaxHp = sg.monsters[0].maxHp
@@ -338,6 +342,7 @@ sg._bullets.push = (bullet) => {
 // 首帧立即射击 1 发；怪物持续向玩家方向（下方）移动
 engine.update(1 / 60)
 assert.equal(shotCount, 1, '首帧应立即射出 1 发')
+assert.ok(sg.laneTime[BUFF_LANE] > 0 && sg.laneTime[MONSTER_LANE] === 0, 'laneTime 应按当前通道累计停留')
 const probeY = sg.monsters[0].y
 for (let i = 0; i < 5; i++) engine.update(1 / 60)
 assert.ok(sg.monsters[0].y > probeY, '怪物应持续向下移动')
@@ -378,6 +383,7 @@ nearMonster.hp = 1 // 快进：下一发命中即击杀
 const killBreachBefore = sg.breachCount
 for (let i = 0; i < 120 && sg.monsters.includes(nearMonster); i++) engine.update(1 / 60)
 assert.ok(!sg.monsters.includes(nearMonster), '击杀后怪物应从数组移除')
+assert.equal(sg.monsterKills, 1, '击杀应计入消灭怪物数')
 assert.equal(farMonster.hp, 5, '击杀不影响远端怪物')
 assert.equal(sg.breachCount, killBreachBefore, '应记为击杀而非突破（未到达玩家区域）')
 
@@ -429,6 +435,10 @@ assert.equal(sg.attackDamage, 1, 'restart 应恢复初始攻击力')
 assert.equal(sg.rapidFireTimer, 0, 'restart 应清空急速状态')
 assert.equal(sg.breachCount, 0, 'restart 应清零突破计数')
 assert.equal(sg.elapsedTime, 0, 'restart 应清零已进行时间')
+assert.equal(sg.monsterKills, 0, 'restart 应清零消灭怪物数')
+assert.equal(sg.attackGateActivations, 0, 'restart 应清零攻击强化次数')
+assert.equal(sg.rapidGateActivations, 0, 'restart 应清零急速强化次数')
+assert.deepEqual(sg.laneTime, [0, 0, 0], 'restart 应清零三通道停留时间')
 assert.equal(sg.currentLane, BUFF_LANE, 'restart 应回到中间通道')
 assert.ok(Math.abs(sg.playerX - sg.laneCenterX(BUFF_LANE)) < 1e-6, 'restart 后玩家应回到中间通道中心')
 assert.equal(sg.monsters.length, 1, 'restart 应立即生成第一只怪物')
@@ -498,6 +508,8 @@ sg._gateByLane[BUFF_LANE] = null
 sg._gateRespawnTimers[BUFF_LANE] = 0
 for (let i = 0; i < 30 && !sg._gateByLane[BUFF_LANE]; i++) engine.update(1 / 60)
 assert.ok(sg._gateByLane[BUFF_LANE], 'ATK Gate 应重生就位')
+// 压力测试期间玩家停在 ATK lane，Gate 可能已被自然打爆过——激活计数用相对断言
+const atkActivationsBefore = sg.attackGateActivations
 const atkGateHpBefore = sg._gateByLane[BUFF_LANE].hp
 for (let i = 0; i < 40 && sg._gateByLane[BUFF_LANE].hp === atkGateHpBefore; i++) engine.update(1 / 60)
 assert.ok(sg._gateByLane[BUFF_LANE].hp < atkGateHpBefore, 'ATK lane 子弹应命中 ATK Gate 扣血')
@@ -507,6 +519,7 @@ sg._gateByLane[BUFF_LANE].hp = sg.attackDamage // 快进：一发打爆
 for (let i = 0; i < 60 && sg._gateByLane[BUFF_LANE]; i++) engine.update(1 / 60)
 assert.equal(sg._gateByLane[BUFF_LANE], null, '打爆后 ATK Gate 应消失')
 assert.equal(sg.attackDamage, damageBefore + 1, '打爆 ATK Gate 应获得永久攻击强化')
+assert.equal(sg.attackGateActivations, atkActivationsBefore + 1, '打爆 ATK Gate 应计入攻击强化次数')
 for (let i = 0; i < 420 && !sg._gateByLane[BUFF_LANE]; i++) engine.update(1 / 60)
 assert.ok(
   sg._gateByLane[BUFF_LANE] && sg._gateByLane[BUFF_LANE].hp === sg._gateByLane[BUFF_LANE].maxHp,
@@ -520,10 +533,13 @@ engine.input.state.right = false
 engine.update(1 / 60)
 assert.equal(sg.currentLane, SPECIAL_LANE, '应切到 Rapid lane')
 const rapidDamageBefore = sg.attackDamage
+const rapidActivationsBefore = sg.rapidGateActivations
 sg._gateByLane[SPECIAL_LANE].hp = sg.attackDamage // 快进：一发打爆
 for (let i = 0; i < 60 && sg._gateByLane[SPECIAL_LANE]; i++) engine.update(1 / 60)
 assert.equal(sg._gateByLane[SPECIAL_LANE], null, '打爆后 Rapid Gate 应消失')
 assert.equal(sg.attackDamage, rapidDamageBefore, 'Rapid Gate 不应提升攻击力')
+assert.equal(sg.rapidGateActivations, rapidActivationsBefore + 1, '打爆 Rapid Gate 应计入急速强化次数')
+assert.equal(sg.rapidGateActivations, 1, '打爆 Rapid Gate 应计入急速强化次数')
 assert.ok(sg.rapidFireTimer > 0, '急速射击效果应激活')
 
 // 效果期间：1 秒约 10 发（基础 5 发/秒的 ×2）

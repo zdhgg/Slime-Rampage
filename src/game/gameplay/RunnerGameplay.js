@@ -134,6 +134,11 @@ export class RunnerGameplay extends GameplayController {
     this.rapidFireTimer = 0 // Rapid Fire 剩余时间（秒；0 = 正常射速）
     this.breachCount = 0 // 怪物到达玩家区域的累计次数（失败遮罩展示）
     this.elapsedTime = 0 // 本局已进行时间（秒），驱动怪物压力曲线与存活时间
+    // 试玩统计（失败遮罩展示；restart 清零）
+    this.monsterKills = 0 // 消灭怪物数
+    this.attackGateActivations = 0 // 攻击强化取得次数
+    this.rapidGateActivations = 0 // 急速强化取得次数
+    this.laneTime = [0, 0, 0] // 三通道停留秒数（怪潮/攻击/急速）
     this._prevLeft = false // 上一帧左键状态（边沿触发用）
     this._prevRight = false // 上一帧右键状态
     this._fireCooldown = 0 // 距下次自动射击的计时（秒）
@@ -191,6 +196,7 @@ export class RunnerGameplay extends GameplayController {
     const targetX = this.laneCenterX(this.currentLane)
     const k = 1 - Math.pow(1 - LANE_LERP_PER_FRAME, dt * 60)
     this.playerX += (targetX - this.playerX) * k
+    this.laneTime[this.currentLane] += dt // 通道停留统计（试玩用）
 
     this._updateMonsters(dt)
     this._updateGates(dt)
@@ -214,6 +220,10 @@ export class RunnerGameplay extends GameplayController {
     this.rapidFireTimer = 0
     this.breachCount = 0
     this.elapsedTime = 0
+    this.monsterKills = 0
+    this.attackGateActivations = 0
+    this.rapidGateActivations = 0
+    this.laneTime = [0, 0, 0]
     this.currentLane = BUFF_LANE // 回到中间通道
     this.playerX = this.laneCenterX(this.currentLane)
     this._prevLeft = false
@@ -364,11 +374,16 @@ export class RunnerGameplay extends GameplayController {
         this._bullets.splice(i, 1)
         gate.hp -= this.attackDamage
         if (gate.hp <= 0) {
-          // 打爆 Gate：按类型发放增益，Gate 消失并按倒计时重生
+          // 打爆 Gate：按类型发放增益并计入统计，Gate 消失并按倒计时重生
           this._gateByLane[gate.lane] = null
           this._gateRespawnTimers[gate.lane] = GATE_RESPAWN_DELAY
-          if (gate.kind === 'rapid') this.rapidFireTimer = RAPID_FIRE_DURATION
-          else this.attackDamage += 1
+          if (gate.kind === 'rapid') {
+            this.rapidFireTimer = RAPID_FIRE_DURATION
+            this.rapidGateActivations += 1
+          } else {
+            this.attackDamage += 1
+            this.attackGateActivations += 1
+          }
         }
         continue
       }
@@ -377,7 +392,10 @@ export class RunnerGameplay extends GameplayController {
         this._bullets.splice(i, 1)
         const monster = this.monsters[hitIndex]
         monster.hp -= this.attackDamage
-        if (monster.hp <= 0) this.monsters.splice(hitIndex, 1) // 击杀：从数组移除
+        if (monster.hp <= 0) {
+          this.monsters.splice(hitIndex, 1) // 击杀：从数组移除
+          this.monsterKills += 1
+        }
         continue
       }
       if (bullet.y < this._laneTop - BULLET_MARGIN) this._bullets.splice(i, 1)
@@ -645,18 +663,35 @@ export class RunnerGameplay extends GameplayController {
     if (!this.gameOver) return
     ctx.fillStyle = 'rgba(6, 10, 16, 0.62)'
     ctx.fillRect(0, 0, width, height)
+    const cx = width / 2
+    const top = height * 0.32
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
     ctx.fillStyle = '#ff6b4a'
     ctx.font = GAME_OVER_FONT
-    ctx.fillText('突围失败', width / 2, height * 0.4)
+    ctx.fillText('突围失败', cx, top)
     ctx.fillStyle = 'rgba(244, 238, 230, 0.9)'
     ctx.font = GAME_OVER_LINE_FONT
-    ctx.fillText(`生存时间  ${formatTime(this.elapsedTime)}`, width / 2, height * 0.4 + 52)
-    ctx.fillText(`突破次数  ${this.breachCount}`, width / 2, height * 0.4 + 82)
+    ctx.fillText(
+      `生存时间 ${formatTime(this.elapsedTime)} · 消灭怪物 ${this.monsterKills} · 突破 ${this.breachCount} 次`,
+      cx,
+      top + 62
+    )
+    ctx.fillText(
+      `最终攻击力 ${this.attackDamage} · 攻击强化 ${this.attackGateActivations} 次 · 急速强化 ${this.rapidGateActivations} 次`,
+      cx,
+      top + 94
+    )
+    const laneTotal = this.laneTime[0] + this.laneTime[1] + this.laneTime[2] || 1
+    const lanePct = this.laneTime.map((t) => Math.round((t / laneTotal) * 100))
+    ctx.fillStyle = 'rgba(244, 238, 230, 0.75)'
+    ctx.fillText(
+      `通道停留  怪潮 ${lanePct[0]}% · 攻击 ${lanePct[1]}% · 急速 ${lanePct[2]}%`,
+      cx,
+      top + 126
+    )
     ctx.fillStyle = 'rgba(244, 238, 230, 0.45)'
-    ctx.font = GAME_OVER_LINE_FONT
-    ctx.fillText('按 Esc 打开菜单 · 可放弃本局', width / 2, height * 0.4 + 114)
+    ctx.fillText('按 Esc 打开菜单 · 可放弃本局', cx, top + 168)
   }
 
   /**
