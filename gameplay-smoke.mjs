@@ -1,6 +1,6 @@
 // Gameplay 架构 smoke test：验证 gameplay 层默认值、工厂回落、
 // hooks 接线（reset/update/render/destroy）、Execution Boundary（每帧
-// update/render 执行边界）与 Engine 初始化销毁不受损。
+// update/render 执行边界）、Runner 空壳与三通道移动、Engine 初始化销毁不受损。
 // 纯 Node 运行（无头桩与 engine-smoke.mjs 同源），npm test 链内执行。
 import assert from 'node:assert/strict'
 
@@ -199,6 +199,76 @@ assert.equal(runnerEntry.game, null, '切回 arena 后旧 runner 实例已销毁
 engine.update(1 / 60) // 切回后 Arena 管线照常运转
 engine.render()
 console.log('✓ RunnerGameplay 空壳：创建/接管每帧/切回 arena 全链可用')
+
+// Runner 三通道移动：初始中间、边沿触发切换、边界钳制、按住不连跳、
+// X 平滑过渡、resize 后 lane 位置自适应。
+const rg = engine.configureGameplay('runner')
+assert.equal(rg.currentLane, 1, '初始 lane 应为中间（1）')
+assert.ok(
+  rg.laneCenterX(0) < rg.laneCenterX(1) && rg.laneCenterX(1) < rg.laneCenterX(2),
+  '三条通道中心 X 应从左到右递增'
+)
+assert.ok(Math.abs(rg.playerX - rg.laneCenterX(1)) < 1e-6, '玩家初始应位于中间通道中心')
+assert.ok(rg.playerY > engine.height * 0.6, '玩家应固定在画面下方区域')
+
+/** 单帧按下并松开（边沿触发）：updateWorld 必须各观察到按下帧与释放帧 */
+const pressFrame = (axis) => {
+  engine.input.state[axis] = true
+  engine.update(1 / 60) // 按下帧：边沿切换
+  engine.input.state[axis] = false
+  engine.update(1 / 60) // 释放帧：让 updateWorld 观察到松开
+}
+
+// 右切 1→2 后再次右按：右边界钳制
+pressFrame('right')
+assert.equal(rg.currentLane, 2, '右切换应到达 lane 2')
+pressFrame('right')
+assert.equal(rg.currentLane, 2, '右边界外不得继续右移')
+
+// 左切 2→1→0 后再次左按：左边界钳制
+pressFrame('left')
+assert.equal(rg.currentLane, 1, '左切换应回到 lane 1')
+pressFrame('left')
+assert.equal(rg.currentLane, 0, '左切换应到达 lane 0')
+pressFrame('left')
+assert.equal(rg.currentLane, 0, '左边界外不得继续左移')
+
+// 按住右键 3 帧：只允许从 0 跳到 1（连续跳 lane 会错误地到达 2）
+engine.input.state.right = true
+engine.update(1 / 60)
+engine.update(1 / 60)
+engine.update(1 / 60)
+engine.input.state.right = false
+assert.equal(rg.currentLane, 1, '按住不得连续跳 lane')
+
+// 平滑过渡：从静止的 lane 1 切到 lane 2，一帧内只移动部分距离并最终收敛
+for (let i = 0; i < 40; i++) engine.update(1 / 60)
+assert.ok(Math.abs(rg.playerX - rg.laneCenterX(1)) < 1, '静止后玩家应收敛在当前通道中心')
+const laneSpan = rg.laneCenterX(2) - rg.laneCenterX(1)
+pressFrame('right')
+assert.equal(rg.currentLane, 2)
+const distToTarget = Math.abs(rg.playerX - rg.laneCenterX(2))
+assert.ok(distToTarget > 1 && distToTarget < laneSpan - 1, 'lane 切换应为平滑过渡而非瞬移')
+for (let i = 0; i < 60; i++) engine.update(1 / 60)
+assert.ok(Math.abs(rg.playerX - rg.laneCenterX(2)) < 1, '平滑过渡应收敛到目标通道中心')
+engine.render() // runner 渲染管线冒烟（背景 + 通道 + 史莱姆占位）
+
+// 视口尺寸变化：通道几何与玩家锚点随新尺寸自适应
+const previousCenter = rg.laneCenterX(2)
+const previousRect = canvasStub.getBoundingClientRect
+canvasStub.getBoundingClientRect = () => ({ width: 900, height: 600 })
+engine._onResize()
+engine.update(1 / 60)
+assert.notEqual(rg.laneCenterX(2), previousCenter, 'lane 中心应随视口宽度变化')
+assert.ok(Math.abs(rg.playerX - rg.laneCenterX(2)) < 1, 'resize 后玩家仍锁定当前通道中心')
+assert.ok(Math.abs(rg.playerY - 600 * 0.78) < 1e-6, '玩家 Y 应随视口高度自适应')
+canvasStub.getBoundingClientRect = previousRect
+engine._onResize()
+engine.update(1 / 60)
+
+// 恢复 arena，交还后续销毁测试的默认上下文
+engine.configureGameplay('arena')
+console.log('✓ Runner lane 移动：边沿切换/边界钳制/按住不连跳/平滑过渡/resize 自适应全链可用')
 
 // 引擎销毁同步销毁 gameplay，单例复位；销毁后可再次初始化（HMR 场景）
 const active = engine.gameplay
