@@ -314,6 +314,9 @@ assert.equal(sg._gateByLane[SPECIAL_LANE].kind, 'rapid', 'Rapid lane 应是 rapi
 assert.equal(sg.attackDamage, 1, '初始攻击力应为 1')
 assert.equal(sg.rapidFireTimer, 0, '初始无急速效果')
 assert.equal(sg.elapsedTime, 0, '初始无已进行时间')
+assert.equal(sg.maxHp, 5, '初始最大生命应为 5')
+assert.equal(sg.hp, 5, '初始生命应满')
+assert.equal(sg.gameOver, false, '初始不应处于失败状态')
 
 // —— 压力曲线基线：前 30 秒完全温和（HP/速度/间隔不增长）——
 const earlyMaxHp = sg.monsters[0].maxHp
@@ -378,21 +381,75 @@ assert.ok(!sg.monsters.includes(nearMonster), '击杀后怪物应从数组移除
 assert.equal(farMonster.hp, 5, '击杀不影响远端怪物')
 assert.equal(sg.breachCount, killBreachBefore, '应记为击杀而非突破（未到达玩家区域）')
 
-// 突破：到达玩家区域 → 移除 + breachCount 只增加一次
+// 突破：到达玩家区域 → 移除 + breachCount 只增加一次 + 扣 1 点生命
 const breachBefore = sg.breachCount
 farMonster.y = sg.playerY - 10 // 直接拉到玩家区域，模拟到达
 engine.update(1 / 60)
 assert.equal(sg.breachCount, breachBefore + 1, '怪物到达玩家区域应记录一次突破')
 assert.ok(!sg.monsters.includes(farMonster), '突破的怪物应被移除')
+assert.equal(sg.hp, sg.maxHp - 1, '每次突破应扣除 1 点生命')
 engine.update(1 / 60)
 assert.equal(sg.breachCount, breachBefore + 1, '突破只应记录一次（不会重复计数）')
 
-// —— 持续生成：多怪同屏 + 数量上限 + 时间压力曲线 ——
-engine.input.state.right = true
+// —— 生命与失败：再次突破扣血归零 → gameOver → 世界冻结 ——
+assert.equal(sg.hp, sg.maxHp - 1, '此前一次突破应已扣除 1 点生命')
+sg.hp = 1 // 快进：再突破一次即失败
+const lifeBreachBefore = sg.breachCount
+sg.monsters.length = 0
+sg.monsters.push({ lane: MONSTER_LANE, y: sg.playerY - 10, hp: 5, maxHp: 5, speed: 0 })
 engine.update(1 / 60)
+assert.equal(sg.breachCount, lifeBreachBefore + 1, '失败前的突破仍应计数')
+assert.equal(sg.hp, 0, '生命应钳制为 0（不为负）')
+assert.equal(sg.gameOver, true, '生命归零应进入失败状态')
+
+// gameOver 后世界冻结：时间/射击/怪物/玩家移动/Gate 全停（渲染继续）
+sg.elapsedTime = 0 // 从 0 起观测冻结（失败后不应增长）
+const frozenShots = shotCount
+const frozenBullets = sg._bullets.length
+sg._monsterSpawnTimer = 0 // 即使到点也不应生成
+engine.input.state.right = true // 即使按键也不应切换通道
+for (let i = 0; i < 20; i++) engine.update(1 / 60)
 engine.input.state.right = false
+assert.equal(sg.elapsedTime, 0, '失败后 elapsedTime 不再增长')
+assert.equal(shotCount, frozenShots, '失败后不应继续射击')
+assert.equal(sg._bullets.length, frozenBullets, '失败后子弹不应推进或新增')
+assert.equal(sg.monsters.length, 0, '失败后不应生成怪物')
+assert.equal(sg.currentLane, MONSTER_LANE, '失败后玩家移动应冻结')
+sg._gateByLane[BUFF_LANE] = null
+sg._gateRespawnTimers[BUFF_LANE] = 0
 engine.update(1 / 60)
-assert.equal(sg.currentLane, BUFF_LANE, '应切到 ATK lane 停止打怪，让怪物自然累积')
+assert.equal(sg._gateByLane[BUFF_LANE], null, '失败后 Gate 不应重生')
+engine.render() // 失败状态渲染冒烟（遮罩 + GAME OVER + 生存时间 + 突破次数）
+
+// restart：恢复完整初始状态并让世界重新运转
+sg.restart()
+assert.equal(sg.hp, sg.maxHp, 'restart 应恢复生命')
+assert.equal(sg.gameOver, false, 'restart 应清除失败状态')
+assert.equal(sg.attackDamage, 1, 'restart 应恢复初始攻击力')
+assert.equal(sg.rapidFireTimer, 0, 'restart 应清空急速状态')
+assert.equal(sg.breachCount, 0, 'restart 应清零突破计数')
+assert.equal(sg.elapsedTime, 0, 'restart 应清零已进行时间')
+assert.equal(sg.currentLane, BUFF_LANE, 'restart 应回到中间通道')
+assert.ok(Math.abs(sg.playerX - sg.laneCenterX(BUFF_LANE)) < 1e-6, 'restart 后玩家应回到中间通道中心')
+assert.equal(sg.monsters.length, 1, 'restart 应立即生成第一只怪物')
+assert.equal(sg._bullets.length, 0, 'restart 应清空子弹')
+assert.equal(sg._gateByLane[MONSTER_LANE], null, 'restart 后怪物 lane 不应有 Gate')
+assert.ok(
+  sg._gateByLane[BUFF_LANE] && sg._gateByLane[BUFF_LANE].hp === sg._gateByLane[BUFF_LANE].maxHp,
+  'restart 后 ATK Gate 应满血重生'
+)
+assert.ok(
+  sg._gateByLane[SPECIAL_LANE] && sg._gateByLane[SPECIAL_LANE].kind === 'rapid',
+  'restart 后 Rapid Gate 应就位'
+)
+const resumedShots = shotCount
+engine.update(1 / 60)
+assert.ok(sg.elapsedTime > 0, 'restart 后时间应恢复增长')
+assert.ok(shotCount > resumedShots, 'restart 后应恢复射击')
+
+// —— 持续生成：多怪同屏 + 数量上限 + 时间压力曲线 ——
+// 生命机制已专项验证，这里把生命拉满，避免自然突破触发 gameOver 干扰后续断言
+sg.hp = 9999
 sg._bullets.length = 0
 sg.monsters.length = 0
 sg._monsterSpawnTimer = 0
@@ -554,7 +611,7 @@ assert.equal(catchUpShots, shotsBeforeNextFrame, '上限触发后下一帧不应
 
 // 恢复 arena，交还后续销毁测试的默认上下文
 engine.configureGameplay('arena')
-console.log('✓ Runner 怪物压力：多怪同屏/上限封顶/时间曲线/最近命中/击杀移除/突破一次性/Gate 不受影响全链可用')
+console.log('✓ Runner 怪物压力：多怪同屏/上限封顶/时间曲线/最近命中/击杀移除/突破扣血/gameOver 冻结/restart 恢复全链可用')
 
 // 引擎销毁同步销毁 gameplay，单例复位；销毁后可再次初始化（HMR 场景）
 const active = engine.gameplay

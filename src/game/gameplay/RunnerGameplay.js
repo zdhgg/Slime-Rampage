@@ -59,6 +59,18 @@ const LANE_LABEL_FONT = 'bold 11px sans-serif'
 // 自动射击补发：单帧 dt 跨多个射击间隔时补齐，但封顶防异常大 dt 爆发
 const MAX_CATCH_UP_SHOTS = 3
 
+// 玩家生命与失败：怪物每突破一次扣 1 点生命，归零即失败（世界冻结，仅渲染）
+const RUNNER_MAX_HP = 5
+const HUD_FONT = 'bold 14px sans-serif'
+const GAME_OVER_FONT = 'bold 44px sans-serif'
+const GAME_OVER_LINE_FONT = 'bold 16px sans-serif'
+
+/** 秒 → m:ss（HUD/结算共用） */
+const formatTime = (seconds) => {
+  const total = Math.max(0, Math.floor(seconds))
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
+}
+
 // Runner 走廊配色：夜色底 + 冷色通道描边（与 Arena 的野外主题区分开）
 const RUNNER_BG = '#0d1520'
 const LANE_FILL = 'rgba(122, 178, 255, 0.06)'
@@ -80,14 +92,17 @@ const HP_BAR_LOW = '#ff6b4a'
  * 绘制 MONSTER / ATK / RAPID 标识）：
  *  - MONSTER_LANE：怪物数组持续从顶部生成并向玩家逼近，同时存在数量受
  *    MAX_MONSTERS 封顶；maxHp/速度/生成间隔随 elapsedTime 线性爬坡
- *    （前 30 秒保持基线，保证可玩）；击杀从数组移除，突破移除并记录
- *    breachCount（暂无失败结算），均由持续生成自然补充；
+ *    （前 30 秒保持基线，保证可玩）；击杀从数组移除；突破移除并记录
+ *    breachCount、玩家 hp -1，hp 归零即 gameOver（世界冻结、仅渲染继续，
+ *    restart() 恢复初始状态），突破后由持续生成自然补充；
  *  - BUFF_LANE：ATK Gate，打爆后 attackDamage 永久 +1；
  *  - SPECIAL_LANE：Rapid Gate，打爆后射速 ×2 持续 6 秒，到期自动恢复。
  * 自动射击固定射速（冷却保留时间余量不受帧率影响，单帧跨多间隔补发但封顶），
  * 子弹以 attackDamage 结算、沿发射 lane 上飞、只命中同 lane 目标，单发只命中
  * 路径上最近的一个；切 lane = 切换火力方向；resize 后所有实体 lane X 保持对齐。
- * 仍未实现：波次/正式失败结算/WeaponSystem 接入/元素基因/Boss/开始界面入口。
+ * 生命/失败为 Runner 自管状态（左上 HUD 显示 HP 与存活时间，失败画遮罩），
+ * 暂不接 Vue 结算页/RunRules/排行榜/后端。
+ * 仍未实现：波次/正式失败结算页/WeaponSystem 接入/元素基因/Boss/开始界面入口。
  * 不接 RunRules.MODE_IDS，仅可通过 configureGameplay('runner') 进入。
  */
 export class RunnerGameplay extends GameplayController {
@@ -96,10 +111,13 @@ export class RunnerGameplay extends GameplayController {
     this.currentLane = 1 // 默认中间通道
     this.playerX = 0 // 玩家显示 X（平滑过渡中的当前值，CSS 像素）
     this.playerY = 0 // 玩家显示 Y（随视口高度固定在下方区域）
+    this.maxHp = RUNNER_MAX_HP // 玩家最大生命
+    this.hp = this.maxHp // 当前生命（怪物每次突破 -1）
+    this.gameOver = false // 失败标志：true 后世界冻结（时间/生成/移动/射击全停）
     this.attackDamage = 1 // 基础战斗属性：单发子弹伤害（打爆 ATK Gate 永久 +1）
     this.rapidFireTimer = 0 // Rapid Fire 剩余时间（秒；0 = 正常射速）
-    this.breachCount = 0 // 怪物到达玩家区域的累计次数（原型计数，暂不结算）
-    this.elapsedTime = 0 // 本局已进行时间（秒），驱动怪物压力曲线
+    this.breachCount = 0 // 怪物到达玩家区域的累计次数（失败遮罩展示）
+    this.elapsedTime = 0 // 本局已进行时间（秒），驱动怪物压力曲线与存活时间
     this._prevLeft = false // 上一帧左键状态（边沿触发用）
     this._prevRight = false // 上一帧右键状态
     this._fireCooldown = 0 // 距下次自动射击的计时（秒）
@@ -140,6 +158,7 @@ export class RunnerGameplay extends GameplayController {
     if (!game) return
     this._ensureLayout()
     if (dt <= 0) return // 首帧 dt=0：无需推进任何时间相关状态
+    if (this.gameOver) return // 失败后世界冻结：时间/输入/生成/移动/射击全停，仅渲染继续
     this.elapsedTime += dt
 
     const state = game.input.state
@@ -163,6 +182,33 @@ export class RunnerGameplay extends GameplayController {
   /** 第 lane 条通道（0..2）的中心 X：lane 坐标计算的唯一入口 */
   laneCenterX(lane) {
     return this._laneStartX + lane * (this._laneW + this._laneGap) + this._laneW / 2
+  }
+
+  /**
+   * 重开一局：恢复完整初始状态（不重建实例，GameEngine reset 架构不感知 Runner）。
+   * 生命/攻击/急速/计数清零回基线，怪物/子弹清空并立即生成第一只，
+   * Gate 全部满血重生，玩家回到中间通道。
+   */
+  restart() {
+    this.hp = this.maxHp
+    this.gameOver = false
+    this.attackDamage = 1
+    this.rapidFireTimer = 0
+    this.breachCount = 0
+    this.elapsedTime = 0
+    this.currentLane = BUFF_LANE // 回到中间通道
+    this.playerX = this.laneCenterX(this.currentLane)
+    this._prevLeft = false
+    this._prevRight = false
+    this._fireCooldown = 0
+    this._bullets.length = 0
+    this.monsters.length = 0
+    this._monsterSpawnTimer = 0 // 立即生成第一只怪物
+    this._spawnMonster()
+    this._monsterSpawnTimer = this.monsterSpawnInterval()
+    this._gateByLane = [null, null, null]
+    this._gateRespawnTimers = [0, 0, 0]
+    for (const lane of GATE_LANES) this._spawnGate(lane)
   }
 
   // ------------------------------------------------------------
@@ -204,9 +250,11 @@ export class RunnerGameplay extends GameplayController {
       const monster = this.monsters[i]
       monster.y += monster.speed * dt
       if (monster.y >= breachY) {
-        // 突破：移除并计数，由持续生成自然补充（无需重生等待）
+        // 突破：移除并计数 + 玩家扣 1 点生命，由持续生成自然补充（无需重生等待）
         this.monsters.splice(i, 1)
         this.breachCount++
+        this.hp = Math.max(0, this.hp - 1)
+        if (this.hp <= 0) this.gameOver = true
       }
     }
   }
@@ -357,6 +405,33 @@ export class RunnerGameplay extends GameplayController {
     this._renderGates(ctx)
     this._renderPlayerPlaceholder(ctx)
     this._renderBullets(ctx)
+    this._renderHud(ctx, width, height)
+  }
+
+  /**
+   * Runner HUD（屏幕空间）：左上角 HP 与存活时间；
+   * gameOver 时叠加半透明遮罩 + GAME OVER + 生存时间 + 突破次数
+   */
+  _renderHud(ctx, width, height) {
+    ctx.fillStyle = 'rgba(244, 238, 230, 0.85)'
+    ctx.font = HUD_FONT
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'top'
+    ctx.fillText(`HP ${this.hp}/${this.maxHp}`, 16, 14)
+    ctx.fillText(`TIME ${formatTime(this.elapsedTime)}`, 16, 36)
+
+    if (!this.gameOver) return
+    ctx.fillStyle = 'rgba(6, 10, 16, 0.62)'
+    ctx.fillRect(0, 0, width, height)
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillStyle = '#ff6b4a'
+    ctx.font = GAME_OVER_FONT
+    ctx.fillText('GAME OVER', width / 2, height * 0.4)
+    ctx.fillStyle = 'rgba(244, 238, 230, 0.9)'
+    ctx.font = GAME_OVER_LINE_FONT
+    ctx.fillText(`生存时间  ${formatTime(this.elapsedTime)}`, width / 2, height * 0.4 + 52)
+    ctx.fillText(`突破次数  ${this.breachCount}`, width / 2, height * 0.4 + 82)
   }
 
   /** 怪物占位图形：敌意暖色圆体 + 双眼 + 各自血条（x 每帧由 lane 现算） */
