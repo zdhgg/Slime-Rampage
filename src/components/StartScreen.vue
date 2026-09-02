@@ -1,6 +1,16 @@
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
 import {
+  ArrowLeft,
+  ArrowRight,
+  Gauge,
+  Infinity as InfinityIcon,
+  Route,
+  Shield,
+  Swords,
+  TowerControl,
+} from 'lucide-vue-next'
+import {
   DIFFICULTIES,
   DIFFICULTY_IDS,
   MODE_IDS,
@@ -16,8 +26,9 @@ import {
 } from '../game/RunRules.js'
 import { getExpeditionStages } from '../game/RunRules.js'
 import { STRAINS, STRAIN_IDS } from '../game/Strains.js'
+import { RUNNER_SUBMODES } from '../game/gameplay/runner/RunnerRules.js'
 
-const emit = defineEmits(['prepare', 'market', 'profiles', 'account', 'leaderboard', 'ui-sound', 'runner'])
+const emit = defineEmits(['prepare', 'market', 'profiles', 'account', 'leaderboard', 'ui-sound', 'runner', 'tower-defense'])
 const props = defineProps({
   records: { type: Object, default: () => ({}) },
   progression: {
@@ -30,6 +41,17 @@ const props = defineProps({
   lanStatus: { type: Object, default: () => ({ checked: false, online: false }) },
   publicLeaderboard: { type: Object, default: null },
 })
+
+const runnerSubmodesList = Object.values(RUNNER_SUBMODES)
+
+function startRunnerWithSubmode(submodeId) {
+  emit('ui-sound', 'confirm')
+  emit('runner', submodeId)
+}
+
+function runnerActionLabel(submode) {
+  return Number.isFinite(submode.duration) ? `${submode.duration} 秒目标` : '持续挑战'
+}
 
 const STRAIN_CHOICES = STRAIN_IDS.map((id) => ({ id, ...STRAINS[id] }))
 const MODE_FACTS = {
@@ -85,6 +107,48 @@ const MODE_COLORS = {
   endless: '#c99bff',
 }
 
+const PLAYSTYLES = [
+  {
+    id: 'arena',
+    index: '01',
+    name: '主战场',
+    kicker: 'Arena · 开放战场',
+    description: '在开放地图中成长、吞噬与进化，选择一套规则推进这场反攻。',
+    detail: '3 种战斗类型 · 共享成长与档案',
+    accent: '#ecc477',
+  },
+  {
+    id: 'runner',
+    index: '02',
+    name: '突围',
+    kicker: 'Runner · 三线推进',
+    description: '切换车道、躲避弹幕并融合武器，在王城封锁线上抢出一条生路。',
+    detail: '3 种突围类型 · 独立玩法结算',
+    accent: '#79d5e6',
+  },
+  {
+    id: 'tower-defense',
+    index: '03',
+    name: '塔防',
+    kicker: 'Tower Defense · 巢穴防线',
+    description: '部署防御塔、调度资源并守住巢心，在一波波攻势中稳住最后的阵地。',
+    detail: '即时部署 · 升级与出售 · 波次结算',
+    accent: '#91dc8c',
+  },
+]
+
+const PLAYSTYLE_ICONS = {
+  arena: Swords,
+  runner: Route,
+  'tower-defense': TowerControl,
+}
+
+const RUNNER_MODE_ICONS = {
+  blitz: Gauge,
+  marathon: Shield,
+  endless: InfinityIcon,
+}
+
 const LOCK_ICON = [
   'M7 10V7a5 5 0 0 1 10 0v3',
   'M5 10h14v10H5z',
@@ -98,9 +162,11 @@ const modeFacts = computed(() => {
   return [`${count} 个独立章节`, ...MODE_FACTS.expedition.slice(1)]
 })
 
-const view = ref('modes')
+const view = ref('playstyles')
 const selection = ref({ ...normalizeRunSelection(props.preferences), strain: 'origin' })
+const playstyleGrid = ref(null)
 const modeGrid = ref(null)
+const runnerGrid = ref(null)
 const configBackLink = ref(null)
 
 watch(
@@ -164,6 +230,40 @@ const modeSummaries = computed(() =>
   Object.fromEntries(MODE_IDS.map((mode) => [mode, modeSummary(mode)]))
 )
 
+function showPlaystyleSelection(playstyle = 'arena') {
+  view.value = 'playstyles'
+  emit('ui-sound', 'click')
+  nextTick(() => {
+    const preferred = playstyleGrid.value?.querySelector(`[data-playstyle="${playstyle}"]`)
+    const target = preferred || playstyleGrid.value?.querySelector('.playstyle-option')
+    target?.focus()
+  })
+}
+
+function selectPlaystyle(playstyle) {
+  emit('ui-sound', 'select')
+  view.value = playstyle === 'runner' ? 'runner-types' : 'arena-types'
+  nextTick(() => {
+    const target = playstyle === 'runner' ? runnerGrid.value : modeGrid.value
+    const preferred = playstyle === 'runner'
+      ? target?.querySelector('.runner-mode-card')
+      : target?.querySelector(`[data-mode="${selection.value.mode}"]`)
+    const fallback = target?.querySelector(playstyle === 'runner' ? '.runner-mode-card' : '.mode-option:not(:disabled)')
+    const focusTarget = preferred || fallback
+    focusTarget?.focus()
+  })
+}
+
+function showArenaTypes() {
+  view.value = 'arena-types'
+  emit('ui-sound', 'click')
+  nextTick(() => {
+    const preferred = modeGrid.value?.querySelector(`[data-mode="${selection.value.mode}"]`)
+    const target = preferred || modeGrid.value?.querySelector('.mode-option:not(:disabled)')
+    target?.focus()
+  })
+}
+
 function selectMode(mode) {
   selection.value.mode = mode
   if (!isDifficultyUnlocked(props.progression, selection.value.difficulty)) {
@@ -187,9 +287,13 @@ function selectStrain(strain) {
 }
 
 function showModeSelection() {
-  view.value = 'modes'
-  emit('ui-sound', 'click')
-  nextTick(() => modeGrid.value?.querySelector('.mode-option')?.focus())
+  showArenaTypes()
+}
+
+function onMenuEscape() {
+  if (view.value === 'config') showArenaTypes()
+  else if (view.value === 'arena-types') showPlaystyleSelection('arena')
+  else if (view.value === 'runner-types') showPlaystyleSelection('runner')
 }
 
 function prepare() {
@@ -205,7 +309,7 @@ watch(
 </script>
 
 <template>
-  <div class="start-overlay">
+  <div class="start-overlay" @keydown.esc="onMenuEscape">
     <!-- 史莱姆主题动态背景：漂浮 goo 光晕 + 上浮气泡，纯 CSS 动画，不挡交互 -->
     <div class="goo-layer" aria-hidden="true">
       <div class="goo-blob blob-a"></div>
@@ -228,7 +332,7 @@ watch(
         </div>
       </header>
 
-      <section v-if="view === 'modes'" class="mode-view" aria-labelledby="mode-title">
+      <section v-if="view === 'playstyles'" class="mode-view playstyle-view" aria-labelledby="playstyle-title">
         <div class="view-heading">
           <p>行动档案</p>
           <div class="title-row">
@@ -239,18 +343,64 @@ watch(
               <circle cx="29.5" cy="24" r="2.1" fill="#0a0d0c" />
               <path d="M21 28.4c1.9 1.4 4.1 1.4 6 0" stroke="#0a0d0c" stroke-width="1.8" stroke-linecap="round" fill="none" />
             </svg>
-            <h2 id="mode-title">选择作战模式</h2>
+            <h2 id="playstyle-title">选择玩法</h2>
           </div>
-          <span>先决定这一局要面对什么。</span>
+          <span>三套战斗系统，从这里选择你的推进方式。</span>
         </div>
 
-          <div ref="modeGrid" class="mode-grid" :style="{ '--mode-count': modeCards.length }">
+        <div ref="playstyleGrid" class="playstyle-grid">
+          <button
+            v-for="playstyle in PLAYSTYLES"
+            :key="playstyle.id"
+            class="playstyle-option"
+            :data-playstyle="playstyle.id"
+            :style="{ '--playstyle-accent': playstyle.accent }"
+            @click="playstyle.id === 'tower-defense' ? emit('tower-defense') : selectPlaystyle(playstyle.id)"
+          >
+            <div class="playstyle-topline">
+              <span class="playstyle-index">{{ playstyle.index }}</span>
+              <span class="playstyle-kicker">{{ playstyle.kicker }}</span>
+            </div>
+            <div class="playstyle-title-row">
+              <component :is="PLAYSTYLE_ICONS[playstyle.id]" class="playstyle-icon" :size="28" :stroke-width="1.65" aria-hidden="true" />
+              <h3>{{ playstyle.name }}</h3>
+            </div>
+            <p>{{ playstyle.description }}</p>
+            <span class="playstyle-detail">{{ playstyle.detail }}</span>
+            <span class="playstyle-enter">{{ playstyle.id === 'arena' ? '选择战斗类型' : playstyle.id === 'runner' ? '选择突围类型' : '直接部署防线' }} <ArrowRight :size="16" :stroke-width="1.8" aria-hidden="true" /></span>
+          </button>
+        </div>
+      </section>
+
+      <section v-else-if="view === 'arena-types'" class="mode-view subtype-view" aria-labelledby="arena-mode-title">
+        <div class="view-heading">
+          <div class="section-kicker">
+            <button class="back-link" title="返回玩法选择" aria-label="返回玩法选择" @click="showPlaystyleSelection('arena')">
+              <ArrowLeft :size="17" :stroke-width="1.8" aria-hidden="true" />
+            </button>
+            <p>主战场 · ARENA</p>
+          </div>
+          <div class="title-row">
+            <svg class="slime-buddy" viewBox="0 0 48 38" aria-hidden="true">
+              <path d="M7 33C5 21 13 9 24 9s19 12 17 24c-.3 2-1.7 2.6-3.4 2.6H10.4C8.7 35.6 7.3 35 7 33Z" fill="rgba(142, 173, 131, 0.9)" />
+              <path d="M14 15.5c2-2.4 5-3.8 8-4" stroke="rgba(255, 255, 255, 0.55)" stroke-width="2.2" stroke-linecap="round" fill="none" />
+              <circle cx="18.5" cy="24" r="2.1" fill="#0a0d0c" />
+              <circle cx="29.5" cy="24" r="2.1" fill="#0a0d0c" />
+              <path d="M21 28.4c1.9 1.4 4.1 1.4 6 0" stroke="#0a0d0c" stroke-width="1.8" stroke-linecap="round" fill="none" />
+            </svg>
+            <h2 id="arena-mode-title">选择战斗类型</h2>
+          </div>
+          <span>决定本局的推进目标与结算规则。</span>
+        </div>
+
+        <div ref="modeGrid" class="mode-grid" :style="{ '--mode-count': modeCards.length }">
             <button
               v-for="card in modeCards"
               :key="card.mode"
               class="mode-option"
               :class="{ locked: card.locked }"
               :disabled="card.locked"
+              :data-mode="card.mode"
               :style="{ '--mode-accent': MODE_COLORS[card.mode] }"
               @click="selectMode(card.mode)"
             >
@@ -278,33 +428,67 @@ watch(
                 </svg>
                 <span>{{ card.hint || '尚未解锁' }}</span>
               </div>
-              <span class="mode-enter">{{ card.locked ? '尚未解锁' : '进入设置' }} <b v-if="!card.locked" aria-hidden="true">→</b></span>
+              <span class="mode-enter">{{ card.locked ? '尚未解锁' : '进入设置' }} <ArrowRight v-if="!card.locked" :size="15" :stroke-width="1.9" aria-hidden="true" /></span>
             </button>
-          </div>
+        </div>
 
         <div class="next-unlock" :class="{ complete: !nextUnlock }">
           <span>解锁进度</span>
           <b>{{ unlockedModes.length }} / {{ MODE_IDS.length }}</b>
           <i v-if="nextUnlock">下一档案：{{ nextUnlock.name }} · {{ nextUnlock.hint }}</i>
-          <i v-else>全部开放 · 三种作战模式均可进入</i>
+          <i v-else>全部开放 · 三种战斗类型均可进入</i>
         </div>
-
-        <!-- 独立试玩入口：Runner 不属于 MODE_IDS，不参与解锁/难度/排行榜 -->
-        <button class="runner-entry" @click="emit('runner')">
-          <span class="runner-tag">独立试玩</span>
-          <span class="runner-copy">
-            <h3>极速突围 · Runner</h3>
-            <p>三线通道射击原型：切道走位、自动射击、打爆增益门。不入档、不上榜、随时可弃。</p>
-          </span>
-          <span class="runner-enter">直接开始 <b aria-hidden="true">→</b></span>
-        </button>
       </section>
 
-      <section v-else class="config-view" aria-labelledby="config-title">
+      <section v-else-if="view === 'runner-types'" class="mode-view subtype-view runner-view" aria-labelledby="runner-mode-title">
+        <div class="view-heading">
+          <div class="section-kicker">
+            <button class="back-link" title="返回玩法选择" aria-label="返回玩法选择" @click="showPlaystyleSelection('runner')">
+              <ArrowLeft :size="17" :stroke-width="1.8" aria-hidden="true" />
+            </button>
+            <p>突围 · RUNNER</p>
+          </div>
+          <div class="title-row">
+            <svg class="slime-buddy" viewBox="0 0 48 38" aria-hidden="true">
+              <path d="M7 33C5 21 13 9 24 9s19 12 17 24c-.3 2-1.7 2.6-3.4 2.6H10.4C8.7 35.6 7.3 35 7 33Z" fill="rgba(142, 173, 131, 0.9)" />
+              <path d="M14 15.5c2-2.4 5-3.8 8-4" stroke="rgba(255, 255, 255, 0.55)" stroke-width="2.2" stroke-linecap="round" fill="none" />
+              <circle cx="18.5" cy="24" r="2.1" fill="#0a0d0c" />
+              <circle cx="29.5" cy="24" r="2.1" fill="#0a0d0c" />
+              <path d="M21 28.4c1.9 1.4 4.1 1.4 6 0" stroke="#0a0d0c" stroke-width="1.8" stroke-linecap="round" fill="none" />
+            </svg>
+            <h2 id="runner-mode-title">选择突围类型</h2>
+          </div>
+          <span>换道、冲锋，在三线战场突破封锁。</span>
+        </div>
+
+        <div ref="runnerGrid" class="runner-mode-grid">
+          <button
+            v-for="(sub, index) in runnerSubmodesList"
+            :key="sub.id"
+            class="runner-mode-card"
+            :class="{ featured: sub.id === 'marathon' }"
+            @click="startRunnerWithSubmode(sub.id)"
+          >
+            <div class="runner-card-top">
+              <span class="runner-card-index">0{{ index + 1 }}</span>
+              <component :is="RUNNER_MODE_ICONS[sub.id]" class="runner-mode-icon" :size="22" :stroke-width="1.7" aria-hidden="true" />
+              <span v-if="sub.id === 'marathon'" class="runner-recommend-tag">主力推荐</span>
+            </div>
+            <h3>{{ sub.name }}</h3>
+            <p class="runner-card-kicker">{{ sub.kicker }}</p>
+            <p class="runner-card-desc">{{ sub.description }}</p>
+            <span class="runner-card-action">{{ runnerActionLabel(sub) }} <ArrowRight :size="15" :stroke-width="1.9" aria-hidden="true" /></span>
+          </button>
+        </div>
+      </section>
+
+      <section v-else-if="view === 'config'" class="config-view" aria-labelledby="config-title">
         <div class="config-intro">
           <div class="config-heading">
             <div class="config-kicker">
-              <button ref="configBackLink" class="back-link" title="返回模式选择" aria-label="返回模式选择" @click="showModeSelection">←</button>
+              <button ref="configBackLink" class="back-link" title="返回战斗类型" aria-label="返回战斗类型" @click="showModeSelection">
+                <ArrowLeft :size="17" :stroke-width="1.8" aria-hidden="true" />
+              </button>
               <p>本局配置</p>
             </div>
             <div class="title-row">
@@ -434,7 +618,7 @@ watch(
         <div class="config-actions">
           <button class="primary-action" @click="prepare">
             开始行动
-            <b aria-hidden="true">→</b>
+            <ArrowRight :size="16" :stroke-width="1.9" aria-hidden="true" />
           </button>
         </div>
       </section>
@@ -596,7 +780,9 @@ watch(
 .account-link,
 .profile-link,
 .back-link,
+.playstyle-option,
 .mode-option,
+.runner-mode-card,
 .difficulty-options button,
 .strain-options button,
 .config-actions button {
@@ -694,6 +880,140 @@ watch(
   font-size: 13px;
 }
 
+.section-kicker {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.section-kicker p { margin: 0; }
+.runner-view .section-kicker p { color: #79d5e6; }
+
+.playstyle-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 34px;
+}
+
+.playstyle-option {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 330px;
+  flex-direction: column;
+  padding: 28px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--playstyle-accent);
+  border-radius: 6px;
+  color: inherit;
+  background: rgba(18, 16, 13, 0.86);
+  text-align: left;
+  transition: border-color 0.14s ease, background 0.14s ease, transform 0.08s ease;
+}
+
+.playstyle-option:hover {
+  border-color: var(--playstyle-accent);
+  background: rgba(24, 21, 17, 0.94);
+}
+
+.playstyle-option:active { transform: scale(0.99); }
+
+.playstyle-option[data-playstyle='runner'] {
+  background: rgba(14, 23, 26, 0.78);
+}
+
+.playstyle-option[data-playstyle='runner']:hover {
+  background: rgba(17, 30, 34, 0.9);
+}
+
+.playstyle-option[data-playstyle='tower-defense'] {
+  background: rgba(14, 26, 18, 0.82);
+}
+
+.playstyle-option[data-playstyle='tower-defense']:hover {
+  background: rgba(18, 36, 23, 0.92);
+}
+
+.playstyle-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.playstyle-index,
+.playstyle-kicker {
+  color: var(--playstyle-accent);
+  font-size: 10px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.playstyle-kicker {
+  color: rgba(244, 238, 230, 0.46);
+  font-weight: 700;
+}
+
+.playstyle-title-row {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  margin-top: 38px;
+}
+
+.playstyle-icon {
+  flex: none;
+  color: var(--playstyle-accent);
+}
+
+.playstyle-title-row h3 {
+  margin: 0;
+  font-size: 25px;
+}
+
+.playstyle-option > p {
+  max-width: 390px;
+  margin-top: 14px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.playstyle-detail {
+  margin-top: 18px;
+  color: rgba(244, 238, 230, 0.42);
+  font-size: 10px;
+}
+
+.playstyle-enter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: auto;
+  padding-top: 24px;
+  color: var(--playstyle-accent);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.playstyle-enter svg,
+.mode-enter svg,
+.runner-card-action svg {
+  flex: none;
+  transition: transform 0.14s ease;
+}
+
+.playstyle-option:hover .playstyle-enter svg,
+.mode-option:not(.locked):hover .mode-enter svg,
+.runner-mode-card:hover .runner-card-action svg {
+  transform: translateX(3px);
+}
+
+.subtype-view { padding-top: 42px; }
+
 .mode-grid {
   display: grid;
   grid-template-columns: repeat(var(--mode-count), minmax(0, 1fr));
@@ -726,6 +1046,8 @@ watch(
 
 .mode-option:active { transform: scale(0.99); }
 .mode-option:focus-visible,
+.playstyle-option:focus-visible,
+.runner-mode-card:focus-visible,
 .market-link:focus-visible,
 .account-link:focus-visible,
 .profile-link:focus-visible,
@@ -842,20 +1164,11 @@ watch(
   font-weight: 800;
 }
 
-.mode-enter b {
-  transition: transform 0.14s ease;
-}
-
 .mode-option:not(.locked):hover .mode-enter {
   text-decoration: underline;
   text-underline-offset: 4px;
   text-decoration-color: rgba(236, 196, 119, 0.55);
 }
-
-.mode-option:not(.locked):hover .mode-enter b {
-  transform: translateX(4px);
-}
-
 
 .next-unlock {
   display: grid;
@@ -876,60 +1189,112 @@ watch(
 .next-unlock.complete { border-left-color: #a8773e; background: rgba(215, 166, 87, 0.05); }
 .next-unlock.complete b { color: var(--accent-bright); }
 
-/* 独立试玩入口（Runner）：与三张模式卡明确区隔的横幅按钮 */
-.runner-entry {
+.runner-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 34px;
+}
+
+.runner-mode-card {
+  display: flex;
+  min-width: 0;
+  min-height: 292px;
+  flex-direction: column;
+  padding: 22px;
+  border: 1px solid rgba(121, 213, 230, 0.18);
+  border-radius: 6px;
+  color: inherit;
+  background: rgba(14, 24, 29, 0.74);
+  text-align: left;
+  transition: border-color 0.14s ease, background 0.14s ease, transform 0.08s ease;
+}
+
+.runner-mode-card:hover {
+  border-color: rgba(121, 213, 230, 0.62);
+  background: rgba(18, 33, 39, 0.9);
+}
+
+.runner-mode-card:active { transform: scale(0.99); }
+
+.runner-mode-card.featured {
+  border-color: rgba(215, 166, 87, 0.38);
+  background: rgba(27, 28, 25, 0.84);
+}
+
+.runner-mode-card.featured:hover {
+  border-color: rgba(236, 196, 119, 0.68);
+  background: rgba(34, 33, 27, 0.92);
+}
+
+.runner-card-top {
   display: flex;
   align-items: center;
-  gap: 14px;
-  width: 100%;
-  margin-top: 12px;
-  padding: 13px 18px;
-  border: 1px solid rgba(201, 162, 255, 0.4);
-  border-radius: 10px;
-  background: linear-gradient(120deg, rgba(201, 162, 255, 0.12), rgba(122, 75, 184, 0.07));
-  color: rgba(244, 238, 230, 0.92);
-  text-align: left;
-  cursor: pointer;
-  transition: border-color 0.15s ease, transform 0.15s ease;
+  min-height: 24px;
+  gap: 9px;
 }
 
-.runner-entry:hover {
-  border-color: rgba(201, 162, 255, 0.75);
-  transform: translateY(-1px);
-}
-
-.runner-tag {
-  flex-shrink: 0;
-  padding: 3px 9px;
-  border: 1px solid rgba(201, 162, 255, 0.5);
-  border-radius: 999px;
-  color: #c9a2ff;
+.runner-card-index {
+  margin-right: auto;
+  color: #79d5e6;
   font-size: 10px;
   font-weight: 800;
-  letter-spacing: 1px;
+  font-variant-numeric: tabular-nums;
 }
 
-.runner-copy {
-  flex: 1;
-  min-width: 0;
-  display: grid;
-  gap: 3px;
+.runner-mode-icon { color: #79d5e6; }
+.runner-mode-card.featured .runner-mode-icon,
+.runner-mode-card.featured .runner-card-index { color: var(--accent-bright); }
+
+.runner-recommend-tag {
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--accent-bright);
+  border: 1px solid rgba(236, 196, 119, 0.32);
+  padding: 2px 6px;
+  border-radius: 3px;
 }
 
-.runner-copy h3 { margin: 0; font-size: 15px; }
-
-.runner-copy p {
-  margin: 0;
-  color: rgba(244, 238, 230, 0.55);
-  font-size: 11px;
-  line-height: 1.5;
+.runner-mode-card h3 {
+  margin: 25px 0 0;
+  color: var(--text);
+  font-size: 20px;
 }
 
-.runner-enter {
-  flex-shrink: 0;
-  color: #c9a2ff;
+.runner-card-kicker {
+  margin: 7px 0 0;
+  color: rgba(244, 238, 230, 0.5);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.runner-card-desc {
+  margin: 13px 0 0;
   font-size: 12px;
-  font-weight: 700;
+  line-height: 1.65;
+  color: var(--text-muted);
+  flex: 1;
+}
+
+.runner-card-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 20px;
+  padding-top: 15px;
+  border-top: 1px solid rgba(121, 213, 230, 0.13);
+  color: #8bdded;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.runner-mode-card.featured .runner-card-action { color: var(--accent-bright); }
+
+@media (max-width: 680px) {
+  .runner-mode-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .config-view {
@@ -1299,6 +1664,9 @@ button.selected .option-copy i {
 }
 
 .primary-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   min-height: 48px;
   padding: 0 28px;
   border: 1px solid #efca82;
@@ -1307,7 +1675,6 @@ button.selected .option-copy i {
   font-size: 13px;
 }
 
-.primary-action b { margin-left: 7px; }
 .primary-action:hover { background: #e3b566; }
 
 @media (max-width: 760px) {
@@ -1321,9 +1688,14 @@ button.selected .option-copy i {
   .profile-link { gap: 5px; }
   .mode-view,
   .config-view { padding-top: 34px; }
+  .playstyle-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 25px; }
+  .playstyle-option { min-height: 244px; padding: 23px; }
+  .playstyle-title-row { margin-top: 28px; }
   .mode-grid,
   .mode-grid.single { grid-template-columns: 1fr; margin-top: 25px; }
   .mode-option { min-height: 218px; }
+  .runner-mode-grid { margin-top: 25px; }
+  .runner-mode-card { min-height: 218px; }
   .next-unlock { grid-template-columns: 1fr; gap: 4px; padding: 12px 14px; }
   .config-intro { display: block; padding-bottom: 18px; }
   .config-heading h2 { font-size: 26px; }
@@ -1363,7 +1735,9 @@ button.selected .option-copy i {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .playstyle-option,
   .mode-option,
+  .runner-mode-card,
   .difficulty-options button,
   .strain-options button,
   .config-actions button { transition: none; }

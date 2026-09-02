@@ -1,743 +1,1627 @@
 import { GameplayController } from './GameplayController.js'
+import { Particle } from '../effects/Particle.js'
+import { FloatingText } from '../effects/FloatingText.js'
+import { RunnerDirector } from './runner/RunnerDirector.js'
+import { RunnerRenderer } from './runner/RunnerRenderer.js'
+import {
+  RUNNER_BULLET_SPEED,
+  RUNNER_COLLISION_DEPTH,
+  RUNNER_COUNTDOWN,
+  RUNNER_DURATION,
+  RUNNER_DAMAGE_AGGREGATE_WINDOW,
+  RUNNER_DASH_COOLDOWN,
+  RUNNER_DASH_DURATION,
+  RUNNER_DASH_IMPACT_DAMAGE,
+  RUNNER_DODGE_WINDOW,
+  RUNNER_ENEMY_ATTACK_GAP,
+  RUNNER_ENTITY_TYPES,
+  RUNNER_FEVER_DURATION,
+  RUNNER_FEVER_MAX_CHARGES,
+  RUNNER_FEVER_SCORE_MULTIPLIER,
+  RUNNER_FEVER_SHARDS_PER_CHARGE,
+  RUNNER_FIRE_INTERVAL,
+  RUNNER_FUSION_WEAPONS,
+  RUNNER_LANE_COMMIT_EPSILON,
+  RUNNER_LANE_COUNT,
+  RUNNER_LANE_LERP_PER_FRAME,
+  RUNNER_MAX_ATTACK,
+  RUNNER_MAX_BULLETS,
+  RUNNER_MAX_CATCH_UP_SHOTS,
+  RUNNER_MAX_DAMAGE_NUMBERS,
+  RUNNER_MAX_ENEMY_PROJECTILES,
+  RUNNER_MAX_HP,
+  RUNNER_MAX_SHIELD,
+  RUNNER_MUTATION_ARM_DEPTH,
+  RUNNER_PLAYER_DEPTH,
+  RUNNER_RAPID_DURATION,
+  RUNNER_RAPID_MULTIPLIER,
+  RUNNER_SECONDARY_ELEMENTS,
+  RUNNER_SUBMODES,
+  RUNNER_TACTICAL_ITEMS,
+  createRunnerSeed,
+  getRunnerFusionWeapon,
+  getRunnerSection,
+  getRunnerSubmode,
+  getRunnerWeaponCore,
+  runnerDistanceRemaining,
+  runnerProgress,
+} from './runner/RunnerRules.js'
 
-const LANE_COUNT = 3 // 三线推进：三条纵向通道
-const TAU = Math.PI * 2
+const HIT_RING_LIFE = 0.22
+const COMBO_WINDOW = 1.8
+const CORE_RING_COLORS = {
+  pierce: 'rgba(121, 217, 238, ALPHA)',
+  burst: 'rgba(240, 179, 95, ALPHA)',
+  corrosion: 'rgba(155, 223, 106, ALPHA)',
+}
+const clamp = (value, min, max) => Math.max(min, Math.min(max, value))
 
-// —— 三条通道的固定职责（原型约定，勿散落 0/1/2）——
-export const MONSTER_LANE = 0 // 怪物通道：怪物群持续逼近玩家
-export const BUFF_LANE = 1 // 普通增益通道：ATK Gate（打爆攻击永久 +1）
-export const SPECIAL_LANE = 2 // 特殊增益通道：Rapid Gate（打爆临时急速射击）
-const GATE_LANES = [BUFF_LANE, SPECIAL_LANE]
-const LANE_LABELS = ['怪潮', '攻击强化', '急速强化'] // 通道顶部职责标识
-const LANE_LABEL_COLORS = [
-  'rgba(255, 138, 92, 0.66)',
-  'rgba(124, 215, 255, 0.66)',
-  'rgba(201, 162, 255, 0.66)',
-]
-
-// 通道几何比例（唯一计算入口在 _ensureLayout / laneCenterX，禁止散落 width * xxx）
-const LANE_WIDTH_RATIO = 0.24 // 通道更宽，三条合计约占屏宽 80%
-const LANE_MIN_WIDTH = 56
-const LANE_GAP_RATIO = 0.18
-const LANE_TOP_RATIO = 0.06
-const LANE_HEIGHT_RATIO = 0.9
-const LANE_TOP_INSET_RATIO = 0.09 // 通道顶部收窄（轻微透视）
-const LANE_BOTTOM_OUTSET_RATIO = 0.06 // 通道底部外扩（轻微透视）
-// 玩家纵向位置：固定在画面下方区域
-const PLAYER_Y_RATIO = 0.78
-const PLAYER_RADIUS_RATIO = 0.2 // 史莱姆占位身体半径（相对通道宽）
-const BREACH_LINE_RATIO = 0.2 // 突破线/子弹出生点距玩家的偏移（相对通道宽，与视觉半径解耦）
-// 玩家 X 平滑过渡：60fps 基准下每帧 22% 收敛（帧率无关指数插值）
-const LANE_LERP_PER_FRAME = 0.22
-
-// 最小射击闭环：固定射速自动射击（无需射击键）
-const FIRE_INTERVAL = 1 / 5 // 每秒 5 发
-const RAPID_FIRE_RATE_MUL = 2 // Rapid Gate 效果：射速 ×2
-const RAPID_FIRE_DURATION = 6 // Rapid Gate 效果持续（秒）
-const BULLET_SPEED = 900 // 子弹上飞速度（px/s）
-const BULLET_RADIUS = 6
-const BULLET_MARGIN = 40 // 子弹飞出通道顶部后的清除余量
-const IMPACT_LIFE = 0.18 // 命中闪光持续（秒）
-
-// 原型怪物：从 MONSTER_LANE 顶部直线逼近玩家（无 AI）；被击杀或突破后由持续生成补充
-const MONSTER_HP = 5
-const MONSTER_SPEED_BASE = 70 // 逼近速度下限（px/s）
-const MONSTER_SPEED_VARIANCE = 50 // 速度随机幅度（70~120 px/s）
-const MONSTER_RADIUS_RATIO = 0.24 // 怪物身体半径（相对通道宽）
-const MONSTER_SPAWN_MARGIN = 20 // 出生点在通道顶部上方的余量
-const MONSTER_SPAWN_INTERVAL_BASE = 2.4 // 基线生成间隔（秒）
-const MONSTER_SPAWN_INTERVAL_MIN = 0.6 // 生成间隔下限（秒）
-const MONSTER_SPAWN_RAMP = 0.012 // 起坡后每秒间隔缩短 0.012s
-const PRESSURE_RAMP_DELAY = 30 // 压力增长起始时间（秒）：前 30 秒保持基线
-const PRESSURE_HP_STEP = 30 // 此后每 30 秒 maxHp +1
-const MONSTER_SPEED_RAMP = 0.8 // 起坡后每秒 +0.8 px/s
-const MONSTER_SPEED_BONUS_CAP = 130 // 速度加成封顶（最终 ≤250 px/s）
-export const MAX_MONSTERS = 8 // 场上同时存在上限
-
-// 增益 Gate：固定在所属通道前方，打爆后获得增益并按冷却重生
-const GATE_HP = 12
-const GATE_Y_RATIO = 0.42 // Gate 纵向位置（怪物生成区与玩家之间）
-const GATE_RESPAWN_DELAY = 4 // 打爆后到重新生成的间隔（秒）
-const GATE_WIDTH_RATIO = 0.22 // 门体宽度（相对通道宽）
-const GATE_HEIGHT_RATIO = 1.15 // 门体高宽比
-const GATE_BODY = '#7cd7ff'
-const GATE_EDGE = '#2a86b8'
-const RAPID_GATE_BODY = '#c9a2ff'
-const RAPID_GATE_EDGE = '#7a4bb8'
-const GATE_FONT = 'bold 13px sans-serif'
-const LANE_LABEL_FONT = 'bold 12px sans-serif'
-const HUD_FONT = 'bold 14px sans-serif'
-const GAME_OVER_FONT = 'bold 44px sans-serif'
-const GAME_OVER_LINE_FONT = 'bold 16px sans-serif'
-// 自动射击补发：单帧 dt 跨多个射击间隔时补齐，但封顶防异常大 dt 爆发
-const MAX_CATCH_UP_SHOTS = 3
-
-// Runner 走廊配色：夜色底 + 冷色通道（与 Arena 的野外主题区分开）
-const RUNNER_BG = '#0d1520'
-const LANE_FILL_TOP = 'rgba(122, 178, 255, 0.03)' // 通道纵深渐变（顶部深）
-const LANE_FILL_BOTTOM = 'rgba(122, 178, 255, 0.1)' // 通道纵深渐变（底部亮）
-const LANE_EDGE = 'rgba(122, 178, 255, 0.5)'
-const LANE_EDGE_GLOW = 'rgba(122, 178, 255, 0.1)'
-const LANE_GUIDE = 'rgba(122, 178, 255, 0.22)'
-const LANE_GUIDE_DASH = [16, 22] // 导向线虚线段（模块常量复用，热路径零分配）
-const LANE_GUIDE_DASH_OFF = [] // 虚线复位（空数组常量，避免每帧分配）
-const LANE_GUIDE_SPEED = 90 // 导向线下滚速度（px/s，制造前进感）
-// 玩家/子弹/怪物/Gate 配色（沿用 Arena 基础色系；怪物敌意暖色、Gate 冷色系）
-const SLIME_BODY = '#8ae84a'
-const SLIME_EDGE = '#2f9e3a'
-const BULLET_COLOR = '#ffe28a'
-const BULLET_TRAIL = 'rgba(255, 209, 102, 0.25)'
-const IMPACT_COLOR = 'rgba(255, 236, 170,' // 命中闪光（运行时拼接 alpha）
-const MONSTER_BODY = '#ff8a5c'
-const MONSTER_EDGE = '#a83a2a'
-const HP_BAR_FULL = '#8ae84a'
-const HP_BAR_LOW = '#ff6b4a'
-
-/** 秒 → m:ss（HUD/结算共用） */
 const formatTime = (seconds) => {
+  const total = Math.max(0, Math.ceil(seconds))
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
+}
+
+const formatElapsedTime = (seconds) => {
   const total = Math.max(0, Math.floor(seconds))
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
 }
 
 /**
- * Runner 玩法：三线推进射击的空间范式。
+ * 极速突围：多模式三线自动射击跑酷系统。
  *
- * 三条通道各司其职（常量 MONSTER_LANE / BUFF_LANE / SPECIAL_LANE，通道顶部
- * 绘制中文职责标识「怪潮 / 攻击强化 / 急速强化」）：
- *  - MONSTER_LANE：怪物数组持续从顶部生成并向玩家逼近，同时存在数量受
- *    MAX_MONSTERS 封顶；maxHp/速度/生成间隔随 elapsedTime 线性爬坡
- *    （前 30 秒保持基线，保证可玩）；击杀从数组移除；突破移除并记录
- *    breachCount、玩家 hp -1，hp 归零即 gameOver（世界冻结、仅渲染继续，
- *    restart() 恢复初始状态），突破后由持续生成自然补充；
- *  - BUFF_LANE：ATK Gate（「攻击 +1」），打爆后 attackDamage 永久 +1；
- *  - SPECIAL_LANE：Rapid Gate（「急速射击」），打爆后射速 ×2 持续 6 秒，
- *    到期自动恢复。
- * 通道带轻微透视与边缘发光、中央导向线下滚；子弹带尾迹与命中闪光；
- * HUD 显示生命/时间/急速剩余，失败画「突围失败」遮罩（中文文案）。
- * 自动射击固定射速（冷却保留时间余量不受帧率影响，单帧跨多间隔补发但封顶），
- * 子弹以 attackDamage 结算、沿发射 lane 上飞、只命中同 lane 目标，单发只命中
- * 路径上最近的一个；切 lane = 切换火力方向；resize 后所有实体 lane X 保持对齐。
- * 生命/失败为 Runner 自管状态，暂不接 Vue 结算页/RunRules/排行榜/后端。
- * 仍未实现：波次/正式失败结算页/WeaponSystem 接入/元素基因/Boss。
- * 不接 RunRules.MODE_IDS，仅可通过 configureGameplay('runner') 进入。
+ * 支持 60秒极速闪击、180秒决战远征与无尽狂飙三档模式。
  */
 export class RunnerGameplay extends GameplayController {
   constructor() {
     super('runner')
-    this.currentLane = 1 // 默认中间通道
-    this.playerX = 0 // 玩家显示 X（平滑过渡中的当前值，CSS 像素）
-    this.playerY = 0 // 玩家显示 Y（随视口高度固定在下方区域）
-    this.maxHp = 5 // 玩家最大生命
-    this.hp = this.maxHp // 当前生命（怪物每次突破 -1）
-    this.gameOver = false // 失败标志：true 后世界冻结（时间/生成/移动/射击全停）
-    this.attackDamage = 1 // 基础战斗属性：单发子弹伤害（打爆 ATK Gate 永久 +1）
-    this.rapidFireTimer = 0 // Rapid Fire 剩余时间（秒；0 = 正常射速）
-    this.breachCount = 0 // 怪物到达玩家区域的累计次数（失败遮罩展示）
-    this.elapsedTime = 0 // 本局已进行时间（秒），驱动怪物压力曲线与存活时间
-    // 试玩统计（失败遮罩展示；restart 清零）
-    this.monsterKills = 0 // 消灭怪物数
-    this.attackGateActivations = 0 // 攻击强化取得次数
-    this.rapidGateActivations = 0 // 急速强化取得次数
-    this.laneTime = [0, 0, 0] // 三通道停留秒数（怪潮/攻击/急速）
-    this._prevLeft = false // 上一帧左键状态（边沿触发用）
-    this._prevRight = false // 上一帧右键状态
-    this._fireCooldown = 0 // 距下次自动射击的计时（秒）
-    this._bullets = [] // 玩家子弹：{ lane, x, y }（lane 为发射时所属，不可变）
-    this._impacts = [] // 命中闪光：{ x, y, t }
-    this.monsters = [] // MONSTER_LANE 的怪物数组：{ lane, y, hp, maxHp, speed }
-    this._monsterSpawnTimer = 0 // 距下次生成的计时（秒；0 = 立即生成）
-    this._monstersReady = false // 怪物系统是否已随首次布局初始化
-    this._gateByLane = [null, null, null] // 仅 BUFF_LANE / SPECIAL_LANE 持有 Gate
-    this._gateRespawnTimers = [0, 0, 0] // 空 lane 的 Gate 重生倒计时（秒）
-    this._gatesReady = false // Gate 是否已随首次布局生成
-    // 视口几何缓存（_ensureLayout 更新；热路径只读数值/缓存对象，零分配）
-    this._viewportW = 0
-    this._viewportH = 0
-    this._laneW = 0
-    this._laneGap = 0
-    this._laneStartX = 0
-    this._laneTop = 0
-    this._laneH = 0
-    this._gateY = 0
-    this._laneFills = null // 每条通道的纵深渐变（resize 时重建）
+    this.renderer = new RunnerRenderer(this)
+    this.director = new RunnerDirector()
+
+    this.entities = []
+    this.bullets = []
+    this.enemyProjectiles = []
+    this.rings = []
+    this.particles = []
+    this.floatingTexts = []
+    this.damageNumbers = []
+
+    this.submode = 'marathon'
+    this.submodeConfig = getRunnerSubmode('marathon')
+    this.duration = this.submodeConfig.duration
+
+    this.state = 'countdown'
+    this.outcome = null
+    this.countdown = RUNNER_COUNTDOWN
+    this.elapsedTime = 0
+    this.visualTime = 0
+    this.currentLane = 1
+    this.targetLane = 1
+    this.lanePosition = 1
+    this.hp = RUNNER_MAX_HP
+    this.maxHp = RUNNER_MAX_HP
+    this.shield = 0
+    this.maxShield = RUNNER_MAX_SHIELD
+    this.attackDamage = 1
+    this.rapidFireTimer = 0
+    this.weaponCore = null
+    this.secondaryElement = null
+    this.weaponLevel = 0
+    this.weaponChoicePending = false
+    this.secondaryChoicePending = false
+    this.weaponNotice = ''
+    this.weaponNoticeTimer = 0
+    this.fusionPresentation = null
+    this.fusionPulse = 0
+    this.score = 0
+    this.kills = 0
+    this.gates = 0
+    this.hitsTaken = 0
+    this.damageTaken = 0
+    this.shieldAbsorbed = 0
+    this.perfectDodges = 0
+    this.combo = 0
+    this.bestCombo = 0
+    this.weaponStats = { pierced: 0, explosions: 0, corrosionStacks: 0 }
+    this.comboTimer = 0
+    this.section = getRunnerSection(0)
+    this.sectionNotice = 0
+    this.damageFlash = 0
+    this.shieldFlash = 0
+    this.dashTimer = 0
+    this.dashCooldown = 0
+    this.dashKills = 0
+    this.feverShards = 0
+    this.feverCharges = 0
+    this.feverTimer = 0
+    this.feverCount = 0
+    this.bulletTimeTimer = 0
+    this.hyperBoostTimer = 0
+    this.droneTimer = 0
+    this.droneLane = 0
+    this.groundFires = []
+    this.tacticalStats = { magnets: 0, bulletTimes: 0, boosters: 0, drones: 0, barrels: 0 }
+    this.reducedMotion = false
+
+    this._seed = createRunnerSeed()
+    this._encounterTimer = 0
+    this._fireCooldown = 0
+    this._prevLeft = false
+    this._prevRight = false
+    this._shakeTime = 0
+    this._shakeDuration = 0
+    this._shakeMagnitude = 0
+    this._finishSent = false
+    this._weaponChoiceTriggered = false
+    this._secondaryChoiceTriggered = false
+    this._weaponEvolved = false
+    this._weaponOverdrive = false
+    this._choiceRowId = 0
+    this._secondaryChoiceRowId = 0
+    this._shotSerial = 0
+    this._nextEnemyProjectileId = 1
+    this._enemyAttackCooldown = 0
+    this._lastLaneSwitchAt = -Infinity
+    this._lastDodgeAt = -Infinity
   }
 
   attach(game) {
     super.attach(game)
-    this._ensureLayout() // attach 时视口尺寸已就绪（Engine 构造末尾）
+    this.renderer.ensureLayout()
+    this.reducedMotion = !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
   }
 
-  /** Runner 接管每帧世界更新/渲染，不走 Arena 帧管线 */
   usesArenaFramePipeline() {
     return false
   }
 
-  /**
-   * 世界更新：通道切换输入 → 玩家 X 平滑过渡 → 怪物群 → Gate 重生 → 射击。
-   * 边沿触发：只在「上一帧未按、本帧按下」的瞬间切换，按住不连跳。
-   */
-  updateWorld(dt) {
-    const game = this.game
-    if (!game) return
-    this._ensureLayout()
-    if (dt <= 0) return // 首帧 dt=0：无需推进任何时间相关状态
-    if (this.gameOver) return // 失败后世界冻结：时间/输入/生成/移动/射击全停，仅渲染继续
-    this.elapsedTime += dt
+  get isSwitching() {
+    return Math.abs(this.lanePosition - this.targetLane) > RUNNER_LANE_COMMIT_EPSILON
+  }
 
-    const state = game.input.state
-    const left = !!state.left
-    const right = !!state.right
-    if (left && !this._prevLeft && this.currentLane > 0) this.currentLane--
-    if (right && !this._prevRight && this.currentLane < LANE_COUNT - 1) this.currentLane++
+  get occupiedLane() {
+    return clamp(Math.round(this.lanePosition), 0, RUNNER_LANE_COUNT - 1)
+  }
+
+  get isFeverActive() {
+    return this.feverTimer > 0
+  }
+
+  get fusionWeapon() {
+    return getRunnerFusionWeapon(this.weaponCore, this.secondaryElement)
+  }
+
+  reset(seed, submode = this.submode || 'marathon') {
+    this._seed = createRunnerSeed(seed)
+    this.director.reset(this._seed)
+    this.entities.length = 0
+    this.bullets.length = 0
+    this.enemyProjectiles.length = 0
+    this.rings.length = 0
+    this.particles.length = 0
+    this.floatingTexts.length = 0
+    this.damageNumbers.length = 0
+    this.groundFires.length = 0
+
+    this.submode = (typeof submode === 'string' && submode) ? submode : (submode?.submode || 'marathon')
+    this.submodeConfig = getRunnerSubmode(this.submode)
+    this.duration = this.submodeConfig.duration
+
+    this.state = 'countdown'
+    this.outcome = null
+    this.countdown = RUNNER_COUNTDOWN
+    this.elapsedTime = 0
+    this.visualTime = 0
+    this.currentLane = 1
+    this.targetLane = 1
+    this.lanePosition = 1
+    this.hp = RUNNER_MAX_HP
+    this.maxHp = RUNNER_MAX_HP
+    this.shield = 0
+    this.maxShield = RUNNER_MAX_SHIELD
+    this.attackDamage = 1
+    this.rapidFireTimer = 0
+    this.weaponCore = null
+    this.secondaryElement = null
+    this.weaponLevel = 0
+    this.weaponChoicePending = false
+    this.secondaryChoicePending = false
+    this.weaponNotice = ''
+    this.weaponNoticeTimer = 0
+    this.fusionPresentation = null
+    this.fusionPulse = 0
+    this.score = 0
+    this.kills = 0
+    this.gates = 0
+    this.hitsTaken = 0
+    this.damageTaken = 0
+    this.shieldAbsorbed = 0
+    this.perfectDodges = 0
+    this.combo = 0
+    this.bestCombo = 0
+    this.weaponStats = { pierced: 0, explosions: 0, corrosionStacks: 0 }
+    this.comboTimer = 0
+    this.section = getRunnerSection(0, this.submode)
+    this.sectionNotice = 1.8
+    this.damageFlash = 0
+    this.shieldFlash = 0
+    this.dashTimer = 0
+    this.dashCooldown = 0
+    this.dashKills = 0
+    this.feverShards = 0
+    this.feverCharges = 0
+    this.feverTimer = 0
+    this.feverCount = 0
+    this.bulletTimeTimer = 0
+    this.hyperBoostTimer = 0
+    this.droneTimer = 0
+    this.droneLane = 0
+    this.groundFires = []
+    this.tacticalStats = { magnets: 0, bulletTimes: 0, boosters: 0, drones: 0, barrels: 0 }
+
+    this._encounterTimer = 0
+    this._fireCooldown = 0
+    this._prevLeft = false
+    this._prevRight = false
+    this._shakeTime = 0
+    this._shakeDuration = 0
+    this._shakeMagnitude = 0
+    this._finishSent = false
+    this._weaponChoiceTriggered = false
+    this._secondaryChoiceTriggered = false
+    this._weaponEvolved = false
+    this._weaponOverdrive = false
+    this._choiceRowId = 0
+    this._secondaryChoiceRowId = 0
+    this._shotSerial = 0
+    this._nextEnemyProjectileId = 1
+    this._enemyAttackCooldown = 0
+    this._lastLaneSwitchAt = -Infinity
+    this._lastDodgeAt = -Infinity
+    return this
+  }
+
+  restart(seed, submode = this.submode) {
+    return this.reset(seed, submode)
+  }
+
+  updateWorld(dt) {
+    if (!this.game || dt <= 0 || this.state === 'finished') return
+    this.visualTime += dt
+    this._updateEffects(dt)
+    this._updateLaneInput(dt)
+    this.dashTimer = Math.max(0, this.dashTimer - dt)
+    this.dashCooldown = Math.max(0, this.dashCooldown - dt)
+
+    if (this.state === 'countdown') {
+      this.game.input.consumeDash?.()
+      this.countdown = Math.max(0, this.countdown - dt)
+      if (this.countdown <= 0) {
+        this.state = 'active'
+        this.sectionNotice = 1.8
+      }
+      return
+    }
+
+    if (this.duration !== Infinity) {
+      this.elapsedTime = Math.min(this.duration, this.elapsedTime + dt)
+    } else {
+      this.elapsedTime += dt
+    }
+    this.rapidFireTimer = Math.max(0, this.rapidFireTimer - dt)
+    this.feverTimer = Math.max(0, this.feverTimer - dt)
+    this.sectionNotice = Math.max(0, this.sectionNotice - dt)
+    this.weaponNoticeTimer = Math.max(0, this.weaponNoticeTimer - dt)
+    this.damageFlash = Math.max(0, this.damageFlash - dt * 2.6)
+    this.shieldFlash = Math.max(0, this.shieldFlash - dt * 3.2)
+    this._shakeTime = Math.max(0, this._shakeTime - dt)
+    this._enemyAttackCooldown = Math.max(0, this._enemyAttackCooldown - dt)
+
+    if (this.state === 'active' && this.game.input.consumeFever?.()) {
+      this.activateFever()
+    }
+
+    if (this.comboTimer > 0) {
+      this.comboTimer -= dt
+      if (this.comboTimer <= 0) this.combo = 0
+    }
+
+    const nextSection = getRunnerSection(this.elapsedTime, this.submode)
+    if (nextSection.id !== this.section.id) {
+      this.section = nextSection
+      this.sectionNotice = 2.2
+      this.game.sound.wave?.()
+    } else {
+      this.section = nextSection
+    }
+
+    this._updateWeaponProgression()
+    this._updateDirector(dt)
+    this._updateEntities(dt)
+    this._updateEnemyProjectiles(dt)
+    if (this.state !== 'active') return
+    this._updateShooting(dt)
+
+    if (this.duration !== Infinity && this.elapsedTime >= this.duration) {
+      this._finish('victory')
+    }
+  }
+
+  _updateLaneInput(dt) {
+    const input = this.game.input.state
+    const left = !!input.left
+    const right = !!input.right
+    if (left && !this._prevLeft) this.targetLane = Math.max(0, this.targetLane - 1)
+    if (right && !this._prevRight) this.targetLane = Math.min(RUNNER_LANE_COUNT - 1, this.targetLane + 1)
     this._prevLeft = left
     this._prevRight = right
 
-    // 平滑过渡：帧率无关的指数收敛
-    const targetX = this.laneCenterX(this.currentLane)
-    const k = 1 - Math.pow(1 - LANE_LERP_PER_FRAME, dt * 60)
-    this.playerX += (targetX - this.playerX) * k
-    this.laneTime[this.currentLane] += dt // 通道停留统计（试玩用）
-
-    this._updateMonsters(dt)
-    this._updateGates(dt)
-    this._updateShooting(dt)
-  }
-
-  /** 第 lane 条通道（0..2）的中心 X：lane 坐标计算的唯一入口 */
-  laneCenterX(lane) {
-    return this._laneStartX + lane * (this._laneW + this._laneGap) + this._laneW / 2
-  }
-
-  /**
-   * 重开一局：恢复完整初始状态（不重建实例，GameEngine reset 架构不感知 Runner）。
-   * 生命/攻击/急速/计数清零回基线，怪物/子弹清空并立即生成第一只，
-   * Gate 全部满血重生，玩家回到中间通道。
-   */
-  restart() {
-    this.hp = this.maxHp
-    this.gameOver = false
-    this.attackDamage = 1
-    this.rapidFireTimer = 0
-    this.breachCount = 0
-    this.elapsedTime = 0
-    this.monsterKills = 0
-    this.attackGateActivations = 0
-    this.rapidGateActivations = 0
-    this.laneTime = [0, 0, 0]
-    this.currentLane = BUFF_LANE // 回到中间通道
-    this.playerX = this.laneCenterX(this.currentLane)
-    this._prevLeft = false
-    this._prevRight = false
-    this._fireCooldown = 0
-    this._bullets.length = 0
-    this._impacts.length = 0
-    this.monsters.length = 0
-    this._monsterSpawnTimer = 0 // 立即生成第一只怪物
-    this._spawnMonster()
-    this._monsterSpawnTimer = this.monsterSpawnInterval()
-    this._gateByLane = [null, null, null]
-    this._gateRespawnTimers = [0, 0, 0]
-    for (const lane of GATE_LANES) this._spawnGate(lane)
-    // 与 engine.reset 对齐：清空暂停锁。Runner 自管生命周期、不触发 Arena reset，
-    // 若上一局从暂停菜单放弃，残留的锁会让本局 Esc 恢复失效
-    if (this.game) this.game._pauseLock = 0
-  }
-
-  // ------------------------------------------------------------
-  // 怪物压力曲线（elapsedTime 驱动；前 30 秒保持基线，温和起步）
-  // ------------------------------------------------------------
-
-  /** 当前生成的怪物 maxHp：起坡后每 PRESSURE_HP_STEP 秒 +1 */
-  monsterMaxHp() {
-    return MONSTER_HP + Math.floor(Math.max(0, this.elapsedTime - PRESSURE_RAMP_DELAY) / PRESSURE_HP_STEP)
-  }
-
-  /** 当前生成的怪物速度：基线随机幅度 + 起坡后线性加成（封顶） */
-  monsterSpeed() {
-    const bonus = Math.min(
-      MONSTER_SPEED_BONUS_CAP,
-      Math.max(0, this.elapsedTime - PRESSURE_RAMP_DELAY) * MONSTER_SPEED_RAMP
-    )
-    return MONSTER_SPEED_BASE + Math.random() * MONSTER_SPEED_VARIANCE + bonus
-  }
-
-  /** 当前生成间隔：基线起随 elapsedTime 线性缩短（下限封底） */
-  monsterSpawnInterval() {
-    return Math.max(
-      MONSTER_SPAWN_INTERVAL_MIN,
-      MONSTER_SPAWN_INTERVAL_BASE - Math.max(0, this.elapsedTime - PRESSURE_RAMP_DELAY) * MONSTER_SPAWN_RAMP
-    )
-  }
-
-  /** 怪物群：持续生成（受上限约束）→ 直线逼近 → 突破移除并计数 */
-  _updateMonsters(dt) {
-    this._monsterSpawnTimer -= dt
-    if (this._monsterSpawnTimer <= 0 && this.monsters.length < MAX_MONSTERS) {
-      this._monsterSpawnTimer = this.monsterSpawnInterval()
-      this._spawnMonster()
-    }
-
-    const breachY = this.playerY - this._laneW * BREACH_LINE_RATIO
-    for (let i = this.monsters.length - 1; i >= 0; i--) {
-      const monster = this.monsters[i]
-      monster.y += monster.speed * dt
-      if (monster.y >= breachY) {
-        // 突破：移除并计数 + 玩家扣 1 点生命，由持续生成自然补充（无需重生等待）
-        this.monsters.splice(i, 1)
-        this.breachCount++
-        this.hp = Math.max(0, this.hp - 1)
-        if (this.hp <= 0) this.gameOver = true
+    if (this.state === 'active' && this.game.input.consumeDash?.() && this.dashCooldown <= 0) {
+      const direction = right && !left ? 1 : left && !right ? -1 : this._safestDashDirection()
+      const nextLane = clamp(this.currentLane + direction, 0, RUNNER_LANE_COUNT - 1)
+      if (nextLane !== this.currentLane) {
+        this.targetLane = nextLane
+        this.lanePosition = nextLane
+        this.currentLane = nextLane
+        this.dashTimer = RUNNER_DASH_DURATION
+        this.dashCooldown = RUNNER_DASH_COOLDOWN
+        this._lastLaneSwitchAt = this.visualTime
+        this._shake(2.5, 0.12)
+        const point = this.renderer.project(nextLane, RUNNER_PLAYER_DEPTH)
+        this._burst(point.x, point.y, '#d8f7eb', 5, true)
+        this.game.sound.dash?.()
+        this._applyDashImpact(nextLane)
       }
     }
+
+    const k = this.reducedMotion ? 1 : 1 - Math.pow(1 - RUNNER_LANE_LERP_PER_FRAME, dt * 60)
+    this.lanePosition += (this.targetLane - this.lanePosition) * k
+    if (Math.abs(this.lanePosition - this.targetLane) <= RUNNER_LANE_COMMIT_EPSILON) {
+      if (this.currentLane !== this.targetLane) this._lastLaneSwitchAt = this.visualTime
+      this.lanePosition = this.targetLane
+      this.currentLane = this.targetLane
+    }
   }
 
-  /** 在 MONSTER_LANE 顶部生成一只怪物（按当前压力曲线取属性） */
-  _spawnMonster() {
-    const maxHp = this.monsterMaxHp()
-    this.monsters.push({
-      lane: MONSTER_LANE,
-      y: this._laneTop - MONSTER_SPAWN_MARGIN,
-      hp: maxHp,
-      maxHp,
-      speed: this.monsterSpeed(),
+  _applyDashImpact(lane) {
+    let impacted = 0
+    for (const entity of this.entities) {
+      if (!entity.active || entity.lane !== lane || entity.kind !== 'enemy') continue
+      if (entity.depth >= 0.70 && entity.depth <= 1.05) {
+        entity.hp -= RUNNER_DASH_IMPACT_DAMAGE
+        entity.hitFlash = 0.25
+        const point = this.renderer.project(entity.lane, entity.depth)
+        this._showDamageNumber(`dash-${entity.id}`, point.x, point.y, RUNNER_DASH_IMPACT_DAMAGE, 'burst')
+        this._burst(point.x, point.y, '#ffd166', 8, true)
+        impacted++
+        if (entity.hp <= 0) {
+          this.dashKills = (this.dashKills || 0) + 1
+          this._defeatEntity(entity)
+          this.floatingTexts.push(new FloatingText(point.x, point.y - 20, '冲撞击破!', '', '#ffe066', 15))
+          this._collectFeverShard(point)
+        }
+      }
+    }
+    if (impacted > 0) {
+      this._shake(4.5, 0.18)
+      this.game.sound.hit?.('spark')
+    }
+  }
+
+  activateFever() {
+    if (this.feverCharges <= 0) return false
+    this.feverCharges -= 1
+    this.feverTimer = RUNNER_FEVER_DURATION
+    this.feverCount = (this.feverCount || 0) + 1
+    const p = this.renderer.project(this.currentLane, RUNNER_PLAYER_DEPTH)
+    this.floatingTexts.push(
+      new FloatingText(
+        this.renderer.lanePositionX(this.lanePosition),
+        this.renderer.playerY - 45,
+        '狂热暴走 FEVER!!',
+        '',
+        '#ffd166',
+        22
+      )
+    )
+    this._shake(6.5, 0.35)
+    this.game.sound.levelUp?.()
+    this._burst(p.x, p.y, '#ffd166', 20, true)
+    return true
+  }
+
+  _collectFeverShard(point) {
+    if (this.feverCharges < RUNNER_FEVER_MAX_CHARGES) {
+      this.feverShards += 1
+      if (this.feverShards >= RUNNER_FEVER_SHARDS_PER_CHARGE) {
+        this.feverShards = 0
+        this.feverCharges = Math.min(RUNNER_FEVER_MAX_CHARGES, this.feverCharges + 1)
+        this.floatingTexts.push(
+          new FloatingText(point.x, point.y - 26, '暴走就绪 +1 [按F释放]', '', '#ffd166', 18)
+        )
+        this.game.sound.levelUp?.()
+        this._burst(point.x, point.y, '#ffd166', 12, true)
+      } else {
+        this.floatingTexts.push(
+          new FloatingText(
+            point.x,
+            point.y - 26,
+            `暴走印记 ${this.feverShards}/${RUNNER_FEVER_SHARDS_PER_CHARGE}`,
+            '',
+            '#ffe066',
+            16
+          )
+        )
+        this.game.sound.pickup?.()
+      }
+    } else {
+      this.score += 150
+      this.floatingTexts.push(
+        new FloatingText(point.x, point.y - 26, '暴走充盈 · 分数 +150', '', '#ffd166', 16)
+      )
+      this.game.sound.pickup?.()
+    }
+  }
+
+  _safestDashDirection() {
+    const risks = this._getLaneRisks()
+    const left = this.currentLane > 0 ? risks[this.currentLane - 1] : Infinity
+    const right = this.currentLane < RUNNER_LANE_COUNT - 1 ? risks[this.currentLane + 1] : Infinity
+    if (left === Infinity && right === Infinity) return 0
+    return left <= right ? -1 : 1
+  }
+
+  _getLaneRisks() {
+    const risks = [0, 0, 0]
+    for (const entity of this.entities) {
+      if (!entity.active || entity.kind === 'mutation' || entity.kind === 'gate') continue
+      const urgency = clamp((entity.depth - 0.34) / 0.66, 0, 1)
+      let weight = urgency * (1 + Math.max(0, entity.damage || 0) * 0.42)
+      if (entity.charging) weight += 0.9
+      if (entity.attacking) {
+        if (entity.behavior === 'archer') weight += 1.45
+        if (entity.behavior === 'mage' && entity.attackLanes) {
+          for (const lane of entity.attackLanes) risks[lane] += 1.65
+        }
+      }
+      risks[clamp(entity.lane, 0, RUNNER_LANE_COUNT - 1)] += weight
+    }
+    for (const projectile of this.enemyProjectiles) {
+      if (!projectile.active) continue
+      const urgency = clamp((projectile.depth - 0.38) / 0.58, 0, 1)
+      risks[projectile.lane] += 1.1 + urgency * 2.4
+    }
+    return risks
+  }
+
+  _getLaneTelemetry() {
+    const risks = this._getLaneRisks()
+    return risks.map((risk, lane) => {
+      const activeMage = this.entities.find(
+        (entity) => entity.active && entity.behavior === 'mage' && entity.attacking && entity.attackLanes?.includes(lane)
+      )
+      const activeArcher = this.entities.find(
+        (entity) => entity.active && entity.behavior === 'archer' && entity.attacking && entity.attackLane === lane
+      )
+      const hasBarrier = this.entities.some(
+        (entity) => entity.active && entity.kind === 'hazard' && entity.lane === lane && entity.depth > 0.15
+      )
+      const isCharging = this.entities.some(
+        (entity) => entity.active && entity.lane === lane && (entity.charging || entity.chargeTelegraph > 0)
+      )
+      const status = risk >= 2.6 || isCharging ? 'danger' : risk >= 0.85 || hasBarrier ? 'warning' : 'open'
+      const intent = isCharging ? '冲锋' : activeMage ? '封锁' : activeArcher ? '瞄准' : hasBarrier ? '路障' : status === 'danger' ? '逼近' : status === 'warning' ? '注意' : '开放'
+      return { lane, risk: Math.min(1, risk / 4.8), status, intent }
     })
   }
 
-  /** Gate 重生：打爆后按倒计时在原 lane 重新生成 */
-  _updateGates(dt) {
-    for (const lane of GATE_LANES) {
-      if (this._gateByLane[lane]) continue
-      this._gateRespawnTimers[lane] -= dt
-      if (this._gateRespawnTimers[lane] <= 0) this._spawnGate(lane)
+  _registerPerfectDodge(lane, depth) {
+    if (this.visualTime - this._lastLaneSwitchAt > RUNNER_DODGE_WINDOW) return false
+    if (this.visualTime - this._lastDodgeAt < 0.28) return false
+    this._lastDodgeAt = this.visualTime
+    this.perfectDodges += 1
+    this.score += 20
+    this.dashCooldown = Math.max(0, this.dashCooldown - RUNNER_DASH_COOLDOWN * 0.35)
+    const safeDepth = Math.min(RUNNER_COLLISION_DEPTH, depth || RUNNER_COLLISION_DEPTH)
+    const point = this.renderer.project(lane, safeDepth)
+    this._collectFeverShard(point)
+    this.rings.push({
+      lane,
+      depth: safeDepth,
+      life: 0.28,
+      maxLife: 0.28,
+      color: 'rgba(128, 226, 210, ALPHA)',
+      radiusScale: 1.35,
+    })
+    this.floatingTexts.push(new FloatingText(point.x, point.y - 24, '极限闪避  +20', '', '#8de3d7', 16))
+    this.game.sound.pickup?.()
+    return true
+  }
+
+  _updateDirector(dt) {
+    if (this.weaponChoicePending) return
+    this._encounterTimer -= dt
+    if (this._encounterTimer > 0) return
+    const encounter = this.director.createEncounter(this.elapsedTime, this.entities.length, this.submode)
+    if (encounter.length) this.entities.push(...encounter)
+    this._encounterTimer = this.section.spawnInterval
+  }
+
+  _updateWeaponProgression() {
+    const choiceTime = this.submodeConfig?.weaponChoiceTime ?? 25
+    const evolveTime = this.submodeConfig?.weaponEvolveTime ?? 65
+    const overdriveTime = this.submodeConfig?.weaponOverdriveTime ?? 110
+
+    if (!this._weaponChoiceTriggered && this.elapsedTime >= choiceTime) {
+      this._weaponChoiceTriggered = true
+      this._startWeaponChoice()
+    }
+    if (!this._secondaryChoiceTriggered && this.elapsedTime >= evolveTime) {
+      this._secondaryChoiceTriggered = true
+      this._startSecondaryChoice()
+    }
+    if (!this._weaponOverdrive && this.elapsedTime >= overdriveTime) {
+      this._weaponOverdrive = this._upgradeWeaponCore(3, '终极超载')
     }
   }
 
-  /** 自动射击（带补发上限）+ 子弹推进 + 同 lane「最近目标」命中判定 */
-  _updateShooting(dt) {
-    // Rapid Fire 效果期间射速 ×2；到期自动恢复正常射速
-    this.rapidFireTimer = Math.max(0, this.rapidFireTimer - dt)
-    const interval =
-      this.rapidFireTimer > 0 ? FIRE_INTERVAL / RAPID_FIRE_RATE_MUL : FIRE_INTERVAL
+  _startWeaponChoice() {
+    const choices = this.director.createWeaponChoice()
+    this._choiceRowId = choices[0]?.rowId || 0
+    this.weaponChoicePending = choices.length > 0
+    this.weaponNotice = '弹道变异'
+    this.weaponNoticeTimer = 2.2
+    this.bullets.length = 0
+    this.entities.push(...choices)
+  }
 
-    // 固定射速：触发后保留时间余量（+= 而非重置），平均节拍不随帧率漂移；
-    // dt 跨多个间隔时补齐应发数量，但单帧封顶——超出部分直接丢弃，
-    // 防止异常大 dt（切后台恢复等）瞬间喷出大量子弹
+  _startSecondaryChoice() {
+    const choices = this.director.createSecondaryChoice()
+    this._secondaryChoiceRowId = choices[0]?.rowId || 0
+    this.secondaryChoicePending = choices.length > 0
+    this.weaponNotice = '元素融合变异'
+    this.weaponNoticeTimer = 2.4
+    this.bullets.length = 0
+    this.entities.push(...choices)
+  }
+
+  _selectWeaponCore(coreId) {
+    if (this.weaponCore || !this.weaponChoicePending) return false
+    const core = getRunnerWeaponCore(coreId)
+    if (!core) return false
+    this.weaponCore = core.id
+    this.weaponLevel = 1
+    this.weaponChoicePending = false
+    this.weaponNotice = `${core.name} · 已融合`
+    this.weaponNoticeTimer = 2.6
+    this.score += 250
+    this._shotSerial = 0
+    for (const entity of this.entities) {
+      if (entity.kind === 'mutation' && entity.rowId === this._choiceRowId) entity.active = false
+    }
+    this._encounterTimer = 0.75
+    this._showFusion(core, 1, '流派融合')
+    this.game.sound.evolution?.()
+    return true
+  }
+
+  _selectSecondaryElement(elemId) {
+    if (this.secondaryElement || !this.secondaryChoicePending) return false
+    const elem = RUNNER_SECONDARY_ELEMENTS[elemId]
+    if (!elem) return false
+    this.secondaryElement = elem.id
+    this.secondaryChoicePending = false
+    this.weaponLevel = Math.max(2, this.weaponLevel)
+    for (const entity of this.entities) {
+      if (entity.kind === 'secondary_mutation' && entity.rowId === this._secondaryChoiceRowId) {
+        entity.active = false
+      }
+    }
+    const fusion = this.fusionWeapon
+    this.weaponNotice = fusion ? `${fusion.name} · 融合觉醒` : `${elem.name} · 附魔就绪`
+    this.weaponNoticeTimer = 3.0
+    this.score += 300
+    this._encounterTimer = 0.75
+    this._showFusion({
+      id: fusion?.id || elem.id,
+      name: fusion?.name || elem.name,
+      color: fusion?.color || elem.color,
+      description: fusion?.description || elem.description,
+    }, this.weaponLevel, '双核融合觉醒')
+    this.game.sound.evolution?.()
+    return true
+  }
+
+  _upgradeWeaponCore(level, prefix) {
+    if (!this.weaponCore || this.weaponLevel >= level) return false
+    const core = getRunnerWeaponCore(this.weaponCore)
+    const fusion = this.fusionWeapon
+    this.weaponLevel = level
+    const displayName = fusion?.name || core.name
+    this.weaponNotice = `${prefix} · ${displayName} Lv.${level}`
+    this.weaponNoticeTimer = 2.6
+    this._showFusion({
+      id: fusion?.id || core.id,
+      name: displayName,
+      color: fusion?.color || core.color,
+      description: fusion?.description || core.description,
+    }, level, prefix)
+    this.game.sound.elementUp?.()
+    return true
+  }
+
+  _showFusion(core, level, kicker) {
+    const descriptions = [core.description, '弹道结构完成双核融合', '核心进入终极过载状态']
+    this.fusionPresentation = {
+      id: core.id,
+      kicker,
+      title: `${core.name} Lv.${level}`,
+      description: core.description || descriptions[level - 1],
+      color: core.color,
+      level,
+      timer: this.reducedMotion ? 0.9 : 0.78,
+      maxTimer: this.reducedMotion ? 0.9 : 0.78,
+    }
+    this.fusionPulse = 1
+  }
+
+  get weaponDefinition() {
+    return getRunnerWeaponCore(this.weaponCore)
+  }
+
+  get weaponLevelConfig() {
+    return this.weaponDefinition?.levels[Math.max(0, this.weaponLevel - 1)] || null
+  }
+
+  _updateEntities(dt) {
+    for (let i = this.entities.length - 1; i >= 0; i--) {
+      const entity = this.entities[i]
+      if (!entity.active) {
+        this.entities.splice(i, 1)
+        continue
+      }
+      entity.previousDepth = entity.depth
+      if (entity.behavior === 'charge') this._updateCharger(entity, dt)
+      else if (entity.behavior === 'archer' || entity.behavior === 'mage') {
+        this._updateRangedEnemy(entity, dt)
+      }
+      else entity.depth += entity.speed * dt
+      entity.hitFlash = Math.max(0, entity.hitFlash - dt)
+      if (entity.depth < RUNNER_COLLISION_DEPTH) continue
+
+      const collides = entity.lane === this.occupiedLane
+      if (entity.kind === 'mutation') {
+        if (collides) this._selectWeaponCore(entity.weaponCore)
+        entity.active = false
+        this.entities.splice(i, 1)
+        continue
+      }
+      if (entity.kind !== 'gate') {
+        if (collides) this._takeDamage(entity)
+        else this._registerPerfectDodge(entity.lane, entity.depth)
+      }
+      this.entities.splice(i, 1)
+      if (this.state === 'finished') return
+    }
+  }
+
+  _updateCharger(entity, dt) {
+    if (!entity.chargeStarted && entity.depth >= entity.chargeAt) {
+      entity.chargeStarted = true
+      entity.chargeTelegraph = entity.chargeDelay
+      entity.speed = 0
+    }
+    if (entity.chargeTelegraph > 0) {
+      entity.chargeTelegraph = Math.max(0, entity.chargeTelegraph - dt)
+      if (entity.chargeTelegraph <= 0) {
+        entity.charging = true
+        entity.speed = entity.baseSpeed * entity.chargeMultiplier
+        this.game.sound.enemyShoot?.()
+      }
+      return
+    }
+    entity.depth += entity.speed * dt
+  }
+
+  _updateRangedEnemy(entity, dt) {
+    if (entity.attacking) {
+      entity.attackTimer = Math.max(0, entity.attackTimer - dt)
+      if (entity.attackTimer <= 0) {
+        if (entity.behavior === 'archer') this._spawnEnemyArrow(entity)
+        else this._detonateMageCast(entity)
+        entity.attacking = false
+        entity.hasAttacked = true
+        entity.speed = entity.baseSpeed * 0.86
+        this.game.sound.enemyShoot?.()
+      }
+      return
+    }
+
+    if (!entity.hasAttacked && entity.depth >= entity.attackAt && this._enemyAttackCooldown <= 0) {
+      entity.attacking = true
+      entity.attackTimer = entity.attackDelay
+      entity.speed = 0
+      if (entity.behavior === 'archer') {
+        entity.attackLane = this.occupiedLane
+      } else {
+        const safeLanes = [0, 1, 2].filter((lane) => lane !== this.occupiedLane)
+        entity.safeLane = safeLanes[Math.floor(this.director.random() * safeLanes.length)]
+        entity.attackLanes = [0, 1, 2].filter((lane) => lane !== entity.safeLane)
+      }
+      this._enemyAttackCooldown = entity.attackDelay + RUNNER_ENEMY_ATTACK_GAP
+      return
+    }
+
+    entity.depth += entity.speed * dt
+  }
+
+  _spawnEnemyArrow(entity) {
+    if (this.enemyProjectiles.length >= RUNNER_MAX_ENEMY_PROJECTILES) return
+    const hp = Math.max(1, entity.projectileHp || 1)
+    this.enemyProjectiles.push({
+      id: this._nextEnemyProjectileId++,
+      kind: 'arrow',
+      lane: entity.attackLane,
+      depth: entity.depth + 0.018,
+      previousDepth: entity.depth + 0.018,
+      speed: 0.72,
+      damage: entity.projectileDamage || 1,
+      hp,
+      maxHp: hp,
+      color: '#9dd9b2',
+      active: true,
+      hitFlash: 0,
+    })
+  }
+
+  _detonateMageCast(entity) {
+    const lanes = entity.attackLanes || []
+    for (const lane of lanes) {
+      this.rings.push({
+        lane,
+        depth: RUNNER_COLLISION_DEPTH - 0.045,
+        life: 0.34,
+        maxLife: 0.34,
+        color: 'rgba(205, 138, 239, ALPHA)',
+        radiusScale: 2.8,
+      })
+    }
+    if (lanes.includes(this.occupiedLane)) {
+      this._takeDamage({
+        lane: this.occupiedLane,
+        depth: RUNNER_COLLISION_DEPTH,
+        damage: entity.projectileDamage || 1,
+      })
+    }
+  }
+
+  _updateEnemyProjectiles(dt) {
+    for (let i = this.enemyProjectiles.length - 1; i >= 0; i--) {
+      const projectile = this.enemyProjectiles[i]
+      if (!projectile.active) {
+        this.enemyProjectiles.splice(i, 1)
+        continue
+      }
+      projectile.previousDepth = projectile.depth
+      projectile.depth += projectile.speed * dt
+      projectile.hitFlash = Math.max(0, projectile.hitFlash - dt)
+      if (projectile.depth < RUNNER_COLLISION_DEPTH) continue
+      if (projectile.lane === this.occupiedLane) this._takeDamage(projectile)
+      else this._registerPerfectDodge(projectile.lane, projectile.depth)
+      projectile.active = false
+      this.enemyProjectiles.splice(i, 1)
+      if (this.state === 'finished') return
+    }
+  }
+
+  _takeDamage(entity) {
+    if (this.dashTimer > 0 || this.hyperBoostTimer > 0) {
+      this._registerPerfectDodge(entity.lane ?? this.occupiedLane, RUNNER_COLLISION_DEPTH)
+      return
+    }
+    const incoming = Math.max(1, entity.damage)
+    const absorbed = Math.min(this.shield, incoming)
+    const hpDamage = incoming - absorbed
+    this.shield -= absorbed
+    this.hp = Math.max(0, this.hp - hpDamage)
+    this.hitsTaken += 1
+    this.damageTaken += hpDamage
+    this.shieldAbsorbed += absorbed
+    this.combo = 0
+    this.comboTimer = 0
+    if (absorbed > 0) {
+      this.shieldFlash = 1
+      this.game.sound.barrierBreak?.()
+    }
+    if (hpDamage > 0) {
+      this.damageFlash = 1
+      this._shake(7, 0.28)
+      this.game.sound.hurt?.()
+    } else {
+      this._shake(3, 0.16)
+    }
+
+    const lane = entity.lane ?? this.occupiedLane
+    const point = this.renderer.project(lane, RUNNER_COLLISION_DEPTH)
+    if (absorbed > 0) {
+      this._burst(point.x, point.y, '#70d8d3', 6, true)
+      this._showDamageNumber('player-shield', point.x, point.y - 34, absorbed, 'shield')
+    }
+    if (hpDamage > 0) {
+      this._burst(point.x, point.y, '#e36b59', 8, true)
+      this._showDamageNumber('player-hp', point.x, point.y - 16, hpDamage, 'player')
+    }
+    if (this.hp <= 0) this._finish('defeat')
+  }
+
+  _updateShooting(dt) {
+    const interval = RUNNER_FIRE_INTERVAL / (this.rapidFireTimer > 0 ? RUNNER_RAPID_MULTIPLIER : 1)
     this._fireCooldown -= dt
     let shots = 0
     while (this._fireCooldown <= 0) {
-      if (shots >= MAX_CATCH_UP_SHOTS) {
+      if (shots >= RUNNER_MAX_CATCH_UP_SHOTS) {
         this._fireCooldown = interval
         break
       }
       this._fireCooldown += interval
-      this._bullets.push({
-        lane: this.currentLane, // 发射时所属 lane，此后不可变
-        x: this.playerX, // 出生于玩家当前位置
-        y: this.playerY - this._laneW * BREACH_LINE_RATIO,
-      })
+      if (!this.isSwitching && this.bullets.length < RUNNER_MAX_BULLETS) {
+        if (this.isFeverActive) {
+          for (let lane = 0; lane < RUNNER_LANE_COUNT; lane++) {
+            if (this.bullets.length < RUNNER_MAX_BULLETS) {
+              this.bullets.push(this._createBullet(lane))
+            }
+          }
+        } else {
+          this.bullets.push(this._createBullet(this.currentLane))
+        }
+        if (this.droneTimer > 0 && this.bullets.length < RUNNER_MAX_BULLETS) {
+          this.bullets.push(this._createBullet(this.droneLane))
+        }
+        this.game.sound.shoot?.(this.rapidFireTimer > 0 || this.isFeverActive ? 'spark' : 'base', 0.65)
+      }
       shots++
     }
 
-    // 子弹推进；同 lane 内可能同时越过多个目标（怪群/Gate）——
-    // 只命中子弹最先到达的一个（y 更大者 = 更靠近玩家），单发绝不双命中
-    for (let i = this._bullets.length - 1; i >= 0; i--) {
-      const bullet = this._bullets[i]
-      const prevY = bullet.y
-      bullet.y -= BULLET_SPEED * dt
-      let hitY = -Infinity // 已越过候选目标中最靠近玩家者的 y
-      let hitKind = null // 'monster' | 'gate'
-      let hitIndex = -1
-      if (bullet.lane === MONSTER_LANE) {
-        for (let j = 0; j < this.monsters.length; j++) {
-          const monster = this.monsters[j]
-          if (monster.hp <= 0) continue
-          if (prevY >= monster.y && bullet.y <= monster.y && monster.y > hitY) {
-            hitY = monster.y
-            hitKind = 'monster'
-            hitIndex = j
-          }
-        }
-      }
-      const gate = this._gateByLane[bullet.lane]
-      if (
-        gate &&
-        gate.hp > 0 &&
-        prevY >= this._gateY &&
-        bullet.y <= this._gateY &&
-        this._gateY > hitY
-      ) {
-        hitKind = 'gate'
+    for (let i = this.bullets.length - 1; i >= 0; i--) {
+      const bullet = this.bullets[i]
+      bullet.previousDepth = bullet.depth
+      bullet.depth -= RUNNER_BULLET_SPEED * dt
+      let target = null
+      let targetIsProjectile = false
+      for (const entity of this.entities) {
+        if (!entity.active || entity.lane !== bullet.lane || entity.hp <= 0) continue
+        if (entity.kind === 'mutation' && entity.depth < RUNNER_MUTATION_ARM_DEPTH) continue
+        const crossed = bullet.previousDepth >= entity.depth && bullet.depth <= entity.depth
+        if (crossed && (!target || entity.depth > target.depth)) target = entity
       }
 
-      if (hitKind === 'gate') {
-        this._impacts.push({ x: bullet.x, y: this._gateY, t: 0 })
-        this._bullets.splice(i, 1)
-        gate.hp -= this.attackDamage
-        if (gate.hp <= 0) {
-          // 打爆 Gate：按类型发放增益并计入统计，Gate 消失并按倒计时重生
-          this._gateByLane[gate.lane] = null
-          this._gateRespawnTimers[gate.lane] = GATE_RESPAWN_DELAY
-          if (gate.kind === 'rapid') {
-            this.rapidFireTimer = RAPID_FIRE_DURATION
-            this.rapidGateActivations += 1
-          } else {
-            this.attackDamage += 1
-            this.attackGateActivations += 1
-          }
+      for (const projectile of this.enemyProjectiles) {
+        if (!projectile.active || projectile.lane !== bullet.lane || projectile.hp <= 0) continue
+        const crossed = bullet.previousDepth >= projectile.previousDepth && bullet.depth <= projectile.depth
+        if (crossed && (!target || projectile.depth > target.depth)) {
+          target = projectile
+          targetIsProjectile = true
         }
-        continue
       }
-      if (hitKind === 'monster') {
-        this._impacts.push({ x: bullet.x, y: hitY, t: 0 })
-        this._bullets.splice(i, 1)
-        const monster = this.monsters[hitIndex]
-        monster.hp -= this.attackDamage
-        if (monster.hp <= 0) {
-          this.monsters.splice(hitIndex, 1) // 击杀：从数组移除
-          this.monsterKills += 1
-        }
-        continue
-      }
-      if (bullet.y < this._laneTop - BULLET_MARGIN) this._bullets.splice(i, 1)
-    }
 
-    // 命中闪光计时推进
-    for (let i = this._impacts.length - 1; i >= 0; i--) {
-      const impact = this._impacts[i]
-      impact.t += dt
-      if (impact.t >= IMPACT_LIFE) this._impacts.splice(i, 1)
+      if (target) {
+        const canPierce =
+          (bullet.core === 'pierce' || bullet.fever) && bullet.remainingHits > 0 && target.kind !== 'mutation'
+        if (targetIsProjectile) this._hitEnemyProjectile(target, bullet)
+        else this._hitEntity(target, bullet)
+        if (bullet.explosive) this._explodeAt(target, bullet)
+        if (canPierce) {
+          bullet.remainingHits -= 1
+          bullet.damageMultiplier *= bullet.pierceDecay
+          // 保留在刚穿过目标的位置，下一帧继续检查本帧跨过的后续目标。
+          bullet.depth = target.depth - 0.003
+          this.weaponStats.pierced += 1
+        } else {
+          this.bullets.splice(i, 1)
+        }
+      } else if (bullet.depth <= 0) {
+        this.bullets.splice(i, 1)
+      }
     }
   }
 
-  /** 在 lane 固定位置生成一个增益 Gate（类型由通道职责决定） */
-  _spawnGate(lane) {
-    this._gateByLane[lane] = {
+  _createBullet(lane = this.currentLane) {
+    this._shotSerial += 1
+    const core = this.weaponDefinition
+    const config = this.weaponLevelConfig
+    const isBurst = core?.id === 'burst'
+    const isFever = this.isFeverActive
+    return {
       lane,
-      kind: lane === SPECIAL_LANE ? 'rapid' : 'attack',
-      hp: GATE_HP,
-      maxHp: GATE_HP,
+      depth: RUNNER_PLAYER_DEPTH - 0.055,
+      previousDepth: RUNNER_PLAYER_DEPTH - 0.055,
+      core: core?.id || null,
+      coreLevel: this.weaponLevel,
+      color: isFever ? '#ffd166' : core?.color || '#ffe39a',
+      fever: isFever,
+      damageMultiplier: isFever ? 1.3 : 1,
+      remainingHits: (core?.id === 'pierce' ? config.penetrations : 0) + (isFever ? 1 : 0),
+      pierceDecay: core?.id === 'pierce' ? config.decay : 0.88,
+      explosive: !!(isBurst && this._shotSerial % config.every === 0),
+      size: (this.attackDamage >= 5 ? 1.24 : this.attackDamage >= 3 ? 1.12 : 1) * (isFever ? 1.35 : 1),
     }
   }
 
-  /** 世界渲染：夜色走廊 + 三条透视通道 + 职责标识 + 怪物群 + Gate + 玩家 + 子弹 + HUD */
-  renderWorld(ctx) {
-    const game = this.game
-    if (!game) return
-    this._ensureLayout()
-    const width = game.width
-    const height = game.height
+  _hitEntity(entity, source = null, options = {}) {
+    if (!entity?.active) return { killed: false, damage: 0 }
+    const damage = this._calculateDamage(entity, source)
+    const appliedDamage = Math.min(entity.hp, damage)
+    entity.hp -= damage
+    entity.hitFlash = 0.12
+    if (!options.silent) this.game.sound.hit?.(this.rapidFireTimer > 0 ? 'spark' : 'base')
+    const core = getRunnerWeaponCore(source?.core || this.weaponCore)
+    this.rings.push({
+      lane: entity.lane,
+      depth: entity.depth,
+      life: HIT_RING_LIFE,
+      maxLife: HIT_RING_LIFE,
+      color: CORE_RING_COLORS[core?.id] || 'rgba(255, 226, 138, ALPHA)',
+      radiusScale: options.splash ? 1.6 : 1,
+    })
+    this._showDamageNumber(
+      `entity-${entity.id}`,
+      this.renderer.project(entity.lane, entity.depth).x,
+      this.renderer.project(entity.lane, entity.depth).y,
+      appliedDamage,
+      this._damageStyleFor(entity, source, options),
+      entity.corrosionStacks || 0
+    )
+    if (entity.hp > 0) return { killed: false, damage }
 
-    // 夜色走廊底色（铺满视口）
-    ctx.fillStyle = RUNNER_BG
-    ctx.fillRect(0, 0, width, height)
-
-    this._renderLanes(ctx)
-    this._renderMonsters(ctx)
-    this._renderGates(ctx)
-    this._renderPlayerPlaceholder(ctx)
-    this._renderBullets(ctx)
-    this._renderImpacts(ctx)
-    this._renderHud(ctx, width, height)
+    this._defeatEntity(entity)
+    return { killed: true, damage }
   }
 
-  /** 三条通道：轻微透视梯形 + 纵深渐变 + 边缘发光 + 中央导向线（下滚虚线） */
-  _renderLanes(ctx) {
-    const top = this._laneTop
-    const bottom = top + this._laneH
-    const inset = this._laneW * LANE_TOP_INSET_RATIO
-    const outset = this._laneW * LANE_BOTTOM_OUTSET_RATIO
-    for (let lane = 0; lane < LANE_COUNT; lane++) {
-      const cx = this.laneCenterX(lane)
-      const topW = this._laneW - inset * 2
-      const bottomW = this._laneW + outset * 2
-
-      // 通道体：梯形（顶部略窄、底部略宽）+ 纵深渐变
-      ctx.fillStyle = this._laneFills[lane]
-      ctx.beginPath()
-      ctx.moveTo(cx - topW / 2, top)
-      ctx.lineTo(cx + topW / 2, top)
-      ctx.lineTo(cx + bottomW / 2, bottom)
-      ctx.lineTo(cx - bottomW / 2, bottom)
-      ctx.closePath()
-      ctx.fill()
-
-      // 边缘发光：宽低透明描边打底 + 细亮描边收边
-      ctx.strokeStyle = LANE_EDGE_GLOW
-      ctx.lineWidth = 6
-      ctx.stroke()
-      ctx.strokeStyle = LANE_EDGE
-      ctx.lineWidth = 1.5
-      ctx.stroke()
-
-      // 中央导向线：向下滚动的虚线，制造「向前推进」的速度感
-      ctx.strokeStyle = LANE_GUIDE
-      ctx.lineWidth = 1.5
-      ctx.setLineDash(LANE_GUIDE_DASH)
-      ctx.lineDashOffset = -((this.elapsedTime * LANE_GUIDE_SPEED) % (LANE_GUIDE_DASH[0] + LANE_GUIDE_DASH[1]))
-      ctx.beginPath()
-      ctx.moveTo(cx, top + 24)
-      ctx.lineTo(cx, bottom)
-      ctx.stroke()
-      ctx.setLineDash(LANE_GUIDE_DASH_OFF)
-    }
-
-    // 通道职责标识（怪潮 / 攻击强化 / 急速强化）
-    ctx.font = LANE_LABEL_FONT
-    ctx.textAlign = 'center'
-    ctx.textBaseline = 'middle'
-    for (let lane = 0; lane < LANE_COUNT; lane++) {
-      ctx.fillStyle = LANE_LABEL_COLORS[lane]
-      ctx.fillText(LANE_LABELS[lane], this.laneCenterX(lane), top + 14)
-    }
+  _hitEnemyProjectile(projectile, source = null, options = {}) {
+    if (!projectile?.active) return { killed: false, damage: 0 }
+    const damage = Math.max(0.25, this.attackDamage * (source?.damageMultiplier || 1))
+    const appliedDamage = Math.min(projectile.hp, damage)
+    projectile.hp -= damage
+    projectile.hitFlash = 0.12
+    if (!options.silent) this.game.sound.hit?.(this.rapidFireTimer > 0 ? 'spark' : 'base')
+    const point = this.renderer.project(projectile.lane, projectile.depth)
+    this._showDamageNumber(
+      `projectile-${projectile.id}`,
+      point.x,
+      point.y,
+      appliedDamage,
+      source?.core || this.weaponCore || 'normal'
+    )
+    if (projectile.hp > 0) return { killed: false, damage }
+    projectile.active = false
+    this.score += 40
+    this._burst(point.x, point.y, projectile.color, 6, true)
+    this.rings.push({
+      lane: projectile.lane,
+      depth: projectile.depth,
+      life: HIT_RING_LIFE,
+      maxLife: HIT_RING_LIFE,
+      color: 'rgba(142, 220, 184, ALPHA)',
+      radiusScale: 1.35,
+    })
+    return { killed: true, damage }
   }
 
-  /** 怪物占位图形：敌意暖色圆体 + 双眼 + 各自血条（x 每帧由 lane 现算） */
-  _renderMonsters(ctx) {
-    const r = this._laneW * MONSTER_RADIUS_RATIO
-    ctx.lineWidth = 2
-    for (const monster of this.monsters) {
-      if (monster.hp <= 0) continue
-      const x = this.laneCenterX(monster.lane)
-      const y = monster.y
-
-      ctx.fillStyle = MONSTER_BODY
-      ctx.beginPath()
-      ctx.ellipse(x, y, r, r * 0.82, 0, 0, TAU)
-      ctx.fill()
-      ctx.strokeStyle = MONSTER_EDGE
-      ctx.stroke()
-
-      ctx.fillStyle = MONSTER_EDGE
-      ctx.beginPath()
-      ctx.arc(x - r * 0.26, y - r * 0.12, r * 0.09, 0, TAU)
-      ctx.fill()
-      ctx.beginPath()
-      ctx.arc(x + r * 0.26, y - r * 0.12, r * 0.09, 0, TAU)
-      ctx.fill()
-
-      const barW = this._laneW * 0.5
-      const barY = y - r - 12
-      const ratio = monster.hp / monster.maxHp
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.14)'
-      ctx.fillRect(x - barW / 2, barY, barW, 4)
-      ctx.fillStyle = ratio > 0.4 ? HP_BAR_FULL : HP_BAR_LOW
-      ctx.fillRect(x - barW / 2, barY, barW * ratio, 4)
-    }
+  _damageStyleFor(entity, source, options) {
+    const coreId = source?.core || this.weaponCore
+    if (options.splash || source?.core === 'burst') return 'burst'
+    if (coreId === 'corrosion') return 'corrosion'
+    if (coreId === 'pierce') return 'pierce'
+    if ((entity.armor || 0) > 0 || this._supportReductionFor(entity) > 0) return 'armor'
+    return 'normal'
   }
 
-  /** 增益 Gate：菱形门体（ATK 青 / RAPID 紫 + 内圈 + 脉冲）+ 中文标签 + 血条 */
-  _renderGates(ctx) {
-    const w = this._laneW * GATE_WIDTH_RATIO
-    const h = w * GATE_HEIGHT_RATIO
-    for (const gate of this._gateByLane) {
-      if (!gate || gate.hp <= 0) continue
-      const x = this.laneCenterX(gate.lane)
-      const y = this._gateY
-      const isRapid = gate.kind === 'rapid'
-      // Rapid Gate 轻微脉冲呼吸，与 ATK 门进一步区分
-      const pulse = isRapid ? 1 + 0.05 * Math.sin(this.elapsedTime * 6) : 1
-      const gw = (w * pulse) / 2
-      const gh = (h * pulse) / 2
+  _showDamageNumber(key, x, y, value, style = 'normal', stacks = 0) {
+    const existing = this.damageNumbers.find(
+      (number) => number.key === key && number.aggregateTimer > 0 && number.active
+    )
+    if (existing) {
+      existing.value += value
+      existing.stacks = Math.max(existing.stacks, stacks)
+      existing.style = style === 'normal' ? existing.style : style
+      existing.life = existing.maxLife
+      existing.aggregateTimer = RUNNER_DAMAGE_AGGREGATE_WINDOW
+      existing.pulse = 1
+      return existing
+    }
 
-      ctx.fillStyle = isRapid ? RAPID_GATE_BODY : GATE_BODY
-      ctx.beginPath()
-      ctx.moveTo(x, y - gh)
-      ctx.lineTo(x + gw, y)
-      ctx.lineTo(x, y + gh)
-      ctx.lineTo(x - gw, y)
-      ctx.closePath()
-      ctx.fill()
-      ctx.strokeStyle = isRapid ? RAPID_GATE_EDGE : GATE_EDGE
-      ctx.lineWidth = 2
-      ctx.stroke()
+    const number = {
+      key,
+      x,
+      y,
+      value,
+      style,
+      stacks,
+      life: 0.72,
+      maxLife: 0.72,
+      aggregateTimer: RUNNER_DAMAGE_AGGREGATE_WINDOW,
+      pulse: 1,
+      active: true,
+    }
+    this.damageNumbers.push(number)
+    while (this.damageNumbers.length > RUNNER_MAX_DAMAGE_NUMBERS) this.damageNumbers.shift()
+    return number
+  }
 
-      if (isRapid) {
-        // 内圈菱形：急速门的形状标识
-        ctx.beginPath()
-        ctx.moveTo(x, y - gh * 0.55)
-        ctx.lineTo(x + gw * 0.55, y)
-        ctx.lineTo(x, y + gh * 0.55)
-        ctx.lineTo(x - gw * 0.55, y)
-        ctx.closePath()
-        ctx.stroke()
+  _calculateDamage(entity, source) {
+    const coreId = source?.core || this.weaponCore
+    const core = getRunnerWeaponCore(coreId)
+    const level = clamp(source?.coreLevel || this.weaponLevel || 1, 1, 3)
+    const config = core?.levels[level - 1]
+    let damage = this.attackDamage * (source?.damageMultiplier || 1)
+
+    if (coreId === 'corrosion' && entity.kind !== 'gate' && entity.kind !== 'mutation' && entity.kind !== 'secondary_mutation') {
+      const stacks = entity.corrosionStacks || 0
+      damage *= 1 + stacks * config.stackBonus
+      entity.corrosionStacks = Math.min(config.maxStacks, stacks + 1)
+      this.weaponStats.corrosionStacks += 1
+      if (entity.kind === 'hazard' || entity.kind === 'obstacle') damage *= config.barrierDamage
+    }
+
+    if (this.fusionWeapon?.id === 'corrosion_frost' && (entity.frostTimer > 0 || entity.freezeTimer > 0)) {
+      damage *= 1.4
+    }
+
+    if (entity.armor > 0) {
+      const armorPierce = coreId === 'corrosion' ? config.armorPierce : 0
+      damage *= 1 - entity.armor * (1 - armorPierce)
+    }
+
+    const supportReduction = this._supportReductionFor(entity)
+    if (supportReduction > 0) damage *= 1 - supportReduction
+    return Math.max(0.25, damage)
+  }
+
+  _supportReductionFor(entity) {
+    if (entity.kind !== 'enemy' || entity.behavior === 'support') return 0
+    let reduction = 0
+    for (const other of this.entities) {
+      if (
+        other.active &&
+        other.behavior === 'support' &&
+        other.rowId === entity.rowId &&
+        other.id !== entity.id
+      ) {
+        reduction = Math.max(reduction, other.supportReduction || 0)
       }
-
-      ctx.fillStyle = 'rgba(244, 238, 230, 0.92)'
-      ctx.font = GATE_FONT
-      ctx.textAlign = 'center'
-      ctx.textBaseline = 'middle'
-      ctx.fillText(isRapid ? '急速射击' : '攻击 +1', x, y + gh + 16)
-
-      const barW = this._laneW * 0.5
-      const barY = y - gh - 12
-      const ratio = gate.hp / gate.maxHp
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.14)'
-      ctx.fillRect(x - barW / 2, barY, barW, 4)
-      ctx.fillStyle = ratio > 0.4 ? HP_BAR_FULL : HP_BAR_LOW
-      ctx.fillRect(x - barW / 2, barY, barW * ratio, 4)
     }
+    return reduction
   }
 
-  /** 史莱姆占位图形（Canvas 基础图形）：椭圆身体 + 高光 + 双眼 */
-  _renderPlayerPlaceholder(ctx) {
-    const r = this._laneW * PLAYER_RADIUS_RATIO
-    const px = this.playerX
-    const py = this.playerY
+  _explodeAt(primary, bullet) {
+    const core = getRunnerWeaponCore('burst')
+    const config = core.levels[clamp(bullet.coreLevel, 1, 3) - 1]
+    const fusion = this.fusionWeapon
+    const radiusMultiplier = fusion?.id === 'burst_flame' ? 1.5 : (fusion?.id === 'burst_frost' ? 1.25 : 1)
+    const radius = config.radius * radiusMultiplier
+    this.weaponStats.explosions += 1
+    this.rings.push({
+      lane: primary.lane,
+      depth: primary.depth,
+      life: HIT_RING_LIFE * 1.45,
+      maxLife: HIT_RING_LIFE * 1.45,
+      color: fusion ? fusion.color : 'rgba(240, 179, 95, ALPHA)',
+      radiusScale: 2.7 * radiusMultiplier,
+    })
 
-    ctx.fillStyle = SLIME_BODY
-    ctx.beginPath()
-    ctx.ellipse(px, py, r, r * 0.78, 0, 0, TAU)
-    ctx.fill()
-    ctx.strokeStyle = SLIME_EDGE
-    ctx.lineWidth = 2
-    ctx.stroke()
-
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.55)'
-    ctx.beginPath()
-    ctx.ellipse(px - r * 0.35, py - r * 0.35, r * 0.22, r * 0.14, -0.6, 0, TAU)
-    ctx.fill()
-
-    ctx.fillStyle = SLIME_EDGE
-    ctx.beginPath()
-    ctx.arc(px - r * 0.28, py - r * 0.1, r * 0.09, 0, TAU)
-    ctx.fill()
-    ctx.beginPath()
-    ctx.arc(px + r * 0.28, py - r * 0.1, r * 0.09, 0, TAU)
-    ctx.fill()
-  }
-
-  /** 子弹：发光弹体 + 向下的尾迹（拖影） */
-  _renderBullets(ctx) {
-    ctx.lineCap = 'round'
-    for (const bullet of this._bullets) {
-      ctx.strokeStyle = BULLET_TRAIL
-      ctx.lineWidth = 7
-      ctx.beginPath()
-      ctx.moveTo(bullet.x, bullet.y + 20)
-      ctx.lineTo(bullet.x, bullet.y)
-      ctx.stroke()
-      ctx.fillStyle = BULLET_COLOR
-      ctx.beginPath()
-      ctx.arc(bullet.x, bullet.y, BULLET_RADIUS, 0, TAU)
-      ctx.fill()
-    }
-    ctx.lineCap = 'butt'
-    ctx.lineWidth = 1
-  }
-
-  /** 命中闪光：短暂扩散的圆环 */
-  _renderImpacts(ctx) {
-    for (const impact of this._impacts) {
-      const k = impact.t / IMPACT_LIFE
-      ctx.strokeStyle = `${IMPACT_COLOR}${((1 - k) * 0.7).toFixed(3)})`
-      ctx.lineWidth = 2.5
-      ctx.beginPath()
-      ctx.arc(impact.x, impact.y, 4 + 22 * k, 0, TAU)
-      ctx.stroke()
-    }
-    ctx.lineWidth = 1
-  }
-
-  /**
-   * Runner HUD（屏幕空间）：左上角生命（分段血块）+ 时间 + 急速剩余；
-   * gameOver 时叠加半透明遮罩 + 突围失败 + 生存时间 + 突破次数
-   */
-  _renderHud(ctx, width, height) {
-    ctx.textAlign = 'left'
-    ctx.textBaseline = 'middle'
-    ctx.font = HUD_FONT
-
-    ctx.fillStyle = 'rgba(244, 238, 230, 0.85)'
-    ctx.fillText('生命', 18, 24)
-    for (let i = 0; i < this.maxHp; i++) {
-      ctx.fillStyle = i < this.hp ? HP_BAR_FULL : 'rgba(255, 255, 255, 0.16)'
-      ctx.fillRect(62 + i * 20, 18, 13, 13)
-    }
-    ctx.fillStyle = 'rgba(244, 238, 230, 0.85)'
-    ctx.fillText(`时间 ${formatTime(this.elapsedTime)}`, 18, 50)
-    if (this.rapidFireTimer > 0) {
-      ctx.fillStyle = 'rgba(201, 162, 255, 0.95)'
-      ctx.fillText(`急速射击 ${this.rapidFireTimer.toFixed(1)}s`, 18, 76)
+    if (fusion?.id === 'burst_flame') {
+      const existing = this.groundFires.find(
+        (f) => f.lane === primary.lane && Math.abs(f.depth - primary.depth) < 0.08
+      )
+      if (existing) {
+        existing.duration = Math.max(existing.duration, 3.0)
+      } else if (this.groundFires.length < 8) {
+        this.groundFires.push({
+          id: this.groundFires.length + 1,
+          lane: primary.lane,
+          depth: primary.depth,
+          duration: 3.0,
+          maxDuration: 3.0,
+          damage: 1.0,
+        })
+      }
     }
 
-    if (!this.gameOver) return
-    ctx.fillStyle = 'rgba(6, 10, 16, 0.62)'
-    ctx.fillRect(0, 0, width, height)
-    const cx = width / 2
-    const top = height * 0.32
-    ctx.textAlign = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillStyle = '#ff6b4a'
-    ctx.font = GAME_OVER_FONT
-    ctx.fillText('突围失败', cx, top)
-    ctx.fillStyle = 'rgba(244, 238, 230, 0.9)'
-    ctx.font = GAME_OVER_LINE_FONT
-    ctx.fillText(
-      `生存时间 ${formatTime(this.elapsedTime)} · 消灭怪物 ${this.monsterKills} · 突破 ${this.breachCount} 次`,
-      cx,
-      top + 62
+    if (fusion?.id === 'burst_lightning') {
+      const adjLanes = [primary.lane - 1, primary.lane + 1].filter((l) => l >= 0 && l < 3)
+      for (const adjLane of adjLanes) {
+        for (const target of this.entities) {
+          if (target.active && target.lane === adjLane && Math.abs(target.depth - primary.depth) <= 0.12) {
+            this._hitEntity(target, { core: 'burst', damageMultiplier: 0.75 }, { silent: true, splash: true })
+            this.rings.push({ lane: adjLane, depth: target.depth, life: 0.2, maxLife: 0.2, color: '#ffd859' })
+            break
+          }
+        }
+      }
+    }
+
+    const targets = this.entities.filter(
+      (entity) =>
+        entity.active &&
+        (primary.kind === 'arrow' || entity.id !== primary.id) &&
+        entity.lane === primary.lane &&
+        entity.kind !== 'mutation' &&
+        entity.kind !== 'secondary_mutation' &&
+        Math.abs(entity.depth - primary.depth) <= radius
     )
-    ctx.fillText(
-      `最终攻击力 ${this.attackDamage} · 攻击强化 ${this.attackGateActivations} 次 · 急速强化 ${this.rapidGateActivations} 次`,
-      cx,
-      top + 94
+    for (const entity of targets) {
+      if (fusion?.id === 'burst_frost') {
+        entity.freezeTimer = 1.2
+        entity.speed = 0
+      }
+      this._hitEntity(
+        entity,
+        { core: 'burst', coreLevel: bullet.coreLevel, damageMultiplier: config.damage },
+        { silent: true, splash: true }
+      )
+    }
+    const arrows = this.enemyProjectiles.filter(
+      (projectile) =>
+        projectile.active &&
+        (primary.kind !== 'arrow' || projectile.id !== primary.id) &&
+        projectile.lane === primary.lane &&
+        Math.abs(projectile.depth - primary.depth) <= radius
     )
-    const laneTotal = this.laneTime[0] + this.laneTime[1] + this.laneTime[2] || 1
-    const lanePct = this.laneTime.map((t) => Math.round((t / laneTotal) * 100))
-    ctx.fillStyle = 'rgba(244, 238, 230, 0.75)'
-    ctx.fillText(
-      `通道停留  怪潮 ${lanePct[0]}% · 攻击 ${lanePct[1]}% · 急速 ${lanePct[2]}%`,
-      cx,
-      top + 126
-    )
-    ctx.fillStyle = 'rgba(244, 238, 230, 0.45)'
-    ctx.fillText('按 Esc 打开菜单 · 可放弃本局', cx, top + 168)
+    for (const projectile of arrows) {
+      this._hitEnemyProjectile(
+        projectile,
+        { core: 'burst', coreLevel: bullet.coreLevel, damageMultiplier: config.damage },
+        { silent: true, splash: true }
+      )
+    }
   }
 
-  /**
-   * 视口几何自适应：尺寸变化时重建通道布局缓存并同步实体锚点。
-   * 所有 lane 坐标只在这里按 width/height 计算一次，帧内只读缓存。
-   */
-  _ensureLayout() {
-    const game = this.game
-    if (!game) return
-    const width = game.width
-    const height = game.height
-    if (this._viewportW === width && this._viewportH === height) return
-    this._viewportW = width
-    this._viewportH = height
+  _defeatEntity(entity) {
+    entity.active = false
+    const index = this.entities.indexOf(entity)
+    if (index >= 0) this.entities.splice(index, 1)
+    const point = this.renderer.project(entity.lane, entity.depth)
+    this._burst(point.x, point.y, entity.color, entity.elite ? 14 : 8)
 
-    const laneW = Math.max(LANE_MIN_WIDTH, width * LANE_WIDTH_RATIO)
-    const gap = laneW * LANE_GAP_RATIO
-    const totalW = laneW * LANE_COUNT + gap * (LANE_COUNT - 1)
-    this._laneW = laneW
-    this._laneGap = gap
-    this._laneStartX = (width - totalW) / 2
-    this._laneTop = height * LANE_TOP_RATIO
-    this._laneH = height * LANE_HEIGHT_RATIO
-    this._gateY = height * GATE_Y_RATIO
-    this.playerY = height * PLAYER_Y_RATIO
-    // 通道纵深渐变按新尺寸重建（离屏创建，帧内只复用）
-    this._laneFills = []
-    for (let lane = 0; lane < LANE_COUNT; lane++) {
-      const gradient = game.ctx.createLinearGradient(0, this._laneTop, 0, this._laneTop + this._laneH)
-      gradient.addColorStop(0, LANE_FILL_TOP)
-      gradient.addColorStop(1, LANE_FILL_BOTTOM)
-      this._laneFills.push(gradient)
+    if (entity.kind === 'mutation') {
+      this._selectWeaponCore(entity.weaponCore)
+      return
     }
-    // resize 后直接吸附（罕见操作，不做过渡动画）；已发射子弹保持 lane 对齐
-    this.playerX = this.laneCenterX(this.currentLane)
-    for (const bullet of this._bullets) bullet.x = this.laneCenterX(bullet.lane)
-    if (!this._monstersReady) {
-      // 首次布局即生成第一只怪物，之后由持续生成系统按间隔补怪
-      this._monstersReady = true
-      this._spawnMonster()
-      this._monsterSpawnTimer = this.monsterSpawnInterval()
+    if (entity.kind === 'secondary_mutation') {
+      this._selectSecondaryElement(entity.secondaryElement)
+      return
     }
-    if (!this._gatesReady) {
-      // 首次布局只在 BUFF_LANE / SPECIAL_LANE 生成 Gate（打爆走重生倒计时）
-      this._gatesReady = true
-      for (const lane of GATE_LANES) this._spawnGate(lane)
+    if (entity.kind === 'gate') {
+      this._applyReward(entity, point)
+      return
     }
+    if (entity.behavior === 'barrel') {
+      this._triggerBarrelExplosion(entity)
+      return
+    }
+    if (entity.type === 'gold_convoy') {
+      this.score += 1500
+      this.shield = this.maxShield
+      this.feverCharges = RUNNER_FEVER_MAX_CHARGES
+      this.feverShards = 0
+      this._showNotice('运宝车击破 · 满能量&全护盾 💰', '#fbbf24')
+      this.game.sound.levelUp?.()
+      return
+    }
+
+    if (entity.corrosionStacks > 0 && this.secondaryElement === 'flame') {
+      this.rings.push({
+        lane: entity.lane,
+        depth: entity.depth,
+        life: 0.3,
+        maxLife: 0.3,
+        color: '#ff9a42',
+        radiusScale: 2.2,
+      })
+      const splashTargets = this.entities.filter(
+        (other) => other.active && other.lane === entity.lane && Math.abs(other.depth - entity.depth) <= 0.09
+      )
+      for (const splash of splashTargets) {
+        this._hitEntity(splash, { core: 'corrosion', damageMultiplier: 2.2 }, { silent: true, splash: true })
+      }
+    }
+
+    this.kills += 1
+    this.combo += 1
+    this.bestCombo = Math.max(this.bestCombo, this.combo)
+    this.comboTimer = COMBO_WINDOW
+    const comboBonus = 1 + Math.min(1.5, Math.max(0, this.combo - 1) * 0.08)
+    const gained = Math.round(
+      (entity.score || 0) * comboBonus * (this.isFeverActive ? RUNNER_FEVER_SCORE_MULTIPLIER : 1)
+    )
+    this.score += gained
+    this.game.sound.kill?.(this.combo)
+    this.floatingTexts.push(new FloatingText(point.x, point.y - 18, `+${gained}`, '', '#f5d778', 18))
+    if (entity.behavior === 'split') {
+      const fragments = this.director.createFragments(entity, this.elapsedTime, this.entities.length)
+      this.entities.push(...fragments)
+    }
+  }
+
+  _applyReward(entity, point) {
+    this.gates += 1
+    this.score += entity.score || 0
+    if (entity.reward === 'fever_shard') {
+      this._collectFeverShard(point)
+      return
+    }
+    if (entity.reward === 'item_magnet') {
+      this._activateMagnet(point)
+      return
+    }
+    if (entity.reward === 'item_bullet_time') {
+      this._activateBulletTime(point)
+      return
+    }
+    if (entity.reward === 'item_booster') {
+      this._activateHyperBooster(point)
+      return
+    }
+    if (entity.reward === 'item_drone') {
+      this._activateDrone(point)
+      return
+    }
+    let label = ''
+    if (entity.reward === 'attack') {
+      if (this.attackDamage < RUNNER_MAX_ATTACK) {
+        this.attackDamage += 1
+        const milestone = this.attackDamage === 3
+          ? ' · 弹体增幅'
+          : this.attackDamage === 5
+          ? ' · 高能弹体'
+          : ''
+        label = `攻击提升至 ${this.attackDamage}${milestone}`
+      } else {
+        this.score += 100
+        label = '攻击已满 · 分数 +100'
+      }
+      this.game.sound.levelUp?.()
+    } else if (entity.reward === 'rapid') {
+      this.rapidFireTimer = Math.min(RUNNER_RAPID_DURATION * 1.5, this.rapidFireTimer + RUNNER_RAPID_DURATION)
+      label = `急速射击 ${Math.ceil(this.rapidFireTimer)} 秒`
+      this.game.sound.pickup?.()
+    } else if (entity.reward === 'repair') {
+      const before = this.hp
+      this.hp = Math.min(this.maxHp, this.hp + 1)
+      label = this.hp > before ? '生命修复 +1' : '生命已满 · 分数 +60'
+      if (this.hp === before) this.score += 60
+      this.game.sound.pickup?.()
+    } else {
+      const before = this.shield
+      this.shield = Math.min(this.maxShield, this.shield + 1)
+      label = this.shield > before ? '防护凝胶 +1' : '防护已满 · 分数 +80'
+      if (this.shield === before) this.score += 80
+      this.shieldFlash = 0.7
+      this.game.sound.pickup?.()
+    }
+    this.floatingTexts.push(new FloatingText(point.x, point.y - 26, label, '', entity.color, 17))
+  }
+
+  _triggerBarrelExplosion(entity) {
+    this.tacticalStats.barrels++
+    const point = this.renderer.project(entity.lane, entity.depth)
+    this._shake(10, 0.35)
+    this._burst(point.x, point.y, '#f97316', 16, true)
+    this.floatingTexts.push(new FloatingText(point.x, point.y - 25, '炸药殉爆 💥', '', '#f97316', 22))
+    this.game.sound.bombExplode?.()
+
+    for (const other of this.entities) {
+      if (!other.active || other.id === entity.id) continue
+      if (Math.abs(other.depth - entity.depth) <= 0.14) {
+        other.hp -= 12
+        other.hitFlash = 0.2
+        if (other.hp <= 0) this._defeatEntity(other)
+      }
+    }
+
+    for (const proj of this.enemyProjectiles) {
+      if (proj.active && Math.abs(proj.depth - entity.depth) <= 0.18) {
+        proj.active = false
+      }
+    }
+
+    this.groundFires.push({
+      id: this.groundFires.length + 1,
+      lane: entity.lane,
+      depth: entity.depth,
+      duration: 3.0,
+      maxDuration: 3.0,
+      damage: 1.0,
+    })
+  }
+
+  _activateMagnet(point) {
+    this.tacticalStats.magnets++
+    this.score += 200
+    this._showNotice('全息磁暴 · 聚能吸纳 🧲', '#4db8ff')
+    this.game.sound.powerUp?.()
+
+    const targets = this.entities.filter((e) => e.active && (e.kind === 'gate' || e.reward))
+    for (const target of targets) {
+      target.active = false
+      const idx = this.entities.indexOf(target)
+      if (idx >= 0) this.entities.splice(idx, 1)
+      this._applyReward(target, this.renderer.project(target.lane, target.depth))
+    }
+  }
+
+  _activateBulletTime(point) {
+    this.tacticalStats.bulletTimes++
+    this.bulletTimeTimer = 3.5
+    this.score += 150
+    this._showNotice('时空力场 · 子弹时间 ⏳', '#6ee7b7')
+    this.game.sound.powerUp?.()
+  }
+
+  _activateHyperBooster(point) {
+    this.tacticalStats.boosters++
+    this.hyperBoostTimer = 2.5
+    this.score += 150
+    this._showNotice('超频冲刺 · 金身横冲 🚀', '#f59e0b')
+    this.game.sound.dash?.()
+  }
+
+  _activateDrone(point) {
+    this.tacticalStats.drones++
+    this.droneTimer = 10.0
+    this.droneLane = this.currentLane === 0 ? 1 : this.currentLane === 2 ? 1 : 0
+    this.score += 150
+    this._showNotice('浮游史莱姆 · 协同射击 🤖', '#ec4899')
+    this.game.sound.powerUp?.()
+  }
+
+  _showNotice(text, color = '#ffd166') {
+    this.weaponNotice = text
+    this.weaponNoticeTimer = 2.4
+    const point = this.renderer.project(this.currentLane, RUNNER_PLAYER_DEPTH)
+    this.floatingTexts.push(new FloatingText(point.x, point.y - 35, text, '', color, 19))
+  }
+
+  _updateGroundFires(dt) {
+    const advance = (this.section?.advanceSpeed || 0.17) * dt
+    for (let i = this.groundFires.length - 1; i >= 0; i--) {
+      const fire = this.groundFires[i]
+      fire.duration -= dt
+      fire.depth += advance
+      if (fire.duration <= 0 || fire.depth > 1.1) {
+        this.groundFires.splice(i, 1)
+        continue
+      }
+      for (const entity of this.entities) {
+        if (
+          entity.active &&
+          entity.hp > 0 &&
+          entity.lane === fire.lane &&
+          Math.abs(entity.depth - fire.depth) <= 0.12
+        ) {
+          const burnDps = Math.max(4, this.attackDamage * 0.85 + (fire.damage || 1) * 3)
+          const dmg = burnDps * dt
+          const applied = Math.min(entity.hp, dmg)
+          entity.hp -= dmg
+          entity.hitFlash = 0.08
+          const point = this.renderer.project(entity.lane, entity.depth)
+          this._showDamageNumber(`burn-${entity.id}`, point.x, point.y - 12, applied, 'burst')
+          if (Math.random() < 0.25) {
+            this._burst(point.x, point.y, '#ff6b35', 1, true)
+          }
+          if (entity.hp <= 0) this._defeatEntity(entity)
+        }
+      }
+    }
+  }
+
+  _burst(x, y, color, count, spark = false) {
+    const limit = this.reducedMotion ? Math.ceil(count / 2) : count
+    for (let i = 0; i < limit; i++) this.particles.push(new Particle(x, y, color, spark))
+  }
+
+  _updateEffects(dt) {
+    for (let i = this.rings.length - 1; i >= 0; i--) {
+      const ring = this.rings[i]
+      ring.life -= dt
+      if (ring.life <= 0) this.rings.splice(i, 1)
+    }
+    for (let i = this.particles.length - 1; i >= 0; i--) {
+      const particle = this.particles[i]
+      particle.update(dt)
+      if (!particle.active) this.particles.splice(i, 1)
+    }
+    for (let i = this.floatingTexts.length - 1; i >= 0; i--) {
+      const floatingText = this.floatingTexts[i]
+      floatingText.update(dt)
+      if (!floatingText.active) this.floatingTexts.splice(i, 1)
+    }
+    for (let i = this.damageNumbers.length - 1; i >= 0; i--) {
+      const number = this.damageNumbers[i]
+      number.life -= dt
+      number.aggregateTimer = Math.max(0, number.aggregateTimer - dt)
+      number.pulse = Math.max(0, number.pulse - dt * 8)
+      if (number.life <= 0) {
+        number.active = false
+        this.damageNumbers.splice(i, 1)
+      }
+    }
+    if (this.fusionPresentation) {
+      this.fusionPresentation.timer -= dt
+      if (this.fusionPresentation.timer <= 0) this.fusionPresentation = null
+    }
+    this.fusionPulse = Math.max(0, this.fusionPulse - dt * (this.reducedMotion ? 2.5 : 1.45))
+  }
+
+  _shake(magnitude, duration) {
+    if (this.reducedMotion) return
+    this._shakeMagnitude = magnitude
+    this._shakeDuration = duration
+    this._shakeTime = duration
+  }
+
+  shakeOffset() {
+    if (this._shakeTime <= 0 || this._shakeDuration <= 0) return 0
+    const strength = this._shakeMagnitude * (this._shakeTime / this._shakeDuration)
+    return Math.sin(this.visualTime * 173) * strength
+  }
+
+  _finish(outcome) {
+    if (this._finishSent) return
+    this._finishSent = true
+    this.state = 'finished'
+    this.outcome = outcome
+    if (outcome === 'victory') {
+      const timeBonus = this.duration !== Infinity ? Math.round((this.duration - this.elapsedTime) * 40) : 0
+      this.score += this.hp * 250 + timeBonus
+      this.game.sound.levelUp?.()
+    } else {
+      this.game.sound.gameOver?.()
+    }
+    this.game.finishGameplay?.(this.getResultSnapshot())
+  }
+
+  getHudSnapshot() {
+    const weapon = this.weaponDefinition
+    const fusion = this.fusionWeapon
+    const isEndless = this.duration === Infinity
+    const remaining = isEndless ? null : Math.max(0, this.duration - this.elapsedTime)
+    const timeLabel = isEndless ? formatElapsedTime(this.elapsedTime) : formatTime(remaining)
+    const progress = runnerProgress(this.elapsedTime, this.duration)
+    const distance = isEndless
+      ? Math.floor(this.elapsedTime * 85)
+      : runnerDistanceRemaining(this.elapsedTime, this.duration, this.submodeConfig.distance)
+
+    return {
+      mode: 'runner',
+      submode: this.submode,
+      submodeName: this.submodeConfig.name,
+      isEndless,
+      state: this.state,
+      countdown: this.countdown,
+      elapsed: this.elapsedTime,
+      duration: this.duration,
+      remaining,
+      timeLabel,
+      progress,
+      distance,
+      hp: this.hp,
+      maxHp: this.maxHp,
+      shield: this.shield,
+      maxShield: this.maxShield,
+      attack: this.attackDamage,
+      attackMax: RUNNER_MAX_ATTACK,
+      rapid: this.rapidFireTimer,
+      rapidMax: RUNNER_RAPID_DURATION,
+      score: this.score,
+      combo: this.combo,
+      section: this.section.name,
+      sectionIndex: this.section.index,
+      sectionNotice: this.sectionNotice,
+      lane: this.currentLane,
+      targetLane: this.targetLane,
+      switching: this.isSwitching,
+      lanes: this._getLaneTelemetry(),
+      dash: {
+        active: this.dashTimer > 0,
+        cooldown: this.dashCooldown,
+        maxCooldown: RUNNER_DASH_COOLDOWN,
+      },
+      fever: {
+        active: this.isFeverActive,
+        charges: this.feverCharges,
+        maxCharges: RUNNER_FEVER_MAX_CHARGES,
+        shards: this.feverShards,
+        shardsPerCharge: RUNNER_FEVER_SHARDS_PER_CHARGE,
+        timer: this.feverTimer,
+        duration: RUNNER_FEVER_DURATION,
+      },
+      weapon: weapon
+        ? {
+            id: weapon.id,
+            name: fusion ? fusion.name : weapon.name,
+            shortName: weapon.shortName,
+            description: fusion ? fusion.description : weapon.description,
+            color: fusion ? fusion.color : weapon.color,
+            level: this.weaponLevel,
+            secondary: this.secondaryElement,
+            fusionId: fusion?.id || null,
+          }
+        : null,
+      buffs: {
+        bulletTime: this.bulletTimeTimer,
+        booster: this.hyperBoostTimer,
+        drone: this.droneTimer,
+      },
+      weaponChoicePending: this.weaponChoicePending,
+      secondaryChoicePending: this.secondaryChoicePending,
+      weaponNotice: this.weaponNoticeTimer > 0 ? this.weaponNotice : '',
+      fusion: this.fusionPresentation ? { ...this.fusionPresentation } : null,
+    }
+  }
+
+  getResultSnapshot() {
+    const weapon = this.weaponDefinition
+    const fusion = this.fusionWeapon
+    const isEndless = this.duration === Infinity
+    const distance = isEndless
+      ? Math.floor(this.elapsedTime * 85)
+      : runnerDistanceRemaining(this.elapsedTime, this.duration, this.submodeConfig.distance)
+
+    return {
+      mode: 'runner',
+      submode: this.submode,
+      submodeName: this.submodeConfig.name,
+      isEndless,
+      outcome: this.outcome,
+      title: isEndless
+        ? `${this.submodeConfig.name} · 战绩结算`
+        : this.outcome === 'victory'
+        ? `${this.submodeConfig.name} · 突围成功`
+        : `${this.submodeConfig.name} · 突围失败`,
+      elapsed: this.elapsedTime,
+      timeLabel: formatElapsedTime(this.elapsedTime),
+      distance,
+      score: this.score,
+      kills: this.kills,
+      gates: this.gates,
+      bestCombo: this.bestCombo,
+      hitsTaken: this.hitsTaken,
+      damageTaken: this.damageTaken,
+      shieldAbsorbed: this.shieldAbsorbed,
+      shield: this.shield,
+      perfectDodges: this.perfectDodges,
+      dashKills: this.dashKills || 0,
+      feverCount: this.feverCount || 0,
+      attack: this.attackDamage,
+      weapon: weapon
+        ? {
+            id: weapon.id,
+            name: fusion ? fusion.name : weapon.name,
+            color: fusion ? fusion.color : weapon.color,
+            level: this.weaponLevel,
+            secondary: this.secondaryElement,
+            fusionId: fusion?.id || null,
+          }
+        : null,
+      tacticalStats: { ...this.tacticalStats },
+      weaponStats: { ...this.weaponStats },
+      seed: this._seed,
+    }
+  }
+
+  renderWorld(ctx) {
+    this.renderer.render(ctx)
+  }
+
+  destroy() {
+    this.entities.length = 0
+    this.bullets.length = 0
+    this.enemyProjectiles.length = 0
+    this.particles.length = 0
+    this.floatingTexts.length = 0
+    this.damageNumbers.length = 0
+    super.destroy()
   }
 }
+
+export { RUNNER_ENTITY_TYPES }

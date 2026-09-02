@@ -13,15 +13,53 @@ const TAU = Math.PI * 2
 
 /** 创建带 DPR 适配的离屏画布 */
 function createOffscreen(w, h, scale = 2) {
-  const canvas = typeof OffscreenCanvas !== 'undefined'
-    ? new OffscreenCanvas(w * scale, h * scale)
-    : document.createElement('canvas')
-  canvas.width = w * scale
-  canvas.height = h * scale
-  const ctx = canvas.getContext('2d')
-  ctx.scale(scale, scale)
-  ctx.imageSmoothingEnabled = true
-  return { canvas, ctx, w, h, scale }
+  if (typeof OffscreenCanvas !== 'undefined') {
+    const canvas = new OffscreenCanvas(w * scale, h * scale)
+    const ctx = canvas.getContext('2d')
+    if (ctx) {
+      ctx.scale(scale, scale)
+      ctx.imageSmoothingEnabled = true
+      return { canvas, ctx, w, h, scale }
+    }
+  }
+  if (typeof document !== 'undefined' && typeof document.createElement === 'function') {
+    const canvas = document.createElement('canvas')
+    canvas.width = w * scale
+    canvas.height = h * scale
+    const ctx = canvas.getContext('2d')
+    if (ctx) {
+      ctx.scale(scale, scale)
+      ctx.imageSmoothingEnabled = true
+      return { canvas, ctx, w, h, scale }
+    }
+  }
+  const noop = () => {}
+  const dummyCtx = {
+    save: noop,
+    restore: noop,
+    scale: noop,
+    translate: noop,
+    rotate: noop,
+    fillRect: noop,
+    strokeRect: noop,
+    clearRect: noop,
+    fill: noop,
+    stroke: noop,
+    beginPath: noop,
+    closePath: noop,
+    moveTo: noop,
+    lineTo: noop,
+    arc: noop,
+    ellipse: noop,
+    quadraticCurveTo: noop,
+    bezierCurveTo: noop,
+    drawImage: noop,
+    fillText: noop,
+    strokeText: noop,
+    createRadialGradient: () => ({ addColorStop: noop }),
+    createLinearGradient: () => ({ addColorStop: noop }),
+  }
+  return { canvas: { width: w * scale, height: h * scale }, ctx: dummyCtx, w, h, scale }
 }
 
 export class AssetManager {

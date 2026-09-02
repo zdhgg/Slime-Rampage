@@ -3,7 +3,7 @@
  *
  * Gameplay 描述一局的「游戏空间与核心操作规则」：
  *  - arena  = 开放地图割草（现有玩法：视口外刷怪、自动索敌、8 向移动）
- *  - runner = 三线推进射击（最小空壳：自有背景与通道渲染，玩法逻辑后续接入）
+ *  - runner = 三线推进射击（独立导演、HUD 与结算）
  *
  * 与 RunRules 的正交关系：runSelection.mode（expedition/timed/endless）
  * 表达一局的规则目标与结算口径，gameplay 表达空间与操作范式；
@@ -65,4 +65,9 @@ export class GameplayController {
 
   /** 自定义世界渲染（usesArenaFramePipeline() 为 false 时每帧调用；DPR 变换已就位） */
   renderWorld(_ctx) {}
+
+  /** 玩法专属 HUD 快照；返回 null 表示继续使用 Arena HUD。 */
+  getHudSnapshot() {
+    return null
+  }
 }

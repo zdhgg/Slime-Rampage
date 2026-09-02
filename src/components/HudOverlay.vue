@@ -7,6 +7,7 @@
  * cooldown 由 onCooldown 以 ~10Hz 推送（连续条平滑数据源）。
  */
 import { computed } from 'vue'
+import { Pause, Play, Volume2, VolumeX } from 'lucide-vue-next'
 import { SPEC_INFO } from '../game/SkillPool.js'
 import { formatRunClock } from '../game/RunRules.js'
 
@@ -19,7 +20,7 @@ const props = defineProps({
   toast: { type: String, default: '' },
   toastKind: { type: String, default: 'info' },
   evolution: { type: Object, default: null },
-  // arena = 完整战斗 HUD；runner = 仅保留右上角暂停/静音（Runner 用 Canvas 内自绘 HUD）
+  // arena = 完整战斗 HUD；runner = 仅保留右上角暂停/静音（其余信息由 Runner HUD 提供）
   variant: { type: String, default: 'arena' },
 })
 const emit = defineEmits(['toggle-mute', 'toggle-pause', 'toggle-resume'])
@@ -322,7 +323,8 @@ const elementLevel = (id) => props.stats.elements.find((e) => e.id === id)?.lv |
         :aria-label="muted ? '取消静音' : '静音'"
         :aria-pressed="muted"
       >
-        {{ muted ? '🔇' : '🔊' }}
+        <VolumeX v-if="muted" :size="18" aria-hidden="true" />
+        <Volume2 v-else :size="18" aria-hidden="true" />
       </button>
       <button
         class="hud-pause"
@@ -330,7 +332,8 @@ const elementLevel = (id) => props.stats.elements.find((e) => e.id === id)?.lv |
         :title="paused ? '继续游戏' : '暂停'"
         :aria-label="paused ? '继续游戏' : '暂停'"
       >
-        {{ paused ? '▶' : '⏸' }}
+        <Play v-if="paused" :size="18" aria-hidden="true" />
+        <Pause v-else :size="18" aria-hidden="true" />
       </button>
     </div>
 
@@ -370,7 +373,7 @@ const elementLevel = (id) => props.stats.elements.find((e) => e.id === id)?.lv |
 }
 
 /* Runner 试玩模式：隐藏全部 Arena 专属信息（等级/生命/波次/提示/统计/Boss/事件/
-   悬赏/章节演出），仅保留右上角暂停与静音按钮；Runner 的生命/时间由 Canvas 自绘 */
+   悬赏/章节演出），仅保留右上角暂停与静音按钮；Runner 信息使用独立 Vue HUD */
 .hud--runner .hud-title,
 .hud--runner .hud-level,
 .hud--runner .expedition-hud,
@@ -1566,7 +1569,7 @@ const elementLevel = (id) => props.stats.elements.find((e) => e.id === id)?.lv |
   width: 40px;
   height: 40px;
   border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 12px;
+  border-radius: 6px;
   font-size: 16px;
   color: rgba(255, 255, 255, 0.9);
   background: rgba(0, 0, 0, 0.4);

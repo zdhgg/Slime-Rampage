@@ -15,6 +15,11 @@
 import { computed, onMounted, onUnmounted, ref, shallowRef } from 'vue'
 import GameCanvas from './components/GameCanvas.vue'
 import HudOverlay from './components/HudOverlay.vue'
+import RunnerHudOverlay from './components/RunnerHudOverlay.vue'
+import RunnerResultModal from './components/RunnerResultModal.vue'
+import TowerDefenseHudOverlay from './components/TowerDefenseHudOverlay.vue'
+import TowerDefenseResultModal from './components/TowerDefenseResultModal.vue'
+import TowerDefenseWorldMapModal from './components/TowerDefenseWorldMapModal.vue'
 import LevelUpModal from './components/LevelUpModal.vue'
 import GameOverModal from './components/GameOverModal.vue'
 import PauseModal from './components/PauseModal.vue'
@@ -96,7 +101,12 @@ const cooldown = ref({
 const gameOverInfo = ref(null) // 游戏结束统计（null = 游戏中）
 const isNewRecord = ref(false) // 本局是否刷新了最高纪录
 const paused = ref(false) // 手动暂停状态（引擎已暂停，画面冻结）
-const runnerActive = ref(false) // Runner 试玩进行中：隐藏 Arena HUD（Canvas 内自绘 Runner HUD）
+const activeGameplay = ref('arena') // 当前玩法 id；Arena 之外的玩法共用 HUD/结算桥接
+const gameplayHud = shallowRef(null)
+const gameplayResult = ref(null)
+const runnerActive = computed(() => activeGameplay.value === 'runner')
+const towerDefenseActive = computed(() => activeGameplay.value === 'tower-defense')
+const showTowerDefenseMap = ref(false)
 const reactionChoice = ref(null) // 副反应替换面板数据（null = 不显示；阶段十六槽位经济）
 const fusionConfirm = ref(null) // 首融确认面板数据（null = 不显示；阶段十六追加设计）
 const expeditionReward = ref(null)
@@ -251,6 +261,19 @@ function onEngineReady(eng) {
   // 高频冷却桥接（~10Hz）：冲刺、Boss 施法与破阵追击条的平滑数据源
   eng.onCooldown = (c) => {
     cooldown.value = c
+  }
+  eng.onGameplayHud = (snapshot) => {
+    if (snapshot?.mode === 'runner' || snapshot?.mode === 'tower-defense') {
+      gameplayHud.value = snapshot
+    }
+  }
+  eng.onGameplayFinished = (result) => {
+    if (result?.mode !== 'runner' && result?.mode !== 'tower-defense') return
+    paused.value = false
+    activeGameplay.value = result.mode
+    if (result.mode === 'runner') {
+      gameplayResult.value = result
+    }
   }
   // 引擎升级暂停后回调：把 3 个技能选项交给 Vue 渲染面板
   eng.onLevelUp = (options) => {
@@ -554,12 +577,14 @@ async function onDeployRun() {
     lanRunTicket.value = null
   }
   snd()?.gameStart()
-  runnerActive.value = false
+  activeGameplay.value = 'arena'
+  gameplayHud.value = null
+  gameplayResult.value = null
   gameOverInfo.value = null
   paused.value = false
   expeditionReward.value = null
   endlessDecision.value = null
-  engine.value.configureGameplay('arena') // 玩过 Runner 试玩后必须显式切回 Arena 管线
+  engine.value.configureGameplay('arena') // 从 Runner 独立玩法返回后必须显式切回 Arena 管线
   engine.value.configureRun(plan.selection)
   engine.value.applyStartingStrain(plan.strain)
   engine.value.reset()
@@ -569,16 +594,21 @@ async function onDeployRun() {
   deployingRun.value = false
 }
 
+const currentRunnerSubmode = ref('marathon')
+
 /**
- * 独立试玩模式：Runner（三线推进射击）。
+ * 独立玩法：Runner（三线推进射击）。
  * 不入档、不上榜、不创建 LAN 行动票据、不改存档 preferences——
- * 仅切换 Gameplay 到 runner 并用其自管的 restart 恢复初始状态。
+ * 仅切换 Gameplay 到 runner 并走独立会话生命周期。
  */
-function onStartRunner() {
+function onStartRunner(submode = 'marathon') {
   if (!engine.value) return
   snd()?.uiSelect()
+  currentRunnerSubmode.value = (typeof submode === 'string' && submode) ? submode : 'marathon'
   // 清理局内 UI 状态（与 onDeployRun/onChangeRules 同一套复位口径）
   gameOverInfo.value = null
+  gameplayResult.value = null
+  gameplayHud.value = null
   paused.value = false
   levelUpOptions.value = null
   reactionChoice.value = null
@@ -589,12 +619,77 @@ function onStartRunner() {
   evolution.value = null
   elementToast.value = ''
   lanRunTicket.value = null
-  runnerActive.value = true
-  engine.value.stop()
-  const runner = engine.value.configureGameplay('runner')
-  runner.restart()
+  activeGameplay.value = 'runner'
+  engine.value.configureGameplay('runner')
+  engine.value.resetGameplaySession(undefined, currentRunnerSubmode.value)
   engine.value.start()
   started.value = true
+}
+
+/** 独立玩法：固定路径塔防闯关战役大地图 */
+function onStartTowerDefense() {
+  snd()?.uiSelect()
+  showTowerDefenseMap.value = true
+}
+
+function onStartTowerDefenseStage(stageId = 1) {
+  if (!engine.value) return
+  snd()?.uiSelect()
+  gameOverInfo.value = null
+  gameplayResult.value = null
+  gameplayHud.value = null
+  paused.value = false
+  levelUpOptions.value = null
+  reactionChoice.value = null
+  fusionConfirm.value = null
+  expeditionReward.value = null
+  endlessDecision.value = null
+  pendingRun.value = null
+  evolution.value = null
+  elementToast.value = ''
+  lanRunTicket.value = null
+  activeGameplay.value = 'tower-defense'
+  engine.value.configureGameplay('tower-defense')
+  engine.value.gameplay.loadStage(stageId)
+  engine.value.start()
+  started.value = true
+  showTowerDefenseMap.value = false
+}
+
+function onSelectTower(typeId) {
+  engine.value?.gameplay?.selectTowerType?.(typeId)
+}
+
+function onSetTowerStrategy(strategyId) {
+  engine.value?.gameplay?.setSelectedTowerStrategy?.(strategyId)
+}
+
+function onSelectTowerBranch(branchId) {
+  engine.value?.gameplay?.selectTowerBranch?.(branchId)
+}
+
+function onUpgradeTower() {
+  engine.value?.gameplay?.upgradeSelectedTower?.()
+}
+
+function onSellTower() {
+  engine.value?.gameplay?.sellSelectedTower?.()
+}
+
+function onClearObstacle(slotIndex) {
+  engine.value?.gameplay?.clearObstacle?.(slotIndex)
+}
+
+function onTriggerTrap(trapId) {
+  engine.value?.gameplay?.triggerTrap?.(trapId)
+}
+
+function onRelocateTower(payload) {
+  engine.value?.gameplay?.relocateTower?.(payload?.from, payload?.to)
+}
+
+function onPetTower(slotIndex) {
+  engine.value?.gameplay?.petTower?.(slotIndex)
 }
 
 function onBackFromIntro() {
@@ -761,11 +856,45 @@ function onRestart() {
   }
 }
 
+/** Runner 重试：保留模式、不经过 Arena 战前简报，也不写入档案。 */
+function onRestartRunner() {
+  if (!engine.value) return
+  snd()?.uiSelect()
+  gameplayResult.value = null
+  paused.value = false
+  activeGameplay.value = 'runner'
+  if (engine.value.gameplayId !== 'runner') engine.value.configureGameplay('runner')
+  engine.value.resetGameplaySession(undefined, currentRunnerSubmode.value)
+  engine.value.start()
+  started.value = true
+}
+
+/** 塔防重试：保留独立玩法规则并重建完整防线会话。 */
+function onRestartTowerDefense() {
+  if (!engine.value) return
+  snd()?.uiSelect()
+  gameplayResult.value = null
+  paused.value = false
+  activeGameplay.value = 'tower-defense'
+  if (engine.value.gameplayId !== 'tower-defense') engine.value.configureGameplay('tower-defense')
+  engine.value.resetGameplaySession()
+  engine.value.start()
+  started.value = true
+}
+
+function onRestartCurrent() {
+  if (activeGameplay.value === 'runner') onRestartRunner()
+  else if (activeGameplay.value === 'tower-defense') onRestartTowerDefense()
+  else onRestart()
+}
+
 function onChangeRules() {
   snd()?.uiClick()
   engine.value?.stop()
   lanRunTicket.value = null
-  runnerActive.value = false
+  activeGameplay.value = 'arena'
+  gameplayHud.value = null
+  gameplayResult.value = null
   levelUpOptions.value = null
   gameOverInfo.value = null
   paused.value = false
@@ -790,6 +919,7 @@ const isModalOpen = computed(
     !!(
       levelUpOptions.value ||
       gameOverInfo.value ||
+      gameplayResult.value ||
       reactionChoice.value ||
       fusionConfirm.value ||
       expeditionReward.value ||
@@ -854,19 +984,51 @@ onUnmounted(() => {
 
     <!-- HUD 覆盖层：stats/cooldown 快照驱动的纯展示组件（前端 P2 拆分） -->
     <HudOverlay
-      v-if="started"
+      v-if="started && !towerDefenseActive"
       :stats="stats"
       :cooldown="cooldown"
-      :variant="runnerActive ? 'runner' : 'arena'"
+      :variant="activeGameplay === 'arena' ? 'arena' : 'runner'"
       :muted="muted"
       :paused="paused"
-      :buttons-visible="!levelUpOptions && !gameOverInfo && !expeditionReward && !endlessDecision"
+      :buttons-visible="!levelUpOptions && !gameOverInfo && !gameplayResult && !expeditionReward && !endlessDecision"
       :toast="elementToast"
       :toast-kind="toastKind"
       :evolution="evolution"
       @toggle-mute="onToggleMute"
       @toggle-pause="onPause"
       @toggle-resume="onResume"
+    />
+
+    <RunnerHudOverlay
+      v-if="started && runnerActive && gameplayHud"
+      :hud="gameplayHud"
+      @activate-fever="engine?.gameplay?.activateFever?.()"
+    />
+
+    <TowerDefenseHudOverlay
+      v-if="started && towerDefenseActive && gameplayHud"
+      :hud="gameplayHud"
+      :muted="muted"
+      :paused="paused"
+      @select-tower="onSelectTower"
+      @set-tower-strategy="onSetTowerStrategy"
+      @select-tower-branch="onSelectTowerBranch"
+      @upgrade="onUpgradeTower"
+      @sell="onSellTower"
+      @clear-obstacle="onClearObstacle"
+      @trigger-trap="onTriggerTrap"
+      @relocate-tower="onRelocateTower"
+      @pet-tower="onPetTower"
+      @deselect="engine?.gameplay?.selectSlot?.(-1)"
+      @toggle-mute="onToggleMute"
+      @toggle-pause="onPause"
+      @toggle-resume="onResume"
+      @open-map="showTowerDefenseMap = true"
+      @next-stage="onStartTowerDefenseStage"
+      @restart-stage="onRestartTowerDefense"
+      @advance-tutorial="engine?.gameplay?.advanceTutorial?.()"
+      @skip-tutorial="engine?.gameplay?.skipTutorial?.()"
+      @select-mutation="engine?.gameplay?.selectMutation?.($event)"
     />
 
     <!-- 升级面板：覆盖层之上，点击卡片应用技能并恢复游戏 -->
@@ -907,8 +1069,27 @@ onUnmounted(() => {
       <PauseModal
         v-if="paused"
         @resume="onResume"
-        @restart="onRestart"
+        @restart="onRestartCurrent"
         @quit="onAbandonRun"
+      />
+    </Transition>
+
+
+    <Transition name="modal-fade">
+      <RunnerResultModal
+        v-if="gameplayResult?.mode === 'runner'"
+        :info="gameplayResult"
+        @restart="onRestartRunner"
+        @menu="onChangeRules"
+      />
+    </Transition>
+
+    <Transition name="modal-fade">
+      <TowerDefenseResultModal
+        v-if="gameplayResult?.mode === 'tower-defense'"
+        :info="gameplayResult"
+        @restart="onRestartTowerDefense"
+        @menu="onChangeRules"
       />
     </Transition>
 
@@ -951,6 +1132,7 @@ onUnmounted(() => {
       :public-leaderboard="publicLeaderboard"
       @prepare="onPrepareRun"
       @runner="onStartRunner"
+      @tower-defense="onStartTowerDefense"
       @market="onOpenMarket"
       @profiles="onOpenSaveSlots"
       @account="onOpenLanAccount"
@@ -967,6 +1149,14 @@ onUnmounted(() => {
         @create="onCreateSaveSlot"
         @switch="onSwitchSaveSlot"
         @delete="onDeleteSaveSlot"
+      />
+    </Transition>
+
+    <Transition name="modal-fade">
+      <TowerDefenseWorldMapModal
+        v-if="showTowerDefenseMap"
+        @start-stage="onStartTowerDefenseStage"
+        @close="showTowerDefenseMap = false"
       />
     </Transition>
 

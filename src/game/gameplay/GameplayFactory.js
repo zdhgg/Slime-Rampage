@@ -1,8 +1,9 @@
 import { ArenaGameplay } from './ArenaGameplay.js'
 import { RunnerGameplay } from './RunnerGameplay.js'
+import { TowerDefenseGameplay } from './tower-defense/TowerDefenseGameplay.js'
 
 /** 当前已支持的 Gameplay id。勿与 RunRules.MODE_IDS 混淆。 */
-export const GAMEPLAY_IDS = ['arena', 'runner']
+export const GAMEPLAY_IDS = ['arena', 'runner', 'tower-defense']
 
 /**
  * gameplay id 归一化：未知 id 安全回落 arena。
@@ -17,6 +18,8 @@ export function createGameplay(id) {
   switch (normalizeGameplayId(id)) {
     case 'runner':
       return new RunnerGameplay()
+    case 'tower-defense':
+      return new TowerDefenseGameplay()
     case 'arena':
     default:
       return new ArenaGameplay()

@@ -1,9 +1,9 @@
 # 史莱姆大暴走 · Slime Rampage
 
-俯视角动作肉鸽（Roguelite）割草游戏：**反套路 RPG 剧情**——你不再是勇者，而是一只位于食物链最底端的史莱姆。骑士、魔法师、弓箭手组成的勇者大军源源不断涌入地下城，你需要吞噬一切来进化自保。
+俯视角动作肉鸽（Roguelite）割草游戏：**反套路 RPG 剧情**——你不再是勇者，而是一只位于食物链最底端的史莱姆。骑士、魔法师、弓箭手组成的勇者大军源源不断涌入地下城，你需要吞噬一切来进化自保。另有独立的三路塔防行动：部署炮塔、识别敌军特性并守住巢心。
 所有视觉元素均由 HTML5 Canvas 纯代码程序化绘制（数学图形 + 渐变），零外部图片资源。
 
-> `0.2.0` 定位为桌面浏览器预览版：新增三槽档案、局域网账号/公共榜、无尽深层抉择、远征巢心守卫与地图功能地形。当前推荐使用最新版 Chrome 或 Edge；移动端触控尚未适配。
+> `0.3.0` 新增三玩法入口：完整突围（Runner）与独立塔防战役——五大主题巢域 99 关、六种史莱姆塔与基因树局外成长。当前推荐使用最新版 Chrome 或 Edge；移动端触控尚未适配。
 
 ## 操作
 
@@ -12,7 +12,12 @@
 | 移动 | `WASD` / 方向键 |
 | 冲刺 | `Space` / `Shift` |
 | 吸收元素核心 | `E` |
+| 暴走狂热（突围） | `F` |
 | 暂停 / 继续 | `Esc` |
+
+**突围（Runner）**：`A/D` 或左右方向键切换三条车道，`Space` 冲刺撞击，`F` 释放暴走狂热；沿途拾取武器核心并融合元素武器。提供极速闪击 / 马拉松 / 无尽三种突围类型与独立结算。
+
+**塔防（Tower Defense）**：使用鼠标或触控点击建造位。六种史莱姆塔随战役关卡进度解锁，三种基础塔均可升至 Lv.4，并在 Lv.3 选择一个专精分支；选中已有炮塔后可切换最前方、最后方、生命高低、支援优先或首领优先等索敌策略。敌军包含疾行、重装、群袭、结界、支援、裂殖与阶段 Boss，HUD 会预告下一波编成和潜在漏怪伤害。战役覆盖五大主题巢域共 99 关，星级解锁基因树天赋，局内可抽取三选一变异强化。
 
 ## 运行
 
@@ -61,6 +66,13 @@ src/
 │   ├── StartScreen.vue        # 开场剧情序章（点击翻页 → 进入地下城 / 黑市）
 │   ├── BlackMarket.vue        # 地下城黑市：掉落物 → 永久基因升级
 │   ├── HudOverlay.vue         # 战斗 HUD、目标、Boss 状态与快捷按钮
+│   ├── RunnerHudOverlay.vue   # 突围 HUD：车道、推进距离、狂热与武器状态
+│   ├── RunnerResultModal.vue  # 突围独立结算面板
+│   ├── TowerDefenseHudOverlay.vue # 塔防波次预览、炮塔属性与专精操作
+│   ├── TowerDefenseWorldMapModal.vue # 塔防战役大地图（5 巢域 99 关）
+│   ├── TowerDefenseGeneTreeModal.vue # 基因树天赋面板（星数解锁）
+│   ├── TowerDefenseMutationModal.vue # 局内变异三选一
+│   ├── TowerDefenseResultModal.vue # 塔防结算统计
 │   ├── LevelUpModal.vue       # 升级面板：3 张技能卡片（纯展示 + emit）
 │   ├── PauseModal.vue         # 手动暂停面板（继续 / 重新开始）
 │   ├── GameOverModal.vue      # 结算面板：统计 + 战利品 + 再来一局/去黑市
@@ -82,6 +94,13 @@ src/
     ├── SoundManager.js        # 音效：Web Audio 程序化合成（零音频文件）+ 程序化 BGM + 静音总线
     ├── MapDecor.js            # 地图叙事层：生态装饰、章节地标、巢穴与战场遗迹
     ├── MapFeatureManager.js   # 地图玩法层：巢心守卫、功能地形、可破坏拒马
+    ├── gameplay/               # 玩法层：GameplayController 契约 + 按玩法拆分的实现
+    │   ├── GameplayController.js # 玩法基类：update/render/HUD 快照/会话生命周期
+    │   ├── GameplayFactory.js    # gameplay id → 实例（arena / runner / tower-defense）
+    │   ├── ArenaGameplay.js      # 主战场：开放地图割草（默认管线）
+    │   ├── RunnerGameplay.js     # 突围：三线推进射击会话
+    │   ├── runner/               # RunnerRules 配置 / RunnerDirector 会话 / RunnerRenderer
+    │   └── tower-defense/        # 塔防规则、战役关卡、导演、渲染与存档
     ├── core/
     │   └── Entity.js          # 实体基类契约（attach / update / render / destroy）
     ├── entities/
@@ -211,4 +230,7 @@ src/
       统一结算与展示口径、全部面板 Transition 淡入淡出；黑市捕食原核新增独有滚雪球机制
       （每次吞噬攻击永久 +3%、封顶 +100%，飞弹/冲撞/HUD 攻击力同步成长）——
       捕食体路线从纯数值变为机制驱动
+- [x] **独立塔防行动（内容优化）**：十波组合编队、八类敌军与护甲/护盾/支援/分裂/Boss 二阶段机制；
+      三种基础塔采用四级成长并提供六个专精分支、六种索敌策略；HUD 显示敌军预告、漏怪风险、DPS 与实际效果，
+      专项 smoke 和确定性长局模拟覆盖机制与通关曲线
 - [ ] **阶段十七**：移动端适配、无尽模式试玩打磨（平衡性调优）

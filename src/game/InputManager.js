@@ -26,6 +26,7 @@ export class InputManager {
     this.state = { up: false, down: false, left: false, right: false }
     this._dashQueued = false // 冲刺请求（Space/Shift 边沿触发，下一帧消费）
     this._interactQueued = false // 元素核心吸收请求（E 边沿触发）
+    this._feverQueued = false // 暴走狂热释放请求（F/E 边沿触发）
     // 挂起态（引擎主循环未运行时为 true）：按键不劫持、不入队——
     // 否则升级/黑市/结算面板打开时按 Space 会入队「幽灵冲刺」，
     // 且全局 preventDefault 会吞掉按钮的 Space 激活与方向键焦点移动
@@ -49,8 +50,16 @@ export class InputManager {
       e.preventDefault()
       return
     }
+    if (e.code === 'KeyF') {
+      if (!e.repeat) this._feverQueued = true
+      e.preventDefault()
+      return
+    }
     if (e.code === 'KeyE') {
-      if (!e.repeat) this._interactQueued = true
+      if (!e.repeat) {
+        this._interactQueued = true
+        this._feverQueued = true
+      }
       e.preventDefault()
       return
     }
@@ -73,6 +82,7 @@ export class InputManager {
     this.state.up = this.state.down = this.state.left = this.state.right = false
     this._dashQueued = false
     this._interactQueued = false
+    this._feverQueued = false
   }
 
   /** 消费一次冲刺请求（边沿触发：取走后立即清零） */
@@ -86,6 +96,16 @@ export class InputManager {
     const q = this._interactQueued
     this._interactQueued = false
     return q
+  }
+
+  consumeFever() {
+    const q = this._feverQueued
+    this._feverQueued = false
+    return q
+  }
+
+  queueFever() {
+    this._feverQueued = true
   }
 
   /**

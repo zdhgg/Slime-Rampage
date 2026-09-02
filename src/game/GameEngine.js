@@ -183,7 +183,7 @@ export class GameEngine {
     this.runSelection = normalizeRunSelection()
     this.runProfile = getRunProfile(this.runSelection)
     // Gameplay 层：描述「游戏空间与核心操作规则」，与 runSelection.mode 正交。
-    // 默认 arena（现有开放地图割草）；未来 runner 走 configureGameplay 显式切换，
+    // 默认 arena（现有开放地图割草）；runner 走 configureGameplay 显式切换，
     // 现有启动流程无需感知。Controller 不是 Entity，不进入 entities 列表。
     // 创建即刻完成，attach 推迟到构造末尾（见 constructor 尾部）。
     this.gameplayId = 'arena'
@@ -219,6 +219,10 @@ export class GameEngine {
     // 2Hz 快照下进度条会肉眼跳变，单独走五个数值的轻量通道。
     this._cdAcc = 0
     this.onCooldown = null // ({ dashCd, dashMax, cast, formationBreak, formationBreakMax }) => void
+    // 玩法专属 UI 桥接：Runner 等非 Arena 玩法以 10Hz 推送轻量 HUD，结束时仅发一次结算。
+    this._gameplayHudAcc = 0
+    this.onGameplayHud = null
+    this.onGameplayFinished = null
     // 世界背景重建防抖计时器（resize 高频触发时合并为一次重建）
     this._worldBgTimer = 0
 
@@ -333,7 +337,7 @@ export class GameEngine {
   }
 
   /**
-   * 显式玩法入口：按 gameplay id 重建 Gameplay Controller（runner 未来接入点）。
+   * 显式玩法入口：按 gameplay id 重建 Gameplay Controller。
    * 与 configureRun 正交：切换玩法不改变 expedition/timed/endless 的语义；
    * 现有启动流程无需调用它（引擎默认已是 arena）。未知 id 安全回落 arena。
    */
@@ -343,6 +347,36 @@ export class GameEngine {
     this.gameplay = createGameplay(this.gameplayId)
     this.gameplay.attach(this)
     return this.gameplay
+  }
+
+  /**
+   * 重置当前玩法会话。Runner 无需重建 Arena 的敌人、地图和技能系统，避免模式间
+   * 生命周期互相污染；Arena 仍沿用完整 reset() 流程。
+   */
+  resetGameplaySession(seed, options) {
+    if (this.gameplayId === 'arena') {
+      this.reset()
+      return this.gameplay
+    }
+    this.stop()
+    this.sound.stopMusic()
+    this.elapsed = 0
+    this._pauseLock = 0
+    this._statAcc = 0
+    this._cdAcc = 0
+    this._gameplayHudAcc = 0
+    this.input.reset()
+    this.gameplay?.reset(seed, options)
+    this._pushGameplayHud()
+    return this.gameplay
+  }
+
+  /** 非 Arena 玩法的统一结束边界：停止循环与音乐，并把最终快照交给 UI。 */
+  finishGameplay(payload) {
+    if (!this.running) return
+    this.pause()
+    this._pushGameplayHud()
+    this.onGameplayFinished?.(payload)
   }
 
   get endlessModifiers() {
@@ -1225,6 +1259,8 @@ export class GameEngine {
     this.entities.length = 0
     this.onStats = null
     this.onCooldown = null
+    this.onGameplayHud = null
+    this.onGameplayFinished = null
     this.onLevelUp = null
     this.onGameOver = null
     this.onBossSpawn = null
@@ -1260,13 +1296,23 @@ export class GameEngine {
     this.update(dt)
     this.render()
 
-    // 低频统计回传（约 2Hz），供 Vue HUD 显示
-    this._statAcc += dt
-    if (this._statAcc >= 0.5) this._pushStats()
+    if (this.gameplayId === 'arena') {
+      // Arena 专属桥接；Runner 不遍历无关的敌人、技能和 Boss 状态。
+      this._statAcc += dt
+      if (this._statAcc >= 0.5) this._pushStats()
+      this._cdAcc += dt
+      if (this._cdAcc >= 0.1) this._pushCooldown()
+    }
 
-    // 高频冷却回传（约 10Hz）：连续条的平滑数据源
-    this._cdAcc += dt
-    if (this._cdAcc >= 0.1) this._pushCooldown()
+    this._gameplayHudAcc += dt
+    if (this._gameplayHudAcc >= 0.1) this._pushGameplayHud()
+  }
+
+  /** 推送当前玩法的专属 HUD；Arena 返回 null，不产生额外 UI 更新。 */
+  _pushGameplayHud() {
+    const snapshot = this.gameplay?.getHudSnapshot?.()
+    if (snapshot) this.onGameplayHud?.(snapshot)
+    this._gameplayHudAcc = 0
   }
 
   /** 推送一次冷却数据（冲刺 / Boss 施法 / 破阵追击），约 10Hz */
