@@ -51,7 +51,8 @@ npm run lan    # 构建并启动局域网主机（默认端口 4173）
 ## 发布
 
 - 推送到 `main` 后，`CI` 工作流会执行干净安装、全量测试、生产构建，并保存 `dist` 构建产物。
-- 推送 `v*` 标签（例如 `v0.2.0`）或手动运行 `Deploy GitHub Pages` 工作流，会重新验证并部署 GitHub Pages。
+- 推送 `v*` 标签会同时触发两条工作流：`Deploy GitHub Pages` 重新验证并部署站点，`Publish Release` 创建 GitHub Release 并把 `CHANGELOG.md` 对应版本小节作为发布说明（若 Release 已存在则更新说明并保持 Latest 标记）。两者也可在 Actions 页面手动运行。
+- **发版流程**：先把 `package.json` 版本号与 `CHANGELOG.md` 新版本小节写好并推送到 `main`，再打标签推送（`git tag -a v0.5.0 -m "..." && git push origin v0.5.0`）。Release 说明完全取自 CHANGELOG，无需手工维护第二份文案；`Publish Release` 会在提取不到对应小节时失败，避免发出空说明的 Release。
 - 首次部署前，需要在仓库 Settings → Pages 中把 Source 设置为 **GitHub Actions**。
 - 正式打标签前仍需在桌面 Chrome / Edge 各完成一局人工试玩，检查音频、键盘、暂停和存档。
 

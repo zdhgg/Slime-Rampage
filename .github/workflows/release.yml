@@ -1,0 +1,69 @@
+name: Publish Release
+
+# 推送 v* 标签时自动发布 GitHub Release，说明取自 CHANGELOG 对应版本小节。
+# 也可手动运行并指定标签，用于补发历史版本或修正说明。
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 要发布的标签（例如 v0.4.0）
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+# 串行化：避免并发运行同时判定「Release 不存在」而重复创建
+concurrency:
+  group: publish-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve target tag
+        id: target
+        run: echo "tag=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.target.outputs.tag }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # 与 Deploy GitHub Pages 工作流各自独立验证：
+      # 两条流水线都失败即止，任一通过都不代表另一条可以跳过验证
+      - name: Verify release candidate
+        run: npm test
+
+      - name: Extract release notes from CHANGELOG
+        run: node .github/scripts/extract-changelog.mjs "${{ steps.target.outputs.tag }}" > release-notes.md
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ steps.target.outputs.tag }}"
+          if gh release view "$tag" > /dev/null 2>&1; then
+            echo "Release $tag 已存在，更新说明与 Latest 标记"
+            gh release edit "$tag" --notes-file release-notes.md --latest
+          else
+            echo "创建 Release $tag"
+            gh release create "$tag" \
+              --title "Slime Rampage $tag" \
+              --notes-file release-notes.md \
+              --verify-tag \
+              --latest
+          fi
