@@ -85,3 +85,41 @@ export const hasReaction = (elements, id) => getActiveReactions(elements).some((
 
 /** 取元素定义（未知 id 返回 null） */
 export const getElement = (id) => ELEMENTS[id] || null
+
+/**
+ * 元素消化表（元素等级 → 吞噬联动）：
+ * 吞噬是四条成长轴的天然交汇点——这里把「已吸收元素的等级」翻译成吞噬时的即时效果，
+ * 让重复核心的积累第一次产生行为质变，而不只是附魔概率的线性上涨。
+ *
+ * 两档解锁：Lv2 基础消化、Lv4 强化消化（刻意错开 Lv4 / Lv8 的槽位里程碑，
+ * 让升级点的收益分散在不同系统上）。damageMul 相对当前武器伤害换算。
+ */
+export const DIGEST_EFFECTS = {
+  fire: {
+    id: 'fire',
+    lv2: { name: '灼热消化', radius: 90, damageMul: 0.8, burn: 0 },
+    lv4: { name: '熔核消化', radius: 130, damageMul: 1.3, burn: 2 },
+  },
+  water: {
+    id: 'water',
+    lv2: { name: '寒潮消化', radius: 110, slow: 2.4, freeze: 0 },
+    lv4: { name: '冰封消化', radius: 150, slow: 3, freeze: 1.6 },
+  },
+  poison: {
+    id: 'poison',
+    lv2: { name: '腐蚀消化', radius: 55, poolDmg: 1, poolLife: 3 },
+    lv4: { name: '剧毒消化', radius: 80, poolDmg: 2, poolLife: 4 },
+  },
+  lightning: {
+    id: 'lightning',
+    lv2: { name: '导电消化', damageMul: 0.7 },
+    lv4: { name: '雷鸣消化', damageMul: 1.2 },
+  },
+}
+
+/** 吞噬时该元素触发的消化档位（未达 Lv2 返回 null） */
+export function getDigestTier(id, level) {
+  const def = DIGEST_EFFECTS[id]
+  if (!def || level < 2) return null
+  return { elementId: id, tier: level >= 4 ? 4 : 2, ...(level >= 4 ? def.lv4 : def.lv2) }
+}

@@ -6,6 +6,7 @@ import {
   TOWER_DEFENSE_SLOT_LEYLINES,
   TOWER_DEFENSE_TOWER_TYPES,
   TOWER_DEFENSE_TRAPS,
+  getEnemyTraitTags,
   getSlotLeylineResonance,
   getTowerDefensePathPosition,
   getTowerStats,
@@ -1037,12 +1038,17 @@ export class TowerDefenseRenderer {
     const selected = this.gameplay.selectedSlotIndex
     const u = this.unit
     const slots = this.gameplay.buildSlots || TOWER_DEFENSE_BUILD_SLOTS
+    // 战斗阶段（部署窗口之外）空槽与封印节点降噪，悬停/选中时恢复完整可见度
+    const phase = this.gameplay.director?.phase || 'intermission'
+    const buildWindow = phase === 'intermission'
     for (let index = 0; index < slots.length; index++) {
       const slotDef = slots[index]
       const point = this.project(slotDef)
       const occupied = !!this.gameplay.getTowerAtSlot(index)
       const hovered = index === this.gameplay.hoveredSlotIndex
       const isLocked = !this.gameplay.unlockedSlots.has(index)
+      // 战斗阶段（部署窗口之外）空槽与封印节点降噪，悬停/选中时恢复完整可见度
+      const dimmed = !buildWindow && !occupied && index !== selected && !hovered
       const leylineId = slotDef.leyline || TOWER_DEFENSE_SLOT_LEYLINES[index] || 'acid'
       const leyline = TOWER_DEFENSE_LEYLINE_TYPES[leylineId]
 
@@ -1050,6 +1056,7 @@ export class TowerDefenseRenderer {
         // Locked / Wild Sealed Obstacle Node
         ctx.save()
         ctx.translate(point.x, point.y)
+        if (dimmed) ctx.globalAlpha = 0.45
 
         // Dark Rocky Seal Base
         ctx.fillStyle = '#16191f'
@@ -1092,12 +1099,15 @@ export class TowerDefenseRenderer {
         // Unlocked Natural Leyline Slot
         ctx.save()
         ctx.translate(point.x, point.y)
+        if (dimmed) ctx.globalAlpha = 0.4
 
         // Soft ambient Leyline glow
-        ctx.fillStyle = leyline ? leyline.glow : 'rgba(88, 201, 165, 0.2)'
-        ctx.beginPath()
-        ctx.arc(0, 0, u * 0.76, 0, TAU)
-        ctx.fill()
+        if (!dimmed) {
+          ctx.fillStyle = leyline ? leyline.glow : 'rgba(88, 201, 165, 0.2)'
+          ctx.beginPath()
+          ctx.arc(0, 0, u * 0.76, 0, TAU)
+          ctx.fill()
+        }
 
         // Clean circular pedestal
         ctx.fillStyle = occupied ? '#131e1c' : hovered ? '#203c32' : '#172b24'
@@ -1109,7 +1119,7 @@ export class TowerDefenseRenderer {
         ctx.stroke()
 
         // Build Cross (+)
-        if (!occupied) {
+        if (!occupied && !dimmed) {
           this._drawBuildCross(ctx, { x: 0, y: 0 })
         }
 
@@ -1534,7 +1544,46 @@ export class TowerDefenseRenderer {
       ctx.restore()
 
       this._drawEnemyBars(ctx, enemy, point, radius)
+      if (this.gameplay.hoveredEnemyId === enemy.id) {
+        this._drawEnemyTooltip(ctx, enemy, point, radius)
+      }
     }
+  }
+
+  /** 敌人悬停提示：名称 + 生命/护盾 + 机制特质说明 */
+  _drawEnemyTooltip(ctx, enemy, point, radius) {
+    const tags = getEnemyTraitTags(enemy.typeId)
+    const lines = [
+      enemy.name,
+      `生命 ${Math.max(0, Math.ceil(enemy.hp))}/${enemy.maxHp}${enemy.shield > 0 ? ` · 护盾 ${Math.ceil(enemy.shield)}` : ''}`,
+      ...tags.map((tag) => `${tag.icon} ${tag.label}`),
+    ]
+    ctx.save()
+    ctx.font = '600 11px "Segoe UI", "PingFang SC", sans-serif'
+    const width = Math.max(...lines.map((line) => ctx.measureText(line).width)) + 16
+    const lineHeight = 15
+    const height = lines.length * lineHeight + 10
+    const canvasWidth = this.gameplay.game?.width || 800
+    let x = point.x + radius + 8
+    if (x + width > canvasWidth - 6) x = point.x - radius - 8 - width
+    let y = point.y - radius - height - 6
+    if (y < 6) y = point.y + radius + 8
+    ctx.fillStyle = 'rgba(8, 14, 20, 0.92)'
+    ctx.strokeStyle = 'rgba(142, 166, 240, 0.55)'
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.roundRect?.(x, y, width, height, 5)
+    if (!ctx.roundRect) ctx.rect(x, y, width, height)
+    ctx.fill()
+    ctx.stroke()
+    ctx.fillStyle = '#f2f6ed'
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'top'
+    lines.forEach((line, index) => {
+      ctx.fillStyle = index === 0 ? '#ffd166' : 'rgba(238, 245, 242, 0.86)'
+      ctx.fillText(line, x + 8, y + 6 + index * lineHeight)
+    })
+    ctx.restore()
   }
 
   _drawEnemyCharacter(ctx, enemy, radius, elapsed) {
@@ -1562,6 +1611,20 @@ export class TowerDefenseRenderer {
       ctx.arc(0, 0, radius * 1.3, 0, TAU)
       ctx.fill()
       ctx.stroke()
+    } else if (enemy.typeId === 'emp') {
+      // 电磁傀儡：电弧环 + 脉冲闪白
+      const flashing = (enemy.empFlash || 0) > 0
+      ctx.strokeStyle = flashing ? '#ffffff' : 'rgba(142, 166, 240, 0.85)'
+      ctx.lineWidth = 2.2
+      ctx.setLineDash([5, 4])
+      ctx.beginPath()
+      ctx.arc(0, 0, radius * (flashing ? 1.9 : 1.32), 0, TAU)
+      ctx.stroke()
+      ctx.setLineDash([])
+      ctx.fillStyle = flashing ? 'rgba(174, 189, 245, 0.25)' : 'rgba(142, 166, 240, 0.10)'
+      ctx.beginPath()
+      ctx.arc(0, 0, radius * 1.32, 0, TAU)
+      ctx.fill()
     } else if (enemy.boss) {
       ctx.save()
       ctx.rotate(-elapsed * 1.6)
@@ -1775,6 +1838,26 @@ export class TowerDefenseRenderer {
         ctx.arc(0, 0, u * 0.70, 0, TAU)
         ctx.stroke()
         ctx.setLineDash([])
+      }
+
+      // EMP 瘫痪状态：暗淡 + 电击标识
+      if ((tower.disabledTimer || 0) > 0) {
+        ctx.fillStyle = 'rgba(10, 16, 28, 0.55)'
+        ctx.beginPath()
+        ctx.arc(0, 0, u * 0.72, 0, TAU)
+        ctx.fill()
+        ctx.strokeStyle = 'rgba(142, 166, 240, 0.9)'
+        ctx.lineWidth = 2
+        ctx.setLineDash([3, 3])
+        ctx.beginPath()
+        ctx.arc(0, 0, u * 0.72, 0, TAU)
+        ctx.stroke()
+        ctx.setLineDash([])
+        ctx.fillStyle = '#aebdf5'
+        ctx.font = `700 ${clamp(u * 0.42, 14, 20)}px system-ui, sans-serif`
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        ctx.fillText('⚡', 0, 0)
       }
 
       // ✨ Shiny Slime Floating Star & Sparkle

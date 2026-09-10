@@ -59,6 +59,7 @@ const {
   TOWER_DEFENSE_WAVES,
   getTowerStats,
   getWaveComposition,
+  getWaveCompositionFromWaves,
 } = await import('./src/game/gameplay/tower-defense/TowerDefenseRules.js')
 
 assert.ok(createGameplay('tower-defense') instanceof TowerDefenseGameplay)
@@ -109,9 +110,11 @@ assert.ok(initialHud.totalWaves >= 4)
 assert.equal(initialHud.towerTypes.length, 6)
 assert.equal(initialHud.selectedTower, null)
 assert.equal(initialHud.currentWaveComposition[0].id, 'grunt')
-assert.ok(initialHud.nextWavePreview.some(({ id }) => id === 'runner'))
+// 情报现在读取关卡实战波次（第 1 关第 2 波为步战小队），不再是默认表
+assert.ok(initialHud.nextWavePreview.some(({ id }) => id === 'grunt'))
+assert.equal(getWaveCompositionFromWaves(gameplay.director.waves, 2).some(({ id }) => id === 'runner'), true)
 assert.equal(initialHud.baseDamagePreview, 7)
-assert.equal(Object.keys(TOWER_DEFENSE_ENEMY_TYPES).length, 8)
+assert.equal(Object.keys(TOWER_DEFENSE_ENEMY_TYPES).length, 9)
 assert.equal(TOWER_DEFENSE_TARGET_STRATEGIES.length, 6)
 assert.equal(getWaveComposition(9).some(({ id }) => id === 'boss'), true)
 assert.deepEqual(new Set(initialHud.towerTypes.map(({ id }) => id)), new Set(['rapid', 'slow', 'blast', 'shock', 'arcane', 'radiant']))
@@ -236,6 +239,7 @@ assert.equal(runA.waves.at(-1).filter(({ boss }) => boss).length, 1)
 console.log('✓ Tower defense director deterministically produces ten composition waves')
 
 gameplay.reset()
+gameplay.director.loadWaves(TOWER_DEFENSE_WAVES)
 gameplay.director.waveIndex = 9
 gameplay.director.completedWaves = 9
 gameplay.director.phase = 'waiting'

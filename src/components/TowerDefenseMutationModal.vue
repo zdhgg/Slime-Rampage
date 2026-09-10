@@ -1,15 +1,28 @@
 <script setup>
 import { computed } from 'vue'
-import { Sparkles, Zap, Flame, Shield, Check, Dna } from 'lucide-vue-next'
+import { Sparkles, Zap, Flame, Shield, Check, Dna, X } from 'lucide-vue-next'
 
 const props = defineProps({
   choices: {
     type: Array,
     required: true,
   },
+  // 暂存模式：可关闭弹窗稍后再选，或放弃换养分
+  skippable: {
+    type: Boolean,
+    default: false,
+  },
+  skipBonus: {
+    type: Number,
+    default: 20,
+  },
+  pendingCount: {
+    type: Number,
+    default: 1,
+  },
 })
 
-const emit = defineEmits(['select'])
+const emit = defineEmits(['select', 'skip', 'dismiss'])
 
 function selectCard(mutation) {
   emit('select', mutation.id)
@@ -21,6 +34,10 @@ function getRarityLabel(rarity) {
   if (rarity === 'rare') return '稀有 · 进阶强化'
   return '普通 · 基础增益'
 }
+
+const headerText = computed(() =>
+  props.pendingCount > 1 ? `母巢基因突变 · 流派觉醒（待选 ${props.pendingCount} 份）` : '母巢基因突变 · 流派觉醒'
+)
 </script>
 
 <template>
@@ -31,7 +48,7 @@ function getRarityLabel(rarity) {
         <div class="header-icon-wrap">
           <Dna :size="32" class="dna-icon" />
         </div>
-        <h2>母巢基因突变 · 流派觉醒</h2>
+        <h2>{{ headerText }}</h2>
         <p>波次防守大捷！选择 1 项专属突变秘籍，强化本局流派构筑</p>
       </div>
 
@@ -68,9 +85,61 @@ function getRarityLabel(rarity) {
           </div>
         </button>
       </div>
+
+      <!-- 暂存操作行：不阻塞布防 -->
+      <div v-if="skippable" class="mutation-defer-row">
+        <button class="mutation-defer-btn" type="button" @click="emit('dismiss')">
+          <X :size="13" />
+          <span>稍后再选（战斗继续）</span>
+        </button>
+        <button class="mutation-skip-btn" type="button" @click="emit('skip')">
+          <span>放弃突变，换取 +{{ skipBonus }} 养分</span>
+        </button>
+      </div>
     </div>
   </div>
 </template>
+
+<style scoped>
+.mutation-defer-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.mutation-defer-btn,
+.mutation-skip-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.mutation-defer-btn {
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(238, 245, 242, 0.85);
+}
+
+.mutation-defer-btn:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.mutation-skip-btn {
+  border: 1px solid rgba(241, 212, 135, 0.55);
+  background: rgba(241, 212, 135, 0.12);
+  color: #f1d487;
+}
+
+.mutation-skip-btn:hover {
+  background: rgba(241, 212, 135, 0.24);
+}
+</style>
 
 <style scoped>
 .mutation-modal-overlay {

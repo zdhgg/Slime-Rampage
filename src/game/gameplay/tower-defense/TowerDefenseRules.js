@@ -251,7 +251,34 @@ export const TOWER_DEFENSE_ENEMY_TYPES = Object.freeze({
     boss: true,
     traits: { armor: 0.38, slowResistance: 0.55, shield: 180 },
   }),
+  emp: enemyType('emp', {
+    name: '电磁傀儡',
+    shortName: '电磁',
+    shape: 'orb',
+    color: '#8ea6f0',
+    hp: 55,
+    speed: 0.045,
+    reward: 26,
+    damage: 2,
+    size: 1.05,
+    traits: { empPulse: { interval: 6.5, duration: 2.5, radius: 0.22 }, slowResistance: 0.15 },
+  }),
 })
+
+// 敌人机制特质标签（用于波次情报与悬停说明，让 counter-pick 有信息依据）
+export function getEnemyTraitTags(typeId) {
+  const type = getEnemyType(typeId)
+  const tags = []
+  if ((type.traits.armor || 0) > 0) tags.push({ icon: '🛡️', label: `护甲 ${Math.round(type.traits.armor * 100)}%（物理减伤）` })
+  if ((type.traits.shield || 0) > 0) tags.push({ icon: '💠', label: '能量护盾（优先吸收伤害）' })
+  if ((type.traits.supportRadius || 0) > 0) tags.push({ icon: '✨', label: `治疗光环（每 1.6 秒回复 ${type.traits.supportHeal} 点）` })
+  if ((type.traits.splitCount || 0) > 0) tags.push({ icon: '🧫', label: `死亡分裂 ×${type.traits.splitCount}` })
+  if ((type.traits.slowResistance || 0) > 0) tags.push({ icon: '❄️', label: `减速抗性 ${Math.round(type.traits.slowResistance * 100)}%` })
+  if (type.traits.empPulse) tags.push({ icon: '⚡', label: `EMP 脉冲：周期性瘫痪附近守卫 ${type.traits.empPulse.duration} 秒` })
+  if (type.speed >= 0.085) tags.push({ icon: '💨', label: '高速行军' })
+  if (type.boss) tags.push({ icon: '👑', label: '首领（狂暴二阶段）' })
+  return tags
+}
 
 export const TOWER_DEFENSE_TARGET_STRATEGIES = Object.freeze([
   Object.freeze({ id: 'first', name: '最前方' }),
@@ -545,13 +572,18 @@ export function getEnemyType(typeId) {
 }
 
 export function getWaveComposition(waveIndex) {
-  const definition = TOWER_DEFENSE_WAVES[waveIndex]
+  return getWaveCompositionFromWaves(TOWER_DEFENSE_WAVES, waveIndex)
+}
+
+// 从任意波次表（战役/无尽）构建构成情报，避免 HUD 情报与实战波次脱节
+export function getWaveCompositionFromWaves(waves, waveIndex) {
+  const definition = waves?.[waveIndex]
   if (!definition) return []
   const counts = new Map()
   for (const entry of definition.groups) counts.set(entry.type, (counts.get(entry.type) || 0) + entry.count)
   return Array.from(counts, ([id, count]) => {
     const type = getEnemyType(id)
-    return { id, name: type.shortName || type.name, count, color: type.color, shape: type.shape }
+    return { id, name: type.shortName || type.name, count, color: type.color, shape: type.shape, traits: getEnemyTraitTags(id) }
   })
 }
 

@@ -2,12 +2,23 @@ import { Entity } from './core/Entity.js'
 import { Projectile } from './entities/Projectile.js'
 import { Particle } from './effects/Particle.js'
 import { getPaletteMid } from './entities/Enemy.js'
+import { getDigestTier, getElement } from './ElementSystem.js'
 import { CELL_SIZE, GRID_KEY_SCALE } from './EnemyManager.js' // 复用分离阶段的空间哈希（碰撞粗筛）
 import { ENDLESS_FORMATION_BREAK_ATTACK_INTERVAL_MUL } from './EndlessMode.js'
 import { resolveWeaponVisual, splitWeaponVisual, tintedWeaponVisual } from './WeaponVisuals.js'
 
 const TAU = Math.PI * 2
 export const COMMON_LOOT_CHANCE = 0.1
+
+/**
+ * 消化进度（吞噬 → 元素联动）：
+ * 每吞噬一个敌人累积能量，满槽时把「吃下去的血肉」转化为一次元素等级爆发。
+ * 普通怪 6 点 / 精英 14 点（抢吞精英同时加速元素成长，强化既有的高光决策），
+ * 满槽后若无已吸收元素则保持满载等待——第一次吸收核心时立刻兑现，不浪费。
+ */
+export const DIGEST_CHARGE_MAX = 100
+export const DIGEST_GAIN_NORMAL = 6
+export const DIGEST_GAIN_ELITE = 14
 
 export function getLootDropCount(enemy, random = Math.random) {
   if (enemy.isBoss) {
@@ -89,6 +100,14 @@ export class WeaponSystem extends Entity {
     this.genePierces = 0 // 黑市动能原核：所有飞弹额外穿透
     this.geneReactionDmgMul = 1 // 黑市共鸣原核：与局内反应倍率独立乘算
     this.devourDamageMul = 1 // 黑市捕食原核：每次吞噬 +3% 攻击（封顶 2.0，本局内滚雪球）
+    // —— 专精 → 元素联动（主专精改写元素玩法规则，不加数值） ——
+    this.splitInherit = 0.5 // 分裂弹继承母弹附魔/暴击概率的比例（机枪主专精抬到 100%）
+    this.critGuaranteesElement = false // 暴击必定触发元素附魔（刺客主专精：精准打击弱点）
+    // —— 吞噬 → 元素联动：消化进度（吞噬累积 → 元素等级爆发） ——
+    this.digestCharge = 0 // 当前消化能量（0 ~ digestChargeMax）
+    this.digestChargeMax = DIGEST_CHARGE_MAX
+    this.digestGainMul = 1 // 消化转化效率（暴食主专精：胃袋把血肉变成元素养分）
+    this.digestBursts = 0 // 消化爆发次数（物种档案统计）
     this.visualTiers = { gluttony: 0, gatling: 0, elemental: 0, assassin: 0 }
     this._muzzleT = 0
     this._muzzleAngle = 0
@@ -147,6 +166,13 @@ export class WeaponSystem extends Entity {
     this.genePierces = 0
     this.geneReactionDmgMul = 1
     this.devourDamageMul = 1
+    // 专精改写标记归位（元素专精的附魔封顶在 Player.resetRunState）
+    this.splitInherit = 0.5
+    this.critGuaranteesElement = false
+    this.digestCharge = 0
+    this.digestChargeMax = DIGEST_CHARGE_MAX
+    this.digestGainMul = 1
+    this.digestBursts = 0
     this.visualTiers = { gluttony: 0, gatling: 0, elemental: 0, assassin: 0 }
     this._muzzleT = 0
     this._muzzleAngle = 0
@@ -330,6 +356,7 @@ export class WeaponSystem extends Entity {
     if (this.berserkBuffTimer > 0) this.berserkBuffTimer -= dt
     if (this._muzzleT > 0) this._muzzleT -= dt
     if (this._weaponPulse > 0) this._weaponPulse -= dt
+    this._updateDigestPulse(dt) // 消化能量过半时的心跳微粒（吞噬 → 元素联动的可见前兆）
 
     // 1) 冷却计时 → 自动索敌 → 发射
     this.cooldown -= dt
@@ -596,17 +623,19 @@ export class WeaponSystem extends Entity {
     this.game.shakeScreen(4, 0.2) // 爆炸震动（阶段十五美化）
   }
 
-  /** 爆炸酸液（火+毒）：命中点范围溅射伤害（70px 内敌人） */
-  _explode(x, y, splashDamage) {
+  /**
+   * 爆炸酸液（火+毒）：命中点范围溅射伤害；effects 可选附加状态（元素消化用），
+   * radius 默认沿用反应版 70px（消化档位会按元素等级放大半径）。
+   */
+  _explode(x, y, splashDamage, effects = null, radius = 70) {
     const enemies = this.enemyManager.enemies
-    const R = 70
-    const R2 = R * R
+    const R2 = radius * radius
     for (const e of enemies) {
       if (!e.active || e.devouring) continue
       const dx = e.x - x
       const dy = e.y - y
       if (dx * dx + dy * dy < R2) {
-        e.hit(splashDamage)
+        e.hit(splashDamage, effects)
         this._burst(e.x, e.y, e.paletteKey, 6, true)
         if (!e.active) this._onKill(e)
       }
@@ -803,14 +832,14 @@ export class WeaponSystem extends Entity {
               effects.poison = 3 * dotMul
               effects.poisonDmg = tickDmg
             }
-            if (procs.burn?.chance && Math.random() < procs.burn.chance) {
+            if (procs.burn?.chance && (this.critGuaranteesElement && isCrit || Math.random() < procs.burn.chance)) {
               effects.burn = Math.max(effects.burn || 0, procs.burn.duration * dotMul)
               effects.burnDmg = Math.max(effects.burnDmg || 0, tickDmg)
             }
-            if (procs.freeze?.chance && Math.random() < procs.freeze.chance) {
+            if (procs.freeze?.chance && (this.critGuaranteesElement && isCrit || Math.random() < procs.freeze.chance)) {
               effects.freeze = Math.max(effects.freeze || 0, procs.freeze.duration)
             }
-            if (procs.poison?.chance && Math.random() < procs.poison.chance) {
+            if (procs.poison?.chance && (this.critGuaranteesElement && isCrit || Math.random() < procs.poison.chance)) {
               effects.poison = Math.max(effects.poison || 0, procs.poison.duration * dotMul)
               effects.poisonDmg = Math.max(effects.poisonDmg || 0, tickDmg)
             }
@@ -934,6 +963,9 @@ export class WeaponSystem extends Entity {
       this.game.gemManager.spawn(e.x, e.y, 0, coreType)
     }
 
+    // 消化进度（吞噬 → 元素联动）：猎物血肉转化为元素养分，满槽爆发元素成长
+    this.addDigestCharge(e.isElite ? DIGEST_GAIN_ELITE : DIGEST_GAIN_NORMAL)
+
     // 战利品必掉（黑市货币）
     this.drops[e.type] = (this.drops[e.type] || 0) + 1
 
@@ -968,7 +1000,8 @@ export class WeaponSystem extends Entity {
       priest: '神圣净化',
       berserker: '嗜血战意',
     }
-    const sub =
+    const digest = this._digestDevour(e)
+    const extract =
       e.type === 'assassin'
         ? '⚡ 暗影疾行 +25% 移速 (2.5s)'
         : e.type === 'priest'
@@ -978,7 +1011,129 @@ export class WeaponSystem extends Entity {
         : coreType
         ? `提取：${CORE_NAMES[coreType]}基因 +1`
         : `提取：${GENES[e.type] || '基因碎片'} +1`
+    const sub = digest ? `${extract} ／ ${digest}` : extract
     this.game.enemyManager.addText(e.x, e.y, `吞噬：${label}`, sub, '#ffd166')
+  }
+
+  /**
+   * 元素消化（元素等级 → 吞噬联动）：吞噬按已吸收元素等级产生差异化即时效果。
+   * 这是「元素」与「吞噬」两条成长轴的咬合点——同一次吞噬，
+   * 火系胃囊炸开缺口、水系胃囊冻住追兵、毒系留下酸池、雷系电弧跳向人群。
+   * 伤害与飞弹同口径（基础 × 等级成长 × 捕食原核），保证后期不衰减成废效果。
+   * @returns {string} 本次触发的消化摘要（供飘字第二行；无触发时为空串）
+   */
+  _digestDevour(e) {
+    const els = this.player.elements
+    if (!els || els.size === 0) return ''
+    const damage = this.damage * this.levelMul * this.devourDamageMul
+    const triggered = []
+    for (const [id, lv] of els) {
+      const tier = getDigestTier(id, lv)
+      if (!tier) continue
+      triggered.push(tier.name)
+      if (id === 'fire') {
+        this._explode(
+          e.x,
+          e.y,
+          Math.max(1, Math.round(damage * tier.damageMul)),
+          tier.burn > 0 ? { burn: tier.burn, burnDmg: Math.max(1, Math.round(damage * 0.4)) } : null,
+          tier.radius
+        )
+        this._ring(e.x, e.y, '#ff9d4a', tier.radius)
+      } else if (id === 'water') {
+        this._frostNova(e.x, e.y, tier)
+      } else if (id === 'poison') {
+        this._pools.push({
+          x: e.x,
+          y: e.y,
+          life: tier.poolLife,
+          r: tier.radius,
+          dmg: Math.max(1, tier.poolDmg),
+          tick: 0.5,
+          active: true,
+        })
+      } else if (id === 'lightning') {
+        this._chainLightning(e, Math.max(1, damage * tier.damageMul))
+      }
+    }
+    return triggered.join(' + ')
+  }
+
+  /** 寒潮消化（水系）：吞噬点周围减速，Lv4 附加短冻结 */
+  _frostNova(x, y, tier) {
+    const enemies = this.enemyManager.enemies
+    const r2 = tier.radius * tier.radius
+    for (const e of enemies) {
+      if (!e.active || e.devouring) continue
+      const dx = e.x - x
+      const dy = e.y - y
+      if (dx * dx + dy * dy >= r2) continue
+      e.slow = Math.max(e.slow, tier.slow)
+      if (tier.freeze > 0) e.hit(0, { freeze: tier.freeze })
+      this._burstColor(e.x, e.y, '#73cfea', 4)
+    }
+    this._ring(x, y, '#73cfea', tier.radius)
+  }
+
+  /**
+   * 消化累积（吞噬 → 元素联动）：每次吞噬注入消化能量。
+   * 满槽时若已吸收元素则立即爆发（随机一种已吸收元素 +1 级）；
+   * 尚未吸收元素时保持满载等待——玩家吃下第一颗核心的瞬间即兑现，不让进度空转。
+   * @returns {boolean} 本次是否触发了消化爆发
+   */
+  addDigestCharge(amount) {
+    this.digestCharge = Math.min(
+      this.digestChargeMax,
+      this.digestCharge + Math.max(0, amount) * this.digestGainMul
+    )
+    if (this.digestCharge < this.digestChargeMax) return false
+    const els = this.player.elements
+    if (!els || els.size === 0) return false // 满载待命：等第一颗元素核心
+    const ids = Array.from(els.keys())
+    const id = ids[(Math.random() * ids.length) | 0]
+    this.digestCharge = 0
+    this.digestBursts++
+    this.player.absorbElement(id)
+    const el = getElement(id)
+    this._ring(this.player.x, this.player.y, el?.color || '#ffd166', 64)
+    this.game.enemyManager.addText(
+      this.player.x,
+      this.player.y - 52,
+      `🧬 消化爆发 · ${el?.icon || ''} ${el?.name || id} +1`,
+      `累计消化 ${this.digestBursts} 次`,
+      '#ffd166',
+      16
+    )
+    this.game.sound.elementUp?.()
+    return true
+  }
+
+  /**
+   * 消化能量的可见心跳（每帧）：给玩家一个「快满了」的期待感。
+   * 有已吸收元素且能量过半时，玩家身上周期性冒出对应元素的氛围微粒。
+   */
+  _updateDigestPulse(dt) {
+    const els = this.player.elements
+    if (!els || els.size === 0) return
+    const ratio = this.digestCharge / this.digestChargeMax
+    if (ratio < 0.5) return
+    this._digestPulseT = (this._digestPulseT || 0) - dt
+    if (this._digestPulseT > 0) return
+    this._digestPulseT = 0.4 - ratio * 0.24 // 越接近满槽冒得越密
+    const ids = Array.from(els.keys())
+    const id = ids[(Math.random() * ids.length) | 0]
+    const el = getElement(id)
+    // 粒子形状与 Player._aura 的推进约定一致（缺 vx/vy 会让位置更新成 NaN）
+    this.player._aura?.push?.({
+      x: this.player.x + (Math.random() - 0.5) * 34,
+      y: this.player.y + (Math.random() - 0.5) * 34,
+      vx: (Math.random() - 0.5) * 14,
+      vy: -18 - Math.random() * 14,
+      r: 3 + ratio * 4,
+      life: 0.7,
+      maxLife: 0.7,
+      color: el?.color || '#ffd166',
+    })
   }
 
   /** 在命中点炸开粒子（普通命中带火花；暴击迸发金色星芒） */
@@ -996,10 +1151,12 @@ export class WeaponSystem extends Entity {
 
   /**
    * 分裂：从命中点迸出 2 枚小弹，各自锁定一个其他存活敌人（homing 追踪）。
-   * 小弹伤害为母弹 50%、按 50% 比例继承母弹的暴击/元素附魔概率
-   * （机枪×元素/刺客协同的通路），isSplit 标记防二次分裂。
+   * 小弹伤害为母弹 50%、按 splitInherit 比例继承母弹的暴击/元素附魔概率
+   * （机枪×元素/刺客协同的通路；机枪主专精把继承率抬到 100%，分裂不再稀释附魔），
+   * isSplit 标记防二次分裂。
    */
   _split(origin, parent) {
+    const inherit = this.splitInherit ?? 0.5
     let spawned = 0
     for (const t of this.enemyManager.enemies) {
       if (!t.active || t === origin || t.devouring) continue
@@ -1014,10 +1171,10 @@ export class WeaponSystem extends Entity {
           life: 1.2,
           radius: 4,
           splitChance: 0,
-          critChance: (parent.critChance || 0) * 0.5,
-          freezeChance: (parent.freezeChance || 0) * 0.5,
-          burnChance: (parent.burnChance || 0) * 0.5,
-          poisonChance: (parent.poisonChance || 0) * 0.5,
+          critChance: (parent.critChance || 0) * inherit,
+          freezeChance: (parent.freezeChance || 0) * inherit,
+          burnChance: (parent.burnChance || 0) * inherit,
+          poisonChance: (parent.poisonChance || 0) * inherit,
           isSplit: true,
           pierces: this.splitPierces + this.genePierces,
           visual: splitWeaponVisual(parent.visual),

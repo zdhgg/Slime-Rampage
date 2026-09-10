@@ -2,11 +2,36 @@
 /**
  * LevelUpModal：升级技能与里程碑专精觉醒面板
  */
+import { computed } from 'vue'
+import { REACTION_SLOT_LEVELS, getReactionSlotLevelBonus } from '../game/entities/Player.js'
+
+/** 主专精的元素规则改写（专精 → 元素联动）：觉醒面板直接标出「这条流派怎么改写元素玩法」 */
+const SPEC_ELEMENT_RULE = {
+  gluttony: '🧬 元素规则：消化能量效率 +50%（胃袋把血肉转成元素养分）',
+  gatling: '🧬 元素规则：分裂弹 100% 继承母弹附魔（分裂不再稀释元素）',
+  elemental: '🧬 元素规则：附魔概率封顶 60% → 85%（把概率投满有了去处）',
+  assassin: '🧬 元素规则：暴击必定触发元素附魔（精准打击弱点）',
+}
+
 const props = defineProps({
   options: { type: Array, required: true }, // 技能选项数组
   level: { type: Number, required: true }, // 当前等级
 })
 const emit = defineEmits(['select'])
+
+/**
+ * 槽位里程碑提示（等级 → 元素联动的高亮时刻）：
+ * 恰好跨过 Lv.4 / Lv.8 时宣告新槽位（此刻已由 Player.refreshReactionSlots 生效），
+ * 否则预告下一个里程碑——让升级面板第一次把「元素构筑」纳入决策视野。
+ */
+const slotMilestone = computed(() => {
+  const level = props.level || 1
+  if (REACTION_SLOT_LEVELS.includes(level)) {
+    return { hit: true, text: `🎉 副反应槽 +1（现 ${2 + getReactionSlotLevelBonus(level)} 个基础槽，已自动接入可用反应）` }
+  }
+  const next = REACTION_SLOT_LEVELS.find((milestone) => level < milestone)
+  return next ? { hit: false, text: `⬡ 下一槽位里程碑：Lv.${next}（副反应槽 +1）` } : null
+})
 
 // 是否处于专精觉醒里程碑
 const isMilestone = props.options?.[0]?.isMilestone || false
@@ -64,6 +89,11 @@ const cardClass = (s) => {
             <div class="ms-bonus-val">{{ s.bonus }}</div>
           </div>
 
+          <!-- 元素规则改写（专精 → 元素联动）：主专精决定你怎么用元素 -->
+          <div v-if="milestoneType === 'primary' && SPEC_ELEMENT_RULE[s.spec]" class="ms-element-rule">
+            {{ SPEC_ELEMENT_RULE[s.spec] }}
+          </div>
+
           <!-- 未来进阶路线预览 -->
           <div v-if="milestoneType === 'primary'" class="ms-roadmap">
             <div class="ms-roadmap-title">📜 未来进阶与终极觉醒预览</div>
@@ -86,6 +116,9 @@ const cardClass = (s) => {
         {{ level < 5
           ? '🌱 阶段说明：Lv.1~4 为自由变异期（随意尝试手感与元素，不会锁死流派，Lv.5 将触发主专精觉醒仪式）'
           : '📈 等级成长：攻击力自动提升 8%（已生效，可与技能叠加）' }}
+      </div>
+      <div v-if="slotMilestone" class="levelup-slot" :class="{ hit: slotMilestone.hit }">
+        {{ slotMilestone.text }}
       </div>
       <div class="levelup-cards">
         <button
@@ -241,6 +274,18 @@ const cardClass = (s) => {
   line-height: 1.6;
 }
 
+/* 元素规则改写（专精 → 元素联动）：主专精独有的元素玩法说明 */
+.ms-element-rule {
+  margin: 8px 0;
+  padding: 7px 9px;
+  border-radius: 10px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: rgba(226, 214, 255, 0.92);
+  background: rgba(156, 138, 212, 0.12);
+  border: 1px dashed rgba(156, 138, 212, 0.42);
+}
+
 .ms-roadmap-title {
   font-size: 10.5px;
   font-weight: 700;
@@ -299,6 +344,25 @@ const cardClass = (s) => {
   font-size: 13px;
   letter-spacing: 1px;
   color: rgba(255, 209, 102, 0.9);
+}
+
+/* 槽位里程碑（等级 → 元素联动）：跨过 Lv.4 / Lv.8 时高亮宣告，其余时候低强度预告 */
+.levelup-slot {
+  margin: -16px 0 20px;
+  font-size: 12px;
+  letter-spacing: 1px;
+  color: rgba(156, 138, 212, 0.82);
+}
+
+.levelup-slot.hit {
+  display: inline-block;
+  padding: 5px 14px;
+  border-radius: 999px;
+  font-weight: 700;
+  color: #e6dcff;
+  background: rgba(156, 138, 212, 0.18);
+  border: 1px solid rgba(156, 138, 212, 0.5);
+  box-shadow: 0 0 18px rgba(156, 138, 212, 0.3);
 }
 
 .levelup-cards {
@@ -497,11 +561,17 @@ const cardClass = (s) => {
   }
 
   .levelup-grow,
+  .levelup-slot,
   .milestone-sub {
     margin: 0 0 18px;
     font-size: 11.5px;
     line-height: 1.5;
     letter-spacing: 0;
+  }
+
+  .levelup-slot.hit {
+    display: block;
+    padding: 5px 10px;
   }
 
   .levelup-cards {

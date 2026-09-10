@@ -1,11 +1,24 @@
 // 逻辑层回归测试（阶段十三起常驻）：纯 Node 运行，无需浏览器
 // 运行：node smoke-test.mjs
 import assert from 'node:assert/strict'
-import { Player } from './src/game/entities/Player.js'
+import {
+  ELEMENTAL_SPEC_PROC_CAP,
+  MAX_REACTION_SLOTS,
+  Player,
+  REACTION_SLOT_LEVELS,
+  getReactionSlotLevelBonus,
+} from './src/game/entities/Player.js'
 import { Enemy } from './src/game/entities/Enemy.js'
 import { Boss } from './src/game/entities/Boss.js'
 import { EnemyManager } from './src/game/EnemyManager.js'
-import { COMMON_LOOT_CHANCE, WeaponSystem, getLootDropCount } from './src/game/WeaponSystem.js'
+import {
+  COMMON_LOOT_CHANCE,
+  DIGEST_CHARGE_MAX,
+  DIGEST_GAIN_ELITE,
+  DIGEST_GAIN_NORMAL,
+  WeaponSystem,
+  getLootDropCount,
+} from './src/game/WeaponSystem.js'
 import {
   ELEMENT_CORE_LIFETIME,
   MAX_ELEMENT_CORES,
@@ -29,12 +42,14 @@ import {
   EVENT_LOCK_AT,
   FINAL_WARNING_AT,
   RUN_DURATION,
+  applyEnemyBias,
   calculateMaterialReward,
   getEndlessDisasterTier,
   getExpeditionStage,
   getExpeditionStages,
   getNextModeUnlock,
   getProgressionStage,
+  getStageEnemyBias,
   getUnlockedModeIds,
   getWaveModifiers,
   isDifficultyUnlocked,
@@ -42,6 +57,7 @@ import {
 } from './src/game/RunRules.js'
 import { STRAINS, STRAIN_IDS } from './src/game/Strains.js'
 import { getRunIntro } from './src/game/RunIntro.js'
+import { DIGEST_EFFECTS, getDigestTier } from './src/game/ElementSystem.js'
 import {
   applyGenes,
   getChosenOrigin,
@@ -1016,5 +1032,327 @@ assert.equal(getLootDropCount(commonLootProbe, () => COMMON_LOOT_CHANCE - 0.001)
 assert.equal(getLootDropCount(commonLootProbe, () => COMMON_LOOT_CHANCE), 0)
 assert.equal(getLootDropCount(eliteLootProbe, () => 1), 1)
 ok('黑市战利品：普通击杀降至 10%，吞噬与精英的确定性收益保留')
+
+// 35) 等级 → 元素联动：副反应槽随等级里程碑扩张，并自动接入被满槽挤掉的反应
+assert.deepEqual(REACTION_SLOT_LEVELS, [4, 8])
+assert.equal(getReactionSlotLevelBonus(3), 0)
+assert.equal(getReactionSlotLevelBonus(4), 1)
+assert.equal(getReactionSlotLevelBonus(8), 2)
+const slotPlayer = new Player({ input })
+slotPlayer.game = {
+  sound,
+  evolutionEvent() {},
+  reactionSlotsFull() {},
+  enemyManager: { addText() {} },
+}
+assert.equal(slotPlayer.secondarySlots, 2)
+slotPlayer.absorbElement('fire')
+slotPlayer.absorbElement('water') // steam → 主形态锁定
+slotPlayer.absorbElement('poison') // acid + corrode → 2/2 满槽
+assert.equal(slotPlayer._primaryReaction, 'steam')
+assert.equal(slotPlayer._secondaryIds.size, 2)
+slotPlayer.absorbElement('lightning') // gel/burst/venom 已满足但无槽可入
+assert.equal(slotPlayer._secondaryIds.size, 2, '满槽时新反应不得潜伏入槽')
+
+slotPlayer.level = 4
+const unlockedAt4 = slotPlayer.refreshReactionSlots()
+assert.equal(slotPlayer.secondarySlots, 3, 'Lv.4 里程碑 +1 槽')
+assert.equal(unlockedAt4.length, 1)
+assert.equal(unlockedAt4[0].id, 'gel', '接入此前因满槽未能入位的反应')
+assert.equal(slotPlayer._reactionIds.has('gel'), true, '自动接入立即产生效果')
+
+slotPlayer.level = 8
+const unlockedAt8 = slotPlayer.refreshReactionSlots()
+assert.equal(slotPlayer.secondarySlots, 4, 'Lv.8 里程碑再 +1 槽')
+assert.equal(unlockedAt8.length, 1)
+assert.equal(unlockedAt8[0].id, 'burst')
+
+slotPlayer.level = 20
+assert.equal(slotPlayer.refreshReactionSlots().length, 0, '无剩余候选时不再接入')
+assert.equal(slotPlayer.secondarySlots, 4, '无基因加持时封顶 2 + 2')
+slotPlayer.baseSecondarySlots = 4
+slotPlayer.refreshReactionSlots()
+assert.equal(slotPlayer.secondarySlots, MAX_REACTION_SLOTS, '基因 + 等级共同封顶 5 槽')
+ok('等级里程碑扩张副反应槽（Lv.4 / Lv.8），并自动接入被满槽挤掉的反应')
+
+// 36) 元素 → 吞噬联动：消化档位随元素等级解锁，四系吞噬效果差异化
+assert.equal(getDigestTier('fire', 1), null, 'Lv.1 尚无消化效果')
+assert.equal(getDigestTier('fire', 2).name, '灼热消化')
+assert.equal(getDigestTier('fire', 4).name, '熔核消化')
+assert.equal(getDigestTier('fire', 99).tier, 4, 'Lv.4+ 保持强化档')
+assert.equal(getDigestTier('water', 3).tier, 2, 'Lv.3 仍是基础档')
+assert.equal(getDigestTier('poison', 4).poolDmg, 2)
+assert.equal(getDigestTier('lightning', 2).damageMul, 0.7)
+assert.equal(getDigestTier('unknown', 9), null)
+for (const id of Object.keys(DIGEST_EFFECTS)) {
+  assert.ok(DIGEST_EFFECTS[id].lv2.name && DIGEST_EFFECTS[id].lv4.name, `${id} 两档命名完整`)
+}
+
+const digestPlayer = new Player({ input })
+const digestEnemies = new EnemyManager()
+const digestWeapon = new WeaponSystem({ player: digestPlayer, enemyManager: digestEnemies })
+const digestGame = {
+  ...game,
+  player: digestPlayer,
+  enemyManager: digestEnemies,
+  weaponSystem: digestWeapon,
+}
+digestPlayer.attach(digestGame)
+digestEnemies.attach(digestGame)
+digestWeapon.attach(digestGame)
+const spawnMeal = (x, y) => {
+  const e = new Enemy({ x, y, speed: 0, hp: 60, type: 'knight' })
+  e.attach(digestGame)
+  digestEnemies._enemies.push(e)
+  return e
+}
+const meal = { x: 0, y: 0, type: 'knight', isElite: false, expValue: 1 }
+
+digestPlayer.elements.set('fire', 2)
+digestPlayer._refreshElements()
+let digestVictim = spawnMeal(40, 0)
+const hpBeforeFire = digestVictim.hp
+assert.ok(digestWeapon._digestDevour(meal).includes('灼热消化'))
+assert.ok(digestVictim.hp < hpBeforeFire, '火消化对周围敌人造成溅射伤害')
+// 半径必须与档位一致：Lv.2 为 90px（既打到 85px，也放过 95px 外的目标）
+digestEnemies._enemies.length = 0
+const inRadius = spawnMeal(85, 0)
+const outRadius = spawnMeal(95, 0)
+digestWeapon._digestDevour(meal)
+assert.ok(inRadius.hp < inRadius.maxHp, 'Lv.2 半径 90px 内的敌人被命中')
+assert.equal(outRadius.hp, outRadius.maxHp, 'Lv.2 半径 90px 外的敌人不受影响')
+
+digestEnemies._enemies.length = 0
+digestPlayer.elements.clear()
+digestPlayer.elements.set('water', 2)
+digestPlayer._refreshElements()
+digestVictim = spawnMeal(60, 0)
+digestWeapon._digestDevour(meal)
+assert.ok(digestVictim.slow > 0 && digestVictim.freeze === 0, '水 Lv.2 只减速不冻结')
+digestEnemies._enemies.length = 0
+digestPlayer.elements.set('water', 4)
+digestPlayer._refreshElements()
+digestVictim = spawnMeal(60, 0)
+digestWeapon._digestDevour(meal)
+assert.ok(digestVictim.freeze > 0, '水 Lv.4 追加冻结')
+
+digestEnemies._enemies.length = 0
+digestPlayer.elements.clear()
+digestPlayer.elements.set('poison', 2)
+digestPlayer._refreshElements()
+const poolsBefore = digestWeapon._pools.length
+digestWeapon._digestDevour(meal)
+assert.equal(digestWeapon._pools.length, poolsBefore + 1, '毒消化在吞噬点留下酸液池')
+
+digestEnemies._enemies.length = 0
+digestPlayer.elements.clear()
+digestPlayer.elements.set('lightning', 4)
+digestPlayer._refreshElements()
+const digestCrowd = [spawnMeal(50, 0), spawnMeal(90, 0)]
+const crowdHp = digestCrowd.map((e) => e.hp)
+digestWeapon._digestDevour(meal)
+assert.ok(digestCrowd.some((e, i) => e.hp < crowdHp[i]), '雷消化电弧跳向附近敌人')
+
+digestPlayer.elements.clear()
+digestPlayer._refreshElements()
+assert.equal(digestWeapon._digestDevour(meal), '', '未吸收元素时吞噬无额外副作用')
+ok('元素消化：四系吞噬效果差异化（溅射/减速冻结/酸池/电弧），未吸收元素时零副作用')
+
+// 37) 吞噬 → 元素联动：消化能量累积、满槽爆发元素等级、满载待命不空转
+const chargePlayer = new Player({ input })
+const chargeEnemies = new EnemyManager()
+const chargeWeapon = new WeaponSystem({ player: chargePlayer, enemyManager: chargeEnemies })
+const chargeGame = {
+  ...game,
+  player: chargePlayer,
+  enemyManager: chargeEnemies,
+  weaponSystem: chargeWeapon,
+}
+chargePlayer.attach(chargeGame)
+chargeEnemies.attach(chargeGame)
+chargeWeapon.attach(chargeGame)
+
+assert.equal(chargeWeapon.digestCharge, 0)
+assert.equal(chargeWeapon.digestChargeMax, DIGEST_CHARGE_MAX)
+
+// 未吸收元素时：满槽保持待命，不空转也不报错
+chargeWeapon.addDigestCharge(DIGEST_CHARGE_MAX * 2)
+assert.equal(chargeWeapon.digestCharge, DIGEST_CHARGE_MAX, '满槽后能量不再溢出')
+assert.equal(chargeWeapon.digestBursts, 0, '未吸收元素时不爆发')
+
+// 吸收元素后：下一次吞噬立即兑现满槽能量
+chargePlayer.elements.set('fire', 1)
+chargePlayer._refreshElements()
+const digestMeal = new Enemy({ x: 50, y: 50, speed: 0, hp: 1, type: 'knight' })
+digestMeal.attach(chargeGame)
+chargeEnemies._enemies.push(digestMeal)
+chargeWeapon.onDevoured(digestMeal) // 吞噬走完整结算：累积 → 满槽 → 爆发
+assert.equal(chargeWeapon.digestBursts, 1, '满槽 + 已吸收元素 → 爆发一次')
+assert.equal(chargeWeapon.digestCharge, 0, '爆发后能量清零')
+assert.equal(chargePlayer.elements.get('fire'), 2, '爆发放大已吸收元素等级')
+
+// 普通怪与精英的累积差异：精英一次顶两个多普通怪
+chargeWeapon.digestCharge = 0
+chargeWeapon.addDigestCharge(DIGEST_GAIN_NORMAL)
+const afterNormal = chargeWeapon.digestCharge
+chargeWeapon.digestCharge = 0
+chargeWeapon.addDigestCharge(DIGEST_GAIN_ELITE)
+assert.ok(chargeWeapon.digestCharge > afterNormal * 2, '精英吞噬的消化收益显著更高')
+
+// 暴食主专精：消化效率 +50%
+chargeWeapon.digestCharge = 0
+chargeWeapon.digestGainMul = 1.5
+chargeWeapon.addDigestCharge(DIGEST_GAIN_NORMAL)
+assert.equal(chargeWeapon.digestCharge, DIGEST_GAIN_NORMAL * 1.5, '专精加成进入实际消化速率')
+
+// 无元素时的微粒心跳：不得污染玩家氛围粒子（缺 vx/vy 会 NaN）
+chargePlayer.elements.clear()
+chargePlayer._refreshElements()
+chargeWeapon.digestCharge = DIGEST_CHARGE_MAX * 0.8
+chargeWeapon._updateDigestPulse(1)
+assert.equal(chargePlayer._aura.length, 0, '未吸收元素时不冒微粒')
+chargePlayer.elements.set('fire', 3)
+chargePlayer._refreshElements()
+chargeWeapon._updateDigestPulse(1)
+assert.ok(chargePlayer._aura.length > 0, '能量过半且已吸收元素时冒微粒')
+const auraParticle = chargePlayer._aura[chargePlayer._aura.length - 1]
+assert.ok(
+  Number.isFinite(auraParticle.vx) && Number.isFinite(auraParticle.vy),
+  '微粒携带速度字段（否则位置更新会变成 NaN）'
+)
+ok('消化进度：满槽爆发元素等级、满载待命、精英高收益与专精效率加成均生效')
+
+// 38) 专精 → 元素规则改写：四条主专精各自改写一条元素玩法规则
+const engineLike = {
+  player,
+  weaponSystem,
+  devourThreshold: 0.25,
+}
+// 直接复用引擎上的实现（不实例化 GameEngine：本测试为纯逻辑层）
+const { GameEngine } = await import('./src/game/GameEngine.js')
+const applySpec = GameEngine.prototype._applyPrimarySpecBonus
+
+weaponSystem.reset()
+player.resetRunState()
+player.elements.clear()
+player._refreshElements()
+applySpec.call(engineLike, 'elemental')
+assert.equal(player.elementProcCap, ELEMENTAL_SPEC_PROC_CAP, '元素专精抬升附魔封顶至 85%')
+player.elements.set('fire', 8) // 8 级 × 10% = 80%，旧封顶 60% 会截断
+player._refreshElements()
+assert.equal(player._procs.burn.chance, 0.8, '封顶抬升后高等级附魔概率不再被 60% 截断')
+
+weaponSystem.reset()
+player.resetRunState()
+applySpec.call(engineLike, 'gatling')
+assert.equal(weaponSystem.splitInherit, 1, '机枪专精：分裂弹 100% 继承母弹附魔')
+
+weaponSystem.reset()
+player.resetRunState()
+applySpec.call(engineLike, 'assassin')
+assert.equal(weaponSystem.critGuaranteesElement, true, '刺客专精：暴击必定触发元素附魔')
+
+weaponSystem.reset()
+player.resetRunState()
+const digestMulBefore = weaponSystem.digestGainMul
+applySpec.call(engineLike, 'gluttony')
+assert.equal(weaponSystem.digestGainMul, digestMulBefore * 1.5, '暴食专精：消化效率 +50%')
+
+// 重开归位：专精标记不得跨局残留
+weaponSystem.reset()
+player.resetRunState()
+assert.equal(weaponSystem.splitInherit, 0.5)
+assert.equal(weaponSystem.critGuaranteesElement, false)
+assert.equal(weaponSystem.digestGainMul, 1)
+assert.equal(player.elementProcCap, 0.6)
+player.elements.set('fire', 8)
+player._refreshElements()
+assert.equal(player._procs.burn.chance, 0.6, '未确立元素专精时回到 60% 封顶')
+player.elements.clear()
+player._refreshElements()
+ok('专精 → 元素规则改写：四条主专精各改写一条规则，且重开后完全归位')
+
+// 39) 章节敌军偏向：12 章各有兵种画像，权重缩放不改变总数走向、且可安全回退
+const hellExpedition = { mode: 'expedition', difficulty: 'hell' }
+const biasedStages = getExpeditionStages('hell')
+assert.equal(biasedStages.length, 12)
+assert.ok(
+  biasedStages.every((stage) => stage.enemyBias && Object.keys(stage.enemyBias).length > 0),
+  '每一章都配置了敌军偏向'
+)
+// 插章按位置插入决战之前，用 id 定位而非数组下标（位置 ≠ 章节号）
+const stageById = (id) => biasedStages.find((stage) => stage.id === id)
+// 王陵章节以怨灵为主：偏向权重必须显著高于其他章节
+assert.ok(stageById(9).enemyBias.wraith >= 2, '王陵章节怨灵权重拉满')
+// 校场章节狂战士为主
+assert.ok(stageById(12).enemyBias.berserker >= 2, '校场章节狂战士权重拉满')
+
+// 权重缩放：偏向只改变分布，未列出的兵种保持原倍率
+const baseRoster = [['knight', 0.5], ['mage', 0.3], ['hound', 0.2]]
+const biasedRoster = applyEnemyBias(baseRoster, { mage: 2, knight: 0.5 })
+assert.deepEqual(biasedRoster, [['knight', 0.25], ['mage', 0.6], ['hound', 0.2]])
+assert.deepEqual(applyEnemyBias(baseRoster, null), baseRoster, '无偏向时原样返回')
+// 极端偏向：权重全部清零时必须回退原生编成，不能抽不出兵
+assert.deepEqual(
+  applyEnemyBias(baseRoster, { knight: 0, mage: 0, hound: 0 }),
+  baseRoster,
+  '权重被清空时回退原生编成'
+)
+assert.equal(getStageEnemyBias({ mode: 'timed', difficulty: 'normal' }, 3), null, '非远征模式无偏向')
+assert.equal(getStageEnemyBias(hellExpedition, 1).knight, 1.2)
+
+// 实际抽取：同一波次下，王陵章节的怨灵占比必须明显高于第 1 章
+const makeRoller = (stage) => {
+  const manager = new EnemyManager()
+  manager.attach({
+    ...game,
+    runSelection: hellExpedition,
+    expeditionStage: stage,
+    enemyManager: manager,
+  })
+  return manager
+}
+const countTypes = (manager, rolls) => {
+  const tally = {}
+  for (let i = 0; i < rolls; i++) {
+    const type = manager._rollType()
+    tally[type] = (tally[type] || 0) + 1
+  }
+  return tally
+}
+const cryptTally = countTypes(makeRoller(8), 4000) // 位置 8 = 「不眠王陵」（id 9）
+const borderTally = countTypes(makeRoller(1), 4000)
+assert.ok(
+  (cryptTally.wraith || 0) > (borderTally.wraith || 0) * 3,
+  `王陵章节怨灵占比显著更高（${cryptTally.wraith || 0} vs ${borderTally.wraith || 0}）`
+)
+ok('章节敌军偏向：12 章各有兵种画像，权重缩放正确且清空时可安全回退')
+
+// 40) 首领登场收口：目标接近完成时增援间隔拉长，首领登场/换章后归位
+const windManager = makeRoller(5)
+windManager.setStagePressure(0)
+const relaxFactor = windManager._directorFactor()
+windManager.setStagePressure(0.5) // 未达收口阈值：节拍不变
+assert.equal(windManager._directorFactor(), relaxFactor, '进度未达阈值时不影响节拍')
+windManager.setStagePressure(1)
+const windFactor = windManager._directorFactor()
+assert.ok(windFactor > relaxFactor, `收口拉长增援间隔（${relaxFactor.toFixed(2)} → ${windFactor.toFixed(2)}）`)
+assert.ok(windFactor <= relaxFactor * (1 + 0.9) + 1e-9, '收口倍率不超过设定上限')
+assert.equal(windManager.directorInfo.phase, '决战前夕')
+
+// 首领登场：收口状态清除，避免与 _finale 的生成闸门叠加
+windManager.beginExpeditionStageBoss({ id: 'test', name: '测试首领', archetype: 'knight', hpMul: 1, telegraph: 1, cooldown: 5 })
+assert.equal(windManager._stagePressure, 0, '首领登场后收口清零')
+
+// 越界输入不产生非法压力值
+windManager.setStagePressure(-5)
+assert.equal(windManager._stagePressure, 0)
+windManager.setStagePressure(99)
+assert.equal(windManager._stagePressure, 1)
+windManager.setStagePressure(Number.NaN)
+assert.equal(windManager._stagePressure, 0, '非法输入回退为 0')
+windManager.reset()
+assert.equal(windManager._stagePressure, 0, '重开归零（非远征模式不受影响）')
+ok('首领登场收口：接近目标时增援稀疏、登场后归位且输入受钳制')
 
 console.log(`\n全部通过：${n} 组断言 ✓`)

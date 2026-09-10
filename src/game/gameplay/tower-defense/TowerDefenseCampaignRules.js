@@ -477,7 +477,186 @@ export const GENE_TREE_NODES = Object.freeze([
       leapBuff: level >= 2,
     }),
   },
+  {
+    id: 'talent_dmg',
+    name: '强酸消化腺',
+    icon: '🧪',
+    maxLevel: 3,
+    costs: [5, 10, 18],
+    descriptions: [
+      '全体守卫攻击力 +4%',
+      '全体守卫攻击力 +8%',
+      '全体守卫攻击力 +12%',
+    ],
+    effect: (level) => ({ towerDamageMultiplier: [1, 1.04, 1.08, 1.12][level] || 1 }),
+  },
+  {
+    id: 'talent_rate',
+    name: '代谢亢进',
+    icon: '🔥',
+    maxLevel: 3,
+    costs: [5, 10, 18],
+    descriptions: [
+      '全体守卫攻击速度 +3%',
+      '全体守卫攻击速度 +6%',
+      '全体守卫攻击速度 +10%',
+    ],
+    effect: (level) => ({ towerSpeedMultiplier: [1, 1.03, 1.06, 1.10][level] || 1 }),
+  },
+  {
+    id: 'talent_range',
+    name: '蛛网感知',
+    icon: '🕸️',
+    maxLevel: 3,
+    costs: [4, 8, 14],
+    descriptions: [
+      '全体守卫感知范围 +3%',
+      '全体守卫感知范围 +6%',
+      '全体守卫感知范围 +10%',
+    ],
+    effect: (level) => ({ towerRangeMultiplier: [1, 1.03, 1.06, 1.10][level] || 1 }),
+  },
+  {
+    id: 'talent_basehp',
+    name: '巢心韧壳',
+    icon: '🏰',
+    maxLevel: 3,
+    costs: [4, 9, 16],
+    descriptions: [
+      '母巢核心生命上限 +2',
+      '母巢核心生命上限 +4',
+      '母巢核心生命上限 +6',
+    ],
+    effect: (level) => ({ baseHpBonus: [0, 2, 4, 6][level] || 0 }),
+  },
+  {
+    id: 'talent_sell',
+    name: '循环回收',
+    icon: '♻️',
+    maxLevel: 3,
+    costs: [3, 6, 10],
+    descriptions: [
+      '放生返还提升 +10%',
+      '放生返还提升 +20%',
+      '放生返还提升 +35%',
+    ],
+    effect: (level) => ({ sellBonusMultiplier: [1, 1.10, 1.20, 1.35][level] || 1 }),
+  },
+  {
+    id: 'talent_interest',
+    name: '复利发酵',
+    icon: '🏦',
+    maxLevel: 3,
+    costs: [4, 9, 16],
+    descriptions: [
+      '波次结算利息 +2%（上限提升）',
+      '波次结算利息 +4%（上限提升）',
+      '波次结算利息 +6%（上限提升）',
+    ],
+    effect: (level) => ({ interestRate: [0.05, 0.07, 0.09, 0.11][level] || 0.05 }),
+  },
+  {
+    id: 'talent_early',
+    name: '先手突袭',
+    icon: '⚔️',
+    maxLevel: 3,
+    costs: [3, 7, 12],
+    descriptions: [
+      '提前召唤下一波的养分奖励 +25%',
+      '提前召唤下一波的养分奖励 +50%',
+      '提前召唤下一波的养分奖励 +80%',
+    ],
+    effect: (level) => ({ earlyCallMultiplier: [1, 1.25, 1.50, 1.80][level] || 1 }),
+  },
+  {
+    id: 'talent_boss',
+    name: '攻城破甲',
+    icon: '🔨',
+    maxLevel: 3,
+    costs: [5, 11, 20],
+    descriptions: [
+      '对首领伤害 +8%',
+      '对首领伤害 +16%',
+      '对首领伤害 +25%',
+    ],
+    effect: (level) => ({ bossDamageMultiplier: [1, 1.08, 1.16, 1.25][level] || 1 }),
+  },
+  {
+    id: 'talent_shiny',
+    name: '闪光血统',
+    icon: '✨',
+    maxLevel: 3,
+    costs: [4, 8, 15],
+    descriptions: [
+      '闪光特质触发率 +5%',
+      '闪光特质触发率 +10%',
+      '闪光特质触发率 +15%',
+    ],
+    effect: (level) => ({ shinyChanceBonus: [0, 0.05, 0.10, 0.15][level] || 0 }),
+  },
+  {
+    id: 'talent_mskip',
+    name: '突变精华',
+    icon: '🧬',
+    maxLevel: 3,
+    costs: [3, 6, 10],
+    descriptions: [
+      '跳过突变的养分补偿 +10',
+      '跳过突变的养分补偿 +20',
+      '跳过突变的养分补偿 +35',
+    ],
+    effect: (level) => ({ mutationSkipBonus: [0, 10, 20, 35][level] || 0 }),
+  },
 ]);
+
+/** 无尽模式：确定性无限波次生成（波次血量持续爬升，每 10 波一个首领） */
+export const TOWER_DEFENSE_ENDLESS_WAVE_COUNT = 60;
+
+export function generateEndlessWaves(baseStageId = 1) {
+  const basePool = ['grunt', 'runner', 'shield', 'support', 'splitter'];
+  const elitePool = ['tank', 'swarm', 'emp'];
+  const waves = [];
+  for (let w = 1; w <= TOWER_DEFENSE_ENDLESS_WAVE_COUNT; w++) {
+    const isBoss = w % 10 === 0;
+    const scale = 1.05 + w * 0.10 + Math.floor(w / 10) * 0.35;
+    const groups = [];
+    if (isBoss) {
+      groups.push({
+        type: 'boss',
+        count: w >= 50 ? 2 : 1,
+        interval: 3.5,
+        gap: 2.0,
+        scale: scale * 1.25,
+      });
+      groups.push({
+        type: w >= 30 ? 'shield' : 'runner',
+        count: 4 + Math.floor(w / 15),
+        interval: 0.9,
+        scale,
+      });
+    } else {
+      const pool = w >= 3 ? basePool.concat(elitePool) : basePool;
+      const mainType = pool[(w + baseStageId) % pool.length];
+      const count = 6 + Math.floor(w * 1.2) + Math.floor(w * 0.08 * Math.min((w - 1) / 3, 1));
+      const mainTuned = tuneEnemyGroup(mainType, count, Math.max(0.60, 1.30 - w * 0.03));
+      groups.push({ type: mainType, count: mainTuned.count, interval: mainTuned.interval, scale });
+      if (w >= 3) {
+        const subType = pool[(w + baseStageId + 2) % pool.length];
+        const subTuned = tuneEnemyGroup(subType, 3 + Math.floor(w * 0.6), 1.1);
+        groups.push({ type: subType, count: subTuned.count, interval: subTuned.interval, gap: 1.2, scale });
+      }
+    }
+    waves.push({
+      wave: w,
+      preview: {
+        title: isBoss ? `首领波次 ${Math.floor(w / 10)}` : `第 ${w} 波次`,
+        count: groups.reduce((acc, g) => acc + g.count, 0),
+      },
+      groups,
+    });
+  }
+  return waves;
+}
 
 
 /**
@@ -663,8 +842,27 @@ function getStageTitle(stageId, chapterId, isBossStage) {
   return list[idx] || '防守要塞';
 }
 
+// 精英兵种只在第 3 波及以后进场（开局经济挡不住满编制重装），并按类型修正编制/间隔：
+// 重装少而慢、群袭多而密、支援（治疗光环叠加）必须零散、裂殖者死亡会翻倍需限量
+const GROUP_TUNING = {
+  tank: { countScale: 0.4, minCount: 2, minInterval: 0.85 },
+  swarm: { countScale: 1.5, maxInterval: 0.45 },
+  support: { countScale: 0.35, minCount: 1, minInterval: 1.0 },
+  splitter: { countScale: 0.7, minCount: 2 },
+  emp: { countScale: 0.3, minCount: 1, minInterval: 1.5 },
+};
+
+function tuneEnemyGroup(type, count, interval) {
+  const tuning = GROUP_TUNING[type];
+  if (!tuning) return { count, interval };
+  return {
+    count: Math.max(tuning.minCount ?? 1, Math.round(count * tuning.countScale)),
+    interval: Math.min(Math.max(interval, tuning.minInterval ?? 0), tuning.maxInterval ?? Infinity),
+  };
+}
+
 function generateStageWaves(stageId, chapterId, waveCount, isBossStage) {
-  // Stage 1 Tutorial Wave Pacing
+  // Stage 1 Tutorial Wave Pacing（教学关保持温和，但疾行者用正确的真实类型）
   if (stageId === 1) {
     return [
       {
@@ -682,7 +880,7 @@ function generateStageWaves(stageId, chapterId, waveCount, isBossStage) {
         preview: { title: '第 3 波 · 疾行斥候', count: 7 },
         groups: [
           { type: 'grunt', count: 4, interval: 1.5, scale: 0.95 },
-          { type: 'fast', count: 3, interval: 1.4, gap: 1.0, scale: 0.9 },
+          { type: 'runner', count: 3, interval: 1.4, gap: 1.0, scale: 0.9 },
         ],
       },
       {
@@ -690,19 +888,36 @@ function generateStageWaves(stageId, chapterId, waveCount, isBossStage) {
         preview: { title: '第 4 波 · 先遣决胜', count: 9 },
         groups: [
           { type: 'grunt', count: 5, interval: 1.4, scale: 1.0 },
-          { type: 'fast', count: 4, interval: 1.2, gap: 1.0, scale: 0.95 },
+          { type: 'runner', count: 4, interval: 1.2, gap: 1.0, scale: 0.95 },
         ],
       },
     ];
   }
 
   const waves = [];
-  const enemyTypesPool = ['grunt', 'fast', 'shield', 'support', 'splitter'];
+  // 敌种池随关卡进度解锁：runner 全程参战，重装第 8 关起逼穿透选择，群袭第 14 关起施压数量，电磁傀儡第 22 关起瘫痪守卫
+  const basePool = ['grunt', 'runner', 'shield', 'support', 'splitter'];
+  const elitePool = [];
+  if (stageId >= 8) elitePool.push('tank');
+  if (stageId >= 14) elitePool.push('swarm');
+  if (stageId >= 22) elitePool.push('emp');
+  // 精英兵种只在第 3 波及以后进场（开局经济挡不住满编制重装），并按类型修正编制/间隔：
+  // 重装少而慢、群袭多而密、支援（治疗光环叠加）必须零散、裂殖者死亡会翻倍需限量
+  const pickType = (offset, waveNumber) => {
+    const pool = waveNumber >= 3 ? basePool.concat(elitePool) : basePool;
+    return pool[offset % pool.length];
+  };
+  const tuneGroup = tuneEnemyGroup;
 
   for (let w = 1; w <= waveCount; w++) {
     const isFinalWave = w === waveCount;
     const groups = [];
-    const scale = 0.95 + (stageId - 1) * 0.038 + (w - 1) * 0.030;
+    // 成长曲线对齐玩家每波一张突变卡的乘法成长（原 0.038/0.030 过平）。
+    // 关卡系数分两段释放：基底让开局波始终可防守，关卡爬坡在前 5 波内逐步吃满，压力滚向阶段后段
+    const scale = 1.05
+      + (stageId - 1) * 0.04
+      + (stageId - 1) * 0.045 * Math.min((w - 1) / 4, 1)
+      + (w - 1) * 0.06;
 
     if (isFinalWave && isBossStage) {
       groups.push({
@@ -710,30 +925,33 @@ function generateStageWaves(stageId, chapterId, waveCount, isBossStage) {
         count: stageId === 99 ? 2 : 1,
         interval: 3.5,
         gap: 2.0,
-        scale: scale * 1.35,
+        scale: scale * 1.25,
       });
       groups.push({
-        type: chapterId >= 3 ? 'shield' : 'fast',
+        type: chapterId >= 3 ? 'shield' : 'runner',
         count: 4 + Math.floor(stageId / 15),
         interval: 0.9,
         scale,
       });
     } else {
-      const mainType = enemyTypesPool[(w + stageId) % enemyTypesPool.length];
-      const count = 4 + Math.floor(w * 1.2) + Math.floor(stageId * 0.12);
+      const mainType = pickType(w + stageId, w);
+      const count = 6 + Math.floor(w * 1.4) + Math.floor(stageId * 0.06 * w * Math.min((w - 1) / 3, 1));
+      const mainInterval = Math.max(0.70, 1.45 - w * 0.04);
+      const mainTuned = tuneGroup(mainType, count, mainInterval);
       groups.push({
         type: mainType,
-        count,
-        interval: Math.max(0.70, 1.45 - w * 0.04),
+        count: mainTuned.count,
+        interval: mainTuned.interval,
         scale,
       });
 
       if (w >= 3) {
-        const subType = enemyTypesPool[(w + stageId + 2) % enemyTypesPool.length];
+        const subType = pickType(w + stageId + 2, w);
+        const subTuned = tuneGroup(subType, 3 + Math.floor(w * 0.7), 1.15);
         groups.push({
           type: subType,
-          count: 3 + Math.floor(w * 0.7),
-          interval: 1.15,
+          count: subTuned.count,
+          interval: subTuned.interval,
           gap: 1.2,
           scale,
         });

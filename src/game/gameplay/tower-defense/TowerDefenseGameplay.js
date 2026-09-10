@@ -4,11 +4,13 @@ import { TowerDefenseRenderer } from './TowerDefenseRenderer.js'
 import {
   CHAPTERS_META,
   GENE_TREE_NODES,
+  generateEndlessWaves,
   getStageConfig,
 } from './TowerDefenseCampaignRules.js'
 import {
   getActiveGeneEffects,
   loadCampaignSave,
+  recordEndlessWave,
   recordStageClear,
   completeTutorial,
 } from './TowerDefenseSave.js'
@@ -38,6 +40,7 @@ import {
   getTowerUpgradeCost,
   getWaveBaseDamage,
   getWaveComposition,
+  getWaveCompositionFromWaves,
 } from './TowerDefenseRules.js'
 
 const TOWER_TYPE_LIST = Object.values(TOWER_DEFENSE_TOWER_TYPES)
@@ -71,8 +74,14 @@ export class TowerDefenseGameplay extends GameplayController {
     this.trapEvents = []
     this.clearResult = null
     this.activeMutations = []
-    this.pendingMutationChoices = null
+    this.pendingMutationOffers = [] // 可暂存的突变三选一队列（不阻塞战斗）
     this.saveUnlockedTowers = new Set(['rapid', 'slow'])
+    this.gameSpeed = 1
+    this.isEndless = false
+    this.lastWaveReport = null
+    this._waveLeaked = 0
+    this._waveLeakDamage = 0
+    this.hoveredEnemyId = null
 
     this.state = 'active'
     this.outcome = null
@@ -104,10 +113,78 @@ export class TowerDefenseGameplay extends GameplayController {
     this._canvas?.addEventListener?.('pointerdown', this._onPointerDown)
     this._canvas?.addEventListener?.('pointermove', this._onPointerMove)
     this.renderer.ensureLayout()
+    this._bindHotkeys()
   }
 
   usesArenaFramePipeline() {
     return false
+  }
+
+  _bindHotkeys() {
+    if (this._hotkeysBound || typeof window === 'undefined') return
+    this._hotkeysBound = true
+    this._onKeyDown = (event) => {
+      if (this.state === 'finished' || event.repeat) return
+      const typeIds = ['rapid', 'slow', 'blast', 'shock', 'arcane', 'radiant']
+      if (event.code.startsWith('Digit')) {
+        const index = Number(event.code.slice(5)) - 1
+        if (index >= 0 && index < typeIds.length) {
+          this.selectTowerType(typeIds[index])
+          event.preventDefault()
+        }
+        return
+      }
+      switch (event.code) {
+        case 'KeyQ':
+          this.selectedSlotIndex = -1
+          this._pushHud()
+          break
+        case 'KeyF':
+          this.cycleGameSpeed()
+          break
+        case 'KeyE':
+          this.callNextWaveEarly()
+          break
+        case 'KeyT':
+          this.triggerTrap(this.traps[0]?.id)
+          break
+        case 'KeyG':
+          this.triggerTrap(this.traps[1]?.id)
+          break
+        default:
+          return
+      }
+      event.preventDefault()
+    }
+    window.addEventListener('keydown', this._onKeyDown)
+  }
+
+  _unbindHotkeys() {
+    if (this._hotkeysBound && this._onKeyDown && typeof window !== 'undefined') {
+      window.removeEventListener('keydown', this._onKeyDown)
+    }
+    this._hotkeysBound = false
+  }
+
+  cycleGameSpeed() {
+    this.gameSpeed = this.gameSpeed >= 3 ? 1 : this.gameSpeed + 1
+    this._feedback(`游戏速度 ×${this.gameSpeed}`, 'info')
+    this._pushHud()
+    return this.gameSpeed
+  }
+
+  callNextWaveEarly() {
+    if (this.state !== 'active') return false
+    if (this.director.phase !== 'intermission') return false
+    const wait = Math.ceil(Math.max(0, this.director.timer))
+    if (wait <= 0) return false
+    const bonus = Math.round(wait * 2 * (this.geneEffects.earlyCallMultiplier || 1))
+    this.director.timer = 0
+    this.gold += bonus
+    this.score += bonus * 2
+    this._feedback(`敌军提前来袭！先手奖励 +${bonus} 养分`, 'warning')
+    this._pushHud()
+    return true
   }
 
   loadStage(stageId = 1) {
@@ -138,13 +215,20 @@ export class TowerDefenseGameplay extends GameplayController {
     this.burnZones.length = 0
     this.trapEvents.length = 0
     this.activeMutations = []
-    this.pendingMutationChoices = null
+    this.pendingMutationOffers = []
+    this.isEndless = false
+    this.lastWaveReport = null
+    this._waveLeaked = 0
+    this._waveLeakDamage = 0
+    this.hoveredEnemyId = null
+    this.gameSpeed = 1
     this.state = 'active'
     this.outcome = null
     this.clearResult = null
     this.elapsedTime = 0
-    this.baseHp = this.stageConfig.baseHp || TOWER_DEFENSE_BASE_HP
-    this.maxBaseHp = this.stageConfig.baseHp || TOWER_DEFENSE_BASE_HP
+    const baseHpTotal = (this.stageConfig.baseHp || TOWER_DEFENSE_BASE_HP) + (this.geneEffects.baseHpBonus || 0)
+    this.baseHp = baseHpTotal
+    this.maxBaseHp = baseHpTotal
     this.gold = (this.stageConfig.startingGold || TOWER_DEFENSE_STARTING_GOLD) + (this.geneEffects.startingGoldBonus || 0)
     this.kills = 0
     this.score = 0
@@ -164,11 +248,23 @@ export class TowerDefenseGameplay extends GameplayController {
   }
 
   reset() {
+    if (this.isEndless) return this.startEndlessMode(this.currentStageId || 1)
     return this.loadStage(this.currentStageId || 1)
   }
 
   restart() {
-    return this.loadStage(this.currentStageId || 1)
+    return this.reset()
+  }
+
+  /** 无尽模式：沿用所选关卡的地图/机关，替换为无限爬坡波次，冲击最高波次记录 */
+  startEndlessMode(baseStageId = 1) {
+    this.loadStage(Math.max(1, Math.min(99, Number(baseStageId) || 1)))
+    this.isEndless = true
+    this.director.loadWaves(generateEndlessWaves(this.currentStageId))
+    this.tutorial = { active: false, step: 0 }
+    this._feedback('♾️ 无尽试炼开始！坚持尽可能多的波次！', 'warning')
+    this._pushHud()
+    return this
   }
 
   advanceTutorial() {
@@ -262,8 +358,13 @@ export class TowerDefenseGameplay extends GameplayController {
     const fromPos = slots[fromIndex]
     const toPos = slots[toIndex]
     tower.slotIndex = toIndex
-    tower.relocateCooldown = 8.0
+    tower.relocateCooldown = this.geneEffects.relocateCooldown || 8.0
     tower.leapAnim = { from: fromPos, to: toPos, progress: 0, duration: 0.35 }
+    if (this.geneEffects.leapBuff) {
+      for (const ally of this.towers) {
+        ally.feverTimer = Math.max(ally.feverTimer || 0, 3)
+      }
+    }
     this.selectedSlotIndex = toIndex
     this._feedback(`${TOWER_DEFENSE_TOWER_TYPES[tower.typeId].name}弹跳换位成功！`, 'success')
     this._pushHud()
@@ -273,7 +374,7 @@ export class TowerDefenseGameplay extends GameplayController {
   petTower(slotIndex) {
     const tower = this.getTowerAtSlot(slotIndex)
     if (!tower) return false
-    tower.moraleTimer = 4.0
+    tower.moraleTimer = this.geneEffects.moraleDuration || 4.0
     tower.heartAnim = 0.8
     this._feedback(`史莱姆感受到了母巢的鼓励！心情大好，攻速提升！`, 'success')
     this._pushHud()
@@ -319,9 +420,9 @@ export class TowerDefenseGameplay extends GameplayController {
     this.gold -= type.cost
     this.selectedTowerTypeId = type.id
     this.selectedSlotIndex = index
-    // 20% Chance to roll Shiny Slime Trait (开盲盒)
+    // 闪光特质开盲盒（闪光血统天赋提升触发率）
     let shinyTrait = null
-    if (Math.random() < 0.20) {
+    if (Math.random() < 0.20 + (this.geneEffects.shinyChanceBonus || 0)) {
       const traitKeys = Object.keys(SLIME_SHINY_TRAITS)
       const rolledKey = traitKeys[Math.floor(Math.random() * traitKeys.length)]
       shinyTrait = SLIME_SHINY_TRAITS[rolledKey]
@@ -383,13 +484,32 @@ export class TowerDefenseGameplay extends GameplayController {
   }
 
 
+  /** 当前可选择的突变（队列中最早的一份），兼容旧读取方 */
+  get pendingMutationChoices() {
+    return this.pendingMutationOffers[0] || null
+  }
+
   selectMutation(mutationId) {
-    const mutation = TOWER_DEFENSE_MUTATIONS.find((m) => m.id === mutationId)
+    const offer = this.pendingMutationOffers[0] || []
+    const mutation = offer.find((m) => m.id === mutationId)
+      || TOWER_DEFENSE_MUTATIONS.find((m) => m.id === mutationId)
     if (!mutation) return false
+    if (this.pendingMutationOffers.length > 0) this.pendingMutationOffers.shift()
     this.activeMutations.push(mutation)
-    this.pendingMutationChoices = null
     this.game?.sound?.levelUp?.()
     this._feedback(`🧬 基因突变觉醒：【${mutation.name}】！`, 'success')
+    this._pushHud()
+    return true
+  }
+
+  /** 放弃当前突变，凝练成养分补偿 */
+  skipMutationOffer() {
+    if (this.pendingMutationOffers.length === 0) return false
+    this.pendingMutationOffers.shift()
+    const bonus = 20 + (this.geneEffects.mutationSkipBonus || 0)
+    this.gold += bonus
+    this.score += bonus * 2
+    this._feedback(`已放弃突变，凝练为 +${bonus} 养分`, 'info')
     this._pushHud()
     return true
   }
@@ -418,7 +538,7 @@ export class TowerDefenseGameplay extends GameplayController {
   sellSelectedTower() {
     const tower = this.getTowerAtSlot(this.selectedSlotIndex)
     if (this.state !== 'active' || !tower) return false
-    const value = getTowerSellValue(tower)
+    const value = Math.round(getTowerSellValue(tower) * (this.geneEffects.sellBonusMultiplier || 1))
     this.gold += value
     this.towers.splice(this.towers.indexOf(tower), 1)
     this.selectedSlotIndex = -1
@@ -429,9 +549,17 @@ export class TowerDefenseGameplay extends GameplayController {
 
   updateWorld(dt) {
     if (!this.game || this.state === 'finished' || !Number.isFinite(dt) || dt <= 0) return
-    if (this.pendingMutationChoices && this.pendingMutationChoices.length > 0) return
+    // 倍速：把缩放后的时间切成小步长推进，保证高频事件（开火/脉冲）不丢帧
+    let remaining = Math.min(dt, 0.25) * (this.gameSpeed || 1)
+    while (remaining > 0) {
+      const step = Math.min(remaining, 0.05)
+      remaining -= step
+      this._simulateStep(step)
+      if (this.state === 'finished') break
+    }
+  }
 
-    const step = Math.min(dt, 0.25)
+  _simulateStep(step) {
     this.elapsedTime += step
     this.feedbackTimer = Math.max(0, this.feedbackTimer - step)
     if (this.feedbackTimer === 0) this.feedback = null
@@ -446,24 +574,43 @@ export class TowerDefenseGameplay extends GameplayController {
 
     const events = this.director.update(step, this.enemies.length)
     for (const enemy of events.spawns) this._addEnemy(enemy)
-    if (events.waveStarted) this._feedback(`第 ${events.waveStarted} 波抵达`, 'warning')
+    if (events.waveStarted) {
+      this._waveLeaked = 0
+      this._waveLeakDamage = 0
+      this._feedback(`第 ${events.waveStarted} 波抵达`, 'warning')
+    }
     if (events.waveCompleted) {
       const wave = (this.director.waves || TOWER_DEFENSE_WAVES)[events.waveCompleted - 1]
-      let bonus = wave?.reward ?? 15 + events.waveCompleted * 3
+      // 波次补给随关卡进度成长（战役波次未配置 reward 时使用成长公式）
+      let bonus = wave?.reward ?? Math.round((18 + events.waveCompleted * 4) * (1 + (this.currentStageId - 1) * 0.06))
       if (this.hasMutation('nutrient_harvest')) {
         bonus = Math.round(bonus * 1.25)
       }
-      this.gold += bonus
-      this.score += bonus * 5
-      this._feedback(`波次清除，整备奖励 ${bonus}`, 'success')
+      // 存款利息：奖励囤积养分做升级决策（有上限，避免滚雪球）
+      const interest = Math.min(Math.floor(this.gold * (this.geneEffects.interestRate || 0.05)), 40)
+      this.gold += bonus + interest
+      this.score += (bonus + interest) * 5
+      this.lastWaveReport = {
+        wave: events.waveCompleted,
+        bonus,
+        interest,
+        leaked: this._waveLeaked,
+        leakDamage: this._waveLeakDamage,
+      }
+      this._feedback(
+        this._waveLeaked > 0
+          ? `⚠ 战报：漏怪 ${this._waveLeaked} 名 -${this._waveLeakDamage} 心 ｜ 补给 +${bonus} 利息 +${interest}`
+          : `战报：防线无损 ｜ 补给 +${bonus} 利息 +${interest}`,
+        this._waveLeaked > 0 ? 'danger' : 'success',
+      )
 
-      // Roguelike Mutation 3-Choice Prompt (Trigger on wave clears before the final victory wave)
+      // Roguelike Mutation 3-Choice：进入可暂存队列，不再阻塞战斗
       const totalWaves = this.director.waves?.length || 5
       if (events.waveCompleted < totalWaves) {
         const unlockedList = Array.from(this.saveUnlockedTowers || ['rapid', 'slow'])
         const choices = getRandomMutationChoices(3, this.activeMutations, unlockedList)
         if (choices.length > 0) {
-          this.pendingMutationChoices = choices
+          this.pendingMutationOffers.push(choices)
           this._pushHud()
         }
       }
@@ -484,45 +631,6 @@ export class TowerDefenseGameplay extends GameplayController {
     enemy.x = point.x
     enemy.y = point.y
     this.enemies.push(enemy)
-  }
-
-  _updateEnemies(dt) {
-    for (const enemy of this.enemies) {
-      if (!enemy.active) continue
-      enemy.slowTimer = Math.max(0, (enemy.slowTimer || 0) - dt)
-      enemy.freezeTimer = Math.max(0, (enemy.freezeTimer || 0) - dt)
-      enemy.frostStackTimer = Math.max(0, (enemy.frostStackTimer || 0) - dt)
-      enemy.speedBoostTimer = Math.max(0, (enemy.speedBoostTimer || 0) - dt)
-      enemy.hitFlash = Math.max(0, (enemy.hitFlash || 0) - dt * 7)
-      enemy.shieldFlash = Math.max(0, (enemy.shieldFlash || 0) - dt * 5)
-      enemy.supportFlash = Math.max(0, (enemy.supportFlash || 0) - dt * 3)
-      if (enemy.frostStackTimer === 0) enemy.frostStacks = 0
-
-      if ((enemy.supportRadius || 0) > 0) this._updateSupportEnemy(enemy, dt)
-      if (!enemy.active) continue
-
-      const resistedSlow = (enemy.slowRatio || 0) * (1 - clamp(enemy.slowResistance || 0, 0, 0.9))
-      const slowSpeed = enemy.slowTimer > 0 ? 1 - resistedSlow : 1
-      const boostSpeed = enemy.speedBoostTimer > 0 ? 1.18 : 1
-      const freezeSpeed = enemy.freezeTimer > 0 ? 0 : 1
-      const moveStep = (enemy.baseSpeed ?? enemy.speed ?? 0) * slowSpeed * boostSpeed * freezeSpeed * dt
-      enemy.progress += moveStep
-      enemy.walkTime = (enemy.walkTime || 0) + moveStep * 45
-      const point = getTowerDefensePathPosition(enemy.progress)
-      enemy.x = point.x
-      enemy.y = point.y
-      enemy.facing = point.facing
-      if (enemy.progress < 1) continue
-
-      enemy.active = false
-      this.baseHp = Math.max(0, this.baseHp - (enemy.damage || 1))
-      if (this.baseHp <= 0) {
-        this._removeDefeatedEnemies()
-        this._finish('defeat')
-        return
-      }
-    }
-    this._removeDefeatedEnemies()
   }
 
   _updateSupportEnemy(support, dt) {
@@ -810,7 +918,13 @@ export class TowerDefenseGameplay extends GameplayController {
     boss.shield = Math.max(boss.shield || 0, Math.round((boss.maxShield || 100) * 0.65))
     boss.maxShield = Math.max(boss.maxShield || 0, boss.shield)
     for (let index = 0; index < 3; index++) this._spawnEscort(boss, index)
-    this._feedback('攻城兽进入狂暴阶段并召来护卫', 'warning')
+    // 狂暴瞬间释放全场 EMP：所有守卫短暂瘫痪，逼迫玩家用陷阱/换位应对
+    for (const tower of this.towers) {
+      tower.disabledTimer = Math.max(tower.disabledTimer || 0, 2)
+      tower.empFlash = 0.8
+    }
+    boss.empFlash = 1.0
+    this._feedback('⚡ 攻城兽狂暴并释放全场 EMP 脉冲！守卫短暂瘫痪！', 'danger')
   }
 
   _spawnEscort(boss, index) {
@@ -924,6 +1038,14 @@ export class TowerDefenseGameplay extends GameplayController {
       if (enemy.frostStackTimer === 0) enemy.frostStacks = 0
 
       if ((enemy.supportRadius || 0) > 0) this._updateSupportEnemy(enemy, dt)
+      if ((enemy.empPulse || 0) && enemy.active) {
+        enemy.empTimer = (enemy.empTimer ?? enemy.empPulse.interval) - dt
+        enemy.empFlash = Math.max(0, (enemy.empFlash || 0) - dt * 2)
+        if (enemy.empTimer <= 0) {
+          enemy.empTimer = enemy.empPulse.interval
+          this._triggerEmpPulse(enemy)
+        }
+      }
       if (!enemy.active) continue
 
       const resistedSlow = (enemy.slowRatio || 0) * (1 - clamp(enemy.slowResistance || 0, 0, 0.9))
@@ -940,6 +1062,8 @@ export class TowerDefenseGameplay extends GameplayController {
       if (enemy.progress < 1) continue
 
       enemy.active = false
+      this._waveLeaked++
+      this._waveLeakDamage += enemy.damage || 1
       this.baseHp = Math.max(0, this.baseHp - (enemy.damage || 1))
       if (this.baseHp <= 0) {
         this._removeDefeatedEnemies()
@@ -948,6 +1072,23 @@ export class TowerDefenseGameplay extends GameplayController {
       }
     }
     this._removeDefeatedEnemies()
+  }
+
+  /** 电磁傀儡脉冲：瘫痪范围内守卫数秒 */
+  _triggerEmpPulse(enemy) {
+    const radiusSq = enemy.empPulse.radius ** 2
+    let disabled = 0
+    const slots = this.buildSlots || []
+    for (const tower of this.towers) {
+      const pos = slots[tower.slotIndex]
+      if (!pos) continue
+      if (distanceSquared(pos, enemy) <= radiusSq) {
+        tower.disabledTimer = Math.max(tower.disabledTimer || 0, enemy.empPulse.duration)
+        disabled++
+      }
+    }
+    enemy.empFlash = 0.6
+    if (disabled > 0) this._feedback(`⚡ 电磁脉冲！${disabled} 座守卫瘫痪 ${enemy.empPulse.duration} 秒！`, 'danger')
   }
 
   _updateSupportEnemy(support, dt) {
@@ -1000,17 +1141,24 @@ export class TowerDefenseGameplay extends GameplayController {
         }
       }
 
+      // EMP 瘫痪：计时走但不开火
+      if ((tower.disabledTimer || 0) > 0) {
+        tower.disabledTimer = Math.max(0, tower.disabledTimer - dt)
+        continue
+      }
+
       if (tower.cooldown > 0) continue
 
       const stats = getTowerStats(tower.typeId, tower.level, tower.branchId, tower.slotIndex)
-      const target = this._findTarget(tower, stats.range)
+      const range = stats.range * (this.geneEffects.towerRangeMultiplier || 1)
+      const target = this._findTarget(tower, range)
       if (!target) continue
 
       const feverMult = tower.feverTimer > 0 ? 0.40 : 1.0
       const moraleSpeedBonus = this.geneEffects?.moraleSpeedBoost || 0.15
       const moraleMult = tower.moraleTimer > 0 ? (1 - moraleSpeedBonus) : 1.0
-      tower.cooldown = stats.fireInterval * feverMult * moraleMult
-      this._fireTower(tower, target, stats)
+      tower.cooldown = (stats.fireInterval * feverMult * moraleMult) / (this.geneEffects.towerSpeedMultiplier || 1)
+      this._fireTower(tower, target, this._boostTowerStats(stats, target))
     }
   }
 
@@ -1019,12 +1167,33 @@ export class TowerDefenseGameplay extends GameplayController {
     this.shots = this.shots.filter((shot) => shot.life > 0)
   }
 
+  /** 基因树伤害加成（全体 + 对首领特化） */
+  _boostTowerStats(stats, target) {
+    const gene = this.geneEffects || {}
+    const mult = (gene.towerDamageMultiplier || 1) * (target?.boss ? (gene.bossDamageMultiplier || 1) : 1)
+    if (mult === 1) return stats
+    return { ...stats, damage: stats.damage * mult }
+  }
+
   _finish(outcome) {
     if (this._finishSent) return
     this._finishSent = true
     this.state = 'finished'
     this.outcome = outcome
-    if (outcome === 'victory') {
+    this._unbindHotkeys()
+    if (this.isEndless) {
+      // 无尽模式：只记录最高波次，不推进战役进度
+      const waveReached = Math.max(0, this.director.completedWaves)
+      this.endlessResult = recordEndlessWave(waveReached)
+      if (outcome === 'victory') {
+        this.score += this.baseHp * 100 + this.gold * 2
+        this.game?.sound?.levelUp?.()
+        this._feedback(`♾️ 无尽试炼达成 ${waveReached} 波，防线坚守成功！`, 'success')
+      } else {
+        this.game?.sound?.gameOver?.()
+        this._feedback(`💀 无尽试炼止步第 ${waveReached} 波${this.endlessResult?.isNewRecord ? '（新纪录！）' : `（最佳 ${this.endlessResult?.best ?? 0} 波）`}`, 'danger')
+      }
+    } else if (outcome === 'victory') {
       this.score += this.baseHp * 100 + this.gold * 2
       this.clearResult = recordStageClear(this.currentStageId || 1, this.baseHp, this.maxBaseHp)
       this.game?.sound?.levelUp?.()
@@ -1066,32 +1235,40 @@ export class TowerDefenseGameplay extends GameplayController {
     return {
       mode: 'tower-defense',
       stageId: this.currentStageId || 1,
-      stageName: this.stageConfig?.name || '第 1-1 关 · 母巢防线',
+      stageName: this.isEndless
+        ? `无尽试炼 · ${this.stageConfig?.chapterName || '母巢防线'}`
+        : (this.stageConfig?.name || '第 1-1 关 · 母巢防线'),
       chapterId: this.stageConfig?.chapterId || 1,
       chapterName: this.stageConfig?.chapterName || '纯净母巢',
       theme: this.stageConfig?.theme || null,
       clearResult: this.clearResult,
+      isEndless: this.isEndless,
       state: this.state,
       stateLabel: this.director.phase === 'intermission' ? (this.director.waveIndex < 0 ? '部署准备' : '波间整备') : '防守进行中',
       outcome: this.outcome,
       elapsed: this.elapsedTime,
       timeLabel,
+      gameSpeed: this.gameSpeed,
       baseHp: this.baseHp,
       maxBaseHp: this.maxBaseHp,
       lives: this.baseHp,
       maxLives: this.maxBaseHp,
       gold: this.gold,
       wave: Math.max(0, this.director.waveIndex + 1),
-      totalWaves: totalWavesCount,
+      totalWaves: this.isEndless ? '∞' : totalWavesCount,
       completedWaves: this.director.completedWaves,
       activeMutations: this.activeMutations,
       pendingMutationChoices: this.pendingMutationChoices,
+      pendingMutationOffers: this.pendingMutationOffers,
+      mutationSkipBonus: 20 + (this.geneEffects.mutationSkipBonus || 0),
+      earlyCallBonus: this._computeEarlyCallBonus(),
+      lastWaveReport: this.lastWaveReport,
       waveProgress,
       status,
       phase: this.director.phase,
       nextWaveIn: this.director.phase === 'intermission' ? Math.max(0, this.director.timer) : 0,
-      currentWaveComposition: getWaveComposition(previewWaveIndex),
-      nextWavePreview: nextWaveIndex < totalWavesCount ? getWaveComposition(nextWaveIndex) : [],
+      currentWaveComposition: getWaveCompositionFromWaves(this.director.waves, previewWaveIndex),
+      nextWavePreview: getWaveCompositionFromWaves(this.director.waves, nextWaveIndex),
       baseDamagePreview: getWaveBaseDamage(previewWaveIndex),
       feedback: this.feedback,
       enemies: this.enemies.length,
@@ -1202,11 +1379,16 @@ export class TowerDefenseGameplay extends GameplayController {
     return {
       mode: 'tower-defense',
       outcome: this.outcome,
-      title: this.outcome === 'victory' ? '防线守卫成功' : '基地防线失守',
+      title: this.isEndless
+        ? (this.outcome === 'victory' ? '无尽试炼·通关' : '无尽试炼·终局')
+        : (this.outcome === 'victory' ? '防线守卫成功' : '基地防线失守'),
+      isEndless: this.isEndless,
+      endlessWave: this.director.completedWaves,
+      endlessBest: this.endlessResult?.best ?? null,
       elapsed: this.elapsedTime,
       wave: Math.max(0, this.director.waveIndex + 1),
       completedWaves: this.director.completedWaves,
-      totalWaves: TOWER_DEFENSE_WAVE_COUNT,
+      totalWaves: this.director.waves?.length || TOWER_DEFENSE_WAVE_COUNT,
       baseHp: this.baseHp,
       maxBaseHp: this.maxBaseHp,
       lives: this.baseHp,
@@ -1274,6 +1456,7 @@ export class TowerDefenseGameplay extends GameplayController {
     if (!point) {
       this.hoveredSlotIndex = -1
       this.hoveredTrapId = null
+      this.hoveredEnemyId = null
       return
     }
     this.hoveredSlotIndex = this.renderer.getSlotIndexAt(point.x, point.y)
@@ -1289,6 +1472,20 @@ export class TowerDefenseGameplay extends GameplayController {
       }
     }
     this.hoveredTrapId = hoveredTrap
+
+    // 敌人悬停（特质说明用）：就近命中
+    let hoveredEnemyId = null
+    let bestDistSq = (Math.max(18, this.renderer.unit * 0.85)) ** 2
+    for (const enemy of this.enemies) {
+      if (!enemy.active) continue
+      const enemyPoint = this.renderer.project(enemy)
+      const distSq = (point.x - enemyPoint.x) ** 2 + (point.y - enemyPoint.y) ** 2
+      if (distSq <= bestDistSq) {
+        bestDistSq = distSq
+        hoveredEnemyId = enemy.id
+      }
+    }
+    this.hoveredEnemyId = hoveredEnemyId
   }
 
   _feedback(text, kind = 'info') {
@@ -1306,6 +1503,13 @@ export class TowerDefenseGameplay extends GameplayController {
     this.game?._pushGameplayHud?.()
   }
 
+  _computeEarlyCallBonus() {
+    if (this.state !== 'active' || this.director.phase !== 'intermission') return 0
+    const wait = Math.ceil(Math.max(0, this.director.timer))
+    if (wait <= 0) return 0
+    return Math.round(wait * 2 * (this.geneEffects.earlyCallMultiplier || 1))
+  }
+
   _unbindCanvas() {
     this._canvas?.removeEventListener?.('pointerdown', this._onPointerDown)
     this._canvas?.removeEventListener?.('pointermove', this._onPointerMove)
@@ -1314,6 +1518,7 @@ export class TowerDefenseGameplay extends GameplayController {
 
   destroy() {
     this._unbindCanvas()
+    this._unbindHotkeys()
     this.enemies.length = 0
     this.towers.length = 0
     this.shots.length = 0

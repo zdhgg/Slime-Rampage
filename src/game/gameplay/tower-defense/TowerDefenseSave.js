@@ -14,6 +14,7 @@ export function createDefaultSave() {
     claimedChests: [], // [stageMilestoneId]
     unlockedTowers: ['rapid', 'slow'],
     tutorialCompleted: false,
+    endlessBestWave: 0,
     geneTalents: {
       talent_gold: 0,
       talent_leyline: 0,
@@ -130,6 +131,18 @@ export function completeTutorial() {
   save.tutorialCompleted = true;
   saveCampaignProgress(save);
   return save;
+}
+
+export function recordEndlessWave(waveReached) {
+  const save = loadCampaignSave();
+  const wave = Math.max(0, Math.floor(Number(waveReached) || 0));
+  const prev = save.endlessBestWave || 0;
+  if (wave > prev) {
+    save.endlessBestWave = wave;
+    saveCampaignProgress(save);
+    return { best: wave, isNewRecord: true };
+  }
+  return { best: prev, isNewRecord: false };
 }
 
 export function upgradeGeneTalent(talentId) {

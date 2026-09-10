@@ -8,16 +8,28 @@ const props = defineProps({
 const emit = defineEmits(['restart', 'menu'])
 const victory = computed(() => props.info.outcome === 'victory' || props.info.result === 'victory' || props.info.success === true)
 const scoreText = computed(() => (props.info.score || 0).toLocaleString('en-US'))
-const waveText = computed(() => props.info.wave ? `${props.info.wave}${props.info.totalWaves ? ` / ${props.info.totalWaves}` : ''}` : '—')
+const endless = computed(() => props.info.isEndless === true)
+const waveText = computed(() => {
+  if (endless.value) return `${props.info.endlessWave ?? props.info.wave ?? 0} / ∞`
+  return props.info.wave ? `${props.info.wave}${props.info.totalWaves ? ` / ${props.info.totalWaves}` : ''}` : '—'
+})
 const livesText = computed(() => props.info.lives != null ? `${props.info.lives}${props.info.maxLives ? ` / ${props.info.maxLives}` : ''}` : '—')
-const stats = computed(() => [
-  ['防守波次', waveText.value],
-  ['巢心耐久', livesText.value],
-  ['建造数量', props.info.towersBuilt ?? props.info.built ?? 0],
-  ['击破敌人', props.info.kills ?? props.info.defeated ?? 0],
-  ['升级次数', props.info.upgrades ?? 0],
-  ['剩余资源', props.info.coins ?? props.info.gold ?? 0],
-])
+const stats = computed(() => {
+  const rows = [
+    ['防守波次', waveText.value],
+  ]
+  if (endless.value) {
+    rows.push(['历史最佳', props.info.endlessBest != null ? `第 ${props.info.endlessBest} 波` : '—'])
+  }
+  rows.push(
+    ['巢心耐久', livesText.value],
+    ['建造数量', props.info.towersBuilt ?? props.info.built ?? 0],
+    ['击破敌人', props.info.kills ?? props.info.defeated ?? 0],
+    ['升级次数', props.info.upgrades ?? 0],
+    ['剩余资源', props.info.coins ?? props.info.gold ?? 0],
+  )
+  return rows
+})
 </script>
 
 <template>

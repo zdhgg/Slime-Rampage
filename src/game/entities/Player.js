@@ -14,6 +14,22 @@ const angleLerp = (current, target, k) =>
 /** 元素附魔概率上限：等级累加封顶，避免高等级必中失去随机性 */
 const ELEMENT_PROC_CHANCE_CAP = 0.6
 
+/** 元素专精（主专精）改写：附魔封顶抬升到 85%——元素流的「把概率投满」有了去处 */
+export const ELEMENTAL_SPEC_PROC_CAP = 0.85
+
+/**
+ * 副反应槽的等级里程碑（等级 → 元素联动）：每次到达 +1 槽，上限 2 级加成。
+ * 槽位 = 局外基因基础值 + 等级加成，最终封顶 MAX_REACTION_SLOTS——
+ * 反应表 6 种组合去掉主形态后恰好 5 种副反应，再多也无槽可填。
+ */
+export const REACTION_SLOT_LEVELS = [4, 8]
+export const MAX_REACTION_SLOTS = 5
+
+/** 等级带来的槽位加成（升级面板与 HUD 共用同一口径，避免两处漂移）。 */
+export function getReactionSlotLevelBonus(level) {
+  return REACTION_SLOT_LEVELS.filter((milestone) => level >= milestone).length
+}
+
 export const STARTING_EXP_THRESHOLD = 40
 
 // 开局放慢选择面板密度，随后逐级收敛到原有中期阈值。
@@ -172,11 +188,15 @@ export class Player extends Entity {
     this._reactionIds = new Set()
     this._reactionMap = new Map()
     this._procs = {}
+    // 附魔概率封顶（专精 → 元素联动）：默认 60%，元素炼金主专精抬升到 85%
+    this.elementProcCap = ELEMENT_PROC_CHANCE_CAP
     // 主形态（阶段十五设计改造）：第一个融合的反应锁定为「物种身份」——
     // 后续反应以副反应叠加生效，不再改变外形。进化是身份承诺，不是换肤。
     this._primaryReaction = null
     // 副反应槽位（阶段十六设计改造）：默认 2 个，黑市「共鸣基因」每级 +1；
-    // 槽满后新组合触发替换面板——稀缺掉落 + 有限槽位 = 硬决策
+    // 槽满后新组合触发替换面板——稀缺掉落 + 有限槽位 = 硬决策。
+    // 基础值由局外基因写入（applyGenes），等级加成在 refreshReactionSlots 里叠加。
+    this.baseSecondarySlots = 2
     this.secondarySlots = 2
     this._secondaryIds = new Set()
     this._refreshElements()
@@ -302,6 +322,7 @@ export class Player extends Entity {
     this.guaranteedCrit = false
     this.adrenalineSpeed = 0
     this.adrenalineTimer = 0
+    this.elementProcCap = ELEMENT_PROC_CHANCE_CAP // 专精改写的附魔封顶归位
   }
 
   /** 回复生命值 */
@@ -345,7 +366,7 @@ export class Player extends Entity {
       cur.duration = Math.max(cur.duration, p.duration)
     }
     for (const key of Object.keys(procs)) {
-      procs[key].chance = Math.min(procs[key].chance, ELEMENT_PROC_CHANCE_CAP)
+      procs[key].chance = Math.min(procs[key].chance, this.elementProcCap)
     }
     this._procs = procs
   }
@@ -448,6 +469,32 @@ export class Player extends Entity {
   }
 
   /**
+   * 重算副反应槽位（等级 → 元素联动）：
+   *  - 槽位 = 局外基因基础值 + 等级里程碑加成（Lv.4 / Lv.8 各 +1，封顶 MAX_REACTION_SLOTS）；
+   *  - 槽位扩张时，把「元素已经满足但当初因满槽被挤掉」的反应自动接入——
+   *    升级本身就成为一次元素构筑的兑现，而不是只加数值。
+   * @returns {Array} 本次自动接入的反应（供调用方播放提示；无变化时为空数组）
+   */
+  refreshReactionSlots() {
+    const base = this.baseSecondarySlots ?? 2
+    this.secondarySlots = Math.min(
+      MAX_REACTION_SLOTS,
+      base + getReactionSlotLevelBonus(this.level)
+    )
+    const equipped = []
+    if (this._secondaryIds.size < this.secondarySlots) {
+      for (const r of getActiveReactions(this.elements)) {
+        if (this._secondaryIds.size >= this.secondarySlots) break
+        if (r.id === this._primaryReaction || this._secondaryIds.has(r.id)) continue
+        this._secondaryIds.add(r.id)
+        equipped.push(r)
+      }
+      if (equipped.length > 0) this._refreshElements()
+    }
+    return equipped
+  }
+
+  /**
    * 吃下该核心是否需要确认（阶段十六追加）：
    *  - 第一颗元素：元素永久入体不可移除，且决定后续融合方向；
    *  - 首次融合：主形态整局锁定不可逆。
@@ -495,6 +542,18 @@ export class Player extends Entity {
     this.level++
     this.maxExp = getNextExpThreshold(this.maxExp, this.level)
     this.game.weaponSystem.onLevelUp() // 等级攻击力成长（每级 ×1.08）
+    // 等级里程碑：槽位扩张 + 自动接入被挤掉的反应（Lv.4 / Lv.8 各 +1 槽）
+    const unlocked = this.refreshReactionSlots()
+    if (unlocked.length > 0) {
+      this.game.enemyManager?.addText?.(
+        this.x,
+        this.y - 42,
+        `🧬 副反应槽扩展 ${this._secondaryIds.size}/${this.secondarySlots}`,
+        `自动接入：${unlocked.map((r) => r.name).join('、')}`,
+        '#9c8ad4',
+        15
+      )
+    }
     this.game.triggerLevelUp() // 暂停 + 生成 3 个技能选项 + onLevelUp 回调
   }
 

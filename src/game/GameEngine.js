@@ -1,5 +1,5 @@
 import { InputManager } from './InputManager.js'
-import { Player, STARTING_EXP_THRESHOLD } from './entities/Player.js'
+import { ELEMENTAL_SPEC_PROC_CAP, Player, STARTING_EXP_THRESHOLD } from './entities/Player.js'
 import { EnemyManager } from './EnemyManager.js'
 import { WeaponSystem } from './WeaponSystem.js'
 import { GemManager } from './GemManager.js'
@@ -81,6 +81,7 @@ export function createDefaultStats() {
     secondarySlots: 2,
     primarySpec: null,
     secondarySpec: null,
+    digest: { charge: 0, max: 100, bursts: 0 },
     x: 0,
     y: 0,
     run: {
@@ -568,23 +569,36 @@ export class GameEngine {
     this.resume()
   }
 
-  /** 主专精初始觉醒赋能（Lv.5 里程碑与开局预选共用同一套数值） */
+  /**
+   * 主专精初始觉醒赋能（Lv.5 里程碑与开局预选共用同一套数值）。
+   * 每条流派除数值外还改写一条「元素玩法规则」——专精决定你怎么用元素，
+   * 而不只是元素有多强（专精 → 元素联动）：
+   *  - 暴食：胃袋把血肉转成元素养分（消化能量效率 +50%）
+   *  - 机枪：分裂弹 100% 继承母弹附魔（分裂不再稀释元素）
+   *  - 元素：附魔概率封顶 60% → 85%（把概率投满有了去处）
+   *  - 刺客：暴击必定触发元素附魔（精准打击弱点）
+   */
   _applyPrimarySpecBonus(spec) {
     if (spec === 'gluttony') {
       this.devourThreshold = Math.max(this.devourThreshold, 0.28)
       this.player.maxHp += 1
       this.player.hp = Math.min(this.player.maxHp, this.player.hp + 1)
+      this.weaponSystem.digestGainMul *= 1.5
     } else if (spec === 'gatling') {
       this.weaponSystem.projectileCount += 1
       this.weaponSystem.fireInterval *= 0.85
+      this.weaponSystem.splitInherit = 1
     } else if (spec === 'elemental') {
       this.weaponSystem.freezeChance += 0.2
       this.weaponSystem.burnChance += 0.2
       this.weaponSystem.poisonChance += 0.2
       this.weaponSystem.reactionDmgMul = (this.weaponSystem.reactionDmgMul || 1) * 1.35
+      this.player.elementProcCap = ELEMENTAL_SPEC_PROC_CAP
+      this.player._refreshElements() // 已有元素的附魔概率立即按新封顶重算
     } else if (spec === 'assassin') {
       this.weaponSystem.critChance = Math.max(this.weaponSystem.critChance || 0, 0.25)
       this.weaponSystem.critMul = Math.max(this.weaponSystem.critMul || 3.0, 3.5)
+      this.weaponSystem.critGuaranteesElement = true
     }
   }
 
@@ -885,6 +899,7 @@ export class GameEngine {
     this.runState = 'expedition-intro'
     this.worldEvents.cancelForTransition()
     this.enemyManager.prepareExpeditionStage()
+    this.enemyManager.setStagePressure(0) // 新章节从零开始，收口状态重置
     this._setMapTheme(definition.theme, definition.variant, true, forceMap)
     this.mapFeatures.prepareStage(definition)
     this._placePlayerAtMapSpawn()
@@ -993,6 +1008,8 @@ export class GameEngine {
     if (this.runState !== 'active') return
     this.expeditionStageElapsed += dt
     const progress = this._expeditionProgress()
+    // 首领登场收口：把章节完成度推给敌军管理器，越接近目标增援越稀疏
+    this.enemyManager.setStagePressure(progress.total > 0 ? progress.progress / progress.total : 0)
     if (!progress.complete) return
 
     if (progress.definition.type === 'defend') this.mapFeatures.completeNestDefense()
@@ -1362,6 +1379,12 @@ export class GameEngine {
       secondarySlots: this.player.secondarySlots,
       primarySpec: this.primarySpec,
       secondarySpec: this.secondarySpec,
+      // 消化进度（吞噬 → 元素联动的可见口径）：满载待命时 ratio = 1，吸收首颗核心即兑现
+      digest: {
+        charge: Math.round(this.weaponSystem.digestCharge),
+        max: this.weaponSystem.digestChargeMax,
+        bursts: this.weaponSystem.digestBursts,
+      },
       x: Math.round(this.player.x), // 扁平坐标：UI 端可直接整树赋值（见 createDefaultStats）
       y: Math.round(this.player.y),
       run: {

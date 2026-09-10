@@ -143,7 +143,8 @@ export const GENES = [
     costs: [30, 60, 100],
     maxLevel: 3,
     apply(game, lv) {
-      game.player.secondarySlots = 2 + lv
+      // 只写基础值：最终槽位 = 基础值 + 等级加成（Player.refreshReactionSlots 统一重算）
+      game.player.baseSecondarySlots = 2 + lv
     },
   },
   {
@@ -160,7 +161,7 @@ export const GENES = [
     maxLevel: 1,
     apply(game) {
       game.weaponSystem.geneReactionDmgMul = 1.25
-      game.player.secondarySlots += 1
+      game.player.baseSecondarySlots += 1
     },
   },
 ]
@@ -235,7 +236,7 @@ export function applyGenes(game, genes) {
   p.speed = 340
   p.expGainMul = 1
   p.regen = 0
-  p.secondarySlots = 2
+  p.baseSecondarySlots = 2
   p.geneDevourHeal = 0
   p.geneDevourExpMul = 1
   p.geneDevourDamage = 0
@@ -252,5 +253,7 @@ export function applyGenes(game, genes) {
     if (level > 0) gene.apply(game, level)
   }
   weapon.splitChance = weapon.baseSplitChance
+  // 基因只决定基础槽位；等级加成与自动接入在此统一结算（重开时元素已清空，是纯重算）
+  p.refreshReactionSlots?.()
   p.hp = p.maxHp
 }

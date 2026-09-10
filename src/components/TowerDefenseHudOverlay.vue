@@ -1,10 +1,11 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import TowerDefenseMutationModal from './TowerDefenseMutationModal.vue'
 import {
   ArrowUp,
   Coins,
   Crosshair,
+  FastForward,
   Flag,
   Heart,
   Map,
@@ -49,7 +50,13 @@ const emit = defineEmits([
   'advance-tutorial',
   'select-mutation',
   'skip-tutorial',
+  'cycle-speed',
+  'call-early',
+  'skip-mutation',
 ])
+
+// 突变可暂存：默认不弹窗，角落芯片提示，点开再选
+const mutationModalOpen = ref(false)
 
 const towerIcons = {
   bolt: Zap,
@@ -91,19 +98,26 @@ const basePercent = computed(() => {
 })
 const currentWaveComposition = computed(() => normalizeComposition(props.hud.currentWaveComposition))
 const nextWaveComposition = computed(() => normalizeComposition(props.hud.nextWavePreview))
-const baseDamagePreview = computed(() => {
-  const value = props.hud.baseDamagePreview
-  if (value == null || value === '') return ''
-  if (typeof value !== 'object') return value
-  return value.damage ?? value.value ?? value.total ?? value.label ?? ''
-})
+const currentWaveLine = computed(() => formatComposition(currentWaveComposition.value))
+const nextWaveLine = computed(() => formatComposition(nextWaveComposition.value))
+const showPhaseChip = computed(() => props.hud.phase === 'intermission')
+const earlyCallBonus = computed(() => props.hud.earlyCallBonus || 0)
+const gameSpeed = computed(() => props.hud.gameSpeed || 1)
+const pendingOfferCount = computed(() => props.hud.pendingMutationOffers?.length || 0)
+const mutationSkipBonus = computed(() => props.hud.mutationSkipBonus ?? 20)
 const feedback = computed(() => {
   const value = props.hud.feedback
   if (!value) return null
   if (typeof value === 'string') return { text: value, kind: 'info' }
   return { text: value.text || value.message || value.label || '', kind: value.kind || value.type || 'info' }
 })
-const statusText = computed(() => feedback.value?.text || props.hud.status || props.hud.objective || props.hud.nextWave || '')
+// 战斗中只保留瞬时反馈浮条；持久的阶段说明仅在部署/清场阶段出现
+const statusText = computed(() => {
+  if (feedback.value?.text) return feedback.value.text
+  const phase = props.hud.phase
+  if (phase === 'intermission' || phase === 'waiting') return props.hud.status || ''
+  return ''
+})
 const statusKind = computed(() => feedback.value?.kind || 'info')
 
 const traps = computed(() => props.hud.traps || [])
@@ -186,6 +200,27 @@ function normalizeEnemyEntry(entry) {
     name: entry?.name || entry?.label || entry?.typeName || id,
     count: Number(entry?.count ?? entry?.amount ?? entry?.quantity ?? entry?.total ?? 0),
   }
+}
+
+function formatComposition(items) {
+  return items.map((entry) => `${entry.name}×${entry.count}${(entry.traits || []).map((t) => t.icon).join('')}`).join(' ')
+}
+
+function compositionTitles(items) {
+  if (!items?.length) return ''
+  return items
+    .map((entry) => `${entry.name}×${entry.count}：${(entry.traits || []).map((t) => t.label).join('；') || '无特殊机制'}`)
+    .join('\n')
+}
+
+function onSelectMutation(mutationId) {
+  mutationModalOpen.value = false
+  emit('select-mutation', mutationId)
+}
+
+function onSkipMutation() {
+  mutationModalOpen.value = false
+  emit('skip-mutation')
 }
 
 const towerTagMap = {
@@ -273,51 +308,82 @@ function displayStat(value, digits = 1) {
 <template>
   <div class="tower-defense-hud" aria-label="塔防战况">
     <header class="defense-header">
-      <div class="defense-brand">
+      <div class="defense-brand" :title="hud.chapterName || ''">
         <TowerControl :size="20" :stroke-width="1.7" aria-hidden="true" />
-        <div>
-          <span>{{ hud.chapterName || '史莱姆防卫战' }}</span>
-          <strong>{{ hud.stageName || hud.mapName || hud.levelName || '母巢防线' }}</strong>
-        </div>
+        <strong>{{ hud.stageName || hud.mapName || hud.levelName || '母巢防线' }}</strong>
       </div>
-      <div class="defense-metrics">
+
+      <div class="wave-pill" aria-label="波次状态">
+        <span v-if="showPhaseChip" class="phase-chip">{{ stateLabel }}</span>
+        <strong class="wave-count">第 {{ wave }}<small v-if="totalWaves"> / {{ totalWaves }}</small> 波</strong>
+        <i class="wave-track" aria-hidden="true"><em :style="{ width: waveProgress }" /></i>
+        <button
+          v-if="earlyCallBonus > 0"
+          class="call-early-btn"
+          type="button"
+          title="提前召唤下一波，按剩余整备秒数获得养分（快捷键 E）"
+          @click="emit('call-early')"
+        >
+          ⚔ 立即进攻 +{{ earlyCallBonus }}
+        </button>
+      </div>
+
+      <div class="header-right">
         <div class="metric-cell"><Coins :size="15" aria-hidden="true" /><span>养分</span><b>{{ displayNumber(money) }}</b></div>
-        <div class="metric-cell"><Heart :size="15" aria-hidden="true" /><span>巢心</span><b>{{ lives }}<small v-if="maxLives"> / {{ maxLives }}</small></b></div>
-        <div class="metric-cell"><Timer :size="15" aria-hidden="true" /><span>时间</span><b>{{ hud.timeLabel || hud.time || '—' }}</b></div>
+        <div class="metric-cell lives-cell">
+          <Heart :size="15" aria-hidden="true" />
+          <span>巢心</span>
+          <b>{{ lives }}<small v-if="maxLives"> / {{ maxLives }}</small></b>
+          <i class="lives-bar" aria-hidden="true"><em :style="{ width: basePercent }" /></i>
+        </div>
+        <div class="system-controls" aria-label="系统控制">
+          <button
+            class="system-button speed-btn"
+            type="button"
+            :title="`游戏速度 ×${gameSpeed}（快捷键 F）`"
+            :aria-label="`游戏速度 ×${gameSpeed}`"
+            @click="emit('cycle-speed')"
+          >
+            <FastForward :size="15" aria-hidden="true" />
+            <span class="speed-label">×{{ gameSpeed }}</span>
+          </button>
+          <button
+            class="system-button map-btn"
+            type="button"
+            title="战役大地图"
+            aria-label="战役大地图"
+            @click="emit('open-map')"
+          >
+            <Map :size="17" aria-hidden="true" />
+          </button>
+          <button
+            class="system-button"
+            type="button"
+            :title="muted ? '取消静音' : '静音'"
+            :aria-label="muted ? '取消静音' : '静音'"
+            :aria-pressed="muted"
+            @click="emit('toggle-mute')"
+          >
+            <VolumeX v-if="muted" :size="17" aria-hidden="true" />
+            <Volume2 v-else :size="17" aria-hidden="true" />
+          </button>
+          <button
+            class="system-button"
+            type="button"
+            :title="paused ? '继续游戏' : '暂停'"
+            :aria-label="paused ? '继续游戏' : '暂停'"
+            @click="paused ? emit('toggle-resume') : emit('toggle-pause')"
+          >
+            <Play v-if="paused" :size="17" aria-hidden="true" />
+            <Pause v-else :size="17" aria-hidden="true" />
+          </button>
+        </div>
       </div>
     </header>
 
-    <div class="system-controls" aria-label="系统控制">
-      <button
-        class="system-button map-btn"
-        type="button"
-        title="战役大地图"
-        aria-label="战役大地图"
-        @click="emit('open-map')"
-      >
-        <Map :size="17" aria-hidden="true" />
-      </button>
-      <button
-        class="system-button"
-        type="button"
-        :title="muted ? '取消静音' : '静音'"
-        :aria-label="muted ? '取消静音' : '静音'"
-        :aria-pressed="muted"
-        @click="emit('toggle-mute')"
-      >
-        <VolumeX v-if="muted" :size="17" aria-hidden="true" />
-        <Volume2 v-else :size="17" aria-hidden="true" />
-      </button>
-      <button
-        class="system-button"
-        type="button"
-        :title="paused ? '继续游戏' : '暂停'"
-        :aria-label="paused ? '继续游戏' : '暂停'"
-        @click="paused ? emit('toggle-resume') : emit('toggle-pause')"
-      >
-        <Play v-if="paused" :size="17" aria-hidden="true" />
-        <Pause v-else :size="17" aria-hidden="true" />
-      </button>
+    <div class="wave-intel" aria-label="波次情报">
+      <span v-if="currentWaveLine" :title="compositionTitles(currentWaveComposition)">本波 {{ currentWaveLine }}</span>
+      <span v-if="nextWaveLine" class="next" :title="compositionTitles(nextWaveComposition)">下波 {{ nextWaveLine }}</span>
     </div>
 
     
@@ -347,34 +413,6 @@ function displayStat(value, digits = 1) {
         </button>
       </div>
     </Transition>
-
-    <section class="wave-status" aria-label="波次状态">
-      <div class="wave-heading">
-        <div class="wave-copy">
-          <span>{{ stateLabel }}</span>
-          <strong>第 {{ wave }}<small v-if="totalWaves"> / {{ totalWaves }}</small> 波</strong>
-        </div>
-        <span v-if="baseDamagePreview !== ''" class="damage-preview">漏怪 -{{ displayStat(baseDamagePreview, 0) }} 巢心</span>
-      </div>
-      <div class="wave-track" aria-hidden="true"><i :style="{ width: waveProgress }" /></div>
-      <div class="composition-row">
-        <div class="composition-block">
-          <span>本波入侵</span>
-          <div v-if="currentWaveComposition.length" class="enemy-list">
-            <span v-for="enemy in currentWaveComposition" :key="`${enemy.id}-current`" class="enemy-chip">{{ enemy.name }} ×{{ enemy.count }}</span>
-          </div>
-          <em v-else>推进中</em>
-        </div>
-        <div class="composition-block next">
-          <span>下一波入侵</span>
-          <div v-if="nextWaveComposition.length" class="enemy-list">
-            <span v-for="enemy in nextWaveComposition" :key="`${enemy.id}-next`" class="enemy-chip">{{ enemy.name }} ×{{ enemy.count }}</span>
-          </div>
-          <em v-else>待定</em>
-        </div>
-      </div>
-      <div class="base-track" aria-label="巢心耐久"><span>巢心耐久</span><i><em :style="{ width: basePercent }" /></i></div>
-    </section>
 
     <section v-if="statusText" class="defense-status" :class="statusKind" role="status" aria-live="polite">
       <Flag :size="15" aria-hidden="true" />
@@ -561,12 +599,26 @@ function displayStat(value, digits = 1) {
       </section>
     </Transition>
 
-    <!-- Roguelike 3-Card Mutation Selection Modal -->
+    <!-- Roguelike 3-Card Mutation：可暂存，不阻塞战斗；点芯片打开 -->
+    <button
+      v-if="pendingOfferCount > 0 && !mutationModalOpen"
+      class="mutation-pending-chip"
+      type="button"
+      title="有未选择的基因突变，点击打开（战斗不会暂停）"
+      @click="mutationModalOpen = true"
+    >
+      🧬 突变待选 ×{{ pendingOfferCount }}
+    </button>
     <Transition name="fade">
       <TowerDefenseMutationModal
-        v-if="hud.pendingMutationChoices && hud.pendingMutationChoices.length"
+        v-if="pendingOfferCount > 0 && mutationModalOpen && hud.pendingMutationChoices?.length"
         :choices="hud.pendingMutationChoices"
-        @select="emit('select-mutation', $event)"
+        :skippable="true"
+        :skip-bonus="mutationSkipBonus"
+        :pending-count="pendingOfferCount"
+        @select="onSelectMutation"
+        @skip="onSkipMutation"
+        @dismiss="mutationModalOpen = false"
       />
     </Transition>
 
@@ -657,9 +709,7 @@ function displayStat(value, digits = 1) {
 }
 
 .defense-header,
-.system-controls,
-.tactical-traps-dock,
-.wave-status,
+.wave-intel,
 .defense-status,
 .tower-controls { position: absolute; }
 
@@ -919,28 +969,27 @@ function displayStat(value, digits = 1) {
 }
 
 .defense-header {
-  top: 18px;
+  top: 14px;
   left: 24px;
-  right: 112px;
+  right: 24px;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 20px;
+  gap: 16px;
 }
 
-.defense-brand { display: flex; align-items: center; gap: 9px; color: #9be1a0; }
-.defense-brand > div { display: grid; gap: 3px; }
-.defense-brand span { color: rgba(238, 245, 242, 0.54); font-size: 9px; font-weight: 800; }
-.defense-brand strong { color: #f2f6ed; font-size: 16px; }
-.defense-metrics { display: flex; gap: 16px; }
+.defense-brand { display: flex; align-items: center; gap: 9px; min-width: 0; color: #9be1a0; }
+.defense-brand strong { overflow: hidden; color: #f2f6ed; font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
+
+.header-right { display: flex; flex: none; align-items: center; gap: 14px; }
 .metric-cell { display: grid; grid-template-columns: 16px auto; align-items: center; column-gap: 5px; min-width: 64px; color: rgba(238, 245, 242, 0.56); font-size: 9px; }
 .metric-cell svg { grid-row: 1 / 3; color: #d7a657; }
 .metric-cell b { color: #f1d487; font-size: 13px; font-variant-numeric: tabular-nums; }
 .metric-cell small { color: rgba(241, 212, 135, 0.58); font-size: 9px; font-weight: 700; }
+.lives-bar { grid-column: 2; width: 64px; height: 3px; margin-top: 1px; overflow: hidden; border-radius: 2px; background: rgba(255, 255, 255, 0.13); }
+.lives-bar em { display: block; height: 100%; background: #d8845c; transition: width 0.16s ease; }
 
 .system-controls {
-  top: 16px;
-  right: 24px;
   display: flex;
   gap: 7px;
   z-index: 2;
@@ -961,34 +1010,103 @@ function displayStat(value, digits = 1) {
 }
 .system-button:hover { border-color: rgba(145, 220, 140, 0.7); }
 
-.wave-status {
-  top: 20px;
-  left: 50%;
-  width: min(440px, 38vw);
-  transform: translateX(-50%);
+.speed-btn {
+  width: auto;
+  min-width: 46px;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  color: #91dc8c;
+  font-weight: 800;
 }
-.wave-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-.wave-copy { display: flex; align-items: baseline; gap: 12px; min-width: 0; color: rgba(238, 245, 242, 0.58); font-size: 10px; font-weight: 800; }
-.wave-copy span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.wave-copy strong { flex: none; color: #f2d98d; font-size: 18px; font-variant-numeric: tabular-nums; }
-.wave-copy small { color: rgba(242, 217, 141, 0.55); font-size: 11px; }
-.damage-preview { flex: none; color: #efaa86; font-size: 9px; font-weight: 800; }
-.wave-track, .base-track > i { height: 4px; overflow: hidden; background: rgba(255, 255, 255, 0.13); }
-.wave-track { margin-top: 7px; }
-.wave-track i, .base-track em { display: block; height: 100%; background: #91dc8c; transition: width 0.16s ease; }
-.composition-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
-.composition-block { min-width: 0; }
-.composition-block > span { color: rgba(238, 245, 242, 0.44); font-size: 9px; font-weight: 800; }
-.composition-block.next > span { color: rgba(121, 213, 230, 0.68); }
-.enemy-list { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 3px; }
-.enemy-chip { max-width: 100%; overflow: hidden; padding: 2px 5px; border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 3px; color: rgba(238, 245, 242, 0.72); background: rgba(255, 255, 255, 0.05); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
-.composition-block.next .enemy-chip { border-color: rgba(121, 213, 230, 0.25); color: rgba(166, 224, 232, 0.78); }
-.composition-block em { display: block; margin-top: 3px; color: rgba(238, 245, 242, 0.34); font-size: 8px; font-style: normal; }
-.base-track { display: grid; grid-template-columns: auto minmax(48px, 1fr); align-items: center; gap: 8px; margin-top: 7px; color: rgba(238, 245, 242, 0.44); font-size: 9px; }
-.base-track em { background: #d8845c; }
+.speed-label { font-size: 11px; font-variant-numeric: tabular-nums; }
+
+.mutation-pending-chip {
+  position: absolute;
+  left: 50%;
+  bottom: 20px;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 1px solid rgba(165, 94, 234, 0.65);
+  border-radius: 999px;
+  background: rgba(24, 14, 36, 0.92);
+  color: #cda9f5;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+  pointer-events: auto;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.55), 0 0 14px rgba(165, 94, 234, 0.35);
+  animation: chip-pulse 1.6s infinite ease-in-out;
+}
+.mutation-pending-chip:hover { background: rgba(44, 24, 66, 0.95); }
+@keyframes chip-pulse {
+  0%, 100% { box-shadow: 0 4px 18px rgba(0, 0, 0, 0.55), 0 0 10px rgba(165, 94, 234, 0.3); }
+  50% { box-shadow: 0 4px 18px rgba(0, 0, 0, 0.55), 0 0 20px rgba(165, 94, 234, 0.55); }
+}
+
+.wave-pill {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 14px;
+  transform: translate(-50%, -50%);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  background: rgba(7, 15, 12, 0.55);
+  backdrop-filter: blur(4px);
+  white-space: nowrap;
+}
+.phase-chip { color: #9be1a0; font-size: 10px; font-weight: 800; }
+.wave-count { color: #f2d98d; font-size: 16px; font-variant-numeric: tabular-nums; }
+.wave-count small { color: rgba(242, 217, 141, 0.55); font-size: 11px; }
+.wave-track { width: 104px; height: 4px; overflow: hidden; border-radius: 2px; background: rgba(255, 255, 255, 0.13); }
+.wave-track em { display: block; height: 100%; background: #91dc8c; transition: width 0.16s ease; }
+
+.call-early-btn {
+  padding: 3px 10px;
+  border: 1px solid rgba(239, 173, 88, 0.65);
+  border-radius: 999px;
+  background: rgba(239, 173, 88, 0.14);
+  color: #f5b56a;
+  font-size: 10px;
+  font-weight: 800;
+  white-space: nowrap;
+  cursor: pointer;
+  pointer-events: auto;
+  transition: all 0.15s ease;
+}
+.call-early-btn:hover {
+  background: #efad58;
+  color: #241503;
+}
+
+.wave-intel {
+  top: 64px;
+  left: 50%;
+  display: flex;
+  gap: 14px;
+  max-width: calc(100vw - 32px);
+  transform: translateX(-50%);
+  color: rgba(238, 245, 242, 0.42);
+  font-size: 9px;
+  font-weight: 700;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.wave-intel span { overflow: hidden; text-overflow: ellipsis; }
+.wave-intel .next { color: rgba(121, 213, 230, 0.5); }
 
 .defense-status {
-  top: 125px;
+  top: 88px;
   left: 50%;
   display: flex;
   align-items: center;
@@ -1177,22 +1295,21 @@ function displayStat(value, digits = 1) {
 
 @media (max-width: 900px) {
   .defense-header { left: 16px; right: 16px; }
-  .system-controls { right: 16px; }
-  .wave-status { top: 76px; width: min(440px, calc(100vw - 32px)); }
-  .defense-status { top: 158px; }
+  .wave-intel { top: 60px; }
+  .defense-status { top: 84px; }
   .tower-controls { right: 16px; bottom: 14px; max-width: calc(100vw - 32px); }
 }
 
 @media (max-width: 620px) {
-  .defense-header { align-items: stretch; flex-direction: column; gap: 8px; }
-  .defense-brand { padding-right: 84px; }
-  .defense-metrics { justify-content: space-between; gap: 8px; }
+  .defense-header { gap: 8px; }
+  .defense-brand strong { max-width: 34vw; font-size: 13px; }
+  .header-right { gap: 8px; }
   .metric-cell { min-width: 0; }
-  .system-controls { top: 12px; right: 14px; }
-  .wave-status { top: 110px; width: calc(100vw - 28px); }
-  .wave-copy strong { font-size: 16px; }
-  .damage-preview { max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .defense-status { top: 205px; max-width: calc(100vw - 28px); }
+  .wave-pill { gap: 7px; padding: 4px 10px; }
+  .wave-count { font-size: 14px; }
+  .wave-track { width: 60px; }
+  .wave-intel { top: 58px; font-size: 8px; }
+  .defense-status { top: 78px; max-width: calc(100vw - 28px); }
   .tower-controls { right: 10px; bottom: 10px; left: 10px; max-width: none; }
   .tower-palette, .selected-tower { min-width: 0; max-width: none; }
   .tower-options { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -1335,7 +1452,7 @@ function displayStat(value, digits = 1) {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .wave-track i, .base-track em, .tower-option, .tower-actions button, .panel-fade-enter-active, .panel-fade-leave-active { transition: none; }
+  .wave-track em, .lives-bar em, .tower-option, .tower-actions button, .panel-fade-enter-active, .panel-fade-leave-active { transition: none; }
 }
 
 .tutorial-banner {
@@ -1355,6 +1472,7 @@ function displayStat(value, digits = 1) {
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.7), 0 0 20px rgba(46, 204, 113, 0.35);
   z-index: 100;
   backdrop-filter: blur(8px);
+  pointer-events: auto;
   animation: pulse-border 2s infinite ease-in-out;
 }
 

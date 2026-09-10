@@ -190,6 +190,7 @@ export const EXPEDITION_STAGES = [
     spawn: { x: 0.5, y: 0.5 },
     narrativeKey: 'pest',
     bossId: 'border_warden',
+    enemyBias: { knight: 1.2 },
   },
   {
     id: 2,
@@ -204,6 +205,7 @@ export const EXPEDITION_STAGES = [
     spawn: { x: 0.5, y: 0.62 },
     narrativeKey: 'alarm',
     bossId: 'beacon_engineer',
+    enemyBias: { mage: 2, hound: 1.4, knight: 0.6 },
   },
   {
     id: 3,
@@ -217,6 +219,7 @@ export const EXPEDITION_STAGES = [
     spawn: { x: 0.5, y: 0.56 },
     narrativeKey: 'reversal',
     bossId: 'hunt_captain',
+    enemyBias: { assassin: 2, hound: 1.5, knight: 0.7 },
   },
   {
     id: 4,
@@ -230,6 +233,7 @@ export const EXPEDITION_STAGES = [
     spawn: { x: 0.5, y: 0.5 },
     narrativeKey: 'home',
     bossId: 'nest_inquisitor',
+    enemyBias: { knight: 1.6, berserker: 1.3, assassin: 0.7 },
   },
   {
     id: 5,
@@ -245,6 +249,7 @@ export const EXPEDITION_STAGES = [
     spawn: { x: 0.34, y: 0.5 },
     narrativeKey: 'war',
     bossId: 'gate_marshal',
+    enemyBias: { knight: 1.8, priest: 1.3, assassin: 0.6 },
   },
   {
     id: 6,
@@ -258,6 +263,7 @@ export const EXPEDITION_STAGES = [
     spawn: { x: 0.5, y: 0.68 },
     narrativeKey: 'truth',
     bossId: 'court_commander',
+    enemyBias: { knight: 1.4, priest: 1.3, mage: 1.2, hound: 0.6 },
   },
 ]
 
@@ -302,6 +308,7 @@ const EXPEDITION_INTERLUDES = [
     variant: 'reliquary',
     narrativeKey: 'relic',
     bossId: 'relic_keeper',
+    enemyBias: { mage: 1.8, golem: 1.5, assassin: 0.6 },
   },
   {
     id: 8,
@@ -315,6 +322,7 @@ const EXPEDITION_INTERLUDES = [
     variant: 'sanctum',
     narrativeKey: 'sanctum',
     bossId: 'ash_paladin',
+    enemyBias: { golem: 2, berserker: 1.4, knight: 1.2 },
   },
   {
     id: 9,
@@ -327,6 +335,7 @@ const EXPEDITION_INTERLUDES = [
     variant: 'royal-crypt',
     narrativeKey: 'crypt',
     bossId: 'tomb_regent',
+    enemyBias: { wraith: 2.2, golem: 1.4, hound: 0.5 },
   },
   {
     id: 10,
@@ -340,6 +349,7 @@ const EXPEDITION_INTERLUDES = [
     variant: 'seal-chamber',
     narrativeKey: 'origin',
     bossId: 'seal_archbishop',
+    enemyBias: { wraith: 1.8, mage: 1.6, priest: 1.2 },
   },
   {
     id: 11,
@@ -352,6 +362,7 @@ const EXPEDITION_INTERLUDES = [
     variant: 'throne-gallery',
     narrativeKey: 'coronation',
     bossId: 'throne_guard',
+    enemyBias: { knight: 2, priest: 1.5, berserker: 1.3 },
   },
   {
     id: 12,
@@ -365,10 +376,32 @@ const EXPEDITION_INTERLUDES = [
     variant: 'war-camp',
     narrativeKey: 'muster',
     bossId: 'last_marshal',
+    enemyBias: { berserker: 2, archer: 1.4, knight: 1.3, mage: 0.6 },
   },
 ]
 
 const EXPEDITION_INTERLUDE_COUNTS = { easy: 0, normal: 2, hard: 4, hell: 6 }
+
+/**
+ * 章节敌军偏向（章节 → 兵种权重乘数）：
+ * 让 12 个章节的兵种构成随地域变化，而不只是数值不同——
+ * 王城缺口是盾卫与牧师的主场、王陵是怨灵的巢穴、校场挤满狂战士。
+ * 权重为乘数（1 = 不变），未列出的兵种保持原权重；
+ * 平局或权重全为 0 时回退到波次原生权重，不会抽不出兵。
+ */
+export function applyEnemyBias(roster, bias) {
+  if (!bias) return roster
+  const scaled = roster.map(([type, weight]) => [type, Math.max(0, weight * (bias[type] ?? 1))])
+  const total = scaled.reduce((sum, [, weight]) => sum + weight, 0)
+  if (total <= 0) return roster // 偏向把权重清空：回退原生编成
+  return scaled.filter(([, weight]) => weight > 0)
+}
+
+/** 当前章节的敌军偏向（非远征模式返回 null，不改变原有波次编成） */
+export function getStageEnemyBias(selection, stage) {
+  if (selection?.mode !== 'expedition') return null
+  return getExpeditionStage(selection.difficulty, stage)?.enemyBias || null
+}
 
 /** 远征关卡表按难度递增：简单 6 关，普通/困难/地狱为 8/10/12 关（插章插在统帅决战之前）。 */
 export function getExpeditionStages(difficulty) {

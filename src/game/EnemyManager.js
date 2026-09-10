@@ -6,8 +6,10 @@ import { ExpeditionBoss } from './entities/ExpeditionBoss.js'
 import { FloatingText } from './effects/FloatingText.js'
 import { AssetManager } from './AssetManager.js'
 import {
+  applyEnemyBias,
   getBossWavePlan,
   getExpeditionBossHpMultiplier,
+  getStageEnemyBias,
   getWaveModifiers,
 } from './RunRules.js'
 
@@ -20,6 +22,14 @@ export const GRID_KEY_SCALE = 100000 // cell 坐标 → Map 唯一数字 key 的
 const WAVE_DURATION = 30 // 每波持续时间（秒）：远征外用于时间驱动的压力推进
 const BOSS_RECOVERY_DURATION = 4
 const CLEAR_RATE_WINDOW = 3
+/**
+ * 章节首领登场前的收口（远征节奏）：
+ * 目标进度越过 75% 后逐步拉长增援间隔，进入 100% 时达到最大收口倍率。
+ * 目的不是清场（那会破坏割草密度与吞噬续航），而是让首领登场的瞬间
+ * 不再是「叠着一波满编杂兵」，玩家有干净的读招空间。
+ */
+const EXPEDITION_WIND_DOWN_AT = 0.75
+const EXPEDITION_WIND_DOWN_MUL = 0.9
 
 /** 波次叙事表：开局是勇者刷史莱姆，后期是整个世界在阻止史莱姆（评审：反转感） */
 const WAVE_NAMES = {
@@ -214,6 +224,15 @@ export class EnemyManager extends Entity {
     this._routing.length = 0
     this._texts.length = 0
     this._finale = false
+    this._stagePressure = 0 // 章节进度（引擎推送）：重开归零
+  }
+
+  /**
+   * 章节进度（0~1，由引擎按远征目标推进推送）：驱动首领登场前的增援收口。
+   * 非远征模式应传 0，保持原有导演节拍不变。
+   */
+  setStagePressure(ratio) {
+    this._stagePressure = Math.max(0, Math.min(1, Number(ratio) || 0))
   }
 
   attach(game) {
@@ -337,6 +356,16 @@ export class EnemyManager extends Entity {
       }
     }
 
+    // 首领登场收口（远征）：目标越接近完成，增援越稀疏——
+    // 由引擎每帧推送的章节进度驱动，非远征模式恒为 0，不影响原有节拍
+    const stagePressure = this._stagePressure || 0
+    if (stagePressure > EXPEDITION_WIND_DOWN_AT) {
+      const k = (stagePressure - EXPEDITION_WIND_DOWN_AT) / (1 - EXPEDITION_WIND_DOWN_AT)
+      factor *= 1 + k * EXPEDITION_WIND_DOWN_MUL
+      this._directorPhase = '决战前夕'
+      this._directorIntensity = Math.max(0.4, 0.72 - k * 0.3)
+    }
+
     const player = this.game?.player
     if (player) {
       const hpRatio = player.maxHp > 0 ? player.hp / player.maxHp : 1
@@ -346,12 +375,21 @@ export class EnemyManager extends Entity {
     return Math.max(0.68, Math.min(1.65, factor))
   }
 
+  /**
+   * 抽取敌军兵种：先按有效波次取原生编成，再叠加当前章节的地域偏向——
+   * 远征的每个章节因此拥有自己的兵种画像（盾卫城塞 / 怨灵王陵 / 狂战校场），
+   * 而非 12 章共用一张权重表。非远征模式 getStageEnemyBias 返回 null，编成不变。
+   */
   _rollType() {
     const effectiveWave = this._effectiveWave()
     let roster = WAVE_ROSTERS[0].units
     for (const profile of WAVE_ROSTERS) {
       if (profile.min > effectiveWave) break
       roster = profile.units
+    }
+    if (this.game?.runSelection?.mode === 'expedition') {
+      const bias = getStageEnemyBias(this.game.runSelection, this.game.expeditionStage || 1)
+      roster = applyEnemyBias(roster, bias)
     }
     let roll = Math.random()
     for (const [type, weight] of roster) {
@@ -872,6 +910,7 @@ export class EnemyManager extends Entity {
     this._waveTimer = 0
     this._bossGrace = 0
     this._bossRecovery = 0
+    this._stagePressure = 0 // 首领已登场：收口状态清除，交由 _finale 接管生成闸门
     this._directorPhase = final ? '王庭真相' : '章节首领'
     this._directorIntensity = 1
     return this.spawnBoss({ encounter, expeditionBoss: final })

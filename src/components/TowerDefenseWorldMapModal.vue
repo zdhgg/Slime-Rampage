@@ -24,7 +24,7 @@ import { CHAPTERS_META, getStageConfig } from '../game/gameplay/tower-defense/To
 import { loadCampaignSave } from '../game/gameplay/tower-defense/TowerDefenseSave.js'
 import TowerDefenseGeneTreeModal from './TowerDefenseGeneTreeModal.vue'
 
-const emit = defineEmits(['start-stage', 'close'])
+const emit = defineEmits(['start-stage', 'start-endless', 'close'])
 
 const save = ref(loadCampaignSave())
 const activeChapterId = ref(1)
@@ -159,6 +159,11 @@ function selectChapter(chapterId) {
       </div>
 
       <div class="header-actions">
+        <button class="endless-btn" type="button" :title="save.endlessBestWave ? `无尽试炼 · 最佳纪录第 ${save.endlessBestWave} 波` : '无尽试炼 · 挑战最高波次纪录'" @click="emit('start-endless')">
+          <span>♾️</span>
+          <span>无尽试炼</span>
+          <b v-if="save.endlessBestWave" class="star-chip">第 {{ save.endlessBestWave }} 波</b>
+        </button>
         <button class="gene-tree-btn" type="button" @click="showGeneTree = true">
           <span>🧬</span>
           <span>母巢基因天赋库</span>
@@ -490,6 +495,27 @@ function selectChapter(chapterId) {
 .gene-tree-btn:hover {
   background: #2ecc71;
   color: #06120d;
+}
+
+.endless-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border: 1px solid #a55eea;
+  border-radius: 8px;
+  background: rgba(165, 94, 234, 0.15);
+  color: #cda9f5;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 0 12px rgba(165, 94, 234, 0.2);
+  transition: all 0.15s ease;
+}
+
+.endless-btn:hover {
+  background: #a55eea;
+  color: #12061d;
 }
 
 .star-chip {

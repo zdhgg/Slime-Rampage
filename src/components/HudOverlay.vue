@@ -10,6 +10,8 @@ import { computed } from 'vue'
 import { Pause, Play, Volume2, VolumeX } from 'lucide-vue-next'
 import { SPEC_INFO } from '../game/SkillPool.js'
 import { formatRunClock } from '../game/RunRules.js'
+import { DIGEST_EFFECTS } from '../game/ElementSystem.js'
+import { REACTION_SLOT_LEVELS } from '../game/entities/Player.js'
 
 const props = defineProps({
   stats: { type: Object, required: true },
@@ -122,6 +124,46 @@ const objectiveMetric = computed(() => {
 
 /** 元素当前等级（stats.elements 为 [{id, lv}]） */
 const elementLevel = (id) => props.stats.elements.find((e) => e.id === id)?.lv || 0
+
+/**
+ * 元素悬停说明（元素 → 吞噬联动的可读入口）：
+ * 附魔效果之外补上该元素的消化档位——玩家不必翻文档就知道
+ * 「继续吃同类核心」除了加概率，还会在 Lv.2 / Lv.4 改写吞噬的即时效果。
+ */
+function elementTitle(id) {
+  const base = ELEMENTS.find((e) => e.id === id)
+  if (!base) return ''
+  const lv = elementLevel(id)
+  const digest = DIGEST_EFFECTS[id]
+  if (!digest) return `${base.effect} | ${base.combo}`
+  const tier = lv >= 4 ? 'Lv.4 已解锁' : lv >= 2 ? 'Lv.4' : 'Lv.2'
+  const detail = lv >= 4 ? digest.lv4 : digest.lv2
+  return `${base.effect} | ${base.combo} | 吞噬消化（${tier}）：${detail.name}（当前 ${lv} 级）`
+}
+
+/** 下一个槽位里程碑提示：让「升级还会给槽位」这件事在 HUD 上可见 */
+const slotMilestone = computed(() => {
+  const level = props.stats.level || 1
+  const next = REACTION_SLOT_LEVELS.find((milestone) => level < milestone)
+  return next ? `Lv.${next} 副反应槽 +1` : ''
+})
+
+/** 消化进度（吞噬 → 元素联动）：吃肉积累，满槽转化元素等级 */
+const digestRatio = computed(() => {
+  const digest = props.stats.digest
+  if (!digest?.max) return 0
+  return Math.max(0, Math.min(1, digest.charge / digest.max))
+})
+const digestTitle = computed(() => {
+  const digest = props.stats.digest
+  if (!digest) return ''
+  if (digestRatio.value >= 1) {
+    return props.stats.elements.length
+      ? '消化能量已满 · 下次吞噬将转化为一次元素等级提升'
+      : '消化能量已满 · 吸收第一颗元素核心时立即兑现为元素等级'
+  }
+  return `吞噬积累消化能量（${Math.round(digestRatio.value * 100)}%）· 满槽转化元素等级｜已爆发 ${digest.bursts} 次`
+})
 </script>
 
 <template>
@@ -163,14 +205,17 @@ const elementLevel = (id) => props.stats.elements.find((e) => e.id === id)?.lv |
             :key="el.id"
             class="el-dot"
             :class="[el.id, { active: elementLevel(el.id) > 0 }]"
-            :title="el.effect + ' | ' + el.combo"
+            :title="elementTitle(el.id)"
           >
             {{ el.icon }}<i v-if="elementLevel(el.id) > 0" class="el-lv">{{ elementLevel(el.id) }}</i>
           </span>
         </div>
         <!-- 激活反应徽章（阶段十五）：主形态 ★ 标识，副反应并列，悬停看效果 -->
         <div v-if="stats.reactions.length" class="hud-reactions">
-          <span class="reaction-meta">副反应 {{ stats.secondaryCount }}/{{ stats.secondarySlots }}</span>
+          <span class="reaction-meta">
+            副反应 {{ stats.secondaryCount }}/{{ stats.secondarySlots }}
+            <em v-if="slotMilestone">{{ slotMilestone }}</em>
+          </span>
           <span
             v-for="r in stats.reactions"
             :key="r.id"
@@ -180,6 +225,18 @@ const elementLevel = (id) => props.stats.elements.find((e) => e.id === id)?.lv |
           >
             <i v-if="r.id === stats.primaryReaction" class="chip-star">★</i>{{ r.name }}
           </span>
+        </div>
+        <!-- 消化进度（吞噬 → 元素联动）：吃下去的血肉正在变成元素养分 -->
+        <div
+          v-if="digestRatio > 0"
+          class="hud-digest"
+          :class="{ ready: digestRatio >= 1 }"
+          :title="digestTitle"
+        >
+          <span>🧬 消化</span>
+          <i><em :style="{ width: Math.round(Math.min(1, digestRatio) * 100) + '%' }"></em></i>
+          <b v-if="digestRatio >= 1">{{ stats.elements.length ? '爆发就绪' : '待吸收元素' }}</b>
+          <b v-else>{{ Math.round(digestRatio * 100) }}%</b>
         </div>
         <!-- 流派专精指示（阶段十八） -->
         <div v-if="stats.primarySpec || stats.secondarySpec" class="hud-specs">
@@ -762,6 +819,66 @@ const elementLevel = (id) => props.stats.elements.find((e) => e.id === id)?.lv |
   color: rgba(255, 255, 255, 0.62);
   letter-spacing: 1px;
   white-space: nowrap;
+}
+
+/* 下一个槽位里程碑（等级 → 元素联动的可读提示） */
+.reaction-meta em {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-style: normal;
+  font-size: 10px;
+  color: rgba(156, 138, 212, 0.92);
+  background: rgba(156, 138, 212, 0.14);
+  border: 1px solid rgba(156, 138, 212, 0.32);
+}
+
+/* 消化进度（吞噬 → 元素联动）：吃下去的猎物正在变成元素养分 */
+.hud-digest {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  color: rgba(255, 209, 102, 0.86);
+  letter-spacing: 1px;
+  white-space: nowrap;
+}
+
+.hud-digest i {
+  display: block;
+  width: 76px;
+  height: 5px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.hud-digest em {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #8ae84a, #ffd166);
+  transition: width 0.2s ease;
+}
+
+.hud-digest b {
+  font-size: 10px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.68);
+}
+
+.hud-digest.ready {
+  color: #ffd166;
+  animation: digestPulse 1s ease-in-out infinite alternate;
+}
+
+.hud-digest.ready em {
+  background: linear-gradient(90deg, #ffd166, #ff9f43);
+}
+
+@keyframes digestPulse {
+  from { opacity: 0.72; }
+  to { opacity: 1; }
 }
 
 /* 流派专精徽章（阶段十八） */

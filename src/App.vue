@@ -49,6 +49,7 @@ import { getGene, getGenePurchaseState } from './game/GenePool.js'
 import { createDefaultStats } from './game/GameEngine.js'
 import { getRunIntro } from './game/RunIntro.js'
 import { lanApi } from './services/LanClient.js'
+import { loadCampaignSave } from './game/gameplay/tower-defense/TowerDefenseSave.js'
 
 const engine = shallowRef(null) // 仅作为挂载句柄：浅响应，避免 Vue 深代理整个引擎对象树
 const started = ref(false) // 序章结束、主循环已启动
@@ -692,6 +693,37 @@ function onPetTower(slotIndex) {
   engine.value?.gameplay?.petTower?.(slotIndex)
 }
 
+/** 启动无尽试炼：使用玩家最新解锁章节（上限第 20 关）的地图与机关 */
+function onStartTowerDefenseEndless() {
+  if (!engine.value) return
+  snd()?.uiSelect()
+  gameOverInfo.value = null
+  gameplayResult.value = null
+  gameplayHud.value = null
+  paused.value = false
+  levelUpOptions.value = null
+  reactionChoice.value = null
+  fusionConfirm.value = null
+  expeditionReward.value = null
+  endlessDecision.value = null
+  pendingRun.value = null
+  evolution.value = null
+  elementToast.value = ''
+  lanRunTicket.value = null
+  const baseStage = Math.min(20, Math.max(1, Number(loadCampaignSave()?.unlockedStage) || 1))
+  activeGameplay.value = 'tower-defense'
+  engine.value.configureGameplay('tower-defense')
+  engine.value.gameplay.startEndlessMode(baseStage)
+  engine.value.start()
+  started.value = true
+  showTowerDefenseMap.value = false
+}
+
+function onSelectTowerDefenseMutation(mutationId) {
+  engine.value?.gameplay?.selectMutation?.(mutationId)
+  snd()?.levelUp?.()
+}
+
 function onBackFromIntro() {
   pendingRun.value = null
 }
@@ -1028,7 +1060,10 @@ onUnmounted(() => {
       @restart-stage="onRestartTowerDefense"
       @advance-tutorial="engine?.gameplay?.advanceTutorial?.()"
       @skip-tutorial="engine?.gameplay?.skipTutorial?.()"
-      @select-mutation="engine?.gameplay?.selectMutation?.($event)"
+      @select-mutation="onSelectTowerDefenseMutation"
+      @skip-mutation="engine?.gameplay?.skipMutationOffer?.()"
+      @cycle-speed="engine?.gameplay?.cycleGameSpeed?.()"
+      @call-early="engine?.gameplay?.callNextWaveEarly?.()"
     />
 
     <!-- 升级面板：覆盖层之上，点击卡片应用技能并恢复游戏 -->
@@ -1156,6 +1191,7 @@ onUnmounted(() => {
       <TowerDefenseWorldMapModal
         v-if="showTowerDefenseMap"
         @start-stage="onStartTowerDefenseStage"
+        @start-endless="onStartTowerDefenseEndless"
         @close="showTowerDefenseMap = false"
       />
     </Transition>
