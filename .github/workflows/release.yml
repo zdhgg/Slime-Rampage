@@ -25,14 +25,10 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - name: Resolve target tag
-        id: target
-        run: echo "tag=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
-
+      # 刻意不指定 ref：checkout 跟随触发引用——标签推送时取标签提交（验证的即发布内容），
+      # 手动运行与 workflow 文件一样取分支最新提交（回填历史标签时才能拿到本脚本）
       - name: Checkout
         uses: actions/checkout@v6
-        with:
-          ref: ${{ steps.target.outputs.tag }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -49,20 +45,25 @@ jobs:
         run: npm test
 
       - name: Extract release notes from CHANGELOG
-        run: node .github/scripts/extract-changelog.mjs "${{ steps.target.outputs.tag }}" > release-notes.md
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          echo "发布标签：$TAG"
+          node .github/scripts/extract-changelog.mjs "$TAG" > release-notes.md
+          echo "说明行数：$(wc -l < release-notes.md)"
 
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          tag="${{ steps.target.outputs.tag }}"
-          if gh release view "$tag" > /dev/null 2>&1; then
-            echo "Release $tag 已存在，更新说明与 Latest 标记"
-            gh release edit "$tag" --notes-file release-notes.md --latest
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "Release $TAG 已存在，更新说明与 Latest 标记"
+            gh release edit "$TAG" --notes-file release-notes.md --latest
           else
-            echo "创建 Release $tag"
-            gh release create "$tag" \
-              --title "Slime Rampage $tag" \
+            echo "创建 Release $TAG"
+            gh release create "$TAG" \
+              --title "Slime Rampage $TAG" \
               --notes-file release-notes.md \
               --verify-tag \
               --latest
