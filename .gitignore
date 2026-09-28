@@ -14,3 +14,6 @@ debug.log
 test-viewer.png
 *.tgz
 data/
+
+# 门户系统（Multi-App Portal）自动生成的代理配置，见 README「门户系统集成」
+frontend/vite.config.proxy.ts

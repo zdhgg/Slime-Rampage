@@ -178,7 +178,7 @@ onUnmounted(() => {
           />
         </label>
 
-        <p v-if="!isOnline" class="auth-note">请先启动局域网主机（npm run lan），再从同一地址打开游戏；仍无法连接时，检查主机防火墙是否放行了 4173 端口。</p>
+        <p v-if="!isOnline" class="auth-note">请先启动局域网主机（npm run lan），再从同一地址打开游戏；仍无法连接时，检查主机防火墙是否放行了 8013 端口。</p>
         <p v-else-if="mode === 'register' && !canRegister" class="auth-note">主机暂时关闭了新账号注册。</p>
         <p v-else class="auth-note">登录后使用远程三档案，结算会进入全员排行榜。</p>
 

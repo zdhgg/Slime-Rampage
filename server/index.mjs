@@ -6,7 +6,8 @@ import { createLanApp } from './app.mjs'
 import { openDatabase } from './database.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const port = Math.max(1, Math.min(65535, Number(process.env.SLIME_PORT) || 4173))
+// 只认 SLIME_PORT（默认 8013）：不读取通用 PORT，避免被宿主环境的 PORT 覆盖
+const port = Math.max(1, Math.min(65535, Number(process.env.SLIME_PORT) || 8013))
 const host = process.env.SLIME_HOST || '0.0.0.0'
 const dataDir = resolve(process.env.SLIME_DATA_DIR || join(root, 'data'))
 const distDir = resolve(process.env.SLIME_DIST_DIR || join(root, 'dist'))

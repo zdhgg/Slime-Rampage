@@ -1,0 +1,8 @@
+{
+  "name": "slime-rampage-server",
+  "private": true,
+  "description": "门户管理系统结构契约：局域网主机入口，依赖复用仓库根 node_modules，数据默认写入根目录 data/",
+  "scripts": {
+    "start": "node index.mjs"
+  }
+}

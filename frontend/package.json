@@ -1,0 +1,8 @@
+{
+  "name": "slime-rampage-frontend",
+  "private": true,
+  "description": "门户管理系统结构契约：前端源码位于仓库根目录，本目录仅作为前端口转发到根 Vite 配置（勿在此放置源码）",
+  "scripts": {
+    "dev": "vite .."
+  }
+}
