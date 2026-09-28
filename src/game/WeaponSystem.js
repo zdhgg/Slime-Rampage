@@ -5,6 +5,16 @@ import { getPaletteMid } from './entities/Enemy.js'
 import { getDigestTier, getElement } from './ElementSystem.js'
 import { CELL_SIZE, GRID_KEY_SCALE } from './EnemyManager.js' // 复用分离阶段的空间哈希（碰撞粗筛）
 import { ENDLESS_FORMATION_BREAK_ATTACK_INTERVAL_MUL } from './EndlessMode.js'
+import {
+  DEVOUR_SOURCE_GLUTTON,
+  GLUTTON_BOSS_ERUPTION_DAMAGE_MUL,
+  GLUTTON_BOSS_ERUPTION_MAX_SHOTS,
+  GLUTTON_CHARGE_MAX,
+  getGluttonMawDamageMultiplier,
+  onGluttonBossBasicHit,
+  onGluttonFDevoured,
+  onNormalDevoured,
+} from './GluttonResource.js'
 import { resolveWeaponVisual, splitWeaponVisual, tintedWeaponVisual } from './WeaponVisuals.js'
 
 const TAU = Math.PI * 2
@@ -102,11 +112,17 @@ export class WeaponSystem extends Entity {
     this.devourDamageMul = 1 // 黑市捕食原核：每次吞噬 +3% 攻击（封顶 2.0，本局内滚雪球）
     // —— 专精 → 元素联动（主专精改写元素玩法规则，不加数值） ——
     this.splitInherit = 0.5 // 分裂弹继承母弹附魔/暴击概率的比例（机枪主专精抬到 100%）
-    this.critGuaranteesElement = false // 暴击必定触发元素附魔（刺客主专精：精准打击弱点）
+    // 刺客觉醒的「暴击保证触发元素 proc」——只在角色有元素权限时才赋值
+    // （见 GameEngine._applyPrimarySpecBonus；暗影史莱姆无元素权限，恒为 false）。
+    // 消费点在 _resolveCollisions：只对 player._procs 里的核心元素附魔生效，
+    // 与飞弹自带的 freeze/burn/poisonChance 状态附加概率是两套东西。
+    this.critGuaranteesElement = false
     // —— 吞噬 → 元素联动：消化进度（吞噬累积 → 元素等级爆发） ——
+    // 第三批角色化：暴食已退出元素链，消化链不再被任何角色触达（见 addDigestCharge 的
+    // 权限闸门）。字段与 _digestDevour / DIGEST_EFFECTS 作为不可达路径暂时保留，
+    // 不在本批删除；digestGainMul 随「暴食消化效率 +50%」赋能一并移除（已无消费方）。
     this.digestCharge = 0 // 当前消化能量（0 ~ digestChargeMax）
     this.digestChargeMax = DIGEST_CHARGE_MAX
-    this.digestGainMul = 1 // 消化转化效率（暴食主专精：胃袋把血肉变成元素养分）
     this.digestBursts = 0 // 消化爆发次数（物种档案统计）
     this.visualTiers = { gluttony: 0, gatling: 0, elemental: 0, assassin: 0 }
     this._muzzleT = 0
@@ -171,7 +187,6 @@ export class WeaponSystem extends Entity {
     this.critGuaranteesElement = false
     this.digestCharge = 0
     this.digestChargeMax = DIGEST_CHARGE_MAX
-    this.digestGainMul = 1
     this.digestBursts = 0
     this.visualTiers = { gluttony: 0, gatling: 0, elemental: 0, assassin: 0 }
     this._muzzleT = 0
@@ -333,6 +348,7 @@ export class WeaponSystem extends Entity {
           freezeChance: this.freezeChance,
           burnChance: this.burnChance,
           poisonChance: this.poisonChance,
+          isBasicAttack: true,
           pierces: this.basePierces + this.genePierces,
           visual,
           life: this.isGatlingMother ? 5 : 2.5,
@@ -665,6 +681,16 @@ export class WeaponSystem extends Entity {
     this._rings.push({ x, y, r0: 4, r1, life: 0.3, maxLife: 0.3, color })
   }
 
+  /**
+   * 元素核心生成闸门（第三批角色化）：只有 elemental / origin 能使用元素，
+   * 其余角色不生成「捡不起来的空资源」。
+   * 这是所有核心产出路径的统一收口（Boss / 精英 / 吞噬 / hunt 事件）。
+   */
+  _spawnElementCore(x, y, type) {
+    if (!this.game.canUseElements) return null
+    return this.game.gemManager.spawn(x, y, 0, type)
+  }
+
   /** 击杀结算唯一汇聚点：计数 + 连杀 + 音效 + 掉落（Boss 大爆 / 精英必掉 / 普通概率） */
   _settleKill(e) {
     // _settled 防重复结算：吞噬中（onDevoured 已结算）或 DOT 已结算的敌人
@@ -702,7 +728,7 @@ export class WeaponSystem extends Entity {
       for (let i = 0; i < gemCount; i++) this.game.gemManager.spawn(e.x, e.y, v)
       const els = ['fire', 'water', 'poison', 'lightning']
       for (let i = 0; i < coreCount; i++) {
-        this.game.gemManager.spawn(e.x, e.y, 0, els[(Math.random() * 4) | 0])
+        this._spawnElementCore(e.x, e.y, els[(Math.random() * 4) | 0])
       }
       if (!chapterGuardian && (!squadMember || squadLast)) {
         this.game.gemManager.spawn(e.x, e.y, 0, 'tome')
@@ -713,10 +739,11 @@ export class WeaponSystem extends Entity {
       this.game.gemManager.spawn(e.x, e.y, e.expValue) // 经验宝石
       // 元素核心（阶段十六经济重设计）：击杀仅精英掉落——
       // 核心回归「狩猎精英/Boss」的战利品定位（Boss 大爆 3 个在 Boss 分支）；
-      // 吞噬路径（法师/精英必掉、其他 25%）仍是主动获取核心的技巧型途径
+      // 吞噬路径（法师/精英必掉、其他 12%）仍是主动获取核心的技巧型途径。
+      // 第三批：非元素角色（暴食/弹射/暗影）不产出核心。
       if (e.isElite) {
         const els = ['fire', 'water', 'poison', 'lightning']
-        this.game.gemManager.spawn(e.x, e.y, 0, els[(Math.random() * els.length) | 0])
+        this._spawnElementCore(e.x, e.y, els[(Math.random() * els.length) | 0])
       }
     }
 
@@ -804,6 +831,8 @@ export class WeaponSystem extends Entity {
 
             // —— 命中：飞弹销毁，敌人扣血 ——
             const critChance = p.critChance + burstBonus
+            // guaranteedCrit 有两个来源：刺客终极觉醒的冲刺隐匿、以及角色 F 技能「影袭」。
+            // 后者与觉醒无关，因此在觉醒前也必须生效——这里只消费、不判断来源。
             const isCrit = (critChance > 0 && Math.random() < critChance) || this.player.guaranteedCrit
             if (this.player.guaranteedCrit) this.player.guaranteedCrit = false
 
@@ -811,7 +840,11 @@ export class WeaponSystem extends Entity {
             if (isCrit && this.executeCrit && e.hp <= e.maxHp * 0.5) {
               critMultiplier *= 2.0
             }
-            let damage = p.damage * critMultiplier
+            // M1（目标感知伤害补偿）：深渊胃囊（glut_maw）的降攻仅用于压低小怪/精英普攻以扩大留血吞噬窗口，
+            // 基础普攻命中 Boss 时按当前 glut_maw 倍率对冲还原，不污染全局 weaponSystem.damage。
+            const mawMul = p.isBasicAttack && e.isBoss ? getGluttonMawDamageMultiplier(this.player) : 1.0
+            const baseDamage = mawMul > 0 && mawMul < 1.0 ? p.damage / mawMul : p.damage
+            let damage = baseDamage * critMultiplier
 
             // 刺客：暗影无相主宰 暴击瞬发影分身斩
             if (isCrit && this.isShadowLord) {
@@ -832,6 +865,10 @@ export class WeaponSystem extends Entity {
               effects.poison = 3 * dotMul
               effects.poisonDmg = tickDmg
             }
+            // 元素附魔（单元素累积）：只有元素权限角色会有 _procs（第三批角色化）。
+            // 刺客觉醒的 critGuaranteesElement 只作用于这三条「核心元素 proc」；
+            // 飞弹自带的 freeze/burn/poisonChance 在上方按概率独立结算，
+            // 两者是不同的概念（后者是武器状态附加，前者是已吸收元素的等级累积）。
             if (procs.burn?.chance && (this.critGuaranteesElement && isCrit || Math.random() < procs.burn.chance)) {
               effects.burn = Math.max(effects.burn || 0, procs.burn.duration * dotMul)
               effects.burnDmg = Math.max(effects.burnDmg || 0, tickDmg)
@@ -863,6 +900,17 @@ export class WeaponSystem extends Entity {
             if (penetrates) p.pierces--
             else p.destroy()
             e.hit(damage, effects)
+            // H10（含 M2 胃囊加速与 C1 觉醒降阈）：仅基础普攻弹体命中 Boss 时计入 Boss 猎食进度
+            if (p.isBasicAttack && e.isBoss && onGluttonBossBasicHit(this.player, e)) {
+              this.game.enemyManager?.addText?.(
+                this.player.x,
+                this.player.y - 46,
+                `🍽️ 猎食点 +1（${this.player.gluttonCharge}/${GLUTTON_CHARGE_MAX}）`,
+                null,
+                '#8ae84a',
+                15
+              )
+            }
             this._burstColor(e.x, e.y, p.visual.impact, isCrit ? 14 : p.visual.impactCount, isCrit)
             this.game.sound.hit(p.visual.sound)
 
@@ -903,12 +951,66 @@ export class WeaponSystem extends Entity {
     }
   }
 
-  /** 吞噬结算（评审核心爽点）：分层收益——普通怪经验×1.5 + 概率核心；精英经验×3 + 必掉核心 */
-  onDevoured(e) {
+  /**
+   * 暴食：胃酸迸发 / 腐殖喷吐（glut_eruption）弹幕生成。
+   *  - 普通吞噬（bossBite = false）：弹数 = player.devourAcidSpray（6 / 10），伤害 = damage * 1.5，poisonChance = 1.0；
+   *  - Boss 撕咬（bossBite = true，方案 E）：弹数上限 4，伤害 ×0.5，poisonChance = 0（不附带毒 DOT）；
+   *  - 所有喷吐弹体均标记 isEruption = true（isBasicAttack = false），命中 Boss 绝不计入普攻猎食进度。
+   */
+  spawnDevourEruption(x, y, { bossBite = false } = {}) {
+    const spray = this.player?.devourAcidSpray || 0
+    if (spray <= 0) return 0
+    const count = bossBite ? Math.min(GLUTTON_BOSS_ERUPTION_MAX_SHOTS, spray) : spray
+    const damageMul = bossBite ? GLUTTON_BOSS_ERUPTION_DAMAGE_MUL : 1
+    const poisonChance = bossBite ? 0 : 1.0
+    for (let i = 0; i < count; i++) {
+      const a = (i / count) * TAU
+      this._projectiles.push(
+        new Projectile({
+          x,
+          y,
+          damage: this.damage * 1.5 * damageMul,
+          speed: 420,
+          vx: Math.cos(a) * 420,
+          vy: Math.sin(a) * 420,
+          homing: 0.6,
+          poisonChance,
+          isEruption: true,
+          visual: tintedWeaponVisual('#7ce86a'),
+        })
+      )
+    }
+    return count
+  }
+
+  /**
+   * 吞噬结算（评审核心爽点）：分层收益——普通怪经验×1.5 + 概率核心；精英经验×3 + 必掉核心。
+   *
+   * `ctx.source` = 本次吞噬的来源（'normal' 缺省 / 'gluttonF'）。这是「暴食 F 不返充
+   * 猎食点」这条护栏的**唯一**判定层：来源由调用方显式传入（EnemyManager._startDevour），
+   * 不依赖时间戳、坐标或全局布尔，因此不存在泄漏路径。
+   *
+   * @param {object} e 被吞噬的敌人
+   * @param {{source?: string}} [ctx] 吞噬来源上下文
+   */
+  onDevoured(e, ctx = null) {
     if (e._settled) return // 防御：已结算的敌人不再重复发放（_checkDevour 已过滤，双保险）
     e._settled = true // 吞噬路径独立结算，标记防止与 DOT/即时路径重复
     this.kills++
     this.devours++
+    // 猎食点进度：只有普通吞噬计入（F 主动捕食走 onGluttonFDevoured，恒不增加进度）
+    if (ctx?.source === DEVOUR_SOURCE_GLUTTON) {
+      onGluttonFDevoured(this.player)
+    } else if (onNormalDevoured(this.player)) {
+      this.game.enemyManager?.addText?.(
+        this.player.x,
+        this.player.y - 46,
+        `🍽️ 猎食点 +1（${this.player.gluttonCharge}/${GLUTTON_CHARGE_MAX}）`,
+        null,
+        '#8ae84a',
+        15
+      )
+    }
     if (e.isElite) this.eliteKills++
     this.game.worldEvents?.onEnemyDefeated(e)
     this.player.triggerKillRush?.(2)
@@ -932,23 +1034,7 @@ export class WeaponSystem extends Entity {
 
     // 暴食：胃酸喷涌
     if (this.player.devourAcidSpray > 0) {
-      const count = this.player.devourAcidSpray
-      for (let i = 0; i < count; i++) {
-        const a = (i / count) * TAU
-        this._projectiles.push(
-          new Projectile({
-            x: e.x,
-            y: e.y,
-            damage: this.damage * 1.5,
-            speed: 420,
-            vx: Math.cos(a) * 420,
-            vy: Math.sin(a) * 420,
-            homing: 0.6,
-            poisonChance: 1.0,
-            visual: tintedWeaponVisual('#7ce86a'),
-          })
-        )
-      }
+      this.spawnDevourEruption(e.x, e.y, { bossBite: false })
     }
 
     // 经验宝石（分层倍率：普通怪 ×1.5、精英 ×3）
@@ -956,15 +1042,20 @@ export class WeaponSystem extends Entity {
     this.game.gemManager.spawn(e.x, e.y, Math.round(e.expValue * mul * (this.player.geneDevourExpMul || 1)))
 
     // 元素核心：法师必掉火/雷、精英必掉随机、其他 12%（普通怪吞噬的核心收益收敛为小概率彩头）
+    // 第三批角色化：非元素角色（暴食/弹射/暗影）不产出核心。
     let coreType = null
     if (e.type === 'mage' || e.isElite || Math.random() < 0.12) {
       const pool = e.type === 'mage' ? ['fire', 'lightning'] : ['fire', 'water', 'poison', 'lightning']
-      coreType = pool[(Math.random() * pool.length) | 0]
-      this.game.gemManager.spawn(e.x, e.y, 0, coreType)
+      const picked = pool[(Math.random() * pool.length) | 0]
+      coreType = this._spawnElementCore(e.x, e.y, picked) ? picked : null
     }
 
     // 消化进度（吞噬 → 元素联动）：猎物血肉转化为元素养分，满槽爆发元素成长
-    this.addDigestCharge(e.isElite ? DIGEST_GAIN_ELITE : DIGEST_GAIN_NORMAL)
+    // 第三批角色化：暴食已退出元素链——只在有元素权限时累积，
+    // 因此 addDigestCharge → absorbElement → _digestDevour 整条链对暴食不可达。
+    if (this.game.canUseElements) {
+      this.addDigestCharge(e.isElite ? DIGEST_GAIN_ELITE : DIGEST_GAIN_NORMAL)
+    }
 
     // 战利品必掉（黑市货币）
     this.drops[e.type] = (this.drops[e.type] || 0) + 1
@@ -1082,9 +1173,12 @@ export class WeaponSystem extends Entity {
    * @returns {boolean} 本次是否触发了消化爆发
    */
   addDigestCharge(amount) {
+    // 权限闸门（第三批角色化）：消化链会经 absorbElement 授予元素等级，
+    // 因此只对有元素权限的角色开放。暴食不再通过吞噬累计/转化元素。
+    if (!this.game.canUseElements) return false
     this.digestCharge = Math.min(
       this.digestChargeMax,
-      this.digestCharge + Math.max(0, amount) * this.digestGainMul
+      this.digestCharge + Math.max(0, amount)
     )
     if (this.digestCharge < this.digestChargeMax) return false
     const els = this.player.elements

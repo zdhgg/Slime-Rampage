@@ -47,8 +47,9 @@ const SLOW_MUL = 0.6
 export const getPaletteMid = (key) => (PALETTES[key] ? PALETTES[key][1] : PALETTES.knight[1])
 
 /** 不可吞噬敌族：魔像是石造物、怨灵是无形亡魂——没有可供吞噬的血肉，
- *  残血也不会进入可吞噬状态（战獒是活物，仍可吞噬） */
-const NO_DEVOUR_TYPES = new Set(['golem', 'wraith'])
+ *  残血也不会进入可吞噬状态（战獒是活物，仍可吞噬）。
+ *  导出供暴食 F 的主动捕食资格复用：一个集合、一处口径，不允许出现第二份副本。 */
+export const NO_DEVOUR_TYPES = new Set(['golem', 'wraith'])
 
 /** 敌方数值表：人类六职 + 非人三族（战獒快袭 / 魔像重壁 / 怨灵吸血） */
 const CLASSES = {
@@ -197,7 +198,18 @@ export class Enemy extends Entity {
     }
 
     const devourHp = Math.max(1, Math.ceil(this.maxHp * this._devourThresh()))
-    if (!this.isBoss && !NO_DEVOUR_TYPES.has(this.type) && this.hp > 0 && this.hp <= devourHp) {
+    // 阶段十九：只有暴食史莱姆能吞噬。非暴食角色下 devourable 永不置位——
+    // 这样白旗/呼吸环（render 读 devourable）与吞噬吸附（_checkDevour）自动一起关闭，
+    // 不需要在渲染热路径里再查一次角色身份。
+    // 兼容：game 桩未提供 canDevour 时按「可吞噬」处理（旧测试与调试桩）。
+    const devourEnabled = this.game?.canDevour ?? true
+    if (
+      devourEnabled &&
+      !this.isBoss &&
+      !NO_DEVOUR_TYPES.has(this.type) &&
+      this.hp > 0 &&
+      this.hp <= devourHp
+    ) {
       this.devourable = true
     }
     if (effects && (!this.isEnraged)) { // 狂战士狂暴状态免疫控制

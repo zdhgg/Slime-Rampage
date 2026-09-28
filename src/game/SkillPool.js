@@ -9,6 +9,21 @@
  *  - Lv. 10+【深潜与终极觉醒】：主专精开放 T4 终极质变大招（Capstone），副专精开放专属共鸣挂件。
  */
 
+/**
+ * 加特林母体觉醒的射速乘数（乘算语义，取值来自固定快照消融实验）。
+ * 间隔 = 觉醒前间隔 × 0.40（即"缩短 60%"），弹体吞吐跃迁约 2.7×。
+ * 刻意保持为「乘数」而非目标间隔：任何前期射速投入（血统 ×1.2 惩罚、
+ * gat_multishot 每级 ×0.85）都会以同等比例延续到觉醒之后。
+ */
+export const GATLING_CAPSTONE_RATE = 0.4
+
+/**
+ * 觉醒文案里「缩短 X%」的唯一派生来源。
+ * desc / stats / roadmap 三处都必须经它取值——否则以后调整 GATLING_CAPSTONE_RATE
+ * 时，写死的那几处会静默漂移（本常量上一版就踩过这个坑）。
+ */
+export const getGatlingCapstoneCutPercent = () => Math.round((1 - GATLING_CAPSTONE_RATE) * 100)
+
 export const SPEC_INFO = {
   gluttony: {
     key: 'gluttony',
@@ -36,7 +51,7 @@ export const SPEC_INFO = {
       'T1: 多重喷射腔 (齐射弹数) / 喷射增压 (弹速伤害)',
       'T2: 有丝分裂 (命中 100% 分裂 2 枚小弹)',
       'T3: 连锁弹射 (分裂微弹穿透弹射 2 次)',
-      '🌟 终极觉醒: 加特林风暴母体 (0.12s 极速机枪连射 · 全屏飞弹强力追踪)',
+      `🌟 终极觉醒: 加特林风暴母体 (射击间隔 -${getGatlingCapstoneCutPercent()}% · 齐射 +2 · 全屏飞弹强力追踪)`,
     ],
     subBonus: '🥈 副专精共鸣：解锁【增压副弹夹(弹数+1/弹速+75%)】与【动能穿透(穿透+2)】',
   },
@@ -300,15 +315,27 @@ export const SKILL_DATABASE = {
         requires: ['gat_chain'],
         name: '🌟 加特林风暴母体',
         icon: '👑',
-        desc: '射击间隔骤降至 0.12 秒（每秒扫射近 10 发），全屏飞弹自动强力追踪！',
+        desc: `射击间隔缩短 ${getGatlingCapstoneCutPercent()}%，额外 +2 齐射飞弹，全屏飞弹自动强力追踪！`,
         tags: ['终极觉醒', '加特林'],
         maxLevel: 1,
         stats() {
-          return '母体觉醒 · 射击间隔 0.12s · 全屏追踪'
+          return `母体觉醒 · 射击间隔 -${getGatlingCapstoneCutPercent()}% · 齐射 +2 · 全屏追踪`
         },
+        /**
+         * 终极觉醒：射速按**乘算**强化，而不是把 fireInterval 写成固定值。
+         *
+         * 早期实现是 `fireInterval = 0.12`（绝对覆盖），实测有三个问题：
+         *  ① 抹平一切前期射速投入——血统的 ×1.2 惩罚、gat_multishot 每级的 ×0.85
+         *     全部被丢弃，任何 Build 都被压到同一个终点（origin 与弹射两条真实路径的
+         *     间隔比值 0.833 会归零到 1.000，即"谁堆过射速都一样"）；
+         *  ② 吞吐跃迁达 4.6×，是本表最强的单点放大节点；
+         *  ③ 与其它来源的关系不连续，无法与后续任何射速调整共存。
+         * 改为乘算后，间隔比值恒等于觉醒前的比值（保留 Build 差异），
+         * 弹体吞吐跃迁收敛到约 2.7×。倍率取值来自固定快照消融实验。
+         */
         apply(game) {
           game.weaponSystem.isGatlingMother = true
-          game.weaponSystem.fireInterval = 0.12
+          game.weaponSystem.fireInterval *= GATLING_CAPSTONE_RATE
           game.weaponSystem.projectileCount += 2
           game.enemyManager.addText(game.player.x, game.player.y - 24, '🌟 加特林风暴母体 觉醒!', null, '#00d2d3', 18)
         },
@@ -694,6 +721,51 @@ export const SKILL_DATABASE = {
 }
 
 /**
+ * 技能的「角色权限」前提（第四批）：把依赖独占能力的技能标出来，
+ * 由候选池与里程碑统一过滤，避免把死技能摆到玩家面前。
+ *
+ * 只列真正完全无效的技能——部分有效的（如 glut_capstone 的冲刺无敌仍在）
+ * 一律保留，宁可少过滤也不误伤。
+ */
+const SKILL_CAPABILITY = {
+  // 只在「吞噬」发生时生效 → 仅 canDevour 的角色可用
+  glut_eruption: 'devour',
+  glut_sub_digest: 'devour',
+  // 只在元素反应存在时生效 → 仅 canUseElements 的角色可用
+  ele_sub_boost: 'element',
+}
+
+/** 该技能在当前角色权限下是否有实际效果 */
+function skillUsable(skill, canDevour, canUseElements) {
+  const need = SKILL_CAPABILITY[skill.id]
+  if (!need) return true
+  return need === 'devour' ? canDevour : canUseElements
+}
+
+/**
+ * 某专精的主树是否可以呈现给当前角色。
+ * 暴食主树整棵依赖「能吞噬」：pool 里的 glut_maw（拿攻击换吞噬线）对不能吞噬的
+ * 角色是纯负面，glut_eruption / glut_capstone 也不可达 → 整树排除，
+ * 不做逐技能白名单（origin 因此保留 gatling / elemental / assassin + 通用）。
+ */
+function specPrimaryUsable(specKey, canDevour) {
+  if (specKey === 'gluttony') return canDevour
+  return true
+}
+
+/** 某专精的 secondary 技能在当前权限下还剩哪些可用 */
+function secondarySkills(specKey, canDevour = true, canUseElements = true) {
+  return (SKILL_DATABASE[specKey]?.secondary || []).filter((s) =>
+    skillUsable(s, canDevour, canUseElements)
+  )
+}
+
+/** 该专精是否还有可用的 secondary（用于 Lv.9 里程碑候选过滤） */
+function specSecondaryUsable(specKey, canDevour, canUseElements) {
+  return secondarySkills(specKey, canDevour, canUseElements).length > 0
+}
+
+/**
  * 智能抽取算法（支持里程碑觉醒机制）
  */
 export function rollSkills(game, count = 3) {
@@ -701,13 +773,22 @@ export function rollSkills(game, count = 3) {
   const levels = game.skillLevels || {}
   const primarySpec = game.primarySpec
   const secondarySpec = game.secondarySpec
+  // 角色身份（阶段十九）：四名角色在 Lv.1~4 只开放本角色 T1；
+  // origin（roleSpec = null）保留四系 T1 自由探索 + Lv.5 四选一。
+  const roleSpec = game.roleSpec || null
+  // 角色权限（第三/第四批）：技能池必须与独占能力对齐，否则会把死技能摆到玩家面前。
+  // 引擎侧是 getter（布尔）；测试桩缺省按「有权限」处理，与本文件其它桩口径一致。
+  const canDevour = game.canDevour !== false
+  const canUseElements = game.canUseElements !== false
+  const isSpecOffered = (k) => specPrimaryUsable(k, canDevour)
+  const isSecondarySpecOffered = (k) => specSecondaryUsable(k, canDevour, canUseElements)
 
   // ===================================================
-  // 1. Lv. 5 里程碑：主专精觉醒仪式（四系陈列）
+  // 1. Lv. 5 里程碑：主专精觉醒仪式（四系陈列；按权限过滤）
   // ===================================================
   if (pLevel >= 5 && !primarySpec) {
     return Object.keys(SKILL_DATABASE)
-      .filter((k) => k !== 'common')
+      .filter((k) => k !== 'common' && isSpecOffered(k))
       .map((k) => {
         const info = SPEC_INFO[k]
         return {
@@ -728,13 +809,17 @@ export function rollSkills(game, count = 3) {
   }
 
   // ===================================================
-  // 2. Lv. 9 里程碑：副专精共鸣仪式（剩余三系陈列）
+  // 2. Lv. 9 里程碑：副专精共鸣仪式（剩余三系陈列；按权限过滤）
   // ===================================================
   if (pLevel >= 9 && primarySpec && !secondarySpec) {
     return Object.keys(SKILL_DATABASE)
-      .filter((k) => k !== 'common' && k !== primarySpec)
+      .filter((k) => k !== 'common' && k !== primarySpec && isSecondarySpecOffered(k))
       .map((k) => {
         const info = SPEC_INFO[k]
+        // 共鸣预览只承诺本角色实际拿得到的部分：某条共鸣技能被权限过滤掉时，
+        // 不得在面板上继续宣告它（否则是「文案承诺了却永远拿不到」）。
+        const keptSkills = secondarySkills(k, canDevour, canUseElements)
+        const partial = keptSkills.length < SKILL_DATABASE[k].secondary.length
         return {
           id: `milestone_sec_${k}`,
           spec: k,
@@ -745,9 +830,13 @@ export function rollSkills(game, count = 3) {
           color: info.color,
           desc: info.desc,
           bonus: info.subBonus,
-          roadmap: [info.subBonus],
+          roadmap: partial
+            ? [keptSkills.map((s) => `${s.icon} ${s.name}`).join(' ／ ')]
+            : [info.subBonus],
           tags: ['🥈 副专精共鸣', info.name],
-          stats: info.subBonus,
+          stats: partial
+            ? keptSkills.map((s) => `${s.icon} ${s.name}`).join(' ／ ')
+            : info.subBonus,
         }
       })
   }
@@ -769,12 +858,24 @@ export function rollSkills(game, count = 3) {
   for (const [specKey, tree] of Object.entries(SKILL_DATABASE)) {
     if (specKey === 'common') continue
 
-    // 尚未确立主专精（Lv 1~4 探索期）：所有 4 大专精的 T1 技能全部开放探索！
+    // 尚未确立主专精（Lv.1~4）：
+    //  - 角色血统（roleSpec）：只开放本角色 T1——Lv.5 会自动觉醒，不需要玩家再选一次；
+    //  - origin（roleSpec = null）：保留四系 T1 自由探索，但**排除暴食主树**
+    //    （第四批：origin 无 canDevour，glut_maw 是「拿攻击换吞噬线」的纯负面卡）。
+    // 注意这里刻意不带 tier 过滤之外的放宽条件：T2/T3 仍必须等 primarySpec 确立
+    // （GameEngine._ensureRoleAwakening）后才会进入候选池，不会因为角色绑定而提前。
     if (!primarySpec) {
-      for (const s of tree.primary.filter((sk) => sk.tier === 1)) {
-        const curLv = levels[s.id] || 0
-        if (curLv < s.maxLevel) {
-          candidatePool.push({ ...s, role: 't1_free', level: curLv })
+      if (roleSpec) {
+        if (specKey !== roleSpec) continue
+        for (const s of tree.primary.filter((sk) => sk.tier === 1)) {
+          const curLv = levels[s.id] || 0
+          if (curLv < s.maxLevel) candidatePool.push({ ...s, role: 'role_t1', level: curLv })
+        }
+      } else {
+        if (!isSpecOffered(specKey)) continue
+        for (const s of tree.primary.filter((sk) => sk.tier === 1)) {
+          const curLv = levels[s.id] || 0
+          if (curLv < s.maxLevel) candidatePool.push({ ...s, role: 't1_free', level: curLv })
         }
       }
     } else if (specKey === primarySpec) {
@@ -782,6 +883,7 @@ export function rollSkills(game, count = 3) {
       for (const s of tree.primary) {
         const curLv = levels[s.id] || 0
         if (curLv >= s.maxLevel) continue
+        if (!skillUsable(s, canDevour, canUseElements)) continue
 
         // 终极觉醒需要构筑深度和战局进度同时达标，防止单次经验暴涨或慢打
         // 单独提前大招；远征用关卡进度替代计时波次。
@@ -804,12 +906,14 @@ export function rollSkills(game, count = 3) {
         }
       }
     } else if (secondarySpec && specKey === secondarySpec) {
-      // 当前是【副专精】：开放副专精共鸣技能
+      // 当前是【副专精】：开放副专精共鸣技能（按权限过滤掉对本角色无效的共鸣）
       for (const s of tree.secondary) {
         const curLv = levels[s.id] || 0
-        if (curLv < s.maxLevel) {
-          candidatePool.push({ ...s, role: 'secondary', level: curLv })
-        }
+        if (curLv >= s.maxLevel) continue
+        // 第四批：glut_sub_digest 仅在 canDevour 时可用；ele_sub_boost 仅在 canUseElements 时可用。
+        // 角色（非 origin）的 secondary 与角色绑定，天然只会看到本树，过滤对它们是恒等变换。
+        if (!skillUsable(s, canDevour, canUseElements)) continue
+        candidatePool.push({ ...s, role: 'secondary', level: curLv })
       }
     }
   }

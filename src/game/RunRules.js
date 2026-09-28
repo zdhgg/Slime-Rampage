@@ -172,9 +172,13 @@ export function getExpeditionBoss(id) {
   return EXPEDITION_BOSSES[id] || EXPEDITION_BOSSES.court_commander
 }
 
-/** 远征首领需要承载完整机制循环；终章统帅额外延长决战时间。 */
+/**
+ * 远征首领需要承载完整机制循环，统一给 1.6 倍体量。
+ * 终章的额外强度改由成长曲线（EXPEDITION_BOSS_GROWTH）与统帅自身 hpMul 提供——
+ * 旧口径在此处再叠一层 2× 会让终章相对前一章暴涨近一倍，形成曲线悬崖。
+ */
 export function getExpeditionBossHpMultiplier(encounter) {
-  return encounter?.final ? 2 : 1.6
+  return encounter ? 1.6 : 1
 }
 
 export const EXPEDITION_STAGES = [
@@ -383,6 +387,30 @@ const EXPEDITION_INTERLUDES = [
 const EXPEDITION_INTERLUDE_COUNTS = { easy: 0, normal: 2, hard: 4, hell: 6 }
 
 /**
+ * 首领乘算成长档位（解决「越到后期首领越脆」的曲线倒挂）：
+ * 玩家 DPS 随等级与技能是乘算增长（一局可涨一个数量级），而首领基础生命
+ * 只在 baseHp 里线性 +8/波——缺少乘算补偿时，后期首领相对血量持续缩水，
+ * 终局反而成为全流程最轻松的一场。这里按档位给首领独立的乘算成长：
+ *  - 限时：第 5 波起每 5 波一档（第 5/10/15/20/25 波，终局为第 5 档）
+ *  - 远征：每章一档逐章递进（上限 12 章），避免旧口径「前段平、末章暴涨」
+ * 用查表而非 pow 是为了让断言可精确复现，也便于逐档手调。
+ */
+const TIMED_BOSS_GROWTH = [1, 1.35, 1.82, 2.46, 3.32]
+const EXPEDITION_BOSS_GROWTH = [1, 1.16, 1.35, 1.56, 1.81, 2.1, 2.44, 2.83, 3.28, 3.8, 4.41, 5.12]
+
+/** 首领成长系数：远征按章、限时按波次档位，其余模式（无尽）由灾变档位负责 */
+function getBossGrowth(selection, wave, expeditionTier) {
+  if (selection?.mode === 'expedition') {
+    return EXPEDITION_BOSS_GROWTH[Math.min(expeditionTier, EXPEDITION_BOSS_GROWTH.length - 1)]
+  }
+  if (selection?.mode === 'timed') {
+    const timedTier = Math.max(0, Math.floor((Math.max(1, wave) - 5) / 5))
+    return TIMED_BOSS_GROWTH[Math.min(timedTier, TIMED_BOSS_GROWTH.length - 1)]
+  }
+  return 1
+}
+
+/**
  * 章节敌军偏向（章节 → 兵种权重乘数）：
  * 让 12 个章节的兵种构成随地域变化，而不只是数值不同——
  * 王城缺口是盾卫与牧师的主场、王陵是怨灵的巢穴、校场挤满狂战士。
@@ -553,15 +581,17 @@ export function getBossWavePlan(selection, wave, extraBossMembers = 0) {
 
 /**
  * 波次修饰：无尽按灾变档位递增；远征按关卡进度递进（关卡越深，
- * 敌人越硬、精英越多——难度跟随远征进度而不只跟随时间波次）。
+ * 敌人越硬、精英越多——难度跟随远征进度而不只跟随时间波次）；
+ * 首领血量另有按档位的乘算成长（见 getBossGrowth），避免后期相对变脆。
  */
 export function getWaveModifiers(selection, wave, stage = 0) {
   const tier = getEndlessDisasterTier(selection, wave)
   const expeditionTier = selection?.mode === 'expedition' ? Math.max(0, (stage || 1) - 1) : 0
+  const bossGrowth = getBossGrowth(selection, wave, expeditionTier)
   return {
     tier,
     enemyHpMul: 1 + tier * 0.12 + expeditionTier * 0.06,
-    bossHpMul: 1 + tier * 0.18 + expeditionTier * 0.09,
+    bossHpMul: (1 + tier * 0.18) * bossGrowth,
     attackTempoMul: 1 + Math.min(0.3, tier * 0.03),
     eliteChanceBonus: Math.min(0.1, tier * 0.02 + expeditionTier * 0.015),
     bossPatternBonus: Math.min(4, tier) + Math.min(2, Math.floor(expeditionTier / 4)),
@@ -608,8 +638,9 @@ export function getUnlockedModeIds(progression) {
 }
 
 export function modeUnlockHint(mode) {
-  if (mode === 'timed') return '困难闯关通关后解锁'
-  if (mode === 'endless') return '困难限时通关后解锁'
+  // 条件直接点名模式，避免「闯关/限时」这类需要玩家自行映射的简称。
+  if (mode === 'timed') return '通关「王庭逆袭 · 困难」后解锁'
+  if (mode === 'endless') return '通关「限时讨伐 · 困难」后解锁'
   return ''
 }
 

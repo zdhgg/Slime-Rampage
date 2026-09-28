@@ -174,6 +174,13 @@ export class GemManager extends Entity {
   /** 查找并主动吸收最近的元素核心；经验与秘籍仍使用自动磁吸。 */
   _updateCoreInteraction() {
     const list = this._gems
+    // 元素权限（第三批角色化）：非元素角色 E 不进行元素交互，
+    // 也不点亮「E」提示气泡（_nearCore 保持 null）。
+    if (this.game?.canUseElements === false) {
+      this.player.input.consumeInteract?.() // 消费掉按键，避免队列残留
+      this._nearCore = null
+      return false
+    }
     const px = this.player.x
     const py = this.player.y
     let best = null
@@ -262,14 +269,18 @@ export class GemManager extends Entity {
       }
       if (changed && !g.merged) g.setExpValue(g.value)
     }
-    // 回收被吸收的宝石（swap-pop；换入的元素原地复查，防 merged 宝石残留）
+    // 回收被吸收的宝石（倒序 swap-pop：O(1) 删除、无数组搬迁）。
+    // 倒序是正确性的前提，因此删除后不需要原地复查：
+    //  - 与末位交换时，换入的元素下标更大、本轮已被访问过且未标记 merged，
+    //    所以搬过来就是干净的；i 继续向前即可；
+    //  - i 恰好是末位时交换退化为自赋值，pop 后由 for 自身的 i-- 正常回退。
+    // 旧实现把 i-- 写在 else 分支里：末位元素 merged 时 pop 后 i 不回退，
+    // 下一轮 i === list.length → list[i] === undefined → 读 .merged 抛 TypeError。
     if (changed) {
-      for (let i = list.length - 1; i >= 0; ) {
+      for (let i = list.length - 1; i >= 0; i--) {
         if (list[i].merged) {
           list[i] = list[list.length - 1]
           list.pop()
-        } else {
-          i--
         }
       }
     }

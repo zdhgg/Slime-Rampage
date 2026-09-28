@@ -14,7 +14,14 @@ import { MapFeatureManager } from './MapFeatureManager.js'
 import { DialogueManager } from './DialogueManager.js'
 import { createGameplay, normalizeGameplayId } from './gameplay/GameplayFactory.js'
 import { AmbientLayer } from './effects/AmbientLayer.js'
-import { STRAIN_IDS, applyStrain } from './Strains.js'
+import { STRAIN_IDS, applyStrain, canDevour, canUseElements, getStrainSkill } from './Strains.js'
+import {
+  GLUTTON_CHARGE_MAX,
+  GLUTTON_DEVOURS_PER_CHARGE,
+  hasGluttonResource,
+  resetGluttonResource,
+  tickGluttonResource,
+} from './GluttonResource.js'
 import {
   EXPEDITION_REWARDS,
   EVENT_LOCK_AT,
@@ -48,6 +55,16 @@ const MAX_DT = 0.05 // 单帧时间上限（50ms）：切后台回来时防止�
 const EXPEDITION_INTRO_DURATION = 1.6
 
 /**
+ * 吞噬线口径（阶段十九集中化）：
+ * 基础阈值 0.25，血统（strainDevourBonus）与专精（glut_maw / Lv.5 觉醒）都往它上面加，
+ * 而 Enemy._devourThresh 是「基础值 ± 13pct」的固定宽度分层。
+ * 不设上限时暴食角色会叠到 ≈30%（普通怪门槛），怪在被打死之前就举白旗，
+ * 击杀数暴跌并连带污染掉落、连杀与导演清怪率采样——因此在此封顶。
+ */
+export const DEVOUR_THRESHOLD_BASE = 0.25
+export const DEVOUR_THRESHOLD_CAP = 0.4
+
+/**
  * HUD 初始统计快照：与 _pushStats 的字段形状保持一致。
  * UI 层用它初始化 stats（引擎就绪前 HUD 渲染不访问 undefined 字段），
  * 字段增删只改引擎这一处，消除「初始对象与回调拷贝手工双写」的漂移。
@@ -69,6 +86,7 @@ export function createDefaultStats() {
     dashCd: 0,
     dashMax: 1.2,
     devourThreshold: 0.25,
+    strainDevourBonus: 0,
     boss: null,
     director: null,
     objective: null,
@@ -81,7 +99,13 @@ export function createDefaultStats() {
     secondarySlots: 2,
     primarySpec: null,
     secondarySpec: null,
+    roleSpec: null,
+    strainId: 'origin',
+    canDevour: false,
+    canUseElements: true,
     digest: { charge: 0, max: 100, bursts: 0 },
+    // 暴食猎食点（仅暴食角色在 _pushStats 里给出 true 与真实数值）
+    glutton: { has: false, charge: 0, max: 2, progress: 0, progressPer: 5, ready: false },
     x: 0,
     y: 0,
     run: {
@@ -233,8 +257,11 @@ export class GameEngine {
     this.primarySpec = null // 主专精（'gluttony' | 'gatling' | 'elemental' | 'assassin'）
     this.secondarySpec = null // 副专精
     this.startingStrain = 'origin' // 开局血统预选（先天属性，reset 末尾叠加应用）
+    // 角色身份（阶段十九）：血统 → 专属技能树。Lv.1~4 只开放本角色 T1，
+    // Lv.5 由 _ensureRoleAwakening 自动确立 primarySpec（origin 为 null = 自由构筑）。
+    this.roleSpec = null
     this.strainDevourBonus = 0 // 贪噬血统：吞噬线整体加宽（pct）
-    this.devourThreshold = 0.25 // 吞噬生命百分比阈值（暴食流放宽）
+    this.devourThreshold = DEVOUR_THRESHOLD_BASE // 吞噬生命百分比阈值（暴食流放宽，封顶见 DEVOUR_THRESHOLD_CAP）
 
     // 游戏结束桥接：玩家死亡时回调 Vue 弹结算面板
     this.onGameOver = null // (info) => void
@@ -451,6 +478,104 @@ export class GameEngine {
   }
 
   // ------------------------------------------------------------
+  // 角色身份（阶段十九）
+  // ------------------------------------------------------------
+
+  /**
+   * 该角色能否吞噬敌人。只有暴食史莱姆可以；origin 没有身份，也不享受独占。
+   * EnemyManager._checkDevour 与 Enemy.hit 共用此判定，避免两处口径漂移。
+   */
+  get canDevour() {
+    return canDevour(this.startingStrain)
+  }
+
+  /**
+   * 该角色能否使用元素系统（第三批角色化）。
+   * 只有 elemental / origin 为真；暴食/弹射/暗影下：
+   * 核心不生成、E 不交互、元素 HUD 不显示、absorbElement 直接短路。
+   */
+  get canUseElements() {
+    return canUseElements(this.startingStrain)
+  }
+
+  /** 当前角色的 F 专属技能定义（origin / 未配置返回 null） */
+  get strainSkill() {
+    return getStrainSkill(this.startingStrain)
+  }
+
+  /**
+   * Lv.5 角色觉醒：达到等级、存在 roleSpec、且 primarySpec 为空时自动确立主专精。
+   *
+   * 刻意放在「抽卡之前」统一执行（而不是 rollSkills 内部、也不是 settleLevelUp）：
+   *  - rollSkills 保持只负责生成候选，不产生副作用；
+   *  - 所有会抽卡的入口（升级 / 王级秘籍 / 悬赏奖励 / 远征勇者秘籍）都先经过这里，
+   *    因此任何一个入口在 Lv.5 都不会漏掉觉醒，也不会弹出错的四选一面板；
+   *  - origin 的 roleSpec 为 null，直接短路 → 保留 Lv.5 四选一里程碑。
+   *
+   * 时序要求：必须在 weaponSystem.reset() / player.resetRunState() / applyGenes /
+   * applyStrain 之后调用（觉醒会改写 damage/fireInterval/maxHp 等基础值）。
+   */
+  _ensureRoleAwakening() {
+    if (this.primarySpec || !this.roleSpec) return false
+    if ((this.player?.level || 1) < 5) return false
+    const spec = this.roleSpec
+    this.primarySpec = spec
+    this._applyPrimarySpecBonus(spec)
+    // 同步武器视觉第 1 档：旧流程靠 Lv.5 里程碑卡触发 registerSkillEvolution，
+    // 角色绑定后这次调用消失，必须在此补上，否则武器外显少一级。
+    this.weaponSystem.registerSkillEvolution({ spec, tier: 1 })
+    return true
+  }
+
+  /**
+   * F 专属主动技能：边沿触发 + 自身冷却。
+   * Arena 使用与 Runner 暴走狂热相同的 F 通道（input.consumeFever()），
+   * 因此不需要新增按键、不需要新增 input 槽位。
+   *
+   * 两条释放语义（互不干扰）：
+   *  - **资源型**（暴食）：没有主冷却，只受 0.3s 再次释放锁限制；点数不足或 320px
+   *    内没有合法猎物 = 空放，既不扣点也不进锁（skill.use 返回 false 即跳过锁定）。
+   *  - **冷却型**（弹射 / 元素 / 暗影）：语义与本轮之前完全一致（strainSkillCd 主冷却）。
+   * 角色分流靠 `skill.getHud`（只有资源型技能提供）判断，不在引擎里比较角色 id。
+   */
+  _updateStrainSkill(dt) {
+    const p = this.player
+    const skill = this.strainSkill
+    if (!skill) {
+      p.strainSkillCd = 0 // 无角色身份（origin）：F 不响应，冷却恒为 0
+      p.strainSkillReadyPulse = 0
+      return
+    }
+    const resourceSkill = typeof skill.getHud === 'function'
+    if (resourceSkill) {
+      // 资源型：再次释放锁每帧推进；主冷却语义整条不参与
+      tickGluttonResource(p, dt)
+      p.strainSkillMax = 0
+      p.strainSkillCd = 0
+    } else {
+      p.strainSkillMax = skill.cooldown
+      p.strainSkillCd = Math.max(0, p.strainSkillCd - dt)
+    }
+    if (p.strainSkillReadyPulse > 0) p.strainSkillReadyPulse -= dt
+    if (!this.running || this.runFinished) return
+    // 边沿消费 F：无论是否满足释放条件都必须取走，否则输入会在一帧后「幽灵释放」
+    const pressed = this.input.consumeFever?.()
+    if (!pressed || p.dead) return
+    if (resourceSkill) {
+      if (!hasGluttonResource(p)) return // 非暴食角色不拥有猎食点：F 不响应
+      if (p.gluttonRecastLock > 0) return // 锁内不消耗点数
+      if (p.gluttonCharge <= 0) return // 没有猎食点：不释放、不扣点
+      if (skill.use(this) !== true) return // 空放：不扣点、不进锁、不启动技能视觉
+      p.strainSkillReadyPulse = 0.4
+      return
+    }
+    if (p.strainSkillCd > 0) return
+    skill.use(this)
+    p.strainSkillCd = skill.cooldown
+    p.strainSkillReadyPulse = 0.4
+  }
+
+  // ------------------------------------------------------------
   // 生命周期
   // ------------------------------------------------------------
 
@@ -513,6 +638,9 @@ export class GameEngine {
    */
   openFreeSkillPanel() {
     this.pause()
+    // 角色觉醒必须在抽卡之前统一执行一次：Lv.5 到达时自动确立 primarySpec，
+    // 之后的候选池才会从「本角色 T1」切到「本角色 T2+」，且不会弹出四选一面板。
+    this._ensureRoleAwakening()
     const options = rollSkills(this, 3)
     if (options.length === 0) {
       this._pauseLock = Math.max(0, this._pauseLock - 1)
@@ -571,19 +699,19 @@ export class GameEngine {
 
   /**
    * 主专精初始觉醒赋能（Lv.5 里程碑与开局预选共用同一套数值）。
-   * 每条流派除数值外还改写一条「元素玩法规则」——专精决定你怎么用元素，
-   * 而不只是元素有多强（专精 → 元素联动）：
-   *  - 暴食：胃袋把血肉转成元素养分（消化能量效率 +50%）
-   *  - 机枪：分裂弹 100% 继承母弹附魔（分裂不再稀释元素）
-   *  - 元素：附魔概率封顶 60% → 85%（把概率投满有了去处）
-   *  - 刺客：暴击必定触发元素附魔（精准打击弱点）
+   *
+   * 角色化后的元素规则归属：
+   *  - 元素树（elemental）：附魔概率封顶 60% → 85%，只可能被 elemental / origin 拿到；
+   *  - 刺客树（assassin）：暴击保证触发玩家**已有的**元素 proc——**仅当角色有元素权限时赋值**。
+   *    暗影史莱姆无元素权限（`_procs` 恒空），因此它拿不到任何元素效果；
+   *    origin 若在 Lv.5 选刺客，则恢复「元素 × 暴击」的自由构筑通路。
+   *  - 暴食的「消化效率 +50%」已随暴食退出元素链一并移除。
    */
   _applyPrimarySpecBonus(spec) {
     if (spec === 'gluttony') {
-      this.devourThreshold = Math.max(this.devourThreshold, 0.28)
+      this.devourThreshold = Math.min(DEVOUR_THRESHOLD_CAP, Math.max(this.devourThreshold, 0.28))
       this.player.maxHp += 1
       this.player.hp = Math.min(this.player.maxHp, this.player.hp + 1)
-      this.weaponSystem.digestGainMul *= 1.5
     } else if (spec === 'gatling') {
       this.weaponSystem.projectileCount += 1
       this.weaponSystem.fireInterval *= 0.85
@@ -598,7 +726,9 @@ export class GameEngine {
     } else if (spec === 'assassin') {
       this.weaponSystem.critChance = Math.max(this.weaponSystem.critChance || 0, 0.25)
       this.weaponSystem.critMul = Math.max(this.weaponSystem.critMul || 3.0, 3.5)
-      this.weaponSystem.critGuaranteesElement = true
+      // 能力闸门：只有能使用元素的角色才获得这条元素规则（暗影恒不获得）。
+      // 显式比较 true，保证字段在任何上下文（含测试桩缺字段）下都是布尔值。
+      this.weaponSystem.critGuaranteesElement = this.canUseElements === true
     }
   }
 
@@ -1051,6 +1181,8 @@ export class GameEngine {
       this.player.hp = Math.min(this.player.hp, this.player.maxHp)
       this.weaponSystem.damage *= 1.2
     } else if (rewardId === 'tome') {
+      // 远征关间秘籍同样先走角色觉醒，避免在这一入口漏掉 Lv.5 绑定
+      this._ensureRoleAwakening()
       const options = rollSkills(this, 3)
       if (options.length > 0) {
         this._pendingExpeditionStage = nextStage
@@ -1202,7 +1334,15 @@ export class GameEngine {
     p._aura.length = 0
     this.primarySpec = null
     this.secondarySpec = null
-    this.devourThreshold = 0.25
+    this.roleSpec = null // 角色身份归位（随后由 applyStrain 按血统重建）
+    this.strainDevourBonus = 0
+    this.devourThreshold = DEVOUR_THRESHOLD_BASE
+    p.strainSkillCd = 0 // F 角色技能冷却归位
+    p.strainSkillMax = 0
+    p.strainSkillReadyPulse = 0
+    // 暴食猎食点归零（随后由 applyStrain 按血统重建归属：
+    // 暴食从 0 点 / 0 进度起步，其它角色置 -1 关闭该资源）
+    resetGluttonResource(p)
     this.skillLevels = {}
     this.elapsed = 0
     this.runState = 'active'
@@ -1332,7 +1472,7 @@ export class GameEngine {
     this._gameplayHudAcc = 0
   }
 
-  /** 推送一次冷却数据（冲刺 / Boss 施法 / 破阵追击），约 10Hz */
+  /** 推送一次冷却数据（冲刺 / Boss 施法 / 破阵追击 / F 角色技能），约 10Hz */
   _pushCooldown() {
     this.onCooldown?.({
       dashCd: this.player.dashCd,
@@ -1340,6 +1480,14 @@ export class GameEngine {
       cast: this.enemyManager.bossInfo?.castProgress || 0,
       formationBreak: this.endlessFormationBreakTimer,
       formationBreakMax: ENDLESS_FORMATION_BREAK_DURATION,
+      // F 角色技能：菜单/冷却条数据源（origin 无技能时 skillId 为 null，HUD 据此隐藏）；
+      // 资源型技能（暴食）额外给出 charge 口径，HUD 改渲染猎食点而非冷却条——
+      // 它的 skillMax 恒为 0，因此旧的冷却分支天然不会被点亮。
+      skillId: this.strainSkill?.id || null,
+      skillName: this.strainSkill?.name || '',
+      skillCd: this.player.strainSkillCd,
+      skillMax: this.player.strainSkillMax,
+      charge: this.strainSkill?.getHud?.(this.player) || null,
     })
     this._cdAcc = 0
   }
@@ -1366,6 +1514,9 @@ export class GameEngine {
       dashCd: this.player.dashCd,
       dashMax: 1.2 * (this.player.dashCdMultiplier || 1) * (this.player.geneDashCdMultiplier || 1),
       devourThreshold: this.devourThreshold,
+      // 血统对吞噬线的加宽（pct）：HUD 需要它才能显示「真实」的普通/精英门槛，
+      // 否则会把暴食角色的白旗线显示得比实际更窄
+      strainDevourBonus: this.strainDevourBonus,
       boss: this.enemyManager.bossInfo,
       director: this.enemyManager.directorInfo,
       objective: this.worldEvents.objectiveInfo,
@@ -1379,12 +1530,29 @@ export class GameEngine {
       secondarySlots: this.player.secondarySlots,
       primarySpec: this.primarySpec,
       secondarySpec: this.secondarySpec,
+      // 角色身份（阶段十九）：HUD 据此显示角色名、决定是否渲染吞噬线（canDevour）
+      roleSpec: this.roleSpec,
+      strainId: this.startingStrain,
+      canDevour: this.canDevour,
+      canUseElements: this.canUseElements,
       // 消化进度（吞噬 → 元素联动的可见口径）：满载待命时 ratio = 1，吸收首颗核心即兑现
       digest: {
         charge: Math.round(this.weaponSystem.digestCharge),
         max: this.weaponSystem.digestChargeMax,
         bursts: this.weaponSystem.digestBursts,
       },
+      // 暴食猎食点（stats 侧口径，给常驻面板用；高频冷却条走 cooldown.charge）：
+      // 非暴食角色 has=false，HUD 整项不渲染
+      glutton: hasGluttonResource(this.player)
+        ? {
+            has: true,
+            charge: this.player.gluttonCharge,
+            max: GLUTTON_CHARGE_MAX,
+            progress: this.player.gluttonDevourProgress,
+            progressPer: GLUTTON_DEVOURS_PER_CHARGE,
+            ready: this.player.gluttonCharge > 0 && this.player.gluttonRecastLock <= 0,
+          }
+        : { has: false, charge: 0, max: GLUTTON_CHARGE_MAX, progress: 0, progressPer: GLUTTON_DEVOURS_PER_CHARGE, ready: false },
       x: Math.round(this.player.x), // 扁平坐标：UI 端可直接整树赋值（见 createDefaultStats）
       y: Math.round(this.player.y),
       run: {
@@ -1455,6 +1623,7 @@ export class GameEngine {
    */
   _updateArenaFrame(dt) {
     if (this._shakeT > 0) this._shakeT -= dt // 屏幕震动计时衰减
+    this._updateStrainSkill(dt) // F 角色技能：边沿触发 + 自身冷却（origin 短路）
     this._updateRunState(dt)
     if (this.runState !== 'stage-reward' && this.runState !== 'expedition-intro') {
       for (const e of this.entities) {

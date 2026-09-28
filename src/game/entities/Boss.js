@@ -119,10 +119,23 @@ export class Boss extends Enemy {
     this.vulnerableTimer = 0
     this.stateLabel = '追猎'
 
+    // —— 连击（二阶段质变）：强招连续释放，段数随难度档位提升 ——
+    this._chainStep = 0
+    this._chainTotal = 1
+    this._chainDelay = 0.5
+    // —— 血量阈值事件：75% 增援 / 25% 困兽之斗（半血二阶段仍走原路径） ——
+    this._reinforced = false
+    this._lastStand = false
+
     this._walkT = Math.random() * 10
     this._moving = false
     this._spawnT = 0.35
     this._shadowGrad = null
+  }
+
+  /** 强招后的破绽承伤倍率：躲完一整套机制的回报必须值得专门去抓 */
+  get vulnerableMultiplier() {
+    return 1.8
   }
 
   get combatInfo() {
@@ -149,8 +162,55 @@ export class Boss extends Enemy {
     const formationMul = damage > 0
       ? this.game?.enemyManager?.getBossDamageTakenMultiplier?.(this) || 1
       : 1
-    const amplified = (this.vulnerableTimer > 0 && damage > 0 ? damage * 1.35 : damage) * formationMul
+    const amplified = (this.vulnerableTimer > 0 && damage > 0
+      ? damage * this.vulnerableMultiplier
+      : damage) * formationMul
     super.hit(amplified, effects)
+    if (damage > 0) this._checkThresholdEvents()
+  }
+
+  /**
+   * 血量阈值事件：把一场首领战切成 75% / 50% / 25% 三段结构，
+   * 而不是只有半血一次转折。50% 仍走原有二阶段路径（保持既有手感与断言）。
+   */
+  _checkThresholdEvents() {
+    if (this.hp <= 0) return
+    const ratio = this.hp / this.maxHp
+    if (!this._reinforced && ratio <= 0.75) {
+      this._reinforced = true
+      this._onReinforce()
+    }
+    if (!this._lastStand && ratio <= 0.25) {
+      this._lastStand = true
+      this._onLastStand()
+    }
+  }
+
+  /** 75%：首领召来护卫，逼迫玩家在输出与清场之间取舍 */
+  _onReinforce() {
+    const manager = this.game.enemyManager
+    const count = 2
+    for (let i = 0; i < count; i++) {
+      const angle = (i / count) * TAU + Math.random() * 0.6
+      manager.spawnAt(
+        clamp(this.x + Math.cos(angle) * 90, 24, this.game.worldWidth - 24),
+        clamp(this.y + Math.sin(angle) * 90, 24, this.game.worldHeight - 24),
+        'knight'
+      )
+    }
+    manager.addText(this.x, this.y - this.radius - 34, '召唤护卫', null, '#ffd166', 14)
+    this.game.sound.enemyShoot()
+    this.game.shakeScreen(3, 0.18)
+  }
+
+  /** 25%：困兽之斗——攻速与移速再上一档，并立即缩短强招冷却 */
+  _onLastStand() {
+    this.speed *= 1.12
+    this.attackInterval *= 0.88
+    this.specialCd = Math.min(this.specialCd, 1.6)
+    this.game.enemyManager.addText(this.x, this.y - this.radius - 34, '困兽之斗', null, '#ff7466', 15)
+    this.game.sound.bossRoar()
+    this.game.shakeScreen(4, 0.22)
   }
 
   update(dt) {
@@ -172,6 +232,13 @@ export class Boss extends Enemy {
     }
     if (this.specialState === 'dash') {
       this._updateKnightDash(dt)
+      return
+    }
+    if (this.specialState === 'chain') {
+      // 连击间隙：短暂停顿后立刻接下一段（不给完整破绽窗口，末段才有）
+      this.specialTimer -= dt
+      this.stateLabel = `连击 · 第 ${this._chainStep + 1} 段`
+      if (this.specialTimer <= 0) this._startSpecial()
       return
     }
     if (this.specialState === 'recover') {
@@ -203,6 +270,9 @@ export class Boss extends Enemy {
     this.phaseShift = 0.85
     this.specialState = 'idle'
     this.specialCd = Math.min(this.specialCd, 1.4)
+    // 连击状态复位：转阶段可能发生在连段中途，残留段数会让二阶段错接旧连段
+    this._chainStep = 0
+    this._chainTotal = 1
     this.speed *= 1.25
     this.attackInterval *= 0.78
     this.summonCd = Math.min(this.summonCd, 3)
@@ -221,6 +291,12 @@ export class Boss extends Enemy {
       this.specialCd = 0.35
       return
     }
+    // 二阶段质变：强招改为连击，段数随难度档位（patternBonus）提升——
+    // 简单/普通 2 段，困难/地狱与深层无尽 3 段。这是难度档位的「行为差异」，
+    // 而不只是数值差异（预警时间仍不缩短，保持公平底线）。
+    if (this._chainStep === 0) {
+      this._chainTotal = this.phase === 2 ? (this.patternBonus >= 1 ? 3 : 2) : 1
+    }
     const cfg = BOSS_CFG[this.type]
     const p = this.game.player
     if (this.isCompositeBoss) {
@@ -233,6 +309,8 @@ export class Boss extends Enemy {
     this.specialState = 'telegraph'
     // 难度只增强招式内容与冷却，不缩短预警时间。
     this.specialDuration = this.specialPattern === 'boss-mage' ? 0.95 : this.specialPattern === 'boss-archer' ? 0.78 : 0.72
+    // 连击第 2 段起预警时间递增（给玩家反应余量），第 3 段最长
+    if (this._chainStep > 0) this.specialDuration += this._chainStep * 0.22
     this.specialTimer = this.specialDuration
     this.lockedAngle = Math.atan2(p.y - this.y, p.x - this.x)
     this.targetX = p.x
@@ -240,30 +318,34 @@ export class Boss extends Enemy {
     this.dashLaneRadius = this.radius + p.radius + 12
     this.dashDistance = (this.phase === 2 ? 760 : 650) * 0.42
     this._moving = false
-    this.stateLabel = `蓄力 · ${this.isCompositeBoss ? patternCfg.special : cfg.special}`
+    const chainLabel = this._chainTotal > 1 ? `（连击 ${this._chainStep + 1}/${this._chainTotal}）` : ''
+    this.stateLabel = `蓄力 · ${this.isCompositeBoss ? patternCfg.special : cfg.special}${chainLabel}`
     this.game.sound.enemyShoot()
   }
 
   _executeSpecial() {
+    // 连击逐段强化：同一场战斗里动作模式随段数变化，而不是简单重复
+    const chain = this._chainStep
     if (this.specialPattern === 'boss-knight') {
       this.specialState = 'dash'
-      this.specialTimer = 0.42
+      this.specialTimer = 0.42 + chain * 0.06
       this.dashHit = false
-      this.stateLabel = '王者冲锋'
+      this.dashChain = chain // 供 _updateKnightDash 读取（段数越高冲得越远越快）
+      this.stateLabel = chain > 0 ? `王者冲锋 · 第 ${chain + 1} 段` : '王者冲锋'
       return
     }
 
     if (this.specialPattern === 'boss-mage') {
       const p = this.game.player
       if ((p.x - this.targetX) ** 2 + (p.y - this.targetY) ** 2 <= 102 * 102) p.hit(2)
-      const count = (this.phase === 2 ? 16 : 12) + this.patternBonus * 2
+      const count = (this.phase === 2 ? 16 : 12) + this.patternBonus * 2 + chain * 4
       for (let i = 0; i < count; i++) {
         this.game.enemyManager.spawnBullet(
           this.targetX,
           this.targetY,
           (i / count) * TAU,
           'mage',
-          { speed: this.phase === 2 ? 315 : 285, radius: 8, isBoss: true }
+          { speed: (this.phase === 2 ? 315 : 285) + chain * 20, radius: 8, isBoss: true }
         )
       }
       this.game.shakeScreen(4, 0.2)
@@ -272,10 +354,12 @@ export class Boss extends Enemy {
     }
 
     // 弹缝可钻性：0.22rad 间隔在 300px 交战距离上 ≈66px 间隙（> 玩家+弹径 64px），
-    // 远距离横向走位可以钻缝，贴脸则躲不开——拉扯站位有收益
-    const count = (this.phase === 2 ? 8 : 6) + this.patternBonus
+    // 远距离横向走位可以钻缝，贴脸则躲不开——拉扯站位有收益。
+    // 连击段数提高弹幕密度（间隔收窄），但仍保留可钻的缝。
+    const count = (this.phase === 2 ? 8 : 6) + this.patternBonus + chain * 2
+    const step = Math.max(0.16, 0.22 - chain * 0.02)
     for (let i = 0; i < count; i++) {
-      const off = (i - (count - 1) / 2) * 0.22
+      const off = (i - (count - 1) / 2) * step
       this.game.enemyManager.spawnBullet(
         this.x,
         this.y,
@@ -288,7 +372,8 @@ export class Boss extends Enemy {
   }
 
   _updateKnightDash(dt) {
-    const speed = this.phase === 2 ? 760 : 650
+    const chain = this.dashChain || 0
+    const speed = (this.phase === 2 ? 760 : 650) + chain * 90
     this.x += Math.cos(this.lockedAngle) * speed * dt
     this.y += Math.sin(this.lockedAngle) * speed * dt
     this.x = clamp(this.x, this.radius, this.game.worldWidth - this.radius)
@@ -297,7 +382,7 @@ export class Boss extends Enemy {
     const p = this.game.player
     const hitRadius = this.radius + p.radius + 12
     if (!this.dashHit && (p.x - this.x) ** 2 + (p.y - this.y) ** 2 <= hitRadius * hitRadius) {
-      p.hit(3 + Math.floor(this.patternBonus / 2))
+      p.hit(3 + Math.floor(this.patternBonus / 2) + chain)
       this.dashHit = true
     }
     if (this.specialTimer <= 0) {
@@ -306,10 +391,42 @@ export class Boss extends Enemy {
     }
   }
 
+  /**
+   * 连击推进（基类与远征首领共用）：
+   *  - 还有后续段：进入短暂间隙（无破绽窗口）并返回 { continuing: true }
+   *  - 连击打完：复位段数并返回 { continuing: false, steps }，由调用方结算破绽窗口
+   */
+  _advanceChain() {
+    if (this._chainStep < this._chainTotal - 1) {
+      this._chainStep++
+      this.specialState = 'chain'
+      this.specialTimer = this._chainDelay
+      this.vulnerableTimer = 0
+      this.stateLabel = `连击 · 第 ${this._chainStep + 1} 段`
+      return { continuing: true, steps: this._chainTotal }
+    }
+    const steps = this._chainTotal
+    this._chainStep = 0
+    this._chainTotal = 1
+    return { continuing: false, steps }
+  }
+
+  /** 破绽窗口时长：基础值 + 收尾余量 + 每多一段连击追加，连段越长回报越高 */
+  _chainBreakWindow(duration, steps) {
+    return duration + 0.4 + Math.max(0, steps - 1) * 0.35
+  }
+
+  /**
+   * 强招收尾：连击未打完则进入短暂间隙并接下一段，打满后才给完整破绽窗口。
+   * 破绽窗口随段数递增（连段越长，收尾回报越高）——「躲完整套 → 抓破绽爆发」成立。
+   */
   _beginRecovery(duration) {
+    const chain = this._advanceChain()
+    if (chain.continuing) return
     this.specialState = 'recover'
-    this.specialTimer = duration
-    this.vulnerableTimer = duration
+    const breakWindow = this._chainBreakWindow(duration, chain.steps)
+    this.specialTimer = breakWindow
+    this.vulnerableTimer = breakWindow
     this.stateLabel = '破绽暴露'
     const pattern = this.specialPattern || this.type
     const baseCd = pattern === 'boss-mage' ? 6 : pattern === 'boss-archer' ? 5.4 : 5

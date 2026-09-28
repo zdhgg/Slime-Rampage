@@ -55,7 +55,7 @@ import {
   isDifficultyUnlocked,
   isModeUnlocked,
 } from './src/game/RunRules.js'
-import { STRAINS, STRAIN_IDS } from './src/game/Strains.js'
+import { CHARACTER_IDS, STRAINS, STRAIN_IDS, canDevour, getStrainSkill } from './src/game/Strains.js'
 import { getRunIntro } from './src/game/RunIntro.js'
 import { DIGEST_EFFECTS, getDigestTier } from './src/game/ElementSystem.js'
 import {
@@ -106,6 +106,10 @@ const game = {
   worldWidth: 2400,
   worldHeight: 1800,
   elapsed: 0, // 游戏时间（首融确认冷却用）
+  // 角色权限（阶段十九/第三批）：本文件测的是「元素系统本身的逻辑」，
+  // 因此默认按有权限的角色跑；权限矩阵本身在 verify-changes.mjs 里单独锁定。
+  canDevour: true,
+  canUseElements: true,
   onWaveChanged() {},
   onBossSpawn() {},
   evolutionEvent() {},
@@ -260,6 +264,130 @@ assert.equal(gemManager._gems[0].value, 10)
 assert.ok(gemManager._gems[0].size >= 6.5) // 合并后重新分级为中宝石
 ok('宝石合并：同位置（<16px）经验宝石并为一颗且数值累加')
 
+// 9b) 合并回收循环的边界：末位元素本身 merged 时，旧的「i-- 写在 else 分支」实现
+//     pop 后 i 不回退 → i === list.length → list[i] === undefined → 读 .merged 抛 TypeError。
+//     180s 长局已稳定复现，因此这里同时断言「不抛异常」与「清理后的真实数组内容」。
+const gmMerge = new GemManager({ player })
+gmMerge.attach(game)
+const mergeRun = (specs) => {
+  gmMerge.reset()
+  const gems = specs.map(([x, y, value]) => gmMerge.spawn(x, y, value))
+  const before = gems.reduce((sum, g) => sum + g.value, 0) // 必须在合并前取，承载者 value 会变
+  gmMerge._mergeGems()
+  const list = gmMerge._gems
+  return {
+    gems,
+    list,
+    before,
+    after: list.reduce((sum, g) => sum + g.value, 0),
+    residue: list.filter((g) => g.merged).length,
+  }
+}
+
+// ① 末位元素本身就是 merged（崩溃现场）
+{
+  const r = mergeRun([[100, 100, 5], [105, 102, 5]])
+  assert.equal(r.list.length, 1, '末位 merged 必须被删除')
+  assert.equal(r.list[0], r.gems[0], '承载经验的宝石必须保留')
+  assert.equal(r.list[0].value, 10)
+  assert.equal(r.residue, 0)
+  assert.equal(r.after, r.before, '合并前后经验总值守恒')
+}
+ok('宝石回收：末位 merged 不再抛 TypeError，被正确删除且经验守恒')
+
+// ② 连续多个尾部元素 merged
+{
+  const r = mergeRun([[100, 100, 3], [101, 100, 4], [102, 100, 5], [103, 100, 6]])
+  assert.equal(r.list.length, 1, '连续尾部 merged 必须全部删除')
+  assert.equal(r.list[0], r.gems[0])
+  assert.equal(r.list[0].value, 18)
+  assert.equal(r.residue, 0)
+  assert.equal(r.after, r.before)
+}
+ok('宝石回收：连续多个尾部 merged 全部删除，只留承载经验的那一颗')
+
+// ③ 中间存在 merged、尾部未 merged
+{
+  const r = mergeRun([[100, 100, 5], [105, 100, 7], [400, 400, 11]])
+  assert.equal(r.list.length, 2, '只删除 merged 的那一颗')
+  assert.ok(!r.list.includes(r.gems[1]), '被吸收的宝石必须移除')
+  assert.ok(r.list.includes(r.gems[0]) && r.list.includes(r.gems[2]), '未删除的元素必须原样保留')
+  assert.equal(r.residue, 0)
+  assert.equal(r.after, r.before)
+}
+ok('宝石回收：中间 merged + 尾部未 merged 时，只删 merged 且其余元素一个不少')
+
+// ④ merged / unmerged 交错
+{
+  const r = mergeRun([[100, 100, 2], [103, 100, 3], [200, 200, 4], [203, 200, 5], [400, 400, 6]])
+  assert.equal(r.list.length, 3)
+  assert.equal(r.residue, 0, '清理后不允许存在 merged 残留')
+  assert.ok(!r.list.includes(r.gems[1]) && !r.list.includes(r.gems[3]))
+  assert.ok(r.list.includes(r.gems[0]) && r.list.includes(r.gems[2]) && r.list.includes(r.gems[4]))
+  assert.equal(r.after, r.before)
+}
+ok('宝石回收：交错标记全部清除，未标记元素全部保留')
+
+// ⑤ 无 merged：数组必须完全不动（对象与顺序都不变）
+{
+  const r = mergeRun([[100, 100, 5], [400, 400, 7], [900, 900, 11]])
+  assert.equal(r.list.length, 3)
+  assert.ok(r.list.every((g, i) => g === r.gems[i]), '无 merged 时不应发生任何搬移')
+  assert.deepEqual(r.list.map((g) => g.value), [5, 7, 11])
+  assert.equal(r.after, r.before)
+}
+ok('宝石回收：无 merged 时数组完全不变')
+
+// ⑥ 多轮压力：掉落 → 合并 → 拾取（swap-pop 删除）交错，模拟长局宝石池
+{
+  gmMerge.reset()
+  let seed = 20260926
+  const rand = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff)
+  let spawned = 0
+  let expSpawned = 0
+  let expPicked = 0
+  let picked = 0
+  let mergedAway = 0
+  let rounds = 0
+  for (let step = 0; step < 3000; step++) {
+    const drops = 1 + ((rand() * 3) | 0) // 每步掉 1~3 颗
+    for (let d = 0; d < drops; d++) {
+      // 位置落在 12×12 个聚集点附近 → 复现「同位置宝石」的真实分布
+      const cx = 120 + ((rand() * 12) | 0) * 90
+      const cy = 120 + ((rand() * 12) | 0) * 90
+      const g = gmMerge.spawn(cx + rand() * 24, cy + rand() * 24, 1 + ((rand() * 20) | 0))
+      spawned++
+      expSpawned += g.value
+    }
+    if (step % 5 !== 0) continue
+    const before = gmMerge.count
+    gmMerge._mergeGems()
+    rounds++
+    mergedAway += before - gmMerge.count // 合并轮自身回收掉的数量
+    // 模拟拾取：与 GemManager.update 一致的 swap-pop 删除（打乱末位、制造尾部 merged 场景）
+    const list = gmMerge._gems
+    const picks = (rand() * 4) | 0
+    for (let k = 0; k < picks && list.length > 0; k++) {
+      const i = (rand() * list.length) | 0
+      expPicked += list[i].value
+      list[i] = list[list.length - 1]
+      list.pop()
+      picked++
+    }
+  }
+  const residue = gmMerge._gems.filter((g) => g.merged).length
+  assert.ok(rounds >= 500, `压力轮次应足够多（实际 ${rounds}）`)
+  assert.ok(mergedAway >= 1000, `合并回收次数应足够多（实际 ${mergedAway}）`)
+  assert.equal(gmMerge.count, spawned - mergedAway - picked, '数组长度必须与掉落-合并回收-拾取严格一致')
+  assert.equal(residue, 0, '多轮合并后不允许有 merged 残留')
+  assert.equal(
+    gmMerge._gems.reduce((sum, g) => sum + g.value, 0),
+    expSpawned - expPicked,
+    '多轮合并 + 拾取交错后经验总值仍守恒'
+  )
+}
+ok('宝石回收：多轮「掉落→合并→拾取」交错无残留、无越界，经验总值守恒')
+
 // 10) Boss 召唤小兵波次成长（spawnAt 复用 spawn 公式）
 enemyManager.reset()
 enemyManager.wave = 10
@@ -347,6 +475,23 @@ eElite.attach(game)
 weaponSystem._settleKill(eElite)
 assert.equal(gemManager.count, gemsBefore + 2) // 经验宝石 + 精英必掉元素核心
 ok('精英击杀必掉元素核心：经验宝石 + 核心 = +2 颗（普通怪/法师不再掉）')
+
+// 15b) 元素权限（第三批角色化）：无权限角色不产出核心，absorbElement 无副作用
+{
+  const before = gemManager.count
+  game.canUseElements = false
+  const eNoEl = new Enemy({ x: 950, y: 950, speed: 80, hp: 5, type: 'knight', elite: true })
+  eNoEl.attach(game)
+  weaponSystem._settleKill(eNoEl)
+  assert.equal(gemManager.count, before + 1, '无元素权限：精英只掉经验宝石，不产核心')
+  const lvBefore = [...player.elements.entries()]
+  const reactionsBefore = player._reactions.length
+  player.absorbElement('fire')
+  assert.deepEqual([...player.elements.entries()], lvBefore, '无元素权限：absorbElement 直接短路')
+  assert.equal(player._reactions.length, reactionsBefore, '无元素权限：不产生新的反应缓存')
+  game.canUseElements = true
+  ok('元素权限：无权限角色不产核心且 absorbElement 无副作用')
+}
 
 // 16) 视觉增强：随机眨眼 + 元素氛围粒子（阶段十五美化）
 player._blinkT = 0
@@ -650,14 +795,38 @@ assert.equal(getProgressionStage(20).theme, 'blight')
 assert.equal(getProgressionStage(29).variant, 'blight-garden')
 assert.equal(getProgressionStage(30).theme, 'royal')
 assert.equal(getProgressionStage(45).variant, 'outer-bailey')
-// 血统设计护栏：每个特化血统都附带明确代价，原生黏液保持纯净基线；简报展示血统行
-assert.equal(STRAIN_IDS.length, 4)
+// 角色设计护栏（阶段十九）：四条角色血统各绑定一棵互不相同的专精树、各有 F 技能与
+// 明确的玩法短板；origin 保持「无身份」纯净基线（不绑树、不吞、无 F 技能）。
+assert.equal(STRAIN_IDS.length, 5)
+assert.equal(CHARACTER_IDS.length, 4)
+assert.deepEqual(STRAIN_IDS, ['origin', ...CHARACTER_IDS])
 assert.ok(!STRAINS.origin.maxHp && !STRAINS.origin.speedMul && !STRAINS.origin.damageMul)
-assert.ok(STRAINS.stone.maxHp > 0 && STRAINS.stone.speedMul < 1)
-assert.ok(STRAINS.volt.maxHp < 0 && STRAINS.volt.speedMul > 1)
-assert.ok(STRAINS.glutton.damageMul < 1 && STRAINS.glutton.devourRadius > 1)
-const strainIntro = getRunIntro({ mode: 'timed', difficulty: 'normal' }, 'stone')
-assert.ok(strainIntro.strainNote.includes('岩壳血统'))
+assert.equal(STRAINS.origin.roleSpec, null, 'origin 不绑定技能树（保留 Lv.5 四选一）')
+assert.equal(getStrainSkill('origin'), null, 'origin 没有 F 专属技能')
+assert.equal(canDevour('origin'), false, 'origin 不享受吞噬独占')
+
+const roleSpecs = CHARACTER_IDS.map((id) => STRAINS[id].roleSpec)
+assert.ok(
+  roleSpecs.every((spec) => typeof spec === 'string' && spec.length > 0),
+  '每条角色血统都必须绑定 roleSpec'
+)
+assert.equal(new Set(roleSpecs).size, 4, '四条角色绑定四棵互不相同的专精树')
+for (const id of CHARACTER_IDS) {
+  assert.ok(getStrainSkill(id), `${id} 必须有 F 专属技能`)
+  // 玩法短板：每条角色至少有一项明确的负向机制修正（而非只有加成）
+  const s = STRAINS[id]
+  const hasDrawback =
+    (s.maxHp || 0) < 0 || (s.fireIntervalMul || 1) > 1 || (s.devourRadius || 1) < 1 || (s.speedMul || 1) < 1
+  assert.ok(hasDrawback, `${id} 必须有玩法层面的短板（负向机制修正）`)
+}
+assert.equal(canDevour('glutton'), true, '只有暴食史莱姆可以吞噬')
+assert.ok(CHARACTER_IDS.filter((id) => canDevour(id)).length === 1, '吞噬独占者只能是暴食')
+assert.ok(STRAINS.glutton.devourRadius > 1 && (STRAINS.glutton.fireIntervalMul || 1) > 1)
+assert.ok(STRAINS.ricochet.projectileCount > 0 && (STRAINS.ricochet.fireIntervalMul || 1) > 1)
+assert.ok(STRAINS.elemental.critChance > 0 && STRAINS.elemental.maxHp < 0)
+assert.ok(STRAINS.shadow.critChance > 0 && STRAINS.shadow.dashCdMul < 1 && STRAINS.shadow.maxHp < 0)
+const strainIntro = getRunIntro({ mode: 'timed', difficulty: 'normal' }, 'glutton')
+assert.ok(strainIntro.strainNote.includes('暴食史莱姆'))
 assert.equal(getRunIntro({ mode: 'timed', difficulty: 'normal' }, 'origin').strainNote, null)
 assert.equal(calculateMaterialReward(10, { difficulty: 'easy' }), 8)
 assert.equal(calculateMaterialReward(10, { difficulty: 'hard' }), 13)
@@ -882,9 +1051,9 @@ assert.equal(knightBoss.specialState, 'recover')
 assert.equal(knightBoss.combatInfo.vulnerable, true)
 const bossHpBeforeBreak = knightBoss.hp
 knightBoss.hit(10)
-assert.equal(knightBoss.hp, bossHpBeforeBreak - 13.5)
+assert.equal(knightBoss.hp, bossHpBeforeBreak - 18) // 破绽承伤 ×1.8（原 1.35 收益过低）
 assert.equal(enemyManager.bossInfo.state, '破绽暴露')
-ok('骑士王强招：预警锁线不追踪、冲锋后暴露破绽且承伤 +35%')
+ok('骑士王强招：预警锁线不追踪、冲锋后暴露破绽且承伤 +80%')
 enemyManager.releaseBossCast(knightBoss)
 
 enemyManager._bullets.length = 0
@@ -1199,11 +1368,11 @@ chargeWeapon.digestCharge = 0
 chargeWeapon.addDigestCharge(DIGEST_GAIN_ELITE)
 assert.ok(chargeWeapon.digestCharge > afterNormal * 2, '精英吞噬的消化收益显著更高')
 
-// 暴食主专精：消化效率 +50%
+// 暴食已退出元素链（第三批角色化）：消化效率乘数被移除，累积不再被放大
 chargeWeapon.digestCharge = 0
-chargeWeapon.digestGainMul = 1.5
 chargeWeapon.addDigestCharge(DIGEST_GAIN_NORMAL)
-assert.equal(chargeWeapon.digestCharge, DIGEST_GAIN_NORMAL * 1.5, '专精加成进入实际消化速率')
+assert.equal(chargeWeapon.digestCharge, DIGEST_GAIN_NORMAL, '消化按基础速率累积（不再有专精效率放大）')
+assert.equal(chargeWeapon.digestGainMul, undefined, '消化效率乘数已随暴食赋能一并移除')
 
 // 无元素时的微粒心跳：不得污染玩家氛围粒子（缺 vx/vy 会 NaN）
 chargePlayer.elements.clear()
@@ -1220,9 +1389,9 @@ assert.ok(
   Number.isFinite(auraParticle.vx) && Number.isFinite(auraParticle.vy),
   '微粒携带速度字段（否则位置更新会变成 NaN）'
 )
-ok('消化进度：满槽爆发元素等级、满载待命、精英高收益与专精效率加成均生效')
+ok('消化进度：满槽爆发元素等级、满载待命与精英高收益均生效（暴食已退出元素链）')
 
-// 38) 专精 → 元素规则改写：四条主专精各自改写一条元素玩法规则
+// 38) 专精规则改写：第三批角色化后只有元素树改写元素规则
 const engineLike = {
   player,
   weaponSystem,
@@ -1250,27 +1419,35 @@ assert.equal(weaponSystem.splitInherit, 1, '机枪专精：分裂弹 100% 继承
 weaponSystem.reset()
 player.resetRunState()
 applySpec.call(engineLike, 'assassin')
-assert.equal(weaponSystem.critGuaranteesElement, true, '刺客专精：暴击必定触发元素附魔')
-
-weaponSystem.reset()
-player.resetRunState()
-const digestMulBefore = weaponSystem.digestGainMul
-applySpec.call(engineLike, 'gluttony')
-assert.equal(weaponSystem.digestGainMul, digestMulBefore * 1.5, '暴食专精：消化效率 +50%')
+assert.equal(weaponSystem.critChance >= 0.25, true, '刺客专精：暴击率提升至 25%')
+assert.equal(weaponSystem.critMul >= 3.5, true, '刺客专精：暴击倍率提升至 3.5×')
+// 第五批：刺客觉醒的「暴击保证触发元素附魔」受能力闸门控制——
+// 有元素权限（origin / elemental）才赋值，暗影史莱姆恒为 false。
+// 注意：闸门读的是引擎 getter `game.canUseElements`，因此这里必须给桩提供布尔值；
+// 缺省（undefined）时按「无权限」处理，正确语义由 verify-changes 用真实引擎锁定。
+engineLike.canUseElements = false
+applySpec.call(engineLike, 'assassin')
+assert.equal(weaponSystem.critGuaranteesElement, false, 'canUseElements=false（暗影）：不获得元素规则')
+engineLike.canUseElements = true
+applySpec.call(engineLike, 'assassin')
+assert.equal(weaponSystem.critGuaranteesElement, true, 'canUseElements=true（origin）：恢复「元素 × 暴击」协同')
+delete engineLike.canUseElements
+applySpec.call(engineLike, 'assassin')
+assert.equal(weaponSystem.critGuaranteesElement, false, '权限缺失时按无权限处理')
 
 // 重开归位：专精标记不得跨局残留
 weaponSystem.reset()
 player.resetRunState()
 assert.equal(weaponSystem.splitInherit, 0.5)
 assert.equal(weaponSystem.critGuaranteesElement, false)
-assert.equal(weaponSystem.digestGainMul, 1)
+assert.equal(weaponSystem.digestGainMul, undefined)
 assert.equal(player.elementProcCap, 0.6)
 player.elements.set('fire', 8)
 player._refreshElements()
 assert.equal(player._procs.burn.chance, 0.6, '未确立元素专精时回到 60% 封顶')
 player.elements.clear()
 player._refreshElements()
-ok('专精 → 元素规则改写：四条主专精各改写一条规则，且重开后完全归位')
+ok('专精规则改写：元素规则受能力闸门控制，且重开后完全归位')
 
 // 39) 章节敌军偏向：12 章各有兵种画像，权重缩放不改变总数走向、且可安全回退
 const hellExpedition = { mode: 'expedition', difficulty: 'hell' }

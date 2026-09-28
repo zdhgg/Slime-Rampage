@@ -36,6 +36,8 @@ export class Projectile extends Entity {
     burnChance = 0, // 燃烧概率（DOT）
     poisonChance = 0, // 染毒概率（DOT）
     isSplit = false, // 是否分裂小弹（小弹不再分裂，防指数爆炸）
+    isEruption = false, // 是否腐殖喷吐弹体（不计入 Boss 普攻猎食进度、不享 M1 补偿）
+    isBasicAttack = false, // 是否基础普攻弹体（正向显式标记：默认 false，仅玩家普攻显式传 true）
     pierces = 0, // 还能额外穿透的目标数
     glow = '#8cffc8', // 辉光颜色（阶段十五：随激活反应/元素变化，武器行为可视化）
     radius = null,
@@ -59,6 +61,8 @@ export class Projectile extends Entity {
     this.burnChance = burnChance
     this.poisonChance = poisonChance
     this.isSplit = isSplit
+    this.isEruption = isEruption
+    this.isBasicAttack = Boolean(isBasicAttack) && !isSplit && !isEruption
     this.pierces = pierces
     this.hitTargets = pierces > 0 ? new Set() : null
     this.glow = this.visual.color

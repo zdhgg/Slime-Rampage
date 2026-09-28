@@ -12,7 +12,10 @@ const EVENTS = {
     title: '讨伐队猎营',
     brief: '猎杀驻地精英',
     color: '#d6a642',
-    reward: '元素核心 + 大型经验',
+    // 第三批角色化：非元素角色（暴食/弹射/暗影）拿不到元素核心，
+    // 因此文案必须与实发奖励一致——不允许「说有核心但实际没有」。
+    reward: (game) =>
+      game?.canUseElements === false ? '大型经验' : '元素核心 + 大型经验',
     duration: 28,
     goal: 3,
   },
@@ -38,6 +41,15 @@ const EVENT_TYPES = Object.keys(EVENTS)
 const AFFIXES = ['swift', 'shielded', 'explosive', 'summoner']
 const rand = (min, max) => min + Math.random() * (max - min)
 const clamp = (v, min, max) => Math.max(min, Math.min(max, v))
+
+/**
+ * 事件奖励文案解析：reward 支持字符串（静态）或函数（按角色权限动态）。
+ * 第三批角色化后，hunt 的奖励随 canUseElements 变化，因此所有展示口径
+ * 都必须经过这里，避免出现「文案说有核心、实际只给经验」。
+ */
+function eventReward(def, game) {
+  return typeof def?.reward === 'function' ? def.reward(game) : def?.reward || ''
+}
 
 function drawEventObject(ctx, type, state, time, color) {
   const disabled = state === 'failed'
@@ -204,7 +216,7 @@ export class WorldEventManager extends Entity {
       type: e.type,
       title: e.def.title,
       label,
-      reward: e.def.reward,
+      reward: eventReward(e.def, this.game),
       state: e.state,
       progress,
       total,
@@ -320,7 +332,7 @@ export class WorldEventManager extends Entity {
       spawnTimer: 0,
       linger: 0,
     }
-    this.game.onWorldEvent?.({ kind: 'appeared', title: def.title, reward: def.reward })
+    this.game.onWorldEvent?.({ kind: 'appeared', title: def.title, reward: eventReward(def, this.game) })
     return this.current
   }
 
@@ -416,9 +428,15 @@ export class WorldEventManager extends Entity {
     if (this.scars.length > 8) this.scars.shift()
 
     if (e.type === 'hunt') {
-      const elements = ['fire', 'water', 'poison', 'lightning']
-      this.game.gemManager.spawn(e.x, e.y, 0, elements[(Math.random() * elements.length) | 0])
-      this.game.gemManager.spawn(e.x, e.y, 65)
+      // 第三批角色化：非元素角色把「元素核心」换成已有的经验奖励——
+      // 不新增资源类型，只复用大型经验（65），与 eventReward 的文案一一对应。
+      if (this.game.canUseElements) {
+        const elements = ['fire', 'water', 'poison', 'lightning']
+        this.game.gemManager.spawn(e.x, e.y, 0, elements[(Math.random() * elements.length) | 0])
+        this.game.gemManager.spawn(e.x, e.y, 65)
+      } else {
+        this.game.gemManager.spawn(e.x, e.y, 65 + 40)
+      }
     } else if (e.type === 'beacon') {
       this.game.gemManager.spawn(e.x, e.y, 0, 'tome')
       this.game.gemManager.spawn(e.x, e.y, 40)
@@ -427,9 +445,9 @@ export class WorldEventManager extends Entity {
       this.game.gemManager.spawn(e.x, e.y, 70)
     }
 
-    this.game.enemyManager.addText(e.x, e.y - 20, '事件完成', e.def.reward, e.def.color, 15)
+    this.game.enemyManager.addText(e.x, e.y - 20, '事件完成', eventReward(e.def, this.game), e.def.color, 15)
     this.game.sound.wave()
-    this.game.onWorldEvent?.({ kind: 'completed', title: e.def.title, reward: e.def.reward })
+    this.game.onWorldEvent?.({ kind: 'completed', title: e.def.title, reward: eventReward(e.def, this.game) })
   }
 
   _fail(reason) {

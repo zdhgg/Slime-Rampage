@@ -56,6 +56,9 @@ export class ExpeditionBoss extends Boss {
     this.phaseShift = 0.85
     this.specialState = 'idle'
     this.specialCd = Math.min(this.specialCd, 1.25)
+    // 连击状态复位（同基类：转阶段可能发生在连段中途）
+    this._chainStep = 0
+    this._chainTotal = 1
     this.speed *= 1.18
     this.attackInterval *= 0.8
     this.freeze = 0
@@ -80,10 +83,16 @@ export class ExpeditionBoss extends Boss {
       this.specialCd = 0.35
       return
     }
+    // 二阶段连击：与基类同口径（patternBonus 由难度与章节深度共同决定），
+    // 让远征首领的二阶段从「同一机制重复」变成连续两/三段机制连段。
+    if (this._chainStep === 0) {
+      this._chainTotal = this.phase === 2 ? (this.patternBonus >= 1 ? 3 : 2) : 1
+    }
     const p = this.game.player
     this.specialPattern = this.encounter.mechanic
     this.specialState = 'telegraph'
     this.specialDuration = this.encounter.telegraph
+    if (this._chainStep > 0) this.specialDuration += this._chainStep * 0.22
     this.specialTimer = this.specialDuration
     this.lockedAngle = Math.atan2(p.y - this.y, p.x - this.x)
     this.targetX = p.x
@@ -244,10 +253,17 @@ export class ExpeditionBoss extends Boss {
     this._beginRecovery(this.phase === 2 ? 0.9 : 1.1)
   }
 
+  /**
+   * 强招收尾（远征版）：连击未打完则短暂间隙后接下一段；
+   * 打满后给破绽窗口（随段数延长），窗口与冷却均按遭遇战配置结算。
+   */
   _beginRecovery(duration) {
+    const chain = this._advanceChain()
+    if (chain.continuing) return
     this.specialState = 'recover'
-    this.specialTimer = duration
-    this.vulnerableTimer = duration
+    const breakWindow = this._chainBreakWindow(duration, chain.steps)
+    this.specialTimer = breakWindow
+    this.vulnerableTimer = breakWindow
     this.stateLabel = '破绽暴露'
     this.specialCd = this.encounter.cooldown * (this.phase === 2 ? 0.78 : 1) / this.attackTempo
   }

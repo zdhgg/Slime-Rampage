@@ -31,6 +31,36 @@ const CLEAR_RATE_WINDOW = 3
 const EXPEDITION_WIND_DOWN_AT = 0.75
 const EXPEDITION_WIND_DOWN_MUL = 0.9
 
+/**
+ * 早期元素入口（第二批）：第 2 波保底放出一只精英。
+ *
+ * 背景：元素核心的唯一来源是精英/Boss，而精英从「有效波次 ≥ 3」才开始出现
+ * （见 spawn 的 baseEliteChance 判定），导致前 60 秒全场无元素可用——
+ * 实测各角色首颗核心落在 66~146 秒。把一个精英提前到第 2 波开始（约 30 秒），
+ * 玩家在 35~45 秒即可拿到第一颗核心。
+ *
+ * 边界（刻意收窄，不影响后续曲线）：
+ *  - 每局至多一次（_earlyEliteDone 闸门）；
+ *  - 走 spawnAt 常规路径：共用波次成长公式与场上上限；只把这一只的体量除以
+ *    EARLY_ELITE_HP_DIVISOR（否则第 2 波打不动，见下），不新增任何掉落或资源；
+ *  - 不修改 baseEliteChance 与任何掉率——第 3 波以后整体精英率与核心掉率不变；
+ *  - 远征模式按章重置波次，同样每章至多一次，与既有章节节奏一致。
+ */
+const EARLY_ELEMENT_WAVE = 2
+/** 第 2 波保底精英的登场距离（px）：在视野内、但必须走过来——给玩家看清并迎战的余地 */
+const EARLY_ELITE_DISTANCE = 480
+/**
+ * 保底精英不享受 3× 精英体量。
+ *
+ * 实测依据：第 2 波玩家裸 DPS 约 1.0~1.3（1 发/秒 × 1 伤害），而 3× 骑士精英
+ * 有 10~14 HP → 需要 8~14 秒纯输出；加上接近与走位，首颗核心实测落在 59~87 秒，
+ * 保底形同虚设。改为「标准体量 + 主动追击」后，击杀缩到 5~9 秒，
+ * 稳定落在 35~45 秒窗口。掉率完全不变（精英掉落规则照旧），只改这一只的体量。
+ */
+const EARLY_ELITE_HP_DIVISOR = 3
+/** 保底精英主动加速逼近，把「遇见」变成「必然交战」 */
+const EARLY_ELITE_SPEED_MUL = 1.4
+
 /** 波次叙事表：开局是勇者刷史莱姆，后期是整个世界在阻止史莱姆（评审：反转感） */
 const WAVE_NAMES = {
   1: '新手村勇者实习团',
@@ -107,6 +137,7 @@ export class EnemyManager extends Entity {
     this._routing = [] // 过关溃散中的残敌（原地震散动画，非吞噬）
     this._texts = [] // 浮动提示文本（吞噬等）
     this._finale = false
+    this._earlyEliteDone = false
   }
 
   /** 当前活跃敌人数量（HUD 显示用） */
@@ -224,6 +255,7 @@ export class EnemyManager extends Entity {
     this._routing.length = 0
     this._texts.length = 0
     this._finale = false
+    this._earlyEliteDone = false
     this._stagePressure = 0 // 章节进度（引擎推送）：重开归零
   }
 
@@ -292,7 +324,50 @@ export class EnemyManager extends Entity {
       this._spawnTimer = Math.max(this._spawnTimer, this._nextInterval())
       this.spawnBossGroup(bossPlan)
     }
+    // 早期元素入口：第 2 波保底一只精英（每局至多一次），让第一颗元素核心
+    // 在 35~45 秒就能到手，而不是等第 3 波之后。
+    // 第三批角色化：它只服务「能使用元素」的角色（elemental / origin）——
+    // 暴食/弹射/暗影不使用元素，为它们多刷一只精英属于纯粹的难度上浮。
+    // 刻意用 spawnAt 在玩家近处「点名登场」：定时生成是视口边缘随机落点
+    // （420~620px 外），玩家很容易整波都没遇到它，保底就失去意义。
+    // spawnAt 与 spawn 共用同一套波次成长公式与场上上限。
+    if (
+      wave >= EARLY_ELEMENT_WAVE &&
+      !this._earlyEliteDone &&
+      !this._finale &&
+      this.game?.canUseElements !== false
+    ) {
+      this._earlyEliteDone = true
+      this._spawnEarlyElementElite()
+    }
     if (WAVE_NAMES[wave]) this.game.onWaveChanged?.(wave, WAVE_NAMES[wave])
+  }
+
+  /**
+   * 第 2 波保底精英：出现在玩家视野附近（EARLY_ELITE_DISTANCE），带一个词缀，
+   * 走常规 spawnAt 路径 → 击杀后按既有规则必掉一颗元素核心。
+   *
+   * 与常规精英的两点刻意差异（都是为了「来得及」）：
+   *  - 体量除以 EARLY_ELITE_HP_DIVISOR，让第 2 波的裸 DPS 也打得动；
+   *  - 移速乘 EARLY_ELITE_SPEED_MUL，主动逼近，把「遇见」变成「必然交战」。
+   * 掉落规则与怪物类型池完全沿用既有实现，不新增任何资源。
+   *
+   * 返回生成的敌人（场上已满时 spawnAt 返回 undefined，保底顺延到下一次 beginWave）。
+   */
+  _spawnEarlyElementElite() {
+    const player = this.game?.player
+    if (!player) return null
+    const type = this._rollType()
+    const angle = Math.random() * TAU
+    const d = EARLY_ELITE_DISTANCE
+    const x = Math.max(0, Math.min(this.game.worldWidth, player.x + Math.cos(angle) * d))
+    const y = Math.max(0, Math.min(this.game.worldHeight, player.y + Math.sin(angle) * d))
+    return this.spawnAt(x, y, type, {
+      elite: true,
+      affix: AFFIXES[(Math.random() * AFFIXES.length) | 0],
+      hpDivisor: EARLY_ELITE_HP_DIVISOR,
+      speedMul: EARLY_ELITE_SPEED_MUL,
+    })
   }
 
   _speedGrowth() {
@@ -438,7 +513,8 @@ export class EnemyManager extends Entity {
     x = Math.max(0, Math.min(this.game.worldWidth, x))
     y = Math.max(0, Math.min(this.game.worldHeight, y))
 
-    // 命名波次使用对应的加权敌军编成；精英怪第 3 波起出现，概率随波次增长。
+    // 命名波次使用对应的加权敌军编成；精英怪第 3 波起按概率出现，
+    // 另在第 2 波有一只保底精英作为「早期元素入口」（见 EARLY_ELEMENT_WAVE）。
     const type = this._rollType()
     const { profile, wave } = this._combatModifiers()
     const effectiveWave = this._effectiveWave()
@@ -480,15 +556,16 @@ export class EnemyManager extends Entity {
     const { profile, wave } = this._combatModifiers()
     const effectiveWave = this._effectiveWave()
     const baseHp = 1 + ((Math.random() * 3) | 0) + Math.floor((effectiveWave - 1) / 2)
+    const hpDivisor = Math.max(1, options.hpDivisor || 1)
     const enemy = new Enemy({
       x,
       y,
       type,
       elite,
       affixes: this._rollAffixes(elite, options.affix || null),
-      speed: rand(65, 110) * this._speedGrowth() * (profile.enemySpeedMul || 1),
+      speed: rand(65, 110) * this._speedGrowth() * (profile.enemySpeedMul || 1) * (options.speedMul || 1),
       speedCap: profile.enemySpeedCap,
-      hp: baseHp * (profile.enemyHpMul || 1) * wave.enemyHpMul,
+      hp: (baseHp * (profile.enemyHpMul || 1) * wave.enemyHpMul) / hpDivisor,
       rewardHp: baseHp,
       attackTempo: (profile.attackTempoMul || 1) * (wave.attackTempoMul || 1),
     })
@@ -1024,10 +1101,16 @@ export class EnemyManager extends Entity {
     this._clearSampleReady = true
   }
 
-  /** 吞噬检测：可吞噬的残血敌人进入玩家吸入口径时触发吞噬（一帧至多一个） */
+  /**
+   * 吞噬检测：可吞噬的残血敌人进入玩家吸入口径时触发吞噬（一帧至多一个）。
+   * 阶段十九：吞噬是暴食史莱姆的独占机制——非暴食角色（含 origin）直接短路。
+   * Enemy.hit 侧也做了同一判定（标记层），这里是吸收层的唯一闸门。
+   */
   _checkDevour() {
+    // game.canDevour：引擎侧是 getter（布尔）；桩对象通常没这个字段，缺省按「可吞噬」处理
+    if (this.game.canDevour === false) return
     const player = this.game.player
-    const reach = (player.radius + 12) * (player.devourRadiusBonus || 1.0) * (player.strainDevourRadius || 1)
+    const reach = (player.radius + 12) * (player.devourRadiusBonus || 1.0)
     const reach2 = reach * reach
     for (const e of this._enemies) {
       if (!e.active || !e.devourable || e.devouring) continue
@@ -1040,13 +1123,22 @@ export class EnemyManager extends Entity {
     }
   }
 
-  /** 开始吞噬：标记吸入 → 玩家膨胀脉冲 → 掉落/素材/文本结算（WeaponSystem 统一处理） */
-  _startDevour(e) {
+  /**
+   * 开始吞噬：标记吸入 → 玩家膨胀脉冲 → 掉落/素材/文本结算（WeaponSystem 统一处理）。
+   *
+   * `ctx.source` 是**显式**的吞噬来源标记（'normal' | 'gluttonF'），从唯一入口
+   * 一路传到 WeaponSystem.onDevoured：判断链路上不存在时间戳、位置或全局布尔，
+   * 「暴食 F 的吞噬不返充猎食点」这条护栏就落在 WeaponSystem.onDevoured 的
+   * 来源分发上（见 GluttonResource.onNormalDevoured / onGluttonFDevoured）。
+   * @param {object} e 目标敌人
+   * @param {{source?: string}} [ctx] 吞噬来源上下文（缺省 = 普通吞噬）
+   */
+  _startDevour(e, ctx = null) {
     e.devouring = true
     e._devourT = 0
     this._devouring.push(e)
     this.game.player._devourPulse = 0.3 // 果冻膨胀脉冲
-    this.game.weaponSystem.onDevoured(e)
+    this.game.weaponSystem.onDevoured(e, ctx)
   }
 
   /** 远征过关：残敌原地震散（0.55s 缩小淡出）——胜势演出，不给吞噬奖励。

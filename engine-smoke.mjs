@@ -36,6 +36,7 @@ globalThis.requestAnimationFrame = () => 0
 globalThis.cancelAnimationFrame = () => {}
 
 const { GameEngine } = await import('./src/game/GameEngine.js')
+const { STRAINS } = await import('./src/game/Strains.js')
 
 const engine = GameEngine.create(canvasStub)
 engine.onStats = () => {}
@@ -265,32 +266,70 @@ assert.equal(zoneEvents[0].zone, '腐化洞庭')
 assert.equal(zoneEvents[1].zone, '王城废垒')
 console.log('✓ 无尽战场推进：随灾变波次从边境烧到王城（三段换景 + 战区横幅）')
 
-// 史莱姆血统：先天属性在基因/难度/专精之后叠加（岩壳/电光/贪噬各有代价）
+// 史莱姆角色（阶段十九）：先天属性在基因/难度/专精之后叠加，且血统同时决定角色身份
+// （roleSpec）——origin 保持自由构筑（不绑树、不吞噬），四条角色绑定各自的技能树。
 engine.configureRun({ mode: 'timed', difficulty: 'normal' })
 engine.applyStartingStrain('origin')
 engine.reset()
 const baseHp = engine.player.maxHp
 const baseSpeed = engine.player.speed
-const baseDmg = engine.weaponSystem.damage
-engine.applyStartingStrain('stone')
-engine.reset()
-assert.equal(engine.player.maxHp, baseHp + 3)
-assert.equal(engine.player.speed, Math.round(baseSpeed * 0.88))
-engine.applyStartingStrain('volt')
-engine.reset()
-assert.equal(engine.player.maxHp, baseHp - 2)
-assert.equal(engine.player.speed, Math.round(baseSpeed * 1.15))
+const baseFireInterval = engine.weaponSystem.fireInterval
+const baseProjectileCount = engine.weaponSystem.projectileCount
+const baseProjectileSpeed = engine.weaponSystem.projectileSpeed
+const baseCritChance = engine.weaponSystem.critChance
+assert.equal(engine.roleSpec, null, 'origin：不绑定技能树')
+assert.equal(engine.canDevour, false, 'origin：不享受吞噬独占')
+
+// 暴食：唯一能吞噬的角色，生命 +1 换开火间隔 ×1.5（近身换命）
 engine.applyStartingStrain('glutton')
 engine.reset()
-assert.ok(Math.abs(engine.weaponSystem.damage - baseDmg * 0.85) < 1e-9)
-assert.equal(engine.player.strainDevourRadius, 1.35)
+assert.equal(engine.roleSpec, 'gluttony')
+assert.equal(engine.canDevour, true, '暴食是唯一可吞噬的角色')
+assert.equal(engine.player.maxHp, baseHp + 1)
+// 期望倍率直接取血统配置（唯一来源），避免测试再单独硬编码一份而随调参漂移
+assert.ok(
+  Math.abs(engine.weaponSystem.fireInterval - baseFireInterval * STRAINS.glutton.fireIntervalMul) < 1e-9
+)
+assert.ok(Math.abs(engine.player.devourRadiusBonus - 1.35) < 1e-9, '吞噬吸附半径由血统乘入')
 assert.equal(engine.strainDevourBonus, 0.04)
 const strainProbe = new (await import('./src/game/entities/Enemy.js')).Enemy({ x: 0, y: 0, speed: 80, hp: 10, type: 'knight' })
 strainProbe.attach(engine)
-assert.ok(Math.abs(strainProbe._devourThresh() - 0.16) < 1e-9, '贪噬血统：普通怪吞噬线 12% → 16%')
+assert.ok(Math.abs(strainProbe._devourThresh() - 0.16) < 1e-9, '暴食：普通怪吞噬线 12% → 16%')
+
+// 弹射：齐射 +1、弹速 +25%，开火间隔 ×1.2
+engine.applyStartingStrain('ricochet')
+engine.reset()
+assert.equal(engine.roleSpec, 'gatling')
+assert.equal(engine.canDevour, false)
+assert.equal(engine.weaponSystem.projectileCount, baseProjectileCount + 1)
+assert.ok(Math.abs(engine.weaponSystem.projectileSpeed - baseProjectileSpeed * 1.25) < 1e-9)
+assert.ok(Math.abs(engine.weaponSystem.fireInterval - baseFireInterval * 1.2) < 1e-9)
+
+// 元素：暴击率 +8%，生命 −1
+engine.applyStartingStrain('elemental')
+engine.reset()
+assert.equal(engine.roleSpec, 'elemental')
+assert.equal(engine.canDevour, false)
+assert.ok(Math.abs(engine.weaponSystem.critChance - (baseCritChance + 0.08)) < 1e-9)
+assert.equal(engine.player.maxHp, baseHp - 1)
+
+// 暗影：暴击 +12%、冲刺冷却 −20%，生命 −1、吞噬范围收窄
+engine.applyStartingStrain('shadow')
+engine.reset()
+assert.equal(engine.roleSpec, 'assassin')
+assert.equal(engine.canDevour, false)
+assert.ok(Math.abs(engine.weaponSystem.critChance - (baseCritChance + 0.12)) < 1e-9)
+assert.ok(Math.abs(engine.player.dashCdMultiplier - 0.8) < 1e-9)
+assert.equal(engine.player.maxHp, baseHp - 1)
+assert.ok(engine.player.devourRadiusBonus < 1, '暗影：吞噬范围收窄（短板）')
+
+// 重开归位：角色身份不得跨局残留
 engine.applyStartingStrain('origin')
 engine.reset()
-console.log('✓ 史莱姆血统：岩壳/电光/贪噬先天属性正确叠加（生命/移速/攻击/吞噬口径）')
+assert.equal(engine.roleSpec, null)
+assert.equal(engine.canDevour, false)
+assert.equal(engine.player.strainSkillCd, 0)
+console.log('✓ 史莱姆角色：origin 自由构筑 + 四角色绑定技能树/独占吞噬/F 技能（属性与身份同步叠加且重开归位）')
 
 // 章节远征：六类目标、逐关首领、关间补给、技能选择与最终统帅必须形成完整状态闭环。
 const rewards = []

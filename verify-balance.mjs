@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 
 import { EnemyManager } from './src/game/EnemyManager.js'
 import { Enemy } from './src/game/entities/Enemy.js'
+import { Boss } from './src/game/entities/Boss.js'
 import {
   DIFFICULTIES,
   getExpeditionBoss,
@@ -34,11 +35,13 @@ function createManager(mode = 'timed', difficulty = 'normal', stage = 1) {
       maxHp: 5,
       level: 1,
       dead: false,
+      invincible: 0,
       devourRadiusBonus: 1,
       strainDevourRadius: 1,
+      hit() {},
     },
     weaponSystem: { kills: 0 },
-    sound: { wave() {}, bossRoar() {} },
+    sound: { wave() {}, bossRoar() {}, enemyShoot() {}, kill() {} },
     dialogue: { tryMinion() {}, sayBoss() {} },
     shakeScreen() {},
   }
@@ -220,7 +223,8 @@ function createManager(mode = 'timed', difficulty = 'normal', stage = 1) {
   assert.deepEqual(atWave99, atWave1)
   assert.equal(atWave1.bossPatternBonus, 2)
   assert.equal(atWave1.enemyHpMul, 1.66)
-  assert.equal(atWave1.bossHpMul, 1.99)
+  // bossHpMul = 灾变档位 1 × 末章乘算成长 5.12：首领须有乘算成长才能追上玩家 DPS 曲线
+  assert.equal(atWave1.bossHpMul, 5.12)
   ok('远征末关修饰固定，额外 Boss 招式层数封顶为 2')
 }
 
@@ -254,13 +258,130 @@ function createManager(mode = 'timed', difficulty = 'normal', stage = 1) {
     const encounter = getExpeditionBoss(stage.bossId)
     return manager.beginExpeditionStageBoss(encounter, !!encounter.final).maxHp
   })
-  assert.deepEqual(hp, [163, 207, 256, 323, 388, 465, 565, 1027])
+  assert.deepEqual(hp, [163, 220, 292, 397, 516, 674, 895, 1426])
   assert.ok(hp.every((value, index) => index === 0 || value > hp[index - 1]))
+
+  // 曲线平滑性：不再有末章悬崖（旧口径终章相对前章 +82%~+99%），
+  // 且整体必须明显跑赢玩家纯等级成长（Lv.1→20 约 4.3×），否则后期首领相对变脆
+  const steps = hp.slice(1).map((value, index) => value / hp[index])
+  assert.ok(steps.every((ratio) => ratio < 1.6), `逐章增幅应平滑（实际最大 ${Math.max(...steps).toFixed(2)}×）`)
+  assert.ok(hp[hp.length - 1] / hp[0] > 8, '终章相对首章应有量级差距（追赶玩家乘算成长）')
 
   const timed = createManager('timed', 'normal', 1).manager
   timed.wave = 5
   assert.equal(timed.spawnBoss({ type: 'boss-knight' }).maxHp, 100)
-  ok('普通远征首领生命递增至 163～1027，且限时首领生命不受影响')
+  ok('普通远征首领生命递增至 163～1426，曲线平滑且限时首领基础生命不受影响')
+}
+
+// 15. 限时首领血量按波次档位乘算成长，终局成为真正的强度高峰。
+{
+  const normal = { mode: 'timed', difficulty: 'normal' }
+  const at5 = getWaveModifiers(normal, 5).bossHpMul
+  const at10 = getWaveModifiers(normal, 10).bossHpMul
+  const at15 = getWaveModifiers(normal, 15).bossHpMul
+  const at20 = getWaveModifiers(normal, 20).bossHpMul
+  const at25 = getWaveModifiers(normal, 25).bossHpMul
+  assert.ok(at5 < at10 && at10 < at15 && at15 < at20 && at20 < at25)
+  assert.equal(at5, 1)
+  assert.equal(at25, 3.32)
+  // 档位在波次区间内保持稳定（第 25~29 波同档），避免同段内无意义抖动
+  assert.equal(getWaveModifiers(normal, 29).bossHpMul, at25)
+  // 无尽仍由灾变档位负责，不受限时档位表影响
+  assert.equal(getWaveModifiers({ mode: 'endless', difficulty: 'normal' }, 25).bossHpMul, 1.18)
+  ok('限时首领按波次档位乘算成长（1 → 3.32），无尽仍走灾变档位')
+}
+
+// 16. 首领二阶段连击：段数随难度档位提升，破绽窗口随段数延长。
+{
+  const { manager, game } = createManager('timed', 'normal', 1)
+  game.player.invincible = 0
+  const boss = new Boss({ x: 500, y: 500, wave: 5, type: 'boss-knight', patternBonus: 0 })
+  boss.attach(game)
+  manager._enemies.push(boss)
+  manager._bosses.push(boss)
+  manager._boss = boss
+  assert.equal(boss._chainTotal, 1, '一阶段不连击')
+  boss._enterPhaseTwo()
+  boss.specialState = 'idle'
+  boss.phaseShift = 0
+  boss.specialCd = 0
+  boss.update(0.016)
+  assert.equal(boss._chainTotal, 2, '普通档二阶段为 2 段连击')
+
+  // 打满第一段：冲锋是持续状态（dash → 撞完才收尾），推进到收尾后进入连击间隙
+  boss._executeSpecial()
+  assert.equal(boss.specialState, 'dash')
+  boss.update(1) // 冲刺结束 → _beginRecovery → 进入第二段间隙
+  assert.equal(boss.specialState, 'chain')
+  assert.equal(boss.vulnerableTimer, 0, '连击中段不给破绽窗口')
+  assert.equal(boss._chainStep, 1)
+
+  // 第二段（末段）打完才给破绽，且窗口比单段更长
+  boss.update(boss._chainDelay + 0.01) // 进入第二段蓄力
+  assert.equal(boss.specialState, 'telegraph')
+  boss.specialTimer = 0.001
+  boss.update(0.01)
+  boss.update(1) // 第二段冲锋结束 → 连击打满
+  const chainRecover = boss.vulnerableTimer
+  assert.equal(boss.specialState, 'recover')
+  assert.ok(chainRecover > 1.6, `连击收尾破绽窗口应延长（实际 ${chainRecover.toFixed(2)}s）`)
+  assert.equal(boss._chainStep, 0, '连击结束后段数复位')
+
+  // 高难档位（patternBonus ≥ 1）提升为 3 段
+  manager.releaseBossCast(boss) // 交还施法权，否则新首领拿不到强招释放资格
+  const hard = new Boss({ x: 500, y: 500, wave: 5, type: 'boss-knight', patternBonus: 2 })
+  hard.attach(game)
+  hard._enterPhaseTwo()
+  hard.specialState = 'idle'
+  hard.phaseShift = 0
+  hard.specialCd = 0
+  hard.update(0.016)
+  assert.equal(hard._chainTotal, 3, '困难/地狱档二阶段为 3 段连击')
+
+  // 转阶段发生在连段中途时，连击状态必须复位（否则二阶段会错接旧连段）
+  const midChain = new Boss({ x: 500, y: 500, wave: 5, type: 'boss-knight', patternBonus: 0 })
+  midChain.attach(game)
+  midChain._chainStep = 1
+  midChain._chainTotal = 2
+  midChain._enterPhaseTwo()
+  assert.equal(midChain._chainStep, 0, '转阶段复位连击段数')
+  assert.equal(midChain._chainTotal, 1, '转阶段复位连击总段数')
+  ok('二阶段连击：普通 2 段 / 高难 3 段，中段无破绽、收尾窗口随段数延长')
+}
+
+// 17. 血量阈值事件：75% 召唤护卫、25% 困兽之斗，且各自只触发一次。
+{
+  const { manager, game } = createManager('timed', 'normal', 1)
+  const boss = new Boss({ x: 500, y: 500, wave: 5, type: 'boss-knight' })
+  boss.attach(game)
+  manager._enemies.push(boss)
+  manager._bosses.push(boss)
+  manager._boss = boss
+  let summons = 0
+  const originalSpawnAt = manager.spawnAt.bind(manager)
+  manager.spawnAt = (...args) => { summons++; return originalSpawnAt(...args) }
+
+  assert.equal(boss._reinforced, false)
+  boss.hp = boss.maxHp * 0.74
+  boss.hit(0) // 阈值检查在 hit 路径上（damage > 0 才计入，0 伤害仅验证不误触发）
+  assert.equal(boss._reinforced, false, '0 伤害不应触发阈值事件')
+
+  boss.hit(1)
+  assert.equal(boss._reinforced, true, '跌破 75% 触发召唤护卫')
+  assert.equal(summons, 2)
+  const summonsAfter = summons
+  boss.hit(1)
+  assert.equal(summons, summonsAfter, '75% 事件只触发一次')
+
+  const speedBefore = boss.speed
+  boss.hp = boss.maxHp * 0.24
+  boss.hit(1)
+  assert.equal(boss._lastStand, true, '跌破 25% 触发困兽之斗')
+  assert.ok(boss.speed > speedBefore, '困兽之斗提升移速')
+  const speedAfter = boss.speed
+  boss.hit(1)
+  assert.equal(boss.speed, speedAfter, '25% 事件只触发一次')
+  ok('血量阈值事件：75% 增援 / 25% 困兽之斗，各只触发一次且零伤害不误触发')
 }
 
 console.log(`\n难度曲线专项通过：${n} 组断言 ✓`)

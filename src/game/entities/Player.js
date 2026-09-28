@@ -221,6 +221,25 @@ export class Player extends Entity {
     this.dashCd = 0 // 冲刺冷却（秒）
     this._dashT = 0 // 冲刺剩余时间（秒）
     this._dashDir = { x: 0, y: 0 } // 冲刺方向（单位向量缓存）
+    this._dashHitTargets = new Set() // 单次冲刺已命中目标集合（防多帧重复结算）
+    // —— F 角色专属主动技能（阶段十九） ——
+    // 冷却由 GameEngine._updateStrainSkill 推进，这里只持有状态；
+    // origin（无角色身份）没有技能，冷却恒为 0、HUD 不渲染技能条。
+    // 暴食是唯一例外：它不使用 strainSkillCd（见 GluttonResource.js），
+    // 而 resource 型分支由 GameEngine 依据「是否拥有猎食点」自动切换。
+    this.strainSkillCd = 0 // 剩余冷却（秒）
+    this.strainSkillMax = 0 // 当前技能冷却上限（HUD 进度条用）
+    this.strainSkillReadyPulse = 0 // 施放瞬间的反馈脉冲（秒）
+    // —— 暴食猎食点资源（暴食 F 主动捕食） ——
+    // 与「F 冷却」是两套语义：暴食没有主冷却，只有资源 + 0.3s 再次释放锁。
+    // 状态放在 Player 上（与 strainSkillCd 同层）：随 resetRunState 归零、
+    // 由 applyStrain 决定本角色的启用与否，不新建通用 ResourceSystem。
+    // 口径与读写函数在 GluttonResource.js；这里只持有数值。
+    this.gluttonCharge = 0 // 当前猎食点（-1 = 该角色不拥有此资源）
+    this.gluttonDevourProgress = 0 // 正常吞噬进度（满 5 → +1 点）
+    this.gluttonBossHuntProgress = 0 // Boss 普攻猎食进度（默认满 10 → +1 点，觉醒满 8）
+    this.gluttonRecastLock = 0 // 再次释放锁剩余（0.3s，防同帧/连点连扣两点）
+    this.gluttonLastGainPulse = 0 // 获得猎食点瞬间的 HUD 反馈脉冲（秒）
     // —— 肾上腺素（通用技能：受击转机动） ——
     this.adrenalineSpeed = 0 // 受击后移速加成（0 = 未习得）
     this.adrenalineTimer = 0 // 剩余爆发时间（秒）
@@ -322,6 +341,16 @@ export class Player extends Entity {
     this.guaranteedCrit = false
     this.adrenalineSpeed = 0
     this.adrenalineTimer = 0
+    this._dashHitTargets.clear()
+    this.strainSkillCd = 0 // F 角色技能冷却归位（角色身份随 applyStrain 重建）
+    this.strainSkillMax = 0
+    this.strainSkillReadyPulse = 0
+    // 暴食猎食点资源归零（新局/重开不得残留；非暴食角色随后由 applyStrain 置 -1 关闭）
+    this.gluttonCharge = 0
+    this.gluttonDevourProgress = 0
+    this.gluttonBossHuntProgress = 0
+    this.gluttonRecastLock = 0
+    this.gluttonLastGainPulse = 0
     this.elementProcCap = ELEMENT_PROC_CHANCE_CAP // 专精改写的附魔封顶归位
   }
 
@@ -399,6 +428,10 @@ export class Player extends Entity {
    */
   absorbElement(type) {
     if (this.dead) return // 死亡帧残差：不再吸收（防进化演出与结算面板叠加）
+    // 元素权限（第三批角色化）：暴食/弹射/暗影不使用元素系统。
+    // 这是防御性兜底闸门——上游（核心生成、E 交互、吞噬消化）已按同一权限
+    // 拦截，这里保证任何未来新增的调用路径都不会绕过权限白拿到元素。
+    if (this.game?.canUseElements === false) return
     const beforeSat = new Set(getActiveReactions(this.elements).map((r) => r.id)) // 吸收前满足的组合
     const lv = (this.elements.get(type) || 0) + 1
     this.elements.set(type, lv)
@@ -738,13 +771,14 @@ export class Player extends Entity {
         if (this._trail.length > 24) this._trail.shift()
       }
 
-      // 暴食冲撞撞击 / 荒古领主冲刺秒杀吞噬
+      // 暴食冲撞撞击 / 荒古领主冲刺秒杀吞噬（单次冲刺内对同一目标仅结算一次）
       if ((this.dashImpactDmg > 0 || this.isGluttonyLord) && this.game.enemyManager) {
         for (const e of this.game.enemyManager.enemies) {
-          if (!e.active || e.devouring) continue
+          if (!e.active || e.devouring || this._dashHitTargets.has(e)) continue
           const d2 = (e.x - this.x) ** 2 + (e.y - this.y) ** 2
           const hitR = this.radius + e.radius + 12
           if (d2 <= hitR * hitR) {
+            this._dashHitTargets.add(e)
             if (this.isGluttonyLord && !e.isBoss && e.hp <= e.maxHp * 0.5) {
               this.game.weaponSystem?.onDevoured?.(e)
               e.destroy()
@@ -756,8 +790,10 @@ export class Player extends Entity {
           }
         }
       }
+      if (this._dashT <= 0) this._dashHitTargets.clear()
     } else if (this.input.consumeDash() && this.dashCd <= 0) {
       // 触发冲刺：方向 = 当前移动方向，静止时朝面朝方向
+      this._dashHitTargets.clear()
       if (this.shadowDecoyDuration > 0) {
         this._decoys.push({
           x: this.x,
