@@ -89,6 +89,9 @@ function buttonLabel(gene) {
                 <span class="node-level">{{ gene.level }}/{{ gene.maxLevel }}</span>
               </div>
               <p>{{ gene.desc }}</p>
+              <!-- 适用范围提示（第四批）：档案级永久成长不按当前角色锁购买，
+                   只把「主要适用于谁」讲清楚，避免买了才发现对当前角色为空 -->
+              <div v-if="gene.scope" class="node-scope">{{ gene.scope }}</div>
               <div v-if="gene.reason" class="node-reason">{{ gene.reason }}</div>
               <button
                 class="gene-buy"
@@ -370,6 +373,14 @@ function buttonLabel(gene) {
   font-size: 11px;
   line-height: 1.55;
   color: rgba(255, 255, 255, 0.52);
+}
+
+/* 适用范围提示（第四批）：比 reason 更弱的存在感，不与「还差 N 份战利品」抢注意力 */
+.node-scope {
+  margin-bottom: 5px;
+  font-size: 10px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.38);
 }
 
 .node-reason {

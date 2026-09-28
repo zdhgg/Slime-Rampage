@@ -5,17 +5,39 @@
 import { computed } from 'vue'
 import { REACTION_SLOT_LEVELS, getReactionSlotLevelBonus } from '../game/entities/Player.js'
 
-/** 主专精的元素规则改写（专精 → 元素联动）：觉醒面板直接标出「这条流派怎么改写元素玩法」 */
+/**
+ * 主专精的规则改写（专精 → 玩法规则）：觉醒面板直接标出「这条流派怎么改写玩法」。
+ *
+ * 三条规则的性质不同，文案必须区分：
+ *  - gatling：分裂弹继承「暴击率 + 状态附加概率」——这里刻意写「状态附加概率」而不是
+ *    「附魔概率」：它指飞弹自带的 freeze/burn/poisonChance（武器状态附加），
+ *    与核心元素的 _procs（已吸收元素的等级累积附魔）不是同一个概念。
+ *  - elemental：核心元素附魔封顶 60% → 85%，只可能被 elemental / origin 拿到。
+ *  - assassin：暴击保证触发**已吸收的**核心元素附魔——**只在角色有元素权限时成立**。
+ *    暗影史莱姆无元素权限，引擎不会给它这条赋能，因此模板里必须按 canUseElements
+ *    隐藏，不能向暗影承诺拿不到的效果。
+ * 暴食的元素规则改写已随赋能移除，不再展示。
+ */
 const SPEC_ELEMENT_RULE = {
-  gluttony: '🧬 元素规则：消化能量效率 +50%（胃袋把血肉转成元素养分）',
-  gatling: '🧬 元素规则：分裂弹 100% 继承母弹附魔（分裂不再稀释元素）',
+  gatling: '🧬 分裂规则：分裂弹 100% 继承母弹的暴击率与状态附加概率（分裂不再稀释）',
   elemental: '🧬 元素规则：附魔概率封顶 60% → 85%（把概率投满有了去处）',
-  assassin: '🧬 元素规则：暴击必定触发元素附魔（精准打击弱点）',
+  assassin: '🧬 元素规则：暴击必定触发你已吸收的元素附魔（原生黏液等高元素角色专属）',
+}
+
+/** 该规则是否应当展示：刺客这条依赖元素权限，其余两条与权限无关 */
+const canShowSpecRule = (spec) => {
+  if (spec === 'assassin') return props.canUseElements === true
+  return !!SPEC_ELEMENT_RULE[spec]
 }
 
 const props = defineProps({
   options: { type: Array, required: true }, // 技能选项数组
   level: { type: Number, required: true }, // 当前等级
+  // 角色身份（阶段十九）：非空 = 四角色血统，Lv.1~4 只开放本树；
+  // 空 = origin 自由构筑，仍走四系自由探索 + Lv.5 四选一
+  roleSpec: { type: String, default: null },
+  // 元素权限（第四批）：无权限角色的槽位里程碑是空承诺，需隐藏
+  canUseElements: { type: Boolean, default: true },
 })
 const emit = defineEmits(['select'])
 
@@ -23,8 +45,12 @@ const emit = defineEmits(['select'])
  * 槽位里程碑提示（等级 → 元素联动的高亮时刻）：
  * 恰好跨过 Lv.4 / Lv.8 时宣告新槽位（此刻已由 Player.refreshReactionSlots 生效），
  * 否则预告下一个里程碑——让升级面板第一次把「元素构筑」纳入决策视野。
+ *
+ * 第四批：无元素权限的角色（暴食/弹射/暗影）不显示——它们不会吸收任何元素，
+ * 槽位再扩也是空槽，提示等于一句空承诺。底层槽位计算不改。
  */
 const slotMilestone = computed(() => {
+  if (!props.canUseElements) return null
   const level = props.level || 1
   if (REACTION_SLOT_LEVELS.includes(level)) {
     return { hit: true, text: `🎉 副反应槽 +1（现 ${2 + getReactionSlotLevelBonus(level)} 个基础槽，已自动接入可用反应）` }
@@ -89,8 +115,9 @@ const cardClass = (s) => {
             <div class="ms-bonus-val">{{ s.bonus }}</div>
           </div>
 
-          <!-- 元素规则改写（专精 → 元素联动）：主专精决定你怎么用元素 -->
-          <div v-if="milestoneType === 'primary' && SPEC_ELEMENT_RULE[s.spec]" class="ms-element-rule">
+          <!-- 玩法规则改写：主专精决定你怎么用（暴击／分裂／元素）。
+               刺客那条依赖元素权限，对暗影隐藏——不承诺拿不到的效果。 -->
+          <div v-if="milestoneType === 'primary' && canShowSpecRule(s.spec)" class="ms-element-rule">
             {{ SPEC_ELEMENT_RULE[s.spec] }}
           </div>
 
@@ -114,7 +141,9 @@ const cardClass = (s) => {
       <h2 class="levelup-title">✨ 升级！Lv.{{ level }} · 选择一项基因进化 ✨</h2>
       <div class="levelup-grow">
         {{ level < 5
-          ? '🌱 阶段说明：Lv.1~4 为自由变异期（随意尝试手感与元素，不会锁死流派，Lv.5 将触发主专精觉醒仪式）'
+          ? (roleSpec
+            ? '🌱 阶段说明：Lv.1~4 只开放本角色专属技能树（Lv.5 自动觉醒为你的主专精，无需选择）'
+            : '🌱 阶段说明：Lv.1~4 为自由变异期（四系技能全开放，不锁死流派，Lv.5 将触发主专精觉醒仪式）')
           : '📈 等级成长：攻击力自动提升 8%（已生效，可与技能叠加）' }}
       </div>
       <div v-if="slotMilestone" class="levelup-slot" :class="{ hit: slotMilestone.hit }">

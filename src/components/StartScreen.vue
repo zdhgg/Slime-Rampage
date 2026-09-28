@@ -3,8 +3,12 @@ import { computed, nextTick, ref, watch } from 'vue'
 import {
   ArrowLeft,
   ArrowRight,
+  Check,
+  Crown,
   Gauge,
+  Hourglass,
   Infinity as InfinityIcon,
+  Play,
   Route,
   Shield,
   Swords,
@@ -73,31 +77,38 @@ const ICONS = {
   stone: ['M8.2 5 15 4l5 6-2.8 8-8.2 1L4.8 12 8.2 5Z', 'M13 4.6 11.8 11 7 12.8'],
   volt: ['M13 2 5 13.2h5L9 22l8-11.2h-5L13 2Z'],
   glutton: ['M20.6 8.4 12 12l8.6 3.6A9 9 0 1 1 20.6 8.4Z'],
+  // 弹射：弹道折线 + 两个命中点（远程弹射的身份）
+  ricochet: ['M3 19 9 11l4.5 5', 'M15 8l3-4 3 3', 'M9.6 9.9a1.9 1.9 0 1 0 0-3.8 1.9 1.9 0 0 0 0 3.8Z'],
+  // 元素：四象环（四系融合的身份）
+  elemental: ['M12 3.2 19.5 12 12 20.8 4.5 12 12 3.2Z', 'M12 8.6a3.4 3.4 0 1 0 0 6.8 3.4 3.4 0 0 0 0-6.8Z'],
+  // 暗影：匕首（暴击与收割的身份）
+  shadow: ['M14.4 3 19 7.6 8.6 18H4v-4.6L14.4 3Z', 'M4.6 15.6 8.4 19.4'],
 }
 
 /** 血统图标配色（血统本身没有 color 字段，这里按主题色手配）。 */
 const STRAIN_COLORS = {
   origin: '#b7cfaf',
-  stone: '#9fb4c8',
-  volt: '#78e0ff',
   glutton: '#96e878',
+  ricochet: '#78d8e8',
+  elemental: '#a29bfe',
+  shadow: '#ff6b6b',
 }
 
-/** 模式专属图标（内联 SVG path，避免系统 emoji 字体差异）。 */
-const MODE_ICONS = {
-  expedition: [
-    'M4 8l4.5 3L12 5l3.5 6L20 8l-1.8 9H5.8L4 8Z',
-    'M9 21h6',
-  ],
-  timed: [
-    'M7 3h10',
-    'M8 3v2.2c0 2.8 3.2 4.3 4 5.8.8-1.5 4-3 4-5.8V3',
-    'M8 21v-2.2c0-2.8 3.2-4.3 4-5.8.8 1.5 4 3 4 5.8V21',
-    'M7 21h10',
-  ],
-  endless: [
-    'M18.6 8.2c-1.5-1.7-3.4-2-4.8-1.2L12 8.1l-1.8-1.1c-1.4-.8-3.3-.5-4.8 1.2-1.6 1.9-1.6 4.7 0 6.6 1.5 1.7 3.4 2 4.8 1.2L12 14.9l1.8 1.1c1.4.8 3.3.5 4.8-1.2 1.6-1.9 1.6-4.7 0-6.6Z',
-  ],
+/**
+ * 模式图标统一使用 lucide 组件（与玩法选择页一致）：
+ * 旧版手绘 path 中沙漏像蝴蝶结、无尽符号像心，辨识度不足。
+ */
+const MODE_LUCIDE_ICONS = {
+  expedition: Crown,
+  timed: Hourglass,
+  endless: InfinityIcon,
+}
+
+/** 模式卡标签：把模式差异（时长/机制/结算）直接摆到选择页，三秒可读。 */
+const MODE_CHIPS = {
+  expedition: ['章节制 · 6–12 章', '章间补给', '统帅决战'],
+  timed: ['12 分钟限时', '阶段首领', '速度计分'],
+  endless: ['无尽波次', '20 波后灾变', '生存纪录'],
 }
 
 /** 模式主题色：仅用于卡片图标与轻微强调，不破坏整体金色体系。 */
@@ -193,6 +204,17 @@ const modeCards = computed(() =>
     hint: modeUnlockHint(mode),
   }))
 )
+/** 最新解锁的模式 = 当前推荐挑战项，用于角标与呼吸光；全部解锁后最后一张为终极挑战。 */
+const featuredMode = computed(
+  () => unlockedModes.value[unlockedModes.value.length - 1]
+)
+const allModesUnlocked = computed(() => unlockedModes.value.length === MODE_IDS.length)
+
+/* 锁卡点击反馈：抖动 + 条件 toast（锁卡不使用 disabled，键盘/屏幕阅读器可达） */
+const shakingMode = ref(null)
+const lockNotice = ref('')
+let shakeTimer = null
+let noticeTimer = null
 const selectedMode = computed(() => MODES[selection.value.mode])
 const selectedDifficulty = computed(() => DIFFICULTIES[selection.value.difficulty])
 const lanLabel = computed(() => {
@@ -272,6 +294,34 @@ function selectMode(mode) {
   emit('ui-sound', 'select')
   view.value = 'config'
   nextTick(() => configBackLink.value?.focus())
+}
+
+/** 模式卡统一入口：已解锁进入配置；锁定则抖动并弹出条件提示。 */
+function onModeCardClick(card) {
+  if (card.locked) {
+    emit('ui-sound', 'click')
+    shakingMode.value = card.mode
+    lockNotice.value = card.hint
+    clearTimeout(shakeTimer)
+    clearTimeout(noticeTimer)
+    shakeTimer = setTimeout(() => {
+      if (shakingMode.value === card.mode) shakingMode.value = null
+    }, 620)
+    noticeTimer = setTimeout(() => { lockNotice.value = '' }, 2800)
+    return
+  }
+  selectMode(card.mode)
+}
+
+function dismissLockNotice() {
+  lockNotice.value = ''
+  clearTimeout(noticeTimer)
+}
+
+/** 一键续局：直接按上次（或默认）规则进入战前简报，老玩家少走三步。 */
+function quickContinue() {
+  emit('ui-sound', 'select')
+  emit('prepare', { ...selection.value })
 }
 
 function selectDifficulty(difficulty) {
@@ -374,12 +424,10 @@ watch(
 
       <section v-else-if="view === 'arena-types'" class="mode-view subtype-view" aria-labelledby="arena-mode-title">
         <div class="view-heading">
-          <div class="section-kicker">
-            <button class="back-link" title="返回玩法选择" aria-label="返回玩法选择" @click="showPlaystyleSelection('arena')">
-              <ArrowLeft :size="17" :stroke-width="1.8" aria-hidden="true" />
-            </button>
-            <p>主战场 · ARENA</p>
-          </div>
+          <button class="section-kicker" title="返回玩法选择" @click="showPlaystyleSelection('arena')">
+            <span class="back-arrow" aria-hidden="true"><ArrowLeft :size="17" :stroke-width="1.8" /></span>
+            <span class="kicker-label">主战场 · ARENA</span>
+          </button>
           <div class="title-row">
             <svg class="slime-buddy" viewBox="0 0 48 38" aria-hidden="true">
               <path d="M7 33C5 21 13 9 24 9s19 12 17 24c-.3 2-1.7 2.6-3.4 2.6H10.4C8.7 35.6 7.3 35 7 33Z" fill="rgba(142, 173, 131, 0.9)" />
@@ -389,6 +437,10 @@ watch(
               <path d="M21 28.4c1.9 1.4 4.1 1.4 6 0" stroke="#0a0d0c" stroke-width="1.8" stroke-linecap="round" fill="none" />
             </svg>
             <h2 id="arena-mode-title">选择战斗类型</h2>
+            <button class="quick-continue" title="按上次规则直接进入战前简报" @click="quickContinue">
+              <Play :size="13" :stroke-width="2.1" aria-hidden="true" />
+              继续上次 · {{ selectedMode.name }} {{ selectedDifficulty.name }}
+            </button>
           </div>
           <span>决定本局的推进目标与结算规则。</span>
         </div>
@@ -398,24 +450,47 @@ watch(
               v-for="card in modeCards"
               :key="card.mode"
               class="mode-option"
-              :class="{ locked: card.locked }"
-              :disabled="card.locked"
+              :class="{
+                locked: card.locked,
+                featured: featuredMode === card.mode,
+                shaking: shakingMode === card.mode,
+              }"
+              :aria-disabled="card.locked"
               :data-mode="card.mode"
               :style="{ '--mode-accent': MODE_COLORS[card.mode] }"
-              @click="selectMode(card.mode)"
+              @click="onModeCardClick(card)"
             >
+              <span v-if="featuredMode === card.mode" class="mode-feature-badge">
+                {{ allModesUnlocked ? '终极挑战' : '当前可挑战' }}
+              </span>
+              <span v-if="card.locked" class="mode-corner-lock" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                  <path v-for="d in LOCK_ICON" :key="d" :d="d" />
+                </svg>
+              </span>
+
               <span class="mode-index">0{{ card.index + 1 }}</span>
               <div class="mode-title-row">
-                <svg class="mode-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path v-for="d in MODE_ICONS[card.mode]" :key="d" :d="d" />
-                </svg>
+                <component
+                  :is="MODE_LUCIDE_ICONS[card.mode]"
+                  class="mode-icon"
+                  :size="23"
+                  :stroke-width="1.7"
+                  aria-hidden="true"
+                />
                 <h3>{{ MODES[card.mode].name }}</h3>
               </div>
               <p>{{ MODES[card.mode].description }}</p>
+
+              <div class="mode-chips" aria-hidden="true">
+                <i v-for="chip in MODE_CHIPS[card.mode]" :key="chip">{{ chip }}</i>
+              </div>
+
               <dl v-if="!card.locked">
                 <div>
                   <dt>最高分<small>全难度</small></dt>
-                  <dd>{{ modeSummaries[card.mode].bestScore ? modeSummaries[card.mode].bestScore.toLocaleString('en-US') : '—' }}</dd>
+                  <dd v-if="modeSummaries[card.mode].bestScore">{{ modeSummaries[card.mode].bestScore.toLocaleString('en-US') }}</dd>
+                  <dd v-else class="empty-dd">等你首创</dd>
                 </div>
                 <div>
                   <dt>{{ card.mode === 'endless' ? '最高波次' : '累计通关' }}<small>全难度</small></dt>
@@ -428,26 +503,76 @@ watch(
                 </svg>
                 <span>{{ card.hint || '尚未解锁' }}</span>
               </div>
-              <span class="mode-enter">{{ card.locked ? '尚未解锁' : '进入设置' }} <ArrowRight v-if="!card.locked" :size="15" :stroke-width="1.9" aria-hidden="true" /></span>
+              <span class="mode-enter">
+                {{ card.locked ? '查看解锁条件' : '进入设置' }}
+                <ArrowRight v-if="!card.locked" :size="15" :stroke-width="1.9" aria-hidden="true" />
+              </span>
             </button>
         </div>
 
-        <div class="next-unlock" :class="{ complete: !nextUnlock }">
-          <span>解锁进度</span>
-          <b>{{ unlockedModes.length }} / {{ MODE_IDS.length }}</b>
-          <i v-if="nextUnlock">下一档案：{{ nextUnlock.name }} · {{ nextUnlock.hint }}</i>
-          <i v-else>全部开放 · 三种战斗类型均可进入</i>
+        <Transition name="toast">
+          <div v-if="lockNotice" class="lock-toast" role="status" @click="dismissLockNotice">
+            <svg class="lock-toast-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path v-for="d in LOCK_ICON" :key="d" :d="d" />
+            </svg>
+            <span>{{ lockNotice }}</span>
+          </div>
+        </Transition>
+
+        <div class="unlock-panel" :class="{ complete: !nextUnlock }">
+          <div class="unlock-stepper" aria-label="模式解锁路线">
+            <template v-for="(card, sIndex) in modeCards" :key="card.mode">
+              <div
+                class="unlock-step"
+                :class="{
+                  done: !card.locked,
+                  current: nextUnlock && nextUnlock.mode === card.mode,
+                  waiting: card.locked && (!nextUnlock || nextUnlock.mode !== card.mode),
+                }"
+              >
+                <span class="unlock-dot">
+                  <Check v-if="!card.locked" :size="14" :stroke-width="2.5" aria-hidden="true" />
+                  <component
+                    v-else
+                    :is="MODE_LUCIDE_ICONS[card.mode]"
+                    :size="14"
+                    :stroke-width="1.9"
+                    aria-hidden="true"
+                  />
+                </span>
+                <b>{{ MODES[card.mode].name }}</b>
+                <i>{{ !card.locked ? '已开放' : nextUnlock && nextUnlock.mode === card.mode ? '当前目标' : '未解锁' }}</i>
+              </div>
+              <div
+                v-if="sIndex < modeCards.length - 1"
+                class="unlock-link"
+                :class="{ filled: unlockedModes.length > sIndex + 1 }"
+              >
+                <span>困难通关</span>
+              </div>
+            </template>
+          </div>
+          <div class="unlock-footer">
+            <div class="unlock-segs" aria-hidden="true">
+              <i
+                v-for="mode in MODE_IDS"
+                :key="mode"
+                :class="{ fill: unlockedModes.includes(mode) }"
+              ></i>
+            </div>
+            <b>解锁进度 {{ unlockedModes.length }} / {{ MODE_IDS.length }}</b>
+            <i v-if="nextUnlock">下一模式：{{ nextUnlock.name }} · {{ nextUnlock.hint }}</i>
+            <i v-else>全部开放 · 三种战斗类型均可进入</i>
+          </div>
         </div>
       </section>
 
       <section v-else-if="view === 'runner-types'" class="mode-view subtype-view runner-view" aria-labelledby="runner-mode-title">
         <div class="view-heading">
-          <div class="section-kicker">
-            <button class="back-link" title="返回玩法选择" aria-label="返回玩法选择" @click="showPlaystyleSelection('runner')">
-              <ArrowLeft :size="17" :stroke-width="1.8" aria-hidden="true" />
-            </button>
-            <p>突围 · RUNNER</p>
-          </div>
+          <button class="section-kicker runner" title="返回玩法选择" @click="showPlaystyleSelection('runner')">
+            <span class="back-arrow" aria-hidden="true"><ArrowLeft :size="17" :stroke-width="1.8" /></span>
+            <span class="kicker-label">突围 · RUNNER</span>
+          </button>
           <div class="title-row">
             <svg class="slime-buddy" viewBox="0 0 48 38" aria-hidden="true">
               <path d="M7 33C5 21 13 9 24 9s19 12 17 24c-.3 2-1.7 2.6-3.4 2.6H10.4C8.7 35.6 7.3 35 7 33Z" fill="rgba(142, 173, 131, 0.9)" />
@@ -739,6 +864,31 @@ watch(
 
 .title-row h2 { margin-top: 0; }
 
+/* 快速续局：推到标题行右端，窄屏换行（见媒体查询） */
+.quick-continue {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+  padding: 8px 14px;
+  border-radius: 5px;
+  border: 1px solid rgba(215, 166, 87, 0.4);
+  color: var(--accent-bright);
+  background: rgba(215, 166, 87, 0.08);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color 0.16s ease, background 0.16s ease, transform 0.12s ease;
+}
+
+.quick-continue:hover {
+  border-color: var(--accent-bright);
+  background: rgba(215, 166, 87, 0.16);
+  transform: translateY(-1px);
+}
+
 .slime-buddy {
   width: 42px;
   flex: none;
@@ -881,13 +1031,47 @@ watch(
 }
 
 .section-kicker {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 10px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
 }
 
-.section-kicker p { margin: 0; }
-.runner-view .section-kicker p { color: #79d5e6; }
+.section-kicker .back-arrow {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: rgba(244, 238, 230, 0.74);
+  background: transparent;
+  transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease;
+}
+
+.section-kicker .kicker-label {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.section-kicker:hover .back-arrow {
+  border-color: rgba(215, 166, 87, 0.45);
+  color: var(--accent-bright);
+  background: rgba(215, 166, 87, 0.07);
+}
+
+.section-kicker.runner .kicker-label { color: #79d5e6; }
+.section-kicker.runner:hover .back-arrow {
+  border-color: rgba(121, 213, 230, 0.5);
+  color: #79d5e6;
+  background: rgba(121, 213, 230, 0.07);
+}
 
 .playstyle-grid {
   display: grid;
@@ -1036,8 +1220,71 @@ watch(
   border-radius: 6px;
   color: inherit;
   background: var(--surface);
-  transition: border-color 0.14s ease, background 0.14s ease, transform 0.08s ease;
+  transition: border-color 0.16s ease, background 0.16s ease, transform 0.14s ease, box-shadow 0.2s ease;
 }
+
+.mode-option:not(.locked):hover {
+  border-color: rgba(215, 166, 87, 0.55);
+  background: var(--surface-hover);
+  transform: translateY(-4px);
+  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.45);
+}
+
+.mode-option:not(.locked):active { transform: translateY(-1px) scale(0.99); }
+
+/* 锁卡悬停：边框透出模式色，暗示「点一下有信息」 */
+.mode-option.locked:hover {
+  border-color: color-mix(in srgb, var(--mode-accent) 48%, var(--border));
+  background: rgba(20, 18, 14, 0.85);
+}
+
+/* 当前推荐卡：呼吸金光 + 角标 */
+.mode-option.featured { border-color: rgba(236, 196, 119, 0.6); }
+.mode-option.featured { animation: cardBreathe 2.4s ease-in-out infinite; }
+@keyframes cardBreathe {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(236, 196, 119, 0); }
+  50% { box-shadow: 0 0 24px 2px rgba(236, 196, 119, 0.25); }
+}
+
+.mode-feature-badge {
+  position: absolute;
+  top: -10px;
+  left: 16px;
+  padding: 3px 9px;
+  border-radius: 4px;
+  color: #24180a;
+  background: linear-gradient(135deg, #ecc477, #d7a657);
+  font-size: 9px;
+  font-weight: 800;
+  box-shadow: 0 4px 14px rgba(215, 166, 87, 0.4);
+}
+
+/* 锁卡被点击时「摇头」 */
+.mode-option.shaking { animation: cardShake 0.55s ease; }
+@keyframes cardShake {
+  0%, 100% { transform: translateX(0); }
+  15% { transform: translateX(-8px); }
+  30% { transform: translateX(7px); }
+  45% { transform: translateX(-5px); }
+  60% { transform: translateX(4px); }
+  75% { transform: translateX(-2px); }
+}
+
+/* 锁卡右上角小锁角标 */
+.mode-corner-lock {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--faint);
+}
+
+.mode-corner-lock svg { width: 13px; height:13px; }
 
 .mode-option:hover {
   border-color: rgba(215, 166, 87, 0.5);
@@ -1092,6 +1339,61 @@ watch(
   line-height: 1.65;
 }
 
+/* 模式标签：描述下方，锁卡用模式色（color-mix 派生） */
+.mode-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 14px;
+}
+
+.mode-chips i {
+  font-style: normal;
+  font-size: 9.5px;
+  padding: 3px 8px;
+  border-radius: 20px;
+  color: rgba(244, 238, 230, 0.78);
+  border: 1px solid rgba(215, 166, 87, 0.22);
+  background: var(--accent-soft);
+}
+
+.mode-option.locked .mode-chips i {
+  color: rgba(244, 238, 230, 0.72);
+  border-color: color-mix(in srgb, var(--mode-accent) 32%, transparent);
+  background: color-mix(in srgb, var(--mode-accent) 12%, transparent);
+}
+
+/* 空成绩：鼓励文案代替冷冰冰的「—」 */
+.empty-dd {
+  color: var(--text-faint) !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+}
+
+/* 锁卡条件 toast（横幅，不遮挡卡片） */
+.lock-toast {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 11px 16px;
+  border-radius: 7px;
+  border: 1px solid rgba(215, 166, 87, 0.5);
+  background: rgba(215, 166, 87, 0.1);
+  color: var(--accent-bright);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.lock-toast-icon { width: 18px; height: 18px; flex: none; }
+.toast-enter-active { animation: toastIn 0.3s ease; }
+.toast-leave-active { animation: toastIn 0.25s ease reverse; }
+@keyframes toastIn {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 .mode-option dl {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1123,14 +1425,10 @@ watch(
 }
 
 .mode-option.locked {
-  cursor: not-allowed;
-  opacity: 0.62;
-  background: rgba(18, 16, 13, 0.48);
-}
-
-.mode-option.locked:hover {
-  border-color: var(--border);
-  background: rgba(18, 16, 13, 0.48);
+  cursor: pointer;
+  opacity: 0.9;
+  filter: saturate(0.65);
+  background: rgba(18, 16, 13, 0.7);
 }
 
 .mode-locked-note {
@@ -1170,24 +1468,99 @@ watch(
   text-decoration-color: rgba(236, 196, 119, 0.55);
 }
 
-.next-unlock {
-  display: grid;
-  grid-template-columns: 120px 150px 1fr;
-  align-items: center;
-  gap: 14px;
-  min-height: 54px;
+/* 解锁面板：三节点步骤条 + 三段进度格 */
+.unlock-panel {
   margin-top: 15px;
-  padding: 0 17px;
-  border-left: 3px solid #8f7650;
-  color: var(--text-muted);
-  background: rgba(215, 166, 87, 0.05);
-  font-size: 11px;
+  padding: 17px 18px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(215, 166, 87, 0.045);
 }
 
-.next-unlock b { color: var(--accent-bright); font-size: 12px; }
-.next-unlock i { font-style: normal; }
-.next-unlock.complete { border-left-color: #a8773e; background: rgba(215, 166, 87, 0.05); }
-.next-unlock.complete b { color: var(--accent-bright); }
+.unlock-stepper { display: flex; align-items: flex-start; }
+
+.unlock-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  width: 120px;
+}
+
+.unlock-dot {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: #17140f;
+  color: var(--faint);
+}
+
+.unlock-step b { font-size: 12px; }
+.unlock-step i { font-style: normal; font-size: 9px; color: var(--faint); text-align: center; line-height: 1.3; }
+
+.unlock-step.done .unlock-dot {
+  border-color: var(--green);
+  color: var(--green);
+  background: rgba(127, 209, 138, 0.1);
+}
+
+.unlock-step.current .unlock-dot {
+  border-color: var(--accent-bright);
+  color: var(--accent-bright);
+  background: rgba(215, 166, 87, 0.14);
+  animation: dotPulse 2s infinite;
+}
+.unlock-step.current b { color: var(--accent-bright); }
+.unlock-step.current i { color: var(--accent); }
+
+@keyframes dotPulse {
+  0% { box-shadow: 0 0 0 0 rgba(236, 196, 119, 0.45); }
+  70% { box-shadow: 0 0 0 11px rgba(236, 196, 119, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(236, 196, 119, 0); }
+}
+
+.unlock-link {
+  flex: 1;
+  position: relative;
+  height: 2px;
+  margin: 16px 6px 0;
+  background: rgba(238, 214, 180, 0.14);
+}
+
+.unlock-link span {
+  position: absolute;
+  top: -9px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 0 7px;
+  background: #15120e;
+  color: var(--faint);
+  font-size: 8.5px;
+}
+
+.unlock-link.filled { background: linear-gradient(90deg, var(--green), #6fb87a); }
+.unlock-link.filled span { color: var(--green); }
+
+.unlock-footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 15px;
+  color: var(--text-muted);
+  font-size: 11px;
+  flex-wrap: wrap;
+}
+
+.unlock-footer b { flex: none; color: var(--accent-bright); font-size: 11px; }
+.unlock-footer i { font-style: normal; }
+
+.unlock-segs { display: flex; gap: 5px; width: 120px; flex: none; }
+.unlock-segs i { flex: 1; height: 7px; border-radius: 3px; background: rgba(238, 214, 180, 0.12); }
+.unlock-segs i.fill { background: linear-gradient(90deg, #b98747, #ecc477); }
 
 .runner-mode-grid {
   display: grid;
@@ -1638,7 +2011,8 @@ button.selected .option-copy i {
 
 .strain-options {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  /* 阶段十九：血统扩到 5 项（origin + 四角色），固定 4 列会把 origin 挤到第二行孤行 */
+  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
   gap: 8px;
 }
 
@@ -1696,7 +2070,11 @@ button.selected .option-copy i {
   .mode-option { min-height: 218px; }
   .runner-mode-grid { margin-top: 25px; }
   .runner-mode-card { min-height: 218px; }
-  .next-unlock { grid-template-columns: 1fr; gap: 4px; padding: 12px 14px; }
+  .unlock-panel { padding: 14px 13px; overflow-x: auto; }
+  .unlock-step { width: 86px; }
+  .unlock-segs { width: 84px; }
+  .quick-continue { margin-left: 0; width: 100%; justify-content: center; }
+  .title-row { flex-wrap: wrap; }
   .config-intro { display: block; padding-bottom: 18px; }
   .config-heading h2 { font-size: 26px; }
   .config-record {

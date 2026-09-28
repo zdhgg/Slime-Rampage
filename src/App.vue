@@ -98,6 +98,13 @@ const cooldown = ref({
   cast: 0,
   formationBreak: 0,
   formationBreakMax: 8,
+  // F 角色专属技能（阶段十九）：skillId 为空表示 origin 无技能，HUD 据此隐藏整条
+  skillId: null,
+  skillName: '',
+  skillCd: 0,
+  skillMax: 0,
+  // 资源型 F（暴食猎食点）：非 null 时 HUD 用它替换冷却条渲染
+  charge: null,
 })
 const gameOverInfo = ref(null) // 游戏结束统计（null = 游戏中）
 const isNewRecord = ref(false) // 本局是否刷新了最高纪录
@@ -1068,7 +1075,7 @@ onUnmounted(() => {
 
     <!-- 升级面板：覆盖层之上，点击卡片应用技能并恢复游戏 -->
     <Transition name="modal-fade">
-      <LevelUpModal v-if="levelUpOptions" :options="levelUpOptions" :level="stats.level" @select="onSelectSkill" />
+      <LevelUpModal v-if="levelUpOptions" :options="levelUpOptions" :level="stats.level" :role-spec="stats.roleSpec" :can-use-elements="stats.canUseElements" @select="onSelectSkill" />
     </Transition>
 
     <Transition name="modal-fade">
