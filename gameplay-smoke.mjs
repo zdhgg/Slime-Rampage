@@ -765,8 +765,24 @@ const chooseSimulationLane = (simulation) => {
   return risk.indexOf(Math.min(...risk))
 }
 
-let simulationVictories = 0
-for (let seed = 1; seed <= 60; seed++) {
+// 60-seed 模拟同时承担两个职责：
+//  1) 难度基线：telegraph-aware bot 的存活率；
+//  2) anti-freeze 回归：证明这 60 局真的在持续生成遭遇，而不是「冻住之后空跑存活」。
+// 只统计胜率会被「冻结 = 没有敌人 = 轻松存活」污染，因此这里额外记录
+// 遭遇行数、末段静默时长、武器选择是否真正完成，并据此设定不变式。
+const SIM_SEED_COUNT = 60
+const simulationStats = {
+  completed: 0,
+  victories: 0,
+  deaths: 0,
+  noWeapon: 0,
+  frozen: 0,
+  rowsTotal: 0,
+  rowsMin: Infinity,
+  tailSilenceMax: 0,
+  magnetRuns: 0,
+}
+for (let seed = 1; seed <= SIM_SEED_COUNT; seed++) {
   const simulation = new RunnerGameplay()
   const simulationGame = {
     width: 1280,
@@ -780,15 +796,52 @@ for (let seed = 1; seed <= 60; seed++) {
   simulation.reset(seed, 'blitz')
   simulation.state = 'active'
   simulation.countdown = 0
+  let rows = 0
+  let lastRowAt = 0
   for (let frame = 0; frame < simulation.duration * 30 + 2 && simulation.state === 'active'; frame++) {
     simulation.targetLane = chooseSimulationLane(simulation)
+    const rowIdBefore = simulation.director._nextRowId
     simulation.updateWorld(1 / 30)
+    if (simulation.director._nextRowId !== rowIdBefore) {
+      rows += simulation.director._nextRowId - rowIdBefore
+      lastRowAt = simulation.elapsedTime
+    }
   }
-  if (simulation.outcome === 'victory') simulationVictories += 1
+  if (simulation.state === 'finished') simulationStats.completed += 1
+  if (simulation.outcome === 'victory') simulationStats.victories += 1
+  if (simulation.outcome === 'defeat') simulationStats.deaths += 1
+  if (!simulation.weaponCore) simulationStats.noWeapon += 1
+  if (simulation.tacticalStats.magnets > 0) simulationStats.magnetRuns += 1
+  simulationStats.rowsTotal += rows
+  if (rows < simulationStats.rowsMin) simulationStats.rowsMin = rows
+  const tailSilence = simulation.elapsedTime - lastRowAt
+  if (tailSilence > simulationStats.tailSilenceMax) simulationStats.tailSilenceMax = tailSilence
+  // 冻结判定：局已结束但末段长期无遭遇，或局中出现过待选状态却从未拿到核心。
+  if (tailSilence >= 8 || !simulation.weaponCore) simulationStats.frozen += 1
   simulation.destroy()
 }
-assert.ok(simulationVictories >= 48, `基础走位策略应至少通过 48/60 个种子，实际 ${simulationVictories}/60`)
-console.log(`✓ Runner telegraph-aware bot survives ${simulationVictories}/60 seeded full runs`)
+assert.ok(simulationStats.victories >= 48, `基础走位策略应至少通过 48/${SIM_SEED_COUNT} 个种子，实际 ${simulationStats.victories}/${SIM_SEED_COUNT}`)
+
+// Anti-freeze 不变式（Phase B.1）：60 局必须都真的在玩。
+// 健康基准来自实测：修复后每局遭遇行数 >= 18，末段静默 < 8s。
+// 修复前有 5 局（seed 3/4/7 等）在 ~37s 冻结，rows 跌到 8、weaponCore 为 null，
+// 却仍被计为「胜利」——这正是单纯胜率断言的盲区。
+assert.equal(simulationStats.completed, SIM_SEED_COUNT, `所有 ${SIM_SEED_COUNT} 局都必须正常结束`)
+assert.equal(simulationStats.frozen, 0, `不得存在 Director 冻结局，实际 ${simulationStats.frozen} 局（其中 weaponCore 为空 ${simulationStats.noWeapon} 局）`)
+assert.equal(simulationStats.noWeapon, 0, `所有局都必须真正完成武器选择，实际 ${simulationStats.noWeapon} 局未完成`)
+assert.ok(
+  simulationStats.rowsMin >= 18,
+  `单局最少遭遇行数 ${simulationStats.rowsMin} 低于健康下限 18，疑似 Director 冻结`
+)
+assert.ok(
+  simulationStats.tailSilenceMax < 8,
+  `末段静默最长 ${simulationStats.tailSilenceMax.toFixed(1)}s，疑似 Director 冻结`
+)
+console.log(
+  `✓ Runner telegraph-aware bot survives ${simulationStats.victories}/${SIM_SEED_COUNT} seeded full runs ` +
+  `(avg ${(simulationStats.rowsTotal / SIM_SEED_COUNT).toFixed(1)} encounter rows, min ${simulationStats.rowsMin}, ` +
+  `deaths ${simulationStats.deaths}, magnet used ${simulationStats.magnetRuns}/${SIM_SEED_COUNT}, 0 frozen)`
+)
 
 // ---------------------------------------------------------------------------
 // Phase A0 — 战术增益生命周期正确性（hyper boost / bullet time / drone / 地火）。
@@ -1002,11 +1055,20 @@ console.log('✓ Runner ground fires stay bounded and drain to empty')
   }
   let maxGroundFires = 0
   let frames = 0
+  // 180s marathon 的 Director 活性：Phase B.1 的磁暴缺陷在 marathon 上有
+  // 25/65/110 三个武器节点与 5 个路线岔口，冻结后果比 60s blitz 更严重。
+  let soakRows = 0
+  let soakLastRowAt = 0
   const maxFrames = Math.ceil(soak.duration * 30) + 2
   for (; frames < maxFrames && soak.state === 'active'; frames++) {
     soak.hp = soak.maxHp
     soak.targetLane = chooseSimulationLane(soak)
+    const rowIdBefore = soak.director._nextRowId
     soak.updateWorld(soakFrame)
+    if (soak.director._nextRowId !== rowIdBefore) {
+      soakRows += soak.director._nextRowId - rowIdBefore
+      soakLastRowAt = soak.elapsedTime
+    }
     if (soak.groundFires.length > maxGroundFires) maxGroundFires = soak.groundFires.length
     for (const key of Object.keys(buffDuration)) {
       const value = soak[key]
@@ -1032,6 +1094,16 @@ console.log('✓ Runner ground fires stay bounded and drain to empty')
   assert.equal(soak.state, 'finished', '180s 局必须正常结束')
   assert.equal(soak.outcome, 'victory', '无伤跑完 180s 应判定为突围成功')
   assert.equal(soak.elapsedTime, 180)
+  assert.equal(soak.weaponChoicePending, false, '180s 局末不得残留武器待选状态')
+  assert.equal(soak.secondaryChoicePending, false, '180s 局末不得残留元素待选状态')
+  assert.ok(soak.weaponCore, '180s 局必须真正完成武器核心选择')
+  assert.ok(soak.secondaryElement, '180s 局必须真正完成元素选择')
+  assert.ok(soak.routeLog.length >= 4, `180s 局应解析出多条路线，实际 ${soak.routeLog.length}`)
+  assert.ok(soakRows >= 60, `180s 局遭遇行数过低（${soakRows}），疑似 Director 冻结`)
+  assert.ok(
+    soak.elapsedTime - soakLastRowAt < 8,
+    `180s 局末段 ${(soak.elapsedTime - soakLastRowAt).toFixed(1)}s 无遭遇生成，疑似冻结`
+  )
   const totalActivations = Object.values(buffActivations).reduce((a, b) => a + b, 0)
   assert.ok(totalActivations > 0, 'soak 必须真的触发过战术增益，否则该断言是空的')
   const maxDeclaredDuration = Math.max(...Object.values(buffDuration))
@@ -1347,6 +1419,167 @@ console.log('✓ Phase B / Test G: 60s blitz resolves at least two forks')
   assert.deepEqual(second.forkLog, first.forkLog, '同 seed 重新开局必须复现同一条路线历史')
 }
 console.log('✓ Phase B / Test H: reset zeroes route state and same seed reproduces the same route history')
+
+// ---------------------------------------------------------------------------
+// Phase B.1 — 磁暴不得吞掉武器/元素三选一门；选择窗口必须有收口。
+// 故障链：gate_magnet 被摧毁 -> _activateMagnet 过滤 (kind==='gate' || reward)
+// -> 武器门(kind:'mutation', reward:'weapon')与元素门(kind:'secondary_mutation',
+// reward:'element')被当成道具吸附并误发护盾 -> _selectWeaponCore/_selectSecondaryElement
+// 的两个正规出口(撞入/射爆)同时被绕过 -> weaponChoicePending 永为 true ->
+// _updateDirector 在递减计时器之前就 return -> 整局不再生成遭遇。
+// ---------------------------------------------------------------------------
+
+// Test A — 磁暴不得吞掉武器三选一门（走正式 _startWeaponChoice 路径）。
+prepareRunner(9101, 'blitz')
+runner._startWeaponChoice()
+const choiceGatesBefore = runner.entities.filter((e) => e.kind === 'mutation')
+assert.equal(runner.weaponChoicePending, true, '武器三选一应处于待选状态')
+assert.equal(choiceGatesBefore.length, 3, '应真实生成三块武器选择门')
+
+// 场上同时放入磁暴本应正常处理的普通奖励门
+const magnetTargets = [
+  { ...RUNNER_ENTITY_TYPES.attack, id: 9201, rowId: 90, lane: 0, kind: 'gate', depth: 0.4, hp: 7, maxHp: 7, active: true },
+  { ...RUNNER_ENTITY_TYPES.repair, id: 9202, rowId: 90, lane: 1, kind: 'gate', depth: 0.4, hp: 5, maxHp: 5, active: true },
+  { ...RUNNER_ENTITY_TYPES.fever_shard, id: 9203, rowId: 90, lane: 2, kind: 'gate', depth: 0.4, hp: 4, maxHp: 4, active: true },
+]
+const attackBefore = runner.attackDamage
+runner.entities.push(...magnetTargets)
+runner._activateMagnet()
+const choiceGatesAfter = runner.entities.filter((e) => e.kind === 'mutation')
+assert.equal(choiceGatesAfter.length, 3, '磁暴不得移除武器选择门（修复前为 0）')
+assert.equal(runner.weaponChoicePending, true, '磁暴不得解除武器待选状态')
+assert.equal(choiceGatesAfter.map((e) => e.id).join(','), choiceGatesBefore.map((e) => e.id).join(','), '三块武器门必须是原对象')
+assert.equal(runner.attackDamage, attackBefore + 1, '合法奖励门仍应被磁暴吸取并结算')
+assert.ok(!runner.entities.includes(magnetTargets[0]), '合法奖励门应被磁暴消耗')
+console.log('✓ Phase B.1 / Test A: magnet no longer swallows weapon choice gates')
+
+// Test B — 磁暴仍然正常吸取合法目标（不得退化成「什么都不吸」）。
+prepareRunner(9102, 'blitz')
+const shieldBefore = runner.shield
+const feverShardsBefore = runner.feverShards
+runner.entities.push(
+  { ...RUNNER_ENTITY_TYPES.guard, id: 9301, rowId: 91, lane: 0, kind: 'gate', depth: 0.4, hp: 6, maxHp: 6, active: true },
+  { ...RUNNER_ENTITY_TYPES.fever_shard, id: 9302, rowId: 91, lane: 1, kind: 'gate', depth: 0.4, hp: 4, maxHp: 4, active: true },
+  { ...RUNNER_ENTITY_TYPES.gate_drone, id: 9303, rowId: 91, lane: 2, kind: 'gate', depth: 0.4, hp: 4, maxHp: 4, active: true }
+)
+runner._activateMagnet()
+assert.equal(runner.shield, shieldBefore + 1, '防护凝胶门应被吸附并结算')
+assert.equal(runner.feverShards, feverShardsBefore + 1, '暴走印记应被吸附并结算')
+assert.equal(runner.tacticalStats.drones, 1, '浮游护卫战术门应被吸附并结算')
+assert.equal(runner.entities.filter((e) => e.kind === 'gate').length, 0, '所有合法奖励门都应被清空')
+console.log('✓ Phase B.1 / Test B: magnet still absorbs every legitimate reward gate')
+
+// Test C — 元素三选一门同样不得被吞。
+prepareRunner(9103, 'blitz')
+runner._startSecondaryChoice()
+assert.equal(runner.secondaryChoicePending, true, '元素三选一应处于待选状态')
+runner.entities.push({ ...RUNNER_ENTITY_TYPES.attack, id: 9401, rowId: 92, lane: 1, kind: 'gate', depth: 0.4, hp: 7, maxHp: 7, active: true })
+runner._activateMagnet()
+assert.equal(runner.entities.filter((e) => e.kind === 'secondary_mutation').length, 3, '磁暴不得移除元素选择门')
+assert.equal(runner.secondaryChoicePending, true, '磁暴不得解除元素待选状态')
+console.log('✓ Phase B.1 / Test C: magnet leaves secondary element choice gates intact')
+
+// Test D — 磁暴不得吸取岔口路线牌，也不得提前解析路线。
+prepareRunner(9104, 'blitz')
+const forkRow = runner.director.createForkRow(0, runner.elapsedTime, 'blitz')
+runner.entities.push(...forkRow)
+runner.entities.push({ ...RUNNER_ENTITY_TYPES.attack, id: 9501, rowId: 93, lane: 1, kind: 'gate', depth: 0.4, hp: 7, maxHp: 7, active: true })
+runner._activateMagnet()
+const forksLeft = runner.entities.filter((e) => e.kind === 'fork')
+assert.equal(forksLeft.length, 3, '磁暴不得移除岔口路线牌')
+assert.equal(runner.currentRouteId, null, '磁暴不得提前锁定路线')
+assert.equal(runner.routeLog.length, 0, '磁暴不得触发路线解析')
+assert.equal(forksLeft.filter((e) => e.lane === runner.occupiedLane).length, 1, '三块路线牌必须仍按车道分布')
+console.log('✓ Phase B.1 / Test D: magnet ignores route fork signs and never resolves a route')
+
+// Test E — 完整武器选择生命周期：出现 -> 磁暴 -> 保留 -> 玩家选择 -> pending 归零 -> Director 恢复。
+prepareRunner(9105, 'blitz')
+runner._startWeaponChoice()
+runner.entities.push({ ...RUNNER_ENTITY_TYPES.gate_magnet, id: 9601, rowId: 94, lane: 1, kind: 'gate', depth: 0.4, hp: 4, maxHp: 4, active: true })
+runner._activateMagnet()
+assert.equal(runner.entities.filter((e) => e.kind === 'mutation').length, 3, '磁暴后武器门仍完整')
+assert.equal(runner.weaponChoicePending, true)
+
+// 玩家驶入其中一块武器门
+const chosenLane = runner.entities.find((e) => e.kind === 'mutation').lane
+runner.targetLane = chosenLane
+runner.lanePosition = chosenLane
+runner.currentLane = chosenLane
+assert.equal(runner._selectWeaponCore(runner.entities.find((e) => e.kind === 'mutation').weaponCore), true, '玩家应能正常选中核心')
+assert.equal(runner.weaponChoicePending, false, '选中后待选状态必须解除')
+assert.ok(runner.weaponCore, '必须真正拿到武器核心')
+
+const rowIdBefore = runner.director._nextRowId
+stepRunner(120) // 2s，足够走完 _selectWeaponCore 设置的 0.75s 首刷延迟
+assert.ok(
+  runner.director._nextRowId > rowIdBefore,
+  `Director 必须在选择完成后恢复生成遭遇（rowId ${rowIdBefore} -> ${runner.director._nextRowId}）`
+)
+console.log('✓ Phase B.1 / Test E: weapon choice survives magnet, resolves, and Director resumes')
+
+// Test F — 端到端复现修复前的真实冻结局（60 seeds 中曾冻结的那几个 seed）。
+// 修复前这些局的特征是：weaponCore 为 null、encounter 行数远低于健康局、
+// 且在局中段之后 Director 再不生成任何遭遇。
+{
+  const previouslyFrozenSeeds = [3, 4, 7]
+  for (const seed of previouslyFrozenSeeds) {
+    const sim = new RunnerGameplay()
+    sim.attach({
+      width: 1280,
+      height: 720,
+      ctx: ctx2d,
+      input: { state: { left: false, right: false } },
+      sound: simulationSound,
+      finishGameplay() {},
+    })
+    sim.reset(seed, 'blitz')
+    sim.state = 'active'
+    sim.countdown = 0
+    let rows = 0
+    let lastRowAt = 0
+    for (let frame = 0; frame < sim.duration * 30 + 2 && sim.state === 'active'; frame++) {
+      sim.targetLane = chooseSimulationLane(sim)
+      const rowIdBefore = sim.director._nextRowId
+      sim.updateWorld(1 / 30)
+      if (sim.director._nextRowId !== rowIdBefore) {
+        rows += sim.director._nextRowId - rowIdBefore
+        lastRowAt = sim.elapsedTime
+      }
+    }
+    assert.equal(sim.state, 'finished', `seed ${seed} 必须正常结束`)
+    assert.equal(sim.outcome, 'victory', `seed ${seed} 应判定为突围成功`)
+    assert.ok(sim.weaponCore, `seed ${seed} 必须真正拿到武器核心（修复前为 null）`)
+    assert.equal(sim.weaponChoicePending, false, `seed ${seed} 局末不得残留待选状态`)
+    assert.ok(rows >= 18, `seed ${seed} 遭遇行数过低（${rows}），疑似 Director 冻结`)
+    assert.ok(
+      sim.duration - lastRowAt < 8,
+      `seed ${seed} 最后 ${(sim.duration - lastRowAt).toFixed(1)}s 没有任何遭遇生成，疑似冻结`
+    )
+    sim.destroy()
+  }
+}
+console.log('✓ Phase B.1 / Test F: previously frozen seeds now play a full uninterrupted run')
+
+// Test G — 不变式：任何时刻 pending=true 都必须存在真实选择入口。
+// 这不是防御性 runtime 守卫，而是对根因的回归锁：修复前磁暴会在 pending 期间
+// 清空选择门，该不变式即被破坏。
+{
+  prepareRunner(9107, 'blitz')
+  let violated = 0
+  for (let frame = 0; frame < 60 * 30; frame++) {
+    runner.updateWorld(1 / 60)
+    if (runner.weaponChoicePending && !runner.entities.some((e) => e.active && e.kind === 'mutation')) {
+      violated += 1
+    }
+    if (runner.secondaryChoicePending && !runner.entities.some((e) => e.active && e.kind === 'secondary_mutation')) {
+      violated += 1
+    }
+  }
+  assert.equal(violated, 0, `pending 与真实选择入口必须始终一致，违例 ${violated} 帧`)
+  assert.equal(runner.weaponChoicePending, false, '局末不得残留武器待选状态')
+  assert.equal(runner.secondaryChoicePending, false, '局末不得残留元素待选状态')
+}
+console.log('✓ Phase B.1 / Test G: pending always has a live choice entry point')
 
 // Defeat must stop the engine and emit one result; restart clears the pause lock.
 engine.resetGameplaySession(9, 'marathon')

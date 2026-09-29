@@ -1444,13 +1444,28 @@ export class RunnerGameplay extends GameplayController {
     this._pushGroundFire(entity.lane, entity.depth, 3.0, 1.0)
   }
 
+  /**
+   * 磁暴可吸附对象：仅限「强化门」一族（普通奖励门与战术道具门），即 kind === 'gate'。
+   *
+   * 原条件 `kind === 'gate' || reward` 里的 `reward` 是 bug 来源：武器三选一门
+   * (kind:'mutation', reward:'weapon') 与元素三选一门 (kind:'secondary_mutation',
+   * reward:'element') 同样带 reward 字段，会被当成道具吸附，走 _applyReward 的
+   * 兜底分支误发护盾；更致命的是它们被绕过 _selectWeaponCore / _selectSecondaryElement
+   * 两个正规出口直接移出数组，使对应 pending 标志永不复位。
+   * 所有合法奖励门（含战术道具门）的 kind 均为 'gate'，因此按 kind 收窄既修掉
+   * 误伤，也一条合法目标都不丢。岔口路线牌 reward 为 null、kind 为 'fork'，天然不匹配。
+   */
+  _isMagnetEligibleEntity(entity) {
+    return !!entity && entity.active === true && entity.kind === 'gate'
+  }
+
   _activateMagnet(point) {
     this.tacticalStats.magnets++
     this.score += 200
     this._showNotice('全息磁暴 · 聚能吸纳 🧲', '#4db8ff')
     this.game.sound.powerUp?.()
 
-    const targets = this.entities.filter((e) => e.active && (e.kind === 'gate' || e.reward))
+    const targets = this.entities.filter((e) => this._isMagnetEligibleEntity(e))
     for (const target of targets) {
       target.active = false
       const idx = this.entities.indexOf(target)
