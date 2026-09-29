@@ -404,8 +404,8 @@ export class RunnerRenderer {
 
       // 牌面
       const w = size * (selected ? 1.3 : 1.05)
-      const h = size * 0.44
-      const top = -size * 1.16
+      const h = size * 0.62
+      const top = -size * 1.28
       ctx.fillStyle = `rgba(8, 14, 20, ${0.84 * faded})`
       ctx.fillRect(-w / 2, top, w, h)
       ctx.strokeStyle = route.color
@@ -416,11 +416,15 @@ export class RunnerRenderer {
         ctx.fillRect(-w / 2, top, w, Math.max(2, size * 0.07))
       }
 
-      ctx.fillStyle = selected ? '#f4fcff' : `rgba(226, 238, 244, ${0.84 * faded})`
-      ctx.font = `800 ${Math.max(9, Math.min(15, size * 0.24))}px "Segoe UI", "PingFang SC", sans-serif`
+      // 主标题 + 最短风险—收益副标签：以真实机制为准，不做营销措辞
       ctx.textAlign = 'center'
       ctx.textBaseline = 'middle'
-      ctx.fillText(route.label, 0, top + h / 2)
+      ctx.fillStyle = selected ? '#f4fcff' : `rgba(226, 238, 244, ${0.84 * faded})`
+      ctx.font = `800 ${Math.max(9, Math.min(15, size * 0.24))}px "Segoe UI", "PingFang SC", sans-serif`
+      ctx.fillText(route.label, 0, top + h * 0.32)
+      ctx.fillStyle = route.color
+      ctx.font = `700 ${Math.max(7, Math.min(11, size * 0.17))}px "Segoe UI", "PingFang SC", sans-serif`
+      ctx.fillText(`${route.riskLabel} · ${route.rewardLabel}`, 0, top + h * 0.72)
       ctx.restore()
     }
   }

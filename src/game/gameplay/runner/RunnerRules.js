@@ -38,9 +38,16 @@ export const RUNNER_LANE_LERP_PER_FRAME = 0.24
 export const RUNNER_LANE_COMMIT_EPSILON = 0.035
 
 // ---------------------------------------------------------------------------
-// 路线分叉（Phase B）：lane 与 route 一一固定映射，不做随机重排。
-// 玩家仍只用 left / right 换道；驶过 selectionDepth 即锁定对应路线。
-// 每条路线只带一个最小 modifier，复用既有 section 参数，不新增战斗系统。
+// 路线（Phase B 选择 / Phase C 风险—收益）：lane 与 route 一一固定映射，
+// 不做随机重排。玩家仍只用 left / right 换道；驶过 selectionDepth 即锁定路线。
+//
+// 所有 modifier 都复用既有 section 参数与既有编队数据，不新增战斗系统。
+// 字段一律是「数据描述」，行为由 Director / Gameplay 解释：
+//   spawnIntervalMultiplier  遭遇行间隔倍率
+//   hpMultiplier             敌人血量倍率
+//   preferPatternKind       编队池偏好：safe / supply / danger / gate / null
+//   forkBonusCharges        每次锁定该路线额外获得的暴走充能（路线专属主收益轴）
+//   riskLabel / rewardLabel 岔口牌与 HUD 用的最短风险—收益提示
 // ---------------------------------------------------------------------------
 export const RUNNER_ROUTE_IDS = ['blockade', 'armory', 'ruins']
 
@@ -51,10 +58,27 @@ export const RUNNER_ROUTES = {
     label: '封锁走廊',
     shortLabel: '封锁',
     color: '#7fb2c8',
-    // 安全线：遭遇更稀疏，其余不变
-    spawnIntervalMultiplier: 1.3,
+    // 低风险 / 低收益：只靠「遭遇最稀疏」表达。刻意不做编队偏好——
+    // 早期版本用 'safe'（无精英无障碍）过滤，实测反而把战术门富集起来
+    // （tactical 744 vs ruins 358），把「少补给」变成了「多补给」。
+    // 少遭遇本身同时意味着少危险与少补给，风险与收益同源、不会互相打架。
+    //
+    // hpMultiplier 保持 1：曾试 0.9 企图把「稀疏」进一步压成「更少受击」，
+    // 但同 seed 配对实测 hits 差异 +0.050 ± 0.105（18 胜 / 13 负 / 29 平），
+    // 是噪声而非效应；原因是 Director 用 Math.ceil(config.hp * hpScale)，
+    // 0.9 只改到 9/30 种实体的血量（scout / fever_shard / 各奖励门这些
+    // 真正决定受击的低血量单位一个都没变）。留一个没有可感知作用的旋钮
+    // 比没有旋钮更糟，因此撤回。
+    //
+    // 实测的「低风险」载体是威胁总量而非受击次数：rows -6.07、enemies -10.38、
+    // elites -4.50 全部在 60/60（或 0/56）个 seed 上一致成立；
+    // 真正把受击拉高的是 ruins（vs armory +0.433 ± 0.120，32 胜 / 9 负）。
+    spawnIntervalMultiplier: 1.35,
     hpMultiplier: 1,
     preferPatternKind: null,
+    forkBonusCharges: 0,
+    riskLabel: '低风险',
+    rewardLabel: '少补给',
   },
   armory: {
     id: 'armory',
@@ -62,10 +86,14 @@ export const RUNNER_ROUTES = {
     label: '军械库',
     shortLabel: '军械',
     color: '#f0b35f',
-    // 火力线：遭遇更密，并优先取用含强化门的编队
-    spawnIntervalMultiplier: 0.85,
+    // 中风险 / 最高构筑收益：遭遇略密，并只从「两个以上强化门」的编队里取，
+    // 使 attack / rapid / 战术门的机会密度真正高于其它路线。
+    spawnIntervalMultiplier: 0.9,
     hpMultiplier: 1,
-    preferPatternKind: 'gate',
+    preferPatternKind: 'supply',
+    forkBonusCharges: 0,
+    riskLabel: '中风险',
+    rewardLabel: '多强化',
   },
   ruins: {
     id: 'ruins',
@@ -73,10 +101,18 @@ export const RUNNER_ROUTES = {
     label: '废墟捷径',
     shortLabel: '废墟',
     color: '#e07a5f',
-    // 高风险线：遭遇更密、敌人更硬，并优先取用含精英与障碍的编队
+    // 高风险 / 高收益：敌人更硬，只从「含精英与障碍」的编队里取。
+    // 主收益轴只有一条：每次锁定险路立刻白送 1 枚暴走充能（路线补贴），
+    // 充能已满时折算成 1 点护盾。充能是 2 倍分 / 三线齐射 / 额外穿透的
+    // 真实局内战力；绝不折算成分数，因为分数只影响结算面板。
+    // 曾经试过「击破精英额外掉印记」：定点验证证明机制本身有效，但主动躲避
+    // 精英是理性打法，实测与真实对局里都几乎打不到，收益轴形同虚设，故弃用。
     spawnIntervalMultiplier: 0.95,
     hpMultiplier: 1.15,
     preferPatternKind: 'danger',
+    forkBonusCharges: 1,
+    riskLabel: '高风险',
+    rewardLabel: '充能补贴',
   },
 }
 

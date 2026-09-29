@@ -1393,7 +1393,7 @@ console.log('✓ Phase B / Test F: same seed diverges only after the fork, via r
 {
   const run = simulateRunner(4242, 'blitz', policyLaneAware(), 60)
   const forkIds = new Set(run.sim.routeLog.map((e) => e.forkId))
-  assert.ok(forkIds.size >= 2, `60s blitz 至少应出现 2 个岔口，实际 ${forkIds.size}`)
+  assert.ok(forkIds.size >= 2, `60s blitz 至少应出现 2 个岔口，实际 ${forkIds.size} state=${run.sim.state} outcome=${run.sim.outcome} elapsed=${run.sim.elapsedTime}`)
   assert.ok(
     run.sim.routeLog.every((e) => e.elapsed > 0 && e.elapsed < 60),
     '岔口解析必须发生在 60s 局内'
@@ -1580,6 +1580,210 @@ console.log('✓ Phase B.1 / Test F: previously frozen seeds now play a full uni
   assert.equal(runner.secondaryChoicePending, false, '局末不得残留元素待选状态')
 }
 console.log('✓ Phase B.1 / Test G: pending always has a live choice entry point')
+
+// ---------------------------------------------------------------------------
+// Phase C — 路线风险—收益。
+// 目标：让「选哪条路」值得思考。三条路线必须形成不同 profile，
+// 而不是同一条路在三个维度上全面更好。所有指标都来自真实 runtime 行为。
+// ---------------------------------------------------------------------------
+const ROUTE_SEEDS = 60
+
+/** 跑一局并把路线相关的风险/收益信号折算成可比较的累计量。 */
+const measureRouteProfile = (routeId, seedCount = ROUTE_SEEDS) => {
+  const routeLane = RUNNER_ROUTES[routeId].lane
+  const acc = {
+    victories: 0, deaths: 0, frozen: 0, weaponOk: 0, elementOk: 0,
+    enemies: 0, elites: 0, hits: 0, damage: 0, rows: 0, dangerRows: 0,
+    gates: 0, tactical: 0, buildGates: 0, forkBonus: 0, forks: 0, magnet: 0, shield: 0, hp: 0,
+  }
+  for (let seed = 1; seed <= seedCount; seed++) {
+    const sim = new RunnerGameplay()
+    sim.attach({
+      width: 1280, height: 720, ctx: ctx2d,
+      input: { state: { left: false, right: false } },
+      sound: simulationSound, finishGameplay() {},
+    })
+    sim.reset(seed, 'blitz')
+    sim.state = 'active'
+    sim.countdown = 0
+    const seen = new Set()
+    // 危险遭遇 = 至少含一只精英的行（精英是主要伤害来源，也是闸口前最难躲的目标）
+    const dangerRowIds = new Set()
+    let rows = 0, enemies = 0, elites = 0, gates = 0, tactical = 0, buildGates = 0
+    let lastRowAt = 0, lastCharges = 0, lastShield = 0, bonus = 0, lastRoutes = 0
+    for (let frame = 0; frame < sim.duration * 30 + 2 && sim.state === 'active'; frame++) {
+      // 固定走该路线；其余行为与既有 bot 完全一致，不改战斗策略
+      const approaching = sim.entities.some((e) => e.active && e.kind === 'fork' && !e.resolved)
+      sim.targetLane = approaching ? routeLane : chooseSimulationLane(sim)
+      const rowIdBefore = sim.director._nextRowId
+      sim.updateWorld(1 / 30)
+      if (sim.director._nextRowId !== rowIdBefore) { rows++; lastRowAt = sim.elapsedTime }
+      // 路线红利：只统计「锁定路线那一帧」新增的暴走充能与护盾，
+      // 否则普通 fever_shard / shield 奖励门会被混进来，红利幅度就不可比了。
+      if (sim.routeLog.length > lastRoutes) {
+        bonus += Math.max(0, sim.feverCharges - lastCharges) + Math.max(0, sim.shield - lastShield)
+      }
+      lastRoutes = sim.routeLog.length
+      lastCharges = sim.feverCharges; lastShield = sim.shield
+      for (const entity of sim.entities) {
+        if (seen.has(entity.id)) continue
+        seen.add(entity.id)
+        if (entity.kind === 'enemy') { enemies++; if (entity.elite) { elites++; dangerRowIds.add(entity.rowId) } }
+        if (entity.kind === 'gate') {
+          gates++
+          const reward = String(entity.reward || '')
+          if (reward.startsWith('item_')) tactical++
+          else if (reward === 'attack' || reward === 'rapid' || reward === 'repair' || reward === 'shield') buildGates++
+        }
+      }
+    }
+    if (sim.outcome === 'victory') acc.victories++
+    if (sim.outcome === 'defeat') acc.deaths++
+    if (sim.elapsedTime - lastRowAt >= 8 || !sim.weaponCore) acc.frozen++
+    if (sim.weaponCore) acc.weaponOk++
+    if (sim.secondaryElement) acc.elementOk++
+    acc.enemies += enemies; acc.elites += elites; acc.hits += sim.hitsTaken; acc.damage += sim.damageTaken
+    acc.rows += rows; acc.dangerRows += dangerRowIds.size
+    acc.gates += gates; acc.tactical += tactical; acc.buildGates += buildGates
+    acc.forkBonus += bonus; acc.forks += sim.routeLog.length
+    acc.magnet += sim.tacticalStats.magnets; acc.shield += sim.shield; acc.hp += sim.hp
+    sim.destroy()
+  }
+  acc.per = (key) => acc[key] / seedCount
+  return acc
+}
+
+const routeProfiles = {}
+for (const id of RUNNER_ROUTE_IDS) routeProfiles[id] = measureRouteProfile(id)
+const rp = routeProfiles
+
+// Test A — blockade 风险最低（真实遭遇量与精英量双低）。
+assert.ok(rp.blockade.per('enemies') < rp.ruins.per('enemies'), `blockade 敌人量应低于 ruins：${rp.blockade.per('enemies').toFixed(2)} vs ${rp.ruins.per('enemies').toFixed(2)}`)
+assert.ok(rp.blockade.per('elites') < rp.ruins.per('elites'), `blockade 精英量应低于 ruins：${rp.blockade.per('elites').toFixed(2)} vs ${rp.ruins.per('elites').toFixed(2)}`)
+assert.ok(rp.blockade.per('rows') < rp.armory.per('rows'), 'blockade 遭遇行数应最低')
+console.log('✓ Phase C / Test A: blockade faces measurably less danger than ruins')
+
+// Test B — blockade 收益最低（真实奖励门机会最少）。
+assert.ok(rp.blockade.per('gates') < rp.armory.per('gates'), `blockade 奖励门应少于 armory：${rp.blockade.per('gates').toFixed(2)} vs ${rp.armory.per('gates').toFixed(2)}`)
+assert.ok(rp.blockade.per('tactical') < rp.armory.per('tactical'), 'blockade 战术门机会应最少')
+console.log('✓ Phase C / Test B: blockade offers the fewest real reward gates')
+
+// Test C — armory 构筑收益最高（战术道具门密度最高）。
+assert.ok(
+  rp.armory.per('tactical') > rp.blockade.per('tactical') && rp.armory.per('tactical') > rp.ruins.per('tactical'),
+  `armory 战术门应多于其它路线：${rp.armory.per('tactical').toFixed(2)} / ${rp.blockade.per('tactical').toFixed(2)} / ${rp.ruins.per('tactical').toFixed(2)}`
+)
+assert.ok(rp.armory.per('gates') >= rp.blockade.per('gates'), 'armory 奖励门总量不应低于 blockade')
+console.log('✓ Phase C / Test C: armory yields the most tactical build opportunities')
+
+// Test D — ruins 风险最高（精英与受击双高）。
+assert.ok(rp.ruins.per('elites') > rp.blockade.per('elites'), 'ruins 精英量应最高')
+assert.ok(rp.ruins.per('hits') > rp.blockade.per('hits'), `ruins 受击应最多：${rp.ruins.per('hits').toFixed(2)} vs ${rp.blockade.per('hits').toFixed(2)}`)
+assert.ok(getRunnerRoute('ruins').hpMultiplier > getRunnerRoute('blockade').hpMultiplier, 'ruins 敌人血量倍率必须更高')
+console.log('✓ Phase C / Test D: ruins carries the highest measured risk')
+
+// Test E — ruins 有真实收益补偿（路线红利），且不是分数。
+{
+  prepareRunner(9201, 'blitz')
+  const forkRow = runner.director.createForkRow(0, runner.elapsedTime, 'blitz')
+  runner.entities.push(...forkRow)
+  runner.lanePosition = 2; runner.currentLane = 2; runner.targetLane = 2
+  const before = runner.feverCharges + runner.shield
+  assert.equal(runner._resolveFork(runner.entities.find((e) => e.kind === 'fork' && e.lane === 2)), true)
+  assert.ok(
+    runner.feverCharges + runner.shield > before,
+    '锁定 ruins 必须真实获得局内资源（暴走充能或护盾）'
+  )
+  assert.equal(runner.score, 0, '路线红利不得折算成分数（分数只影响结算）')
+  // blockade 不给红利
+  const sim2 = new RunnerGameplay()
+  sim2.attach({ width: 1280, height: 720, ctx: ctx2d, input: { state: { left: false, right: false } }, sound: simulationSound, finishGameplay() {} })
+  sim2.reset(9202, 'blitz')
+  sim2.state = 'active'; sim2.countdown = 0
+  const row2 = sim2.director.createForkRow(0, 0, 'blitz')
+  sim2.entities.push(...row2)
+  sim2.lanePosition = 0; sim2.currentLane = 0; sim2.targetLane = 0
+  const before2 = sim2.feverCharges + sim2.shield
+  sim2._resolveFork(sim2.entities.find((e) => e.kind === 'fork' && e.lane === 0))
+  assert.equal(sim2.feverCharges + sim2.shield, before2, 'blockade 不得发放路线红利')
+  sim2.destroy()
+}
+assert.ok(
+  rp.ruins.per('forkBonus') > rp.blockade.per('forkBonus') + 0.5,
+  `ruins 路线红利应显著高于 blockade：${rp.ruins.per('forkBonus').toFixed(2)} vs ${rp.blockade.per('forkBonus').toFixed(2)}`
+)
+console.log('✓ Phase C / Test E: ruins carries a real in-run reward, blockade carries none')
+
+// Test F — 三条路线不构成严格优劣：各自至少在一个维度独占第一。
+{
+  const first = (key) => RUNNER_ROUTE_IDS.filter((id) => Math.abs(rp[id].per(key) - Math.max(...RUNNER_ROUTE_IDS.map((r) => rp[r].per(key)))) < 1e-9)
+  assert.ok(first('elites').includes('ruins'), 'ruins 应在精英量上独占最高')
+  assert.ok(first('tactical').includes('armory'), 'armory 应在战术门机会上独占最高')
+  assert.ok(first('forkBonus').includes('ruins'), 'ruins 应独占路线红利')
+  // blockade 必须在「风险最低」这一维度独占，否则它就没有存在理由
+  const safest = Math.min(...RUNNER_ROUTE_IDS.map((id) => rp[id].per('elites') + rp[id].per('enemies')))
+  assert.ok(
+    Math.abs(rp.blockade.per('elites') + rp.blockade.per('enemies') - safest) < 1e-9,
+    'blockade 应在综合遭遇量上独占最低'
+  )
+  // armory 不该同时是「最安全 + 奖励最多」，ruins 不该是「最难 + 奖励最少」
+  assert.ok(
+    rp.armory.per('elites') > rp.blockade.per('elites'),
+    'armory 的精英压力必须高于 blockade，否则它会变成全面更优'
+  )
+  assert.ok(
+    rp.ruins.per('buildGates') > rp.blockade.per('buildGates'),
+    'ruins 的构筑机会必须高于 blockade，否则它就是纯粹更难而无回报'
+  )
+}
+console.log('✓ Phase C / Test F: the three routes form distinct profiles with no strict dominance')
+
+// Test G — Determinism：路线加权不得引入非 seeded 随机。
+{
+  const runWithRoute = (routeId) => {
+    const sim = new RunnerGameplay()
+    sim.attach({ width: 1280, height: 720, ctx: ctx2d, input: { state: { left: false, right: false } }, sound: simulationSound, finishGameplay() {} })
+    sim.reset(2026, 'blitz')
+    sim.state = 'active'; sim.countdown = 0
+    const lane = RUNNER_ROUTES[routeId].lane
+    for (let frame = 0; frame < sim.duration * 30 + 2 && sim.state === 'active'; frame++) {
+      const approaching = sim.entities.some((e) => e.active && e.kind === 'fork' && !e.resolved)
+      sim.targetLane = approaching ? lane : chooseSimulationLane(sim)
+      sim.updateWorld(1 / 30)
+    }
+    const out = { routeLog: sim.routeLog.map((e) => ({ ...e })), score: sim.score, kills: sim.kills, state: sim.state }
+    sim.destroy()
+    return out
+  }
+  for (const id of RUNNER_ROUTE_IDS) {
+    const a = runWithRoute(id)
+    const b = runWithRoute(id)
+    assert.deepEqual(a, b, `路线 ${id} 必须同 seed 完全复现`)
+  }
+  assert.notDeepEqual(
+    runWithRoute('blockade').routeLog.map((e) => e.routeId),
+    runWithRoute('ruins').routeLog.map((e) => e.routeId),
+    '不同路线策略必须产生不同的路线历史'
+  )
+}
+console.log('✓ Phase C / Test G: route weighting stays fully seeded and reproducible')
+
+// Test H — Anti-freeze：三条路线都不得复现 choice freeze 或 Director 停摆。
+for (const id of RUNNER_ROUTE_IDS) {
+  const p = rp[id]
+  assert.equal(p.frozen, 0, `路线 ${id} 出现 ${p.frozen} 个冻结局`)
+  assert.equal(p.weaponOk, ROUTE_SEEDS, `路线 ${id} 必须每局都完成武器选择`)
+  assert.equal(p.elementOk, ROUTE_SEEDS, `路线 ${id} 必须每局都完成元素选择`)
+  assert.ok(p.magnet > 0, `路线 ${id} 必须仍然会触发磁暴（功能未被削弱）`)
+}
+console.log('✓ Phase C / Test H: all three routes stay magnet-active and freeze-free')
+
+// 路线对比矩阵（报告用输出，断言已在上面完成）
+console.log('\n  路线矩阵 · 60 seeds × always-route · blitz 60s（每局均值）')
+console.log('  ' + 'metric'.padEnd(14) + RUNNER_ROUTE_IDS.map((id) => id.padStart(12)).join(''))
+for (const key of ['victories', 'deaths', 'frozen', 'weaponOk', 'elementOk', 'forks', 'rows', 'dangerRows', 'enemies', 'elites', 'hits', 'damage', 'gates', 'tactical', 'buildGates', 'forkBonus', 'magnet', 'shield', 'hp']) {
+  console.log('  ' + (key + '/run').padEnd(14) + RUNNER_ROUTE_IDS.map((id) => rp[id].per(key).toFixed(2).padStart(12)).join(''))
+}
 
 // Defeat must stop the engine and emit one result; restart clears the pause lock.
 engine.resetGameplaySession(9, 'marathon')

@@ -42,6 +42,7 @@ function onFeverClick() {
       <div class="mode-label">{{ hud.submodeName || '极速突围' }}</div>
       <div v-if="hud.route" class="route-label" :style="{ '--route-color': hud.route.color }">
         路线 <b>{{ hud.route.label }}</b>
+        <i>{{ hud.route.riskLabel }} · {{ hud.route.rewardLabel }}</i>
       </div>
       <div class="hp-row" :aria-label="`生命 ${hud.hp} / ${hud.maxHp}`">
         <span
@@ -276,6 +277,15 @@ function onFeverClick() {
   color: var(--route-color, #79d5e6);
   font-size: 11px;
   font-weight: 900;
+}
+
+/* Phase C：当前路线的风险—收益提示。 */
+.route-label i {
+  color: rgba(235, 244, 242, 0.52);
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 700;
+  letter-spacing: 0.04em;
 }
 
 .hp-row {

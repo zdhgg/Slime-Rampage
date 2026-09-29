@@ -37,6 +37,8 @@ import {
   RUNNER_MUTATION_ARM_DEPTH,
   RUNNER_PLAYER_DEPTH,
   RUNNER_RAPID_DURATION,
+  RUNNER_ROUTES,
+  RUNNER_ROUTE_IDS,
   RUNNER_RAPID_MULTIPLIER,
   RUNNER_SECONDARY_ELEMENTS,
   RUNNER_SUBMODES,
@@ -654,7 +656,34 @@ export class RunnerGameplay extends GameplayController {
     for (const other of this.entities) {
       if (other.kind === 'fork' && other.rowId === fork.rowId) other.resolved = true
     }
-    this._showNotice(`路线 · ${route.label}`, route.color)
+    // ruins 主收益轴：锁定险路立刻结算一次路线红利。
+    // 优先给暴走充能（3 线齐射 / 2 倍分 / 额外穿透的真实战力）；充能已满时
+    // 折算成 1 点护盾，同样是局内资源——绝不折算成分数，因为分数只影响结算。
+    // 不采用「击杀精英掉印记」：定点验证证明机制有效，但主动躲避精英才是理性
+    // 打法，实测与真实对局里都几乎打不到，收益轴形同虚设。
+    let bonusCharges = 0
+    let bonusShield = 0
+    if (route.forkBonusCharges) {
+      for (let i = 0; i < route.forkBonusCharges; i++) {
+        if (this.feverCharges < RUNNER_FEVER_MAX_CHARGES) {
+          this.feverCharges += 1
+          bonusCharges += 1
+        } else if (this.shield < this.maxShield) {
+          this.shield += 1
+          bonusShield += 1
+        }
+      }
+    }
+    // 提示必须说实际拿到的东西：充能已满时发的是护盾，不能一律写「暴走充能」。
+    const bonusLabel = bonusCharges
+      ? `暴走充能 +${bonusCharges}`
+      : bonusShield
+        ? `防护凝胶 +${bonusShield}`
+        : ''
+    this._showNotice(
+      bonusLabel ? `路线 · ${route.label} · ${bonusLabel}` : `路线 · ${route.label}`,
+      route.color
+    )
     return true
   }
 
@@ -1247,7 +1276,7 @@ export class RunnerGameplay extends GameplayController {
       const adjLanes = [primary.lane - 1, primary.lane + 1].filter((l) => l >= 0 && l < 3)
       for (const adjLane of adjLanes) {
         for (const target of this.entities) {
-          if (target.active && target.lane === adjLane && Math.abs(target.depth - primary.depth) <= 0.12) {
+          if (target.active && target.hp > 0 && target.lane === adjLane && Math.abs(target.depth - primary.depth) <= 0.12) {
             this._hitEntity(target, { core: 'burst', damageMultiplier: 0.75 }, { silent: true, splash: true })
             this.rings.push({ lane: adjLane, depth: target.depth, life: 0.2, maxLife: 0.2, color: '#ffd859' })
             break
@@ -1259,6 +1288,10 @@ export class RunnerGameplay extends GameplayController {
     const targets = this.entities.filter(
       (entity) =>
         entity.active &&
+        // 范围伤害只打还有血的实体：路线牌 hp 为 0（不可射击/不碰撞），
+        // 若被当成目标，_hitEntity 会立刻判定它"已死"并把它当击杀删除，
+        // 于是岔口牌会在抵达选择深度之前凭空消失、路线永远不解析。
+        entity.hp > 0 &&
         (primary.kind === 'arrow' || entity.id !== primary.id) &&
         entity.lane === primary.lane &&
         entity.kind !== 'mutation' &&
@@ -1335,7 +1368,7 @@ export class RunnerGameplay extends GameplayController {
         radiusScale: 2.2,
       })
       const splashTargets = this.entities.filter(
-        (other) => other.active && other.lane === entity.lane && Math.abs(other.depth - entity.depth) <= 0.09
+        (other) => other.active && other.hp > 0 && other.lane === entity.lane && Math.abs(other.depth - entity.depth) <= 0.09
       )
       for (const splash of splashTargets) {
         this._hitEntity(splash, { core: 'corrosion', damageMultiplier: 2.2 }, { silent: true, splash: true })
@@ -1427,7 +1460,7 @@ export class RunnerGameplay extends GameplayController {
     this.game.sound.bombExplode?.()
 
     for (const other of this.entities) {
-      if (!other.active || other.id === entity.id) continue
+      if (!other.active || other.id === entity.id || other.hp <= 0) continue
       if (Math.abs(other.depth - entity.depth) <= 0.14) {
         other.hp -= 12
         other.hitFlash = 0.2
@@ -1648,8 +1681,21 @@ export class RunnerGameplay extends GameplayController {
             label: this.currentRoute.label,
             shortLabel: this.currentRoute.shortLabel,
             color: this.currentRoute.color,
+            riskLabel: this.currentRoute.riskLabel,
+            rewardLabel: this.currentRoute.rewardLabel,
           }
         : null,
+      routes: RUNNER_ROUTE_IDS.map((id) => {
+        const route = RUNNER_ROUTES[id]
+        return {
+          id,
+          lane: route.lane,
+          label: route.label,
+          color: route.color,
+          riskLabel: route.riskLabel,
+          rewardLabel: route.rewardLabel,
+        }
+      }),
       lane: this.currentLane,
       targetLane: this.targetLane,
       switching: this.isSwitching,

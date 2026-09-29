@@ -12,7 +12,7 @@ import {
   getRunnerSection,
 } from './RunnerRules.js'
 
-/** 判定编队属于哪一类倾向：强化门 / 精英与障碍。 */
+/** 单个编队实体的分类：强化门 / 精英与障碍。 */
 function classifyPatternEntity(typeId) {
   const config = RUNNER_ENTITY_TYPES[typeId]
   if (!config) return { gate: false, danger: false }
@@ -23,15 +23,32 @@ function classifyPatternEntity(typeId) {
 }
 
 /**
+ * 编队分类。全部从既有 section.patterns 推导，不新增内容。
+ *   gate    至少一个强化门
+ *   supply  两个以上强化门（构筑机会密度更高）
+ *   danger  至少一个精英/障碍
+ *   safe    完全不含精英/障碍
+ */
+function classifyPattern(pattern) {
+  let gateCount = 0
+  let danger = false
+  for (const typeId of pattern) {
+    if (!typeId) continue
+    const flags = classifyPatternEntity(typeId)
+    if (flags.gate) gateCount += 1
+    if (flags.danger) danger = true
+  }
+  return { gate: gateCount >= 1, supply: gateCount >= 2, danger, safe: !danger }
+}
+
+/**
  * 路线偏好只对既有 section.patterns 做编队池筛选，不额外消费 RNG：
  * 未选路线（routeId 为 null）时返回原池，draw 次数与 Phase B 前完全一致。
  */
 function selectRoutePatternPool(patterns, route) {
   const kind = route?.preferPatternKind
   if (!kind) return patterns
-  const preferred = patterns.filter((pattern) =>
-    pattern.some((typeId) => typeId && classifyPatternEntity(typeId)[kind])
-  )
+  const preferred = patterns.filter((pattern) => classifyPattern(pattern)[kind])
   return preferred.length ? preferred : patterns
 }
 
