@@ -29,6 +29,7 @@ import {
   RUNNER_MAX_CATCH_UP_SHOTS,
   RUNNER_MAX_DAMAGE_NUMBERS,
   RUNNER_MAX_ENEMY_PROJECTILES,
+  RUNNER_MAX_GROUND_FIRES,
   RUNNER_MAX_HP,
   RUNNER_MAX_SHIELD,
   RUNNER_MUTATION_ARM_DEPTH,
@@ -186,6 +187,40 @@ export class RunnerGameplay extends GameplayController {
     return this.feverTimer > 0
   }
 
+  /**
+   * 世界时间缩放：子弹时间生效时取 RunnerRules 声明的 dilation，否则正常速度。
+   * 仅作用于「环境」推进（敌人、敌方弹幕、地火）；玩家输入、玩家弹道、
+   * 刷怪节奏与局内计时一律仍用真实 dt，见 updateWorld。
+   */
+  get worldTimeScale() {
+    return this.bulletTimeTimer > 0 ? RUNNER_TACTICAL_ITEMS.bullet_time.dilation : 1
+  }
+
+  /**
+   * 战术道具生命周期：按真实 dt 递减并夹紧到 0。
+   * bulletTimeTimer 自身不参与 worldTimeScale，否则持续时间会被放大。
+   */
+  _updateTacticalBuffs(dt) {
+    this.bulletTimeTimer = Math.max(0, this.bulletTimeTimer - dt)
+    this.hyperBoostTimer = Math.max(0, this.hyperBoostTimer - dt)
+    this.droneTimer = Math.max(0, this.droneTimer - dt)
+  }
+
+  /** 推入一块地火并维持上限：超限时淘汰最旧的一块，防止长局无界增长。 */
+  _pushGroundFire(lane, depth, duration, damage) {
+    while (this.groundFires.length >= RUNNER_MAX_GROUND_FIRES) {
+      this.groundFires.shift()
+    }
+    this.groundFires.push({
+      id: this.groundFires.length + 1,
+      lane,
+      depth,
+      duration,
+      maxDuration: duration,
+      damage,
+    })
+  }
+
   get fusionWeapon() {
     return getRunnerFusionWeapon(this.weaponCore, this.secondaryElement)
   }
@@ -309,6 +344,7 @@ export class RunnerGameplay extends GameplayController {
     }
     this.rapidFireTimer = Math.max(0, this.rapidFireTimer - dt)
     this.feverTimer = Math.max(0, this.feverTimer - dt)
+    this._updateTacticalBuffs(dt)
     this.sectionNotice = Math.max(0, this.sectionNotice - dt)
     this.weaponNoticeTimer = Math.max(0, this.weaponNoticeTimer - dt)
     this.damageFlash = Math.max(0, this.damageFlash - dt * 2.6)
@@ -336,9 +372,12 @@ export class RunnerGameplay extends GameplayController {
 
     this._updateWeaponProgression()
     this._updateDirector(dt)
-    this._updateEntities(dt)
-    this._updateEnemyProjectiles(dt)
+    // 世界推进按子弹时间 dilation 缩放；刷怪节奏保持真实 dt，避免改变刷怪数量。
+    const worldDt = dt * this.worldTimeScale
+    this._updateEntities(worldDt)
+    this._updateEnemyProjectiles(worldDt)
     if (this.state !== 'active') return
+    this._updateGroundFires(worldDt)
     this._updateShooting(dt)
 
     if (this.duration !== Infinity && this.elapsedTime >= this.duration) {
@@ -1114,15 +1153,8 @@ export class RunnerGameplay extends GameplayController {
       )
       if (existing) {
         existing.duration = Math.max(existing.duration, 3.0)
-      } else if (this.groundFires.length < 8) {
-        this.groundFires.push({
-          id: this.groundFires.length + 1,
-          lane: primary.lane,
-          depth: primary.depth,
-          duration: 3.0,
-          maxDuration: 3.0,
-          damage: 1.0,
-        })
+      } else {
+        this._pushGroundFire(primary.lane, primary.depth, 3.0, 1.0)
       }
     }
 
@@ -1324,14 +1356,7 @@ export class RunnerGameplay extends GameplayController {
       }
     }
 
-    this.groundFires.push({
-      id: this.groundFires.length + 1,
-      lane: entity.lane,
-      depth: entity.depth,
-      duration: 3.0,
-      maxDuration: 3.0,
-      damage: 1.0,
-    })
+    this._pushGroundFire(entity.lane, entity.depth, 3.0, 1.0)
   }
 
   _activateMagnet(point) {
@@ -1351,7 +1376,7 @@ export class RunnerGameplay extends GameplayController {
 
   _activateBulletTime(point) {
     this.tacticalStats.bulletTimes++
-    this.bulletTimeTimer = 3.5
+    this.bulletTimeTimer = RUNNER_TACTICAL_ITEMS.bullet_time.duration
     this.score += 150
     this._showNotice('时空力场 · 子弹时间 ⏳', '#6ee7b7')
     this.game.sound.powerUp?.()
@@ -1359,7 +1384,7 @@ export class RunnerGameplay extends GameplayController {
 
   _activateHyperBooster(point) {
     this.tacticalStats.boosters++
-    this.hyperBoostTimer = 2.5
+    this.hyperBoostTimer = RUNNER_TACTICAL_ITEMS.booster.duration
     this.score += 150
     this._showNotice('超频冲刺 · 金身横冲 🚀', '#f59e0b')
     this.game.sound.dash?.()
@@ -1367,7 +1392,7 @@ export class RunnerGameplay extends GameplayController {
 
   _activateDrone(point) {
     this.tacticalStats.drones++
-    this.droneTimer = 10.0
+    this.droneTimer = RUNNER_TACTICAL_ITEMS.drone.duration
     this.droneLane = this.currentLane === 0 ? 1 : this.currentLane === 2 ? 1 : 0
     this.score += 150
     this._showNotice('浮游史莱姆 · 协同射击 🤖', '#ec4899')

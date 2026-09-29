@@ -50,8 +50,10 @@ const {
   RUNNER_FEVER_DURATION,
   RUNNER_FEVER_MAX_CHARGES,
   RUNNER_FEVER_SHARDS_PER_CHARGE,
+  RUNNER_MAX_GROUND_FIRES,
   RUNNER_MAX_HP,
   RUNNER_MAX_SHIELD,
+  RUNNER_TACTICAL_ITEMS,
   RUNNER_WEAPON_CORES,
 } = await import('./src/game/gameplay/runner/RunnerRules.js')
 const { createGameplay } = await import('./src/game/gameplay/GameplayFactory.js')
@@ -780,6 +782,225 @@ for (let seed = 1; seed <= 60; seed++) {
 }
 assert.ok(simulationVictories >= 48, `基础走位策略应至少通过 48/60 个种子，实际 ${simulationVictories}/60`)
 console.log(`✓ Runner telegraph-aware bot survives ${simulationVictories}/60 seeded full runs`)
+
+// ---------------------------------------------------------------------------
+// Phase A0 — 战术增益生命周期正确性（hyper boost / bullet time / drone / 地火）。
+// 这些断言锁定 RunnerRules 已经声明的生命周期确实被执行链真实驱动：
+// 属于回归护栏，不做数值平衡判断。
+// ---------------------------------------------------------------------------
+const stepRunner = (frames, dt = 1 / 60) => {
+  for (let i = 0; i < frames; i++) engine.update(dt)
+}
+
+/** 重置到一个空场面的活跃局，避免刷怪/既有实体污染受控测量。 */
+const prepareRunner = (seed, submode) => {
+  engine.resetGameplaySession(seed, submode)
+  runner.state = 'active'
+  runner.countdown = 0
+  runner.entities.length = 0
+  runner.enemyProjectiles.length = 0
+  runner.groundFires.length = 0
+  runner.bullets.length = 0
+  runner.hp = runner.maxHp
+  runner.shield = 0
+  runner._encounterTimer = 9999 // 让世界保持空旷，推进量只来自受控实体
+}
+
+/** 用 Director 产出的完整字段模板构造受控敌人，避免手工漏字段。 */
+const makeProbeEnemy = (id, lane, depth, speed, hp) => {
+  const generated = runner.director.createEncounter(0, 0, 'blitz')
+  const template = generated.find((entity) => entity.kind === 'enemy') || generated[0]
+  return {
+    ...template,
+    id,
+    rowId: 1,
+    lane,
+    depth,
+    previousDepth: depth,
+    speed,
+    baseSpeed: speed,
+    hp,
+    maxHp: hp,
+    hitFlash: 0,
+    active: true,
+    behavior: null,
+    charging: false,
+    chargeTelegraph: 0,
+    attackTimer: 0,
+    attacking: false,
+    hasAttacked: false,
+    attackLanes: null,
+    attackLane: null,
+    projectileDamage: 0,
+    projectileHp: 0,
+    corrosionStacks: 0,
+    armor: 0,
+    supportReduction: 0,
+  }
+}
+
+// Test A — hyper boost 必须经由正式更新路径自然到期，并解除无敌。
+prepareRunner(4242, 'blitz')
+runner._activateHyperBooster()
+assert.equal(runner.hyperBoostTimer, 2.5, '超频踏板应赋予 2.5s 金身')
+const boostedHp = runner.hp
+runner._takeDamage({ lane: runner.currentLane, depth: RUNNER_COLLISION_DEPTH, damage: 2 })
+assert.equal(runner.hp, boostedHp, '增益生效期间应免疫伤害')
+stepRunner(60)
+assert.ok(
+  runner.hyperBoostTimer < 2.5 && runner.hyperBoostTimer > 0,
+  `hyperBoostTimer 必须随 dt 递减，实际 ${runner.hyperBoostTimer}`
+)
+stepRunner(120) // 累计 3.0s > 2.5s
+assert.equal(runner.hyperBoostTimer, 0, 'hyperBoostTimer 到期必须归零')
+runner.entities.length = 0
+runner.enemyProjectiles.length = 0
+runner._takeDamage({ lane: runner.currentLane, depth: RUNNER_COLLISION_DEPTH, damage: 2 })
+assert.equal(runner.hp, boostedHp - 2, '增益结束后必须真实扣血（不得永久无敌）')
+console.log('✓ Runner hyper boost expires on the real update path and ends invulnerability')
+
+// Test B — drone 必须到期，并在到期后停止协同射击。
+prepareRunner(4343, 'blitz')
+runner._activateDrone()
+assert.equal(runner.droneTimer, 10.0, '浮游炮应召唤 10s 协同射击')
+stepRunner(60)
+assert.ok(
+  runner.droneTimer < 10.0 && runner.droneTimer > 0,
+  `droneTimer 必须随 dt 递减，实际 ${runner.droneTimer}`
+)
+stepRunner(9 * 60 + 5)
+assert.equal(runner.droneTimer, 0, 'droneTimer 到期必须归零')
+
+runner.entities.length = 0
+runner.enemyProjectiles.length = 0
+runner.bullets.length = 0
+runner._fireCooldown = 0 // 单发：负值会触发 catch-up 补射，不用于本断言
+engine.update(1 / 60)
+assert.equal(runner.bullets.length, 1, 'drone 到期后只应保留玩家自身弹道')
+
+runner._activateDrone()
+runner.entities.length = 0
+runner.bullets.length = 0
+runner._fireCooldown = 0
+engine.update(1 / 60)
+assert.equal(runner.bullets.length, 2, 'drone 生效期间应同时存在玩家与僚机弹道')
+console.log('✓ Runner drone expires and stops contributing shots afterwards')
+
+// Test C — bullet time 必须真实压缩世界推进，且自身计时按真实 dt 递减。
+const BULLET_TIME_DILATION = RUNNER_TACTICAL_ITEMS.bullet_time.dilation
+const measureEntityAdvance = (activateBulletTime) => {
+  prepareRunner(4444, 'blitz')
+  const probe = makeProbeEnemy(9001, 0, 0.1, 0.2, 999)
+  runner.entities.push(probe)
+  if (activateBulletTime) runner._activateBulletTime()
+  const timerAtStart = runner.bulletTimeTimer
+  const depthAtStart = probe.depth
+  stepRunner(60) // 1.0s 真实时间
+  return {
+    delta: probe.depth - depthAtStart,
+    timerElapsed: timerAtStart - runner.bulletTimeTimer,
+  }
+}
+const normalAdvance = measureEntityAdvance(false)
+const dilatedAdvance = measureEntityAdvance(true)
+assert.ok(
+  Math.abs(normalAdvance.delta - 0.2) < 1e-9,
+  `无子弹时间时敌人应按真实速度推进，实际 ${normalAdvance.delta}`
+)
+assert.ok(
+  Math.abs(dilatedAdvance.delta - normalAdvance.delta * BULLET_TIME_DILATION) < 1e-9,
+  `子弹时间必须把世界推进压缩到 ${BULLET_TIME_DILATION} 倍，实际 ${dilatedAdvance.delta}`
+)
+assert.ok(
+  Math.abs(dilatedAdvance.timerElapsed - 1.0) < 1e-9,
+  `bulletTimeTimer 自身必须按真实 dt 递减，实际 ${dilatedAdvance.timerElapsed}`
+)
+
+// 持续时间不得被自身 dilation 放大
+prepareRunner(4445, 'blitz')
+runner._activateBulletTime()
+stepRunner(Math.ceil(RUNNER_TACTICAL_ITEMS.bullet_time.duration * 60) + 2)
+assert.equal(runner.bulletTimeTimer, 0, '子弹时间必须在 3.5s 真实时间后结束')
+console.log('✓ Runner bullet time dilates world advance and expires on real time')
+
+// Test D — 地火必须通过 updateWorld 推进、持续伤害并过期清理。
+prepareRunner(4545, 'blitz')
+const groundFire = { id: 1, lane: 0, depth: 0.4, duration: 1.0, maxDuration: 1.0, damage: 1.0 }
+runner.groundFires.push(groundFire)
+const burningVictim = makeProbeEnemy(9002, 0, 0.4, 0, 40)
+runner.entities.push(burningVictim)
+const fireDepthBefore = groundFire.depth
+const fireDurationBefore = groundFire.duration
+const victimHpBefore = burningVictim.hp
+engine.update(1 / 60)
+assert.ok(groundFire.depth > fireDepthBefore, 'ground fire 必须随 updateWorld 向前推进')
+assert.ok(groundFire.duration < fireDurationBefore, 'ground fire 生命周期必须随 dt 递减')
+assert.ok(burningVictim.hp < victimHpBefore, 'ground fire 必须对同车道目标造成持续伤害')
+stepRunner(90) // 累计 1.5s > duration 1.0
+assert.ok(!runner.groundFires.includes(groundFire), '过期 ground fire 必须被清理')
+console.log('✓ Runner ground fires advance, burn and expire through updateWorld')
+
+// Test E — 地火数量必须有界，防止长局无界增长。
+prepareRunner(4646, 'blitz')
+for (let i = 0; i < 60; i++) {
+  runner.entities.length = 0 // 隔离连锁殉爆，保证每次只推入一个火海
+  const barrel = makeProbeEnemy(5000 + i, i % 3, 0.2 + (i % 5) * 0.12, 0, 3)
+  barrel.type = 'barrel'
+  barrel.kind = 'obstacle'
+  barrel.behavior = 'barrel'
+  runner.entities.push(barrel)
+  runner._defeatEntity(barrel)
+}
+assert.ok(
+  runner.groundFires.length <= RUNNER_MAX_GROUND_FIRES,
+  `连续引爆后 ground fire 数量必须受上限约束，实际 ${runner.groundFires.length}`
+)
+assert.ok(runner.groundFires.length > 0, '炸药殉爆仍应留下火海')
+stepRunner(Math.ceil(3.0 * 60) + 30)
+assert.equal(runner.groundFires.length, 0, '全部火海到期后必须被清空')
+console.log('✓ Runner ground fires stay bounded and drain to empty')
+
+// Test F — 180s 长局 soak：不得残留永久增益，数组不得无界增长或出现 NaN。
+{
+  const soak = new RunnerGameplay()
+  const soakGame = {
+    width: 1280,
+    height: 720,
+    ctx: ctx2d,
+    input: { state: { left: false, right: false } },
+    sound: simulationSound,
+    finishGameplay() {},
+  }
+  soak.attach(soakGame)
+  soak.reset(2024, 'marathon')
+  soak.state = 'active'
+  soak.countdown = 0
+  // soak 只验证生命周期/内存稳定性，用高血量排除战斗平衡对结果的干扰。
+  soak.maxHp = 1e6
+  soak.hp = soak.maxHp
+  let maxGroundFires = 0
+  let frames = 0
+  const maxFrames = Math.ceil(soak.duration * 30) + 2
+  for (; frames < maxFrames && soak.state === 'active'; frames++) {
+    soak.hp = soak.maxHp
+    soak.targetLane = chooseSimulationLane(soak)
+    soak.updateWorld(1 / 30)
+    if (soak.groundFires.length > maxGroundFires) maxGroundFires = soak.groundFires.length
+  }
+  assert.equal(soak.state, 'finished', '180s 局必须正常结束')
+  assert.equal(soak.outcome, 'victory', '无伤跑完 180s 应判定为突围成功')
+  assert.equal(soak.elapsedTime, 180)
+  assert.equal(soak.hyperBoostTimer, 0, '长局结束不得残留 hyper boost')
+  assert.equal(soak.bulletTimeTimer, 0, '长局结束不得残留 bullet time')
+  assert.equal(soak.droneTimer, 0, '长局结束不得残留 drone')
+  assert.ok(maxGroundFires <= RUNNER_MAX_GROUND_FIRES, `地火峰值越界：${maxGroundFires}`)
+  assert.ok(Number.isFinite(soak.score) && Number.isFinite(soak.elapsedTime))
+  assert.ok(soak.entities.every((e) => Number.isFinite(e.depth) && Number.isFinite(e.hp)))
+  assert.ok(soak.groundFires.every((f) => Number.isFinite(f.depth) && Number.isFinite(f.duration)))
+  assert.ok(soak.bullets.every((b) => Number.isFinite(b.depth)))
+  soak.destroy()
+}
+console.log('✓ Runner 180s soak drains every buff and keeps arrays bounded')
 
 // Defeat must stop the engine and emit one result; restart clears the pause lock.
 engine.resetGameplaySession(9, 'marathon')

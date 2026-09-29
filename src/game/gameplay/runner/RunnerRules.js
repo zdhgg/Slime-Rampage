@@ -27,6 +27,10 @@ export const RUNNER_FEVER_DURATION = 5.0
 export const RUNNER_FEVER_SCORE_MULTIPLIER = 2
 export const RUNNER_DASH_IMPACT_DAMAGE = 6
 
+// 地火数量上限：工程性护栏，防止爆裂/殉爆在长局中无界增长，
+// 沿用 RunnerGameplay 中 burst_flame 分支既有的内联上限 8，非玩法平衡参数。
+export const RUNNER_MAX_GROUND_FIRES = 8
+
 export const RUNNER_PLAYER_DEPTH = 0.98
 export const RUNNER_ENTITY_SPAWN_DEPTH = 0.035
 export const RUNNER_COLLISION_DEPTH = 0.965
