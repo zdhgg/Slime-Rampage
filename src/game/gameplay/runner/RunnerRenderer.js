@@ -527,6 +527,8 @@ export class RunnerRenderer {
 
       if (entity.kind === 'mutation') this._drawMutationGate(ctx, entity, size)
       else if (entity.kind === 'secondary_mutation') this._drawSecondaryMutationGate(ctx, entity, size)
+      // D1 第三槽：复用既有变异门绘制，只换配色与图标，不引入新素材或新绘制管线
+      else if (entity.kind === 'module_mutation') this._drawModuleMutationGate(ctx, entity, size)
       else if (entity.kind === 'gate') this._drawGate(ctx, entity, size)
       else if (entity.behavior === 'barrel') this._drawBarrel(ctx, entity, size)
       else if (entity.behavior === 'laser_gate') this._drawLaserGate(ctx, entity, size)
@@ -899,6 +901,64 @@ export class RunnerRenderer {
       ctx.moveTo(0, -r * 0.45)
       ctx.quadraticCurveTo(r * 0.42, 0, 0, r * 0.42)
       ctx.quadraticCurveTo(-r * 0.42, 0, 0, -r * 0.45)
+      ctx.fill()
+    }
+
+    ctx.font = `800 ${Math.max(9, Math.min(13, size * 0.24))}px "Segoe UI", "PingFang SC", sans-serif`
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'top'
+    ctx.fillStyle = armed ? '#eef5f2' : 'rgba(238, 245, 242, 0.55)'
+    ctx.fillText(entity.name, 0, r + 7)
+    ctx.globalAlpha = 1
+  }
+
+  /**
+   * D1 第三槽的 module 门。刻意复用变异门的菱形轮廓与武装态逻辑，
+   * 只把内部图标换成 module 自己的标记——不新增素材、不新增绘制管线，
+   * 视觉工程留给 Phase E。
+   */
+  _drawModuleMutationGate(ctx, entity, size) {
+    const armed = entity.depth >= entity.armedDepth
+    const pulse = 1 + Math.sin(this.gameplay.visualTime * 4.4 + entity.id) * 0.05
+    const r = size * 0.67 * pulse
+    ctx.globalAlpha = armed ? 1 : 0.46
+    ctx.fillStyle = 'rgba(9, 18, 24, 0.82)'
+    ctx.strokeStyle = entity.color
+    ctx.lineWidth = Math.max(2, size * 0.055)
+    ctx.beginPath()
+    for (let i = 0; i < 6; i++) {
+      const angle = (i / 6) * TAU - Math.PI / 2
+      const x = Math.cos(angle) * r
+      const y = Math.sin(angle) * r
+      if (i === 0) ctx.moveTo(x, y)
+      else ctx.lineTo(x, y)
+    }
+    ctx.closePath()
+    ctx.fill()
+    ctx.stroke()
+
+    ctx.strokeStyle = entity.color
+    ctx.fillStyle = entity.color
+    ctx.lineWidth = Math.max(1.5, size * 0.05)
+    // 内部标记：split 两道分叉、ricochet 一个回环、amplify 一个实心菱形
+    if (entity.weaponModule === 'split') {
+      for (const angle of [-0.7, 0.7]) {
+        ctx.beginPath()
+        ctx.moveTo(0, r * 0.34)
+        ctx.lineTo(Math.sin(angle) * r * 0.5, -r * 0.36)
+        ctx.stroke()
+      }
+    } else if (entity.weaponModule === 'ricochet') {
+      ctx.beginPath()
+      ctx.arc(0, 0, r * 0.34, Math.PI * 0.25, Math.PI * 1.75)
+      ctx.stroke()
+    } else {
+      ctx.beginPath()
+      ctx.moveTo(0, -r * 0.42)
+      ctx.lineTo(r * 0.34, 0)
+      ctx.lineTo(0, r * 0.42)
+      ctx.lineTo(-r * 0.34, 0)
+      ctx.closePath()
       ctx.fill()
     }
 

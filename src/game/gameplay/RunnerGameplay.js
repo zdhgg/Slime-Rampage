@@ -39,6 +39,7 @@ import {
   RUNNER_RAPID_DURATION,
   RUNNER_ROUTES,
   RUNNER_ROUTE_IDS,
+  RUNNER_WEAPON_MODULE_IDS,
   RUNNER_RAPID_MULTIPLIER,
   RUNNER_SECONDARY_ELEMENTS,
   RUNNER_SUBMODES,
@@ -51,10 +52,11 @@ import {
   getRunnerSection,
   getRunnerSubmode,
   getRunnerWeaponCore,
+  getRunnerWeaponModule,
   runnerDistanceRemaining,
   runnerProgress,
 } from './runner/RunnerRules.js'
-import { findRunnerEffect, planRunnerEffects } from './runner/RunnerEffects.js'
+import { findRunnerEffect, getRunnerBulletProfile, planRunnerEffects } from './runner/RunnerEffects.js'
 
 const HIT_RING_LIFE = 0.22
 const COMBO_WINDOW = 1.8
@@ -117,6 +119,11 @@ export class RunnerGameplay extends GameplayController {
     this.weaponLevel = 0
     this.weaponChoicePending = false
     this.secondaryChoicePending = false
+    // D1 第三槽：与 core / element 完全独立的 pending 生命周期，reset 必须一并归零。
+    this.weaponModule = null
+    this.moduleChoicePending = false
+    this._moduleChoiceTriggered = false
+    this._moduleChoiceRowId = 0
     this.weaponNotice = ''
     this.weaponNoticeTimer = 0
     this.fusionPresentation = null
@@ -130,7 +137,7 @@ export class RunnerGameplay extends GameplayController {
     this.perfectDodges = 0
     this.combo = 0
     this.bestCombo = 0
-    this.weaponStats = { pierced: 0, explosions: 0, corrosionStacks: 0 }
+    this.weaponStats = { pierced: 0, explosions: 0, corrosionStacks: 0, splits: 0, ricochets: 0, splinterCount: 0, maxProcDepth: 0 }
     this.comboTimer = 0
     this.section = getRunnerSection(0)
     this.sectionNotice = 0
@@ -239,6 +246,16 @@ export class RunnerGameplay extends GameplayController {
     return getRunnerFusionWeapon(this.weaponCore, this.secondaryElement)
   }
 
+  /** D1 第三槽：module 是独立维度，不与 core / element 产生任何组合 id。 */
+  get moduleWeapon() {
+    return getRunnerWeaponModule(this.weaponModule)
+  }
+
+  /** 交给 RunnerEffects 的当前构筑：融合负责触发时机，模块负责额外轴。 */
+  get buildProfile() {
+    return { fusion: this.fusionWeapon, module: this.moduleWeapon }
+  }
+
   /** 当前已锁定的路线；第一次岔口之前为 null。 */
   get currentRoute() {
     return getRunnerRoute(this.currentRouteId)
@@ -284,6 +301,11 @@ export class RunnerGameplay extends GameplayController {
     this.weaponLevel = 0
     this.weaponChoicePending = false
     this.secondaryChoicePending = false
+    // D1 第三槽：与 core / element 完全独立的 pending 生命周期，reset 必须一并归零。
+    this.weaponModule = null
+    this.moduleChoicePending = false
+    this._moduleChoiceTriggered = false
+    this._moduleChoiceRowId = 0
     this.weaponNotice = ''
     this.weaponNoticeTimer = 0
     this.fusionPresentation = null
@@ -297,7 +319,7 @@ export class RunnerGameplay extends GameplayController {
     this.perfectDodges = 0
     this.combo = 0
     this.bestCombo = 0
-    this.weaponStats = { pierced: 0, explosions: 0, corrosionStacks: 0 }
+    this.weaponStats = { pierced: 0, explosions: 0, corrosionStacks: 0, splits: 0, ricochets: 0, splinterCount: 0, maxProcDepth: 0 }
     this.comboTimer = 0
     this.section = getRunnerSection(0, this.submode)
     this.sectionNotice = 1.8
@@ -691,6 +713,7 @@ export class RunnerGameplay extends GameplayController {
   _updateWeaponProgression() {
     const choiceTime = this.submodeConfig?.weaponChoiceTime ?? 25
     const evolveTime = this.submodeConfig?.weaponEvolveTime ?? 65
+    const moduleTime = this.submodeConfig?.weaponModuleTime ?? 90
     const overdriveTime = this.submodeConfig?.weaponOverdriveTime ?? 110
 
     if (!this._weaponChoiceTriggered && this.elapsedTime >= choiceTime) {
@@ -700,6 +723,10 @@ export class RunnerGameplay extends GameplayController {
     if (!this._secondaryChoiceTriggered && this.elapsedTime >= evolveTime) {
       this._secondaryChoiceTriggered = true
       this._startSecondaryChoice()
+    }
+    if (!this._moduleChoiceTriggered && this.elapsedTime >= moduleTime) {
+      this._moduleChoiceTriggered = true
+      this._startModuleChoice()
     }
     if (!this._weaponOverdrive && this.elapsedTime >= overdriveTime) {
       this._weaponOverdrive = this._upgradeWeaponCore(3, '终极超载')
@@ -769,6 +796,45 @@ export class RunnerGameplay extends GameplayController {
       color: fusion?.color || elem.color,
       description: fusion?.description || elem.description,
     }, this.weaponLevel, '双核融合觉醒')
+    this.game.sound.evolution?.()
+    return true
+  }
+
+  /**
+   * D1 第三槽：module 三选一。
+   * 刻意不阻塞 _updateDirector —— weaponChoicePending 的阻塞正是 B.1 冻结的成因，
+   * 而三条车道各有一扇 module 门，玩家无论停在哪条车道都会必然撞上其中一扇，
+   * 「必定能选」由布局保证，不靠 Director 停摆来保证。
+   */
+  _startModuleChoice() {
+    const choices = this.director.createModuleChoice()
+    this._moduleChoiceRowId = choices[0]?.rowId || 0
+    this.moduleChoicePending = choices.length > 0
+    this.weaponNotice = '模块搭载变异'
+    this.weaponNoticeTimer = 2.4
+    this.entities.push(...choices)
+  }
+
+  _selectWeaponModule(moduleId) {
+    if (this.weaponModule || !this.moduleChoicePending) return false
+    const module = getRunnerWeaponModule(moduleId)
+    if (!module) return false
+    this.weaponModule = module.id
+    this.moduleChoicePending = false
+    for (const entity of this.entities) {
+      if (entity.kind === 'module_mutation' && entity.rowId === this._moduleChoiceRowId) {
+        entity.active = false
+      }
+    }
+    this.weaponNotice = `${module.name} · 已搭载`
+    this.weaponNoticeTimer = 2.8
+    this.score += 300
+    this._showFusion({
+      id: module.id,
+      name: module.name,
+      color: module.color,
+      description: module.description,
+    }, this.weaponLevel, '模块搭载')
     this.game.sound.evolution?.()
     return true
   }
@@ -864,7 +930,7 @@ export class RunnerGameplay extends GameplayController {
    * 增伤（vulnerability）不进这里——它要在算伤害之前生效，由 _calculateDamage 读取。
    */
   _applyFusionOnHit(target) {
-    for (const effect of planRunnerEffects(this.fusionWeapon, 'onHit')) {
+    for (const effect of planRunnerEffects(this.buildProfile, 'onHit')) {
       if (effect.kind === 'slow') this._applySlow(target, effect)
       else if (effect.kind === 'corrosionShock' && (target.corrosionStacks || 0) >= effect.threshold) {
         this._triggerCorrosionShock(target, effect)
@@ -894,7 +960,7 @@ export class RunnerGameplay extends GameplayController {
    * 目标按固定顺序挑选（车道 → 深度 → id），不使用任何随机。
    */
   _applyFusionOnPierce(target) {
-    for (const effect of planRunnerEffects(this.fusionWeapon, 'onPierce')) {
+    for (const effect of planRunnerEffects(this.buildProfile, 'onPierce')) {
       if (effect.kind === 'adjacentArc') this._arcToAdjacentLanes(target, effect)
       else if (effect.kind === 'groundFire') this._mergeGroundFire(target.lane, target.depth, effect)
       else if (effect.kind === 'slow') this._applySlow(target, effect)
@@ -909,7 +975,7 @@ export class RunnerGameplay extends GameplayController {
       const target = this._nearestTargetInLane(lane, primary.depth, 0.14, primary.id)
       if (!target) continue
       this.rings.push({ lane, depth: target.depth, life: 0.2, maxLife: 0.2, color: '#7be8ff' })
-      this._hitEntity(target, { core: this.weaponCore, coreLevel: this.weaponLevel, damageMultiplier: effect.damageRatio }, { silent: true, splash: true })
+      this._hitEntity(target, { core: this.weaponCore, coreLevel: this.weaponLevel, damageMultiplier: effect.damageRatio, procDepth: 1 }, { silent: true, splash: true, skipModuleProc: true })
     }
   }
 
@@ -923,15 +989,15 @@ export class RunnerGameplay extends GameplayController {
     for (const lane of lanes) {
       for (const entity of this.entities) {
         if (!entity.active || entity.hp <= 0 || entity.id === primary.id) continue
-        if (entity.lane !== lane || entity.kind === 'mutation' || entity.kind === 'secondary_mutation') continue
-        if (Math.abs(entity.depth - primary.depth) > 0.16) continue
+        if (this._isChoiceGate(entity)) continue
+        if (entity.lane !== lane || Math.abs(entity.depth - primary.depth) > 0.16) continue
         candidates.push(entity)
       }
     }
     candidates.sort((a, b) => a.lane - b.lane || b.depth - a.depth || a.id - b.id)
     for (const entity of candidates.slice(0, effect.count)) {
       this.rings.push({ lane: entity.lane, depth: entity.depth, life: 0.2, maxLife: 0.2, color: '#ffd859' })
-      this._hitEntity(entity, { core: this.weaponCore, coreLevel: this.weaponLevel, damageMultiplier: effect.damage }, { silent: true, splash: true })
+      this._hitEntity(entity, { core: this.weaponCore, coreLevel: this.weaponLevel, damageMultiplier: effect.damage, procDepth: 1 }, { silent: true, splash: true, skipModuleProc: true })
     }
   }
 
@@ -940,7 +1006,7 @@ export class RunnerGameplay extends GameplayController {
     let best = null
     for (const entity of this.entities) {
       if (!entity.active || entity.hp <= 0 || entity.id === excludeId) continue
-      if (entity.kind === 'mutation' || entity.kind === 'secondary_mutation') continue
+      if (this._isChoiceGate(entity)) continue
       if (entity.lane !== lane || Math.abs(entity.depth - depth) > tolerance) continue
       if (!best || entity.depth > best.depth) best = entity
     }
@@ -951,11 +1017,100 @@ export class RunnerGameplay extends GameplayController {
   _deathBlast(dead, effect) {
     this.rings.push({ lane: dead.lane, depth: dead.depth, life: 0.3, maxLife: 0.3, color: '#ff9a42', radiusScale: 2.2 })
     const targets = this.entities.filter(
-      (other) => other.active && other.hp > 0 && other.lane === dead.lane && Math.abs(other.depth - dead.depth) <= effect.radius
+      (other) => other.active && other.hp > 0 && !this._isChoiceGate(other) && other.lane === dead.lane && Math.abs(other.depth - dead.depth) <= effect.radius
     )
     for (const target of targets) {
-      this._hitEntity(target, { core: this.weaponCore, coreLevel: this.weaponLevel, damageMultiplier: effect.damage }, { silent: true, splash: true })
+      this._hitEntity(target, { core: this.weaponCore, coreLevel: this.weaponLevel, damageMultiplier: effect.damage, procDepth: 1 }, { silent: true, splash: true, skipModuleProc: true })
     }
+  }
+
+  /**
+   * 分裂弹片：一次真实命中扩散到附近其它目标。
+   *
+   * 递归防护是结构性的，不是「碰巧没发生」：
+   *   1. procDepth —— effect pipeline 生成的二级攻击带 procDepth=1，模块不再触发；
+   *   2. 每颗弹丸只 proc 一次 —— pierce 后续穿透与 ricochet 回弹都不再 proc。
+   * 两者叠加后，单发子弹能产生的二级效果数量有确定上限 = splitCount。
+   * 目标按 (lane, depth, id) 确定性挑选，不使用任何随机。
+   */
+  _applyModuleProc(primary, source) {
+    if ((source?.procDepth || 0) !== 0 || source?.moduleProcUsed) return
+    const split = findRunnerEffect(planRunnerEffects(this.buildProfile, 'onHit'), 'split')
+    if (!split) return
+    if (source) source.moduleProcUsed = true
+    const candidates = []
+    for (const entity of this.entities) {
+      if (!entity.active || entity.hp <= 0 || entity.id === primary.id) continue
+      if (this._isChoiceGate(entity)) continue
+      if (Math.abs(entity.depth - primary.depth) > split.range) continue
+      candidates.push(entity)
+    }
+    candidates.sort((a, b) => a.lane - b.lane || b.depth - a.depth || a.id - b.id)
+    const targets = candidates.slice(0, split.count)
+    if (!targets.length) return
+    this.weaponStats.splits += 1
+    for (const entity of targets) {
+      const point = this.renderer.project(entity.lane, entity.depth)
+      this._burst(point.x, point.y, '#7ce0c3', 4, true)
+      this.weaponStats.splinterCount += 1
+      this.weaponStats.maxProcDepth = Math.max(this.weaponStats.maxProcDepth, 1)
+      this._hitEntity(
+        entity,
+        {
+          core: this.weaponCore,
+          coreLevel: this.weaponLevel,
+          damageMultiplier: split.damage,
+          // provenance：这是 effect pipeline 生成的二级攻击，不再触发任何模块
+          procDepth: 1,
+        },
+        { silent: true, splash: true, skipModuleProc: true }
+      )
+    }
+  }
+
+  /**
+   * 回弹：击破目标后让同一颗弹体转向下一个目标继续飞行。
+   * 不新建弹体，所以弹体数量天然不增长；次数由 ricochetCount 硬性递减，
+   * 没有合法目标时直接销毁弹体，绝不残留。
+   */
+  _tryRicochet(bullet, killedTarget) {
+    if (!bullet.ricochetRemaining || bullet.ricochetRemaining <= 0) return false
+    // 不要求 killedTarget 仍然 active：_defeatEntity 刚刚把它置为 inactive，
+    // 拿 active 当前置条件等于「每一次击破都取消回弹」。
+    if (!killedTarget) return false
+    const candidates = []
+    for (const entity of this.entities) {
+      if (!entity.active || entity.hp <= 0) continue
+      if (entity.kind === 'mutation' || entity.kind === 'secondary_mutation' || entity.kind === 'module_mutation') continue
+      if (bullet.ricochetHitIds.includes(entity.id)) continue
+      // 只考虑弹体前方（depth 更小 = 更远）的目标，否则弹体永远追不上
+      if (entity.depth >= bullet.depth - 0.005) continue
+      candidates.push(entity)
+    }
+    if (!candidates.length) return false
+    candidates.sort((a, b) => a.lane - b.lane || b.depth - a.depth || a.id - b.id)
+    const next = candidates[0]
+    bullet.ricochetRemaining -= 1
+    bullet.damageMultiplier *= bullet.ricochetDecay
+    bullet.lane = next.lane
+    bullet.ricochetHitIds.push(next.id)
+    bullet.procDepth = 1
+    this.weaponStats.ricochets += 1
+    const point = this.renderer.project(next.lane, next.depth)
+    this._burst(point.x, point.y, '#c9a6ff', 3, true)
+    return true
+  }
+
+  /**
+   * 变异门（核心 / 元素 / module）是玩家界面，不是伤害目标。
+   *
+   * 这条判定必须集中在一处。曾经只有主弹道选靶遵守「未武装不可射击」，
+   * 而雷弧、火花、殉爆、地火、弹片、油桶这些范围路径各自手写过滤条件，
+   * 结果 pierce_lightning 的折射雷弧会打死相邻车道的 module 门，
+   * **替玩家做掉了构筑选择**。任何新增伤害路径都必须先过这一关。
+   */
+  _isChoiceGate(entity) {
+    return entity.kind === 'mutation' || entity.kind === 'secondary_mutation' || entity.kind === 'module_mutation'
   }
 
   _updateEntities(dt) {
@@ -990,6 +1145,13 @@ export class RunnerGameplay extends GameplayController {
       const collides = entity.lane === this.occupiedLane
       if (entity.kind === 'mutation') {
         if (collides) this._selectWeaponCore(entity.weaponCore)
+        entity.active = false
+        this.entities.splice(i, 1)
+        continue
+      }
+      // D1 第三槽：与核心选择同构——驶入车道即搭载。
+      if (entity.kind === 'module_mutation') {
+        if (collides) this._selectWeaponModule(entity.weaponModule)
         entity.active = false
         this.entities.splice(i, 1)
         continue
@@ -1188,7 +1350,10 @@ export class RunnerGameplay extends GameplayController {
       let targetIsProjectile = false
       for (const entity of this.entities) {
         if (!entity.active || entity.lane !== bullet.lane || entity.hp <= 0) continue
-        if (entity.kind === 'mutation' && entity.depth < RUNNER_MUTATION_ARM_DEPTH) continue
+        // 变���门未武装不可射击：核心门与 module 门共用同一把锁，
+        // 否则 module 门一生成（depth 0.08）就会被本车道子弹打掉，玩家只剩 0.6 秒换道，
+        // 所谓「三选一」退化成「拿当前车道那扇」。
+        if ((entity.kind === 'mutation' || entity.kind === 'module_mutation') && entity.depth < RUNNER_MUTATION_ARM_DEPTH) continue
         const crossed = bullet.previousDepth >= entity.depth && bullet.depth <= entity.depth
         if (crossed && (!target || entity.depth > target.depth)) target = entity
       }
@@ -1205,8 +1370,9 @@ export class RunnerGameplay extends GameplayController {
       if (target) {
         const canPierce =
           (bullet.core === 'pierce' || bullet.fever) && bullet.remainingHits > 0 && target.kind !== 'mutation'
+        let result = null
         if (targetIsProjectile) this._hitEnemyProjectile(target, bullet)
-        else this._hitEntity(target, bullet)
+        else result = this._hitEntity(target, bullet)
         if (bullet.explosive) this._explodeAt(target, bullet)
         if (canPierce) {
           bullet.remainingHits -= 1
@@ -1216,6 +1382,8 @@ export class RunnerGameplay extends GameplayController {
           this.weaponStats.pierced += 1
           // 贯穿类融合效果在此结算：折射雷弧 / 熔岩火海 / 减速 / 破甲。
           this._applyFusionOnPierce(target)
+        } else if (result?.killed && this._tryRicochet(bullet, target)) {
+          // 回弹：弹体留在场上继续飞行，不消耗本帧的弹体槽位
         } else {
           this.bullets.splice(i, 1)
         }
@@ -1231,6 +1399,8 @@ export class RunnerGameplay extends GameplayController {
     const config = this.weaponLevelConfig
     const isBurst = core?.id === 'burst'
     const isFever = this.isFeverActive
+    // D1 弹体级模块参数：回弹走弹道通道而不是 trigger，因此不新增触发时机。
+    const bulletProfile = getRunnerBulletProfile(this.buildProfile)
     return {
       lane,
       depth: RUNNER_PLAYER_DEPTH - 0.055,
@@ -1244,6 +1414,11 @@ export class RunnerGameplay extends GameplayController {
       pierceDecay: core?.id === 'pierce' ? config.decay : 0.88,
       explosive: !!(isBurst && this._shotSerial % config.every === 0),
       size: (this.attackDamage >= 5 ? 1.24 : this.attackDamage >= 3 ? 1.12 : 1) * (isFever ? 1.35 : 1),
+      // 模块专属的弹体状态：只有回弹用得上，其余构筑全部保持 0 / 空数组
+      ricochetRemaining: bulletProfile ? bulletProfile.ricochetCount : 0,
+      ricochetDecay: bulletProfile ? bulletProfile.ricochetDecay : 1,
+      ricochetHitIds: [],
+      moduleProcUsed: false,
     }
   }
 
@@ -1273,6 +1448,7 @@ export class RunnerGameplay extends GameplayController {
     )
     if (entity.hp > 0) {
       if (!options.skipFusionOnHit) this._applyFusionOnHit(entity)
+      if (!options.skipModuleProc) this._applyModuleProc(entity, source)
       // 融合效果（过载电击）可能把目标打死：若它还没被结算过就补一次，
       // 已经由效果本身结算过（active=false）则绝不能重复计入击杀。
       if (entity.hp > 0 || !entity.active) return { killed: false, damage }
@@ -1374,9 +1550,16 @@ export class RunnerGameplay extends GameplayController {
     // 判据是「目标当前处于减速状态」，而不是某个只有别的组合才会写的计时器——
     // 旧实现读 frostTimer（游戏从不赋值）/ freezeTimer（只有 burst_frost 会写），
     // 而一局同时只可能有一个融合，因此该条件恒为假，增伤从未生效过。
-    const vulnerability = findRunnerEffect(planRunnerEffects(this.fusionWeapon, 'onHit'), 'vulnerability')
+    const onHitEffects = planRunnerEffects(this.buildProfile, 'onHit')
+    const vulnerability = findRunnerEffect(onHitEffects, 'vulnerability')
     if (vulnerability && (entity.slowTimer || 0) > 0) {
       damage *= 1 + vulnerability.bonus
+    }
+
+    // D1 增幅棱镜：条件增伤，不是无条件全局加成——满血目标一个字节都不多。
+    const amplify = findRunnerEffect(onHitEffects, 'amplify')
+    if (amplify && entity.maxHp > 0 && entity.hp / entity.maxHp < amplify.hpRatio) {
+      damage *= 1 + amplify.bonus
     }
 
     if (entity.armor > 0) {
@@ -1411,7 +1594,7 @@ export class RunnerGameplay extends GameplayController {
     const fusion = this.fusionWeapon
     // 爆裂类融合效果一次性规划：半径放大、冻结、焦土、锁敌火花。
     // 具体效果由 Rules 的数据字段决定，这里不再出现任何组合 id。
-    const effects = planRunnerEffects(fusion, 'onExplosion')
+    const effects = planRunnerEffects(this.buildProfile, 'onExplosion')
     const blast = findRunnerEffect(effects, 'blastRadius')
     const freeze = findRunnerEffect(effects, 'freeze')
     const groundFire = findRunnerEffect(effects, 'groundFire')
@@ -1439,8 +1622,7 @@ export class RunnerGameplay extends GameplayController {
         entity.hp > 0 &&
         (primary.kind === 'arrow' || entity.id !== primary.id) &&
         entity.lane === primary.lane &&
-        entity.kind !== 'mutation' &&
-        entity.kind !== 'secondary_mutation' &&
+        !this._isChoiceGate(entity) &&
         Math.abs(entity.depth - primary.depth) <= radius
     )
     for (const entity of targets) {
@@ -1483,6 +1665,10 @@ export class RunnerGameplay extends GameplayController {
       this._selectSecondaryElement(entity.secondaryElement)
       return
     }
+    if (entity.kind === 'module_mutation') {
+      this._selectWeaponModule(entity.weaponModule)
+      return
+    }
     if (entity.kind === 'gate') {
       this._applyReward(entity, point)
       return
@@ -1504,7 +1690,7 @@ export class RunnerGameplay extends GameplayController {
     // 酸焰殉爆：只有真正带着腐蚀叠层的目标阵亡才触发，范围与伤害取自 Rules。
     // 旧实现判的是 secondaryElement === 'flame'——那是元素判断而不是融合判断，
     // 任何带火焰元素的击杀都会误触发，只是恰好被「叠层只由腐蚀写入」掩盖了。
-    const deathBlast = findRunnerEffect(planRunnerEffects(this.fusionWeapon, 'onKill'), 'deathBlast')
+    const deathBlast = findRunnerEffect(planRunnerEffects(this.buildProfile, 'onKill'), 'deathBlast')
     if (deathBlast && (entity.corrosionStacks || 0) > 0) this._deathBlast(entity, deathBlast)
 
     this.kills += 1
@@ -1592,7 +1778,7 @@ export class RunnerGameplay extends GameplayController {
     this.game.sound.bombExplode?.()
 
     for (const other of this.entities) {
-      if (!other.active || other.id === entity.id || other.hp <= 0) continue
+      if (!other.active || other.id === entity.id || other.hp <= 0 || this._isChoiceGate(other)) continue
       if (Math.abs(other.depth - entity.depth) <= 0.14) {
         other.hp -= 12
         other.hitFlash = 0.2
@@ -1685,6 +1871,7 @@ export class RunnerGameplay extends GameplayController {
         if (
           entity.active &&
           entity.hp > 0 &&
+          !this._isChoiceGate(entity) &&
           entity.lane === fire.lane &&
           Math.abs(entity.depth - fire.depth) <= 0.12
         ) {
@@ -1770,6 +1957,31 @@ export class RunnerGameplay extends GameplayController {
     this.game.finishGameplay?.(this.getResultSnapshot())
   }
 
+  /**
+   * 构筑三标签：`贯穿 · 冰霜 · 分裂`。
+   * 刻意不生成 27 个专属名字——正交构筑的可读性来自「三个维度各自是什么」，
+   * 而不是来自把三个词拼成一个新词。
+   */
+  _buildHudTags() {
+    return {
+      core: this.weaponDefinition ? { id: this.weaponDefinition.id, shortLabel: this.weaponDefinition.shortLabel, color: this.weaponDefinition.color } : null,
+      element: this.secondaryElement
+        ? {
+            id: this.secondaryElement,
+            shortLabel: RUNNER_SECONDARY_ELEMENTS[this.secondaryElement]?.shortLabel || this.secondaryElement,
+            color: RUNNER_SECONDARY_ELEMENTS[this.secondaryElement]?.color || '#ffffff',
+          }
+        : null,
+      module: this.moduleWeapon
+        ? { id: this.moduleWeapon.id, shortLabel: this.moduleWeapon.shortLabel, color: this.moduleWeapon.color }
+        : null,
+      modules: RUNNER_WEAPON_MODULE_IDS.map((id) => {
+        const module = getRunnerWeaponModule(id)
+        return { id, shortLabel: module.shortLabel, color: module.color }
+      }),
+    }
+  }
+
   getHudSnapshot() {
     const weapon = this.weaponDefinition
     const fusion = this.fusionWeapon
@@ -1807,6 +2019,10 @@ export class RunnerGameplay extends GameplayController {
       section: this.section.name,
       sectionIndex: this.section.index,
       sectionNotice: this.sectionNotice,
+      // D1 第三槽：HUD 只做 Core / Element / Module 三个短标签的并置，
+      // 不为 27 种组合编名字，也不新增面板或资源条。
+      build: this._buildHudTags(),
+      moduleChoicePending: this.moduleChoicePending,
       route: this.currentRoute
         ? {
             id: this.currentRoute.id,

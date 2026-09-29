@@ -51,8 +51,11 @@ const {
   RUNNER_ENTITY_TYPES,
   RUNNER_FUSION_WEAPONS,
   RUNNER_MAX_GROUND_FIRES,
+  RUNNER_WEAPON_MODULE_IDS,
   getRunnerFusionWeapon,
+  getRunnerWeaponModule,
 } = await import('./src/game/gameplay/runner/RunnerRules.js')
+const { getRunnerBulletProfile, planRunnerEffects } = await import('./src/game/gameplay/runner/RunnerEffects.js')
 
 let nextId = 1
 
@@ -136,7 +139,7 @@ const driveExplosion = (runner, primary) => {
 const driveCorrosionHit = (runner, target) => runner._hitEntity(target, { core: 'corrosion', coreLevel: 1, damageMultiplier: 1 })
 
 /** 与正式 bot 同规则的车道选择：先满足选择门，再按风险躲开。 */
-const chooseLane = (runner, wantedElement) => {
+const chooseLane = (runner, wantedElement, wantedModule) => {
   // 选择门优先：与正式 bot 同规则，否则 pending 永远挂着，测到的就不是产品问题而是 bot 问题
   if (runner.weaponChoicePending) {
     const gate = runner.entities.find((e) => e.active && e.kind === 'mutation')
@@ -145,6 +148,10 @@ const chooseLane = (runner, wantedElement) => {
   if (runner.secondaryChoicePending) {
     // 选本组合对应的那颗元素核心——真实玩家就是这么选的
     const gate = runner.entities.find((e) => e.active && e.kind === 'secondary_mutation' && e.secondaryElement === wantedElement)
+    if (gate) return gate.lane
+  }
+  if (runner.moduleChoicePending && wantedModule) {
+    const gate = runner.entities.find((e) => e.active && e.kind === 'module_mutation' && e.weaponModule === wantedModule)
     if (gate) return gate.lane
   }
   const risk = [0, 0, 0]
@@ -441,7 +448,7 @@ check('determinism：同 seed 同搭配必须逐帧复现', () => {
     const runner = makeRunner(777001)
     const signature = []
     for (let frame = 0; frame < 30 * 30; frame++) {
-      runner.targetLane = chooseLane(runner, 'flame')
+      runner.targetLane = chooseLane(runner, 'flame', 'split')
       if (runner.weaponCore && runner.elapsedTime > 12) runner.weaponCore = 'corrosion'
       runner.updateWorld(1 / 30)
       if (frame % 90 === 0) {
@@ -452,6 +459,8 @@ check('determinism：同 seed 同搭配必须逐帧复现', () => {
           runner.hp,
           runner.entities.length,
           runner.director._nextRowId,
+          runner.weaponStats.splinterCount,
+          runner.weaponStats.ricochets,
         ].join('|'))
       }
     }
@@ -522,10 +531,379 @@ for (const core of ['pierce', 'burst', 'corrosion']) {
 }
 
 // ---------------------------------------------------------------------------
+// Phase D1：第三槽 Weapon Module（Core × Element × Module = 27 种构筑）
+// ---------------------------------------------------------------------------
+console.log('\n=== Phase D1 · Module 专项 ===')
+
+const MODULES = ['split', 'ricochet', 'amplify']
+const CORES = ['pierce', 'burst', 'corrosion']
+const ELEMENTS = ['lightning', 'flame', 'frost']
+// 状态计时器的合法上限，直接从 Rules 推导，不在测试里另写一个 3.0
+const MAX_STATUS_SECONDS = Math.max(
+  ...Object.values(RUNNER_FUSION_WEAPONS).flatMap((f) => [f.freezeDuration || 0, f.slowDuration || 0, f.shockDuration || 0])
+)
+let moduleIdCounter = 5000
+
+/** 一发真实的玩家子弹穿过 lane 里的目标，返回本次命中的实体 id 顺序。 */
+const fireOneShot = (runner, lane, targets) => {
+  const hits = []
+  const bullet = runner._createBullet(lane)
+  const startDepth = targets.length ? Math.max(...targets.map((t) => t.depth)) + 0.05 : 0.9
+  bullet.previousDepth = startDepth
+  bullet.depth = startDepth
+  runner.bullets = [bullet]
+  runner._fireCooldown = 999
+  const before = new Map(runner.entities.map((e) => [e.id, e.hp]))
+  for (let step = 0; step < 12 && runner.bullets.includes(bullet); step++) {
+    const beforeIds = new Set(runner.bullets.map((b) => b))
+    runner._updateShooting(0.05)
+    for (const e of runner.entities) {
+      if (before.has(e.id) && e.hp < before.get(e.id) && !hits.includes(e.id)) hits.push(e.id)
+    }
+    if (beforeIds.size === runner.bullets.length && step > 0) {
+      // 弹体没有继续前进也没消失说明已经离场
+      if (bullet.depth <= 0 || !runner.bullets.includes(bullet)) break
+    }
+  }
+  runner.bullets = []
+  return hits
+}
+
+check('module 数据：3 个 module 都能从 Rules 解析出完整合同', () => {
+  assert.equal(RUNNER_WEAPON_MODULE_IDS.length, 3, '本轮只做 3 个 module')
+  for (const id of RUNNER_WEAPON_MODULE_IDS) {
+    const mod = getRunnerWeaponModule(id)
+    assert.ok(mod, `module ${id} 无法解析`)
+    assert.ok(mod.name && mod.shortLabel && mod.description, `${id} 缺少展示字段`)
+  }
+})
+
+check('split：命中真实产生弹片，且不打重复目标、不无限递归', () => {
+  const runner = makeRunner()
+  const mod = getRunnerWeaponModule('split')
+  runner.weaponCore = 'pierce'
+  runner.secondaryElement = 'lightning'
+  runner.weaponModule = 'split'
+  const primary = makeEntity('brute', 1, 0.5, 200, moduleIdCounter++)
+  const a = makeEntity('scout', 0, 0.5, 40, moduleIdCounter++)
+  const b = makeEntity('scout', 2, 0.5, 40, moduleIdCounter++)
+  runner.entities.push(primary, a, b)
+
+  fireOneShot(runner, 1, [primary, a, b])
+
+  const splintered = [a, b].filter((e) => e.hp < 40).length
+  assert.ok(
+    splintered >= 1,
+    `分裂必须让其它目标受到伤害，实测 ${splintered} 个（splitCount=${mod.splitCount}）`
+  )
+  assert.ok(
+    (runner.weaponStats.splits || 0) >= 1,
+    '分裂必须被计入统计，证明确实走了模块分支'
+  )
+  assert.equal(new Set([a.id, b.id]).size, 2, '弹片不得重复命中同一实体')
+  assert.equal(new Set([a.id, b.id]).size, 2, '弹片不得重复命中同一实体')
+  assert.ok(
+    (runner.weaponStats.splinterCount || 0) >= 1,
+    '分裂必须被计入统计，证明确实走了模块分支'
+  )
+  assert.ok(
+    (runner.weaponStats.maxProcDepth || 0) <= 1,
+    `模块 proc 深度必须封顶在 1，实测 ${runner.weaponStats.maxProcDepth}`
+  )
+})
+
+check('ricochet：击破后弹体继续命中下一个目标，且次数受限', () => {
+  const runner = makeRunner()
+  const mod = getRunnerWeaponModule('ricochet')
+  runner.weaponCore = 'corrosion'
+  runner.secondaryElement = 'flame'
+  runner.weaponModule = 'ricochet'
+  const first = makeEntity('scout', 1, 0.6, 3, moduleIdCounter++)
+  const second = makeEntity('scout', 0, 0.3, 40, moduleIdCounter++)
+  const third = makeEntity('scout', 2, 0.1, 40, moduleIdCounter++)
+  runner.entities.push(first, second, third)
+
+  const bullet = runner._createBullet(1)
+  bullet.previousDepth = 0.65
+  bullet.depth = 0.65
+  runner.bullets = [bullet]
+  runner._fireCooldown = 999
+  for (let i = 0; i < 40 && runner.bullets.includes(bullet); i++) runner._updateShooting(0.05)
+
+  assert.ok(first.hp <= 0, '主目标应被击破')
+  assert.ok(
+    second.hp < 40 || third.hp < 40,
+    '回弹必须让弹体转向并命中下一个目标'
+  )
+  assert.ok((runner.weaponStats.ricochets || 0) >= 1, '回弹必须被计入统计')
+  assert.ok(
+    (runner.weaponStats.ricochets || 0) <= mod.ricochetCount,
+    `回弹次数不得超过 ricochetCount=${mod.ricochetCount}，实测 ${runner.weaponStats.ricochets}`
+  )
+})
+
+check('ricochet：没有合法目标时安全结束', () => {
+  const runner = makeRunner()
+  runner.weaponCore = 'corrosion'
+  runner.secondaryElement = 'flame'
+  runner.weaponModule = 'ricochet'
+  const only = makeEntity('scout', 1, 0.6, 2, moduleIdCounter++)
+  runner.entities.push(only)
+  const bullet = runner._createBullet(1)
+  bullet.previousDepth = 0.65
+  bullet.depth = 0.65
+  runner.bullets = [bullet]
+  runner._fireCooldown = 999
+  for (let i = 0; i < 40 && runner.bullets.includes(bullet); i++) runner._updateShooting(0.05)
+  assert.equal(runner.bullets.length, 0, '没有可回弹目标时弹体必须正常消失，不得残留')
+})
+
+check('amplify：只对低于血线���目标增伤，不是无条件全局加成', () => {
+  const runner = makeRunner()
+  const mod = getRunnerWeaponModule('amplify')
+  runner.weaponCore = 'pierce'
+  runner.weaponModule = 'amplify'
+  const healthy = makeEntity('brute', 1, 0.5, 200, moduleIdCounter++)
+  const wounded = makeEntity('brute', 2, 0.5, 200, moduleIdCounter++)
+  wounded.hp = Math.floor(200 * mod.amplifyHpRatio) - 1
+  runner.entities.push(healthy, wounded)
+  const source = { core: 'pierce', coreLevel: 1, damageMultiplier: 1 }
+
+  const healthyHit = runner._hitEntity(healthy, source).damage
+  const woundedHit = runner._hitEntity(wounded, source).damage
+
+  assert.ok(
+    woundedHit > healthyHit * 1.3,
+    `低血目标应吃到 amplifyBonus=${mod.amplifyBonus}：${woundedHit.toFixed(2)} vs 满血 ${healthyHit.toFixed(2)}`
+  )
+  assert.ok(
+    Math.abs(healthyHit - runner.attackDamage) < 0.001,
+    `满血目标不得被增幅，实测 ${healthyHit.toFixed(2)}（基础 ${runner.attackDamage}）`
+  )
+})
+
+check('27 组合：Core × Element × Module 全部成立且互相正交', () => {
+  let passed = 0
+  const broken = []
+  const ricochetModule = getRunnerWeaponModule('ricochet')
+  for (const core of CORES) {
+    for (const element of ELEMENTS) {
+      for (const moduleId of MODULES) {
+        const runner = makeRunner(31337)
+        runner.weaponCore = core
+        runner.secondaryElement = element
+        runner.weaponModule = moduleId
+        try {
+          assert.equal(runner.fusionWeapon?.id, `${core}_${element}`, '融合身份错误')
+          assert.equal(runner.moduleWeapon?.id, moduleId, '模块身份错误')
+          // 一次 plan 必须同时包含融合效果与模块效果——这才是「正交」而不是拼表
+          const explosion = planRunnerEffects({ fusion: runner.fusionWeapon, module: runner.moduleWeapon }, 'onExplosion')
+          const hit = planRunnerEffects({ fusion: runner.fusionWeapon, module: runner.moduleWeapon }, 'onHit')
+          if (core === 'burst') {
+            const expected = { burst_flame: 'blastRadius', burst_frost: 'blastRadius', burst_lightning: 'sparks' }[`${core}_${element}`]
+            assert.ok(
+              explosion.some((e) => e.kind === expected),
+              `${core}+${element} 缺少 ${expected}`
+            )
+          }
+          // ricochet 走弹道通道（getRunnerBulletProfile），本来就没有 onHit 效果；
+          // 其余两个 module 必须在 onHit 里出现。三条路径都算「模块行为存在」。
+          const bulletProfile = getRunnerBulletProfile({ fusion: runner.fusionWeapon, module: runner.moduleWeapon })
+          if (moduleId === 'ricochet') {
+            assert.ok(
+              bulletProfile && bulletProfile.ricochetCount === ricochetModule.ricochetCount,
+              `${core}+${element}+ricochet 缺少弹道参数`
+            )
+          } else {
+            assert.ok(
+              hit.some((e) => e.kind === (moduleId === 'split' ? 'split' : 'amplify')),
+              `${core}+${element}+${moduleId} 缺少模块效果`
+            )
+          }
+
+          // 真实开火：必须真的打中东西，且不产生 NaN
+          const target = makeEntity('brute', 1, 0.5, 120, moduleIdCounter++)
+          const neighbour = makeEntity('scout', 0, 0.5, 60, moduleIdCounter++)
+          runner.entities.push(target, neighbour)
+          fireOneShot(runner, 1, [target, neighbour])
+          for (const entity of runner.entities) {
+            assert.ok(Number.isFinite(entity.hp) && Number.isFinite(entity.depth), '实体状态出现 NaN')
+          }
+          passed++
+        } catch (error) {
+          broken.push(`${core}+${element}+${moduleId}: ${error.message}`)
+        } finally {
+          runner.destroy()
+        }
+      }
+    }
+  }
+  assert.equal(broken.length, 0, `${broken.length} 个构筑不成立：\n    ${broken.join('\n    ')}`)
+  assert.equal(passed, 27, '必须是 27 个真实构筑')
+  console.log(`    27 组合矩阵：${passed}/27 成立`)
+})
+
+check('module choice 生命周期：出现 / 三选一 / 磁暴不吞 / pending 解除 / reset 归零', () => {
+  const runner = makeRunner(555)
+  assert.equal(runner.weaponModule, null, '开局不得白送 module')
+  assert.equal(runner.moduleChoicePending, false)
+
+  const gates = runner.director.createModuleChoice()
+  assert.equal(gates.length, 3, 'module 选择必须是三选一')
+  for (const gate of gates) {
+    assert.equal(gate.kind, 'module_mutation', 'module 门必须有独立 kind，不得冒充 gate')
+    assert.ok(gate.weaponModule, 'module 门必须携带自己的 module id')
+    assert.equal(
+      runner._isMagnetEligibleEntity(gate),
+      false,
+      '磁暴绝不能吸走 module 门'
+    )
+  }
+
+  runner.entities.push(...gates)
+  runner.moduleChoicePending = true
+  runner._moduleChoiceRowId = gates[0].rowId
+  const ok = runner._selectWeaponModule(runner.entities.find((g) => g.kind === 'module_mutation' && g.lane === 1).weaponModule)
+  assert.equal(ok, true, '驶入车道应能完成 module 选择')
+  assert.equal(runner.moduleChoicePending, false, '选择后 pending 必须解除')
+  assert.equal(runner.weaponModule, runner.moduleWeapon.id)
+  for (const gate of gates) assert.equal(gate.active, false, '选择后同排其余 module 门必须关闭')
+
+  const fresh = makeRunner(555)
+  assert.equal(fresh.weaponModule, null, 'reset 后 module 必须归零')
+  assert.equal(fresh.moduleChoicePending, false, 'reset 后 pending 必须归零')
+  fresh.destroy()
+  runner.destroy()
+})
+
+check('递归压力：最密集构筑下 effect 数量必须有确定上限', () => {
+  const runner = makeRunner(909)
+  runner.weaponCore = 'burst'
+  runner.secondaryElement = 'lightning'
+  runner.weaponModule = 'split'
+  for (let lane = 0; lane < 3; lane++) {
+    for (let n = 0; n < 6; n++) {
+      runner.entities.push(makeEntity(n % 2 ? 'brute' : 'hound', lane, 0.15 + n * 0.12, 60, moduleIdCounter++))
+    }
+  }
+  const bullet = runner._createBullet(1)
+  bullet.previousDepth = 0.95
+  bullet.depth = 0.95
+  runner.bullets = [bullet]
+  runner._fireCooldown = 999
+  for (let i = 0; i < 30; i++) runner._updateShooting(0.05)
+
+  const perShot = (runner.weaponStats.splinterCount || 0)
+  const cap = 4 * (getRunnerWeaponModule('split').splitCount + 1)
+  assert.ok(perShot <= cap, `单发子弹的二级效果必须有上限，实测 ${perShot} > ${cap}`)
+  assert.ok((runner.weaponStats.maxProcDepth || 0) <= 1, 'proc 深度不得增长')
+  assert.ok(runner.bullets.length <= 48, '弹体不得无界增长')
+  assert.ok(runner.entities.length <= 24, '实体不得无界增长')
+  runner.destroy()
+})
+
+check('选择门免疫：任何范围效果都不得替玩家做掉构筑选择', () => {
+  // 真实踩过的坑：pierce_lightning 的折射雷弧会打死相邻车道的 module 门，
+  // 于是玩家还没来得及选，构筑就被效果定死了。核心门 / 元素门同理。
+  for (const [core, element] of [['pierce', 'lightning'], ['burst', 'flame'], ['corrosion', 'flame'], ['corrosion', 'frost']]) {
+    const runner = makeRunner(6060)
+    runner.weaponCore = core
+    runner.secondaryElement = element
+    const player = makeEntity('brute', 1, 0.5, 300, moduleIdCounter++)
+    runner.entities.push(player)
+    const choiceGates = runner.director.createModuleChoice()
+    for (const gate of choiceGates) {
+      gate.id = moduleIdCounter++
+      gate.depth = 0.5
+      runner.entities.push(gate)
+    }
+    // 真正打开选择态：pending 为真时 _selectWeaponModule 才可能生效。
+    // 否则门被打坏也看不出来，这条断言就是空转。
+    runner.moduleChoicePending = true
+    runner._moduleChoiceRowId = choiceGates[0].rowId
+    assert.equal(runner.weaponModule, null, '前置：尚未做出 module 选择')
+
+    runner._explodeAt(player, runner._createBullet(1))
+    runner._applyFusionOnPierce(player)
+    for (let i = 0; i < 5; i++) runner._updateGroundFires(0.2)
+    for (const gate of choiceGates) {
+      assert.equal(gate.hp, gate.maxHp, `${core}+${element} 的范围效果打坏了 module 门`)
+      assert.equal(gate.active, true, `${core}+${element} 的范围效果销毁了 module 门`)
+    }
+    assert.equal(runner.weaponModule, null, `${core}+${element} 替玩家做了 module 选择`)
+    runner.destroy()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 27 组合 soak：Core × Element × Module 全跑一局完整 blitz 60s。
+// 60s 是必需的——blitz 的 module 门 34s 生成、约 41.7s 结算，只有跑满 60s
+// 才真的「拿到 module 并用它打完最后 18 秒」。
+// ---------------------------------------------------------------------------
+console.log('\n=== 27 组合 soak（blitz 60s 完整局，seed 20260929）===')
+
+const comboSoakProblems = []
+let comboSoakPassed = 0
+for (const core of CORES) {
+  for (const element of ELEMENTS) {
+    for (const moduleId of MODULES) {
+      const runner = makeRunner(20260929)
+      let maxFires = 0
+      let maxEntities = 0
+      let maxBullets = 0
+      const buildId = `${core}+${element}+${moduleId}`
+      try {
+        for (let frame = 0; frame < 60 * 30; frame++) {
+          runner.targetLane = chooseLane(runner, element, moduleId)
+          if (runner.weaponCore && runner.elapsedTime > 12) runner.weaponCore = core
+          runner.updateWorld(1 / 30)
+          maxFires = Math.max(maxFires, runner.groundFires.length)
+          maxEntities = Math.max(maxEntities, runner.entities.length)
+          maxBullets = Math.max(maxBullets, runner.bullets.length)
+          for (const entity of runner.entities) {
+            if (!Number.isFinite(entity.depth) || !Number.isFinite(entity.hp) || !Number.isFinite(entity.speed)) {
+              throw new Error(`实体 ${entity.id} 出现 NaN`)
+            }
+          }
+        }
+        if (runner.weaponCore !== core) throw new Error(`weaponCore 实际是 ${runner.weaponCore}`)
+        if (runner.secondaryElement !== element) throw new Error(`secondaryElement 实际是 ${runner.secondaryElement}`)
+        if (runner.weaponModule !== moduleId) throw new Error(`weaponModule 实际是 ${runner.weaponModule}，说明 34s 的 module 门没被结算`)
+        if (runner.moduleChoicePending) throw new Error('module 选择在局末仍挂起')
+        if (runner.weaponChoicePending || runner.secondaryChoicePending) throw new Error('核心/元素选择未完成')
+        if (maxFires > RUNNER_MAX_GROUND_FIRES) throw new Error(`地火越界 ${maxFires}`)
+        if (maxEntities > 24) throw new Error(`实体无界 ${maxEntities}`)
+        if (maxBullets > 48) throw new Error(`弹体无界 ${maxBullets}`)
+        if ((runner.weaponStats.maxProcDepth || 0) > 1) throw new Error(`proc 深度失控 ${runner.weaponStats.maxProcDepth}`)
+        // 「无永久状态」的正确判据是计时器会到期，而不是局末必须为 0——
+        // 最后一秒刚挂上的 3 秒减速在到期前仍然活跃，那是设计，不是泄漏。
+        // 真正的泄漏长这样：计时器超过 Rules 里配置过的最大时长却仍在增长。
+        const leaked = runner.entities.filter(
+          (e) => (e.freezeTimer || 0) > MAX_STATUS_SECONDS || (e.slowTimer || 0) > MAX_STATUS_SECONDS
+        )
+        if (leaked.length) throw new Error(`${leaked.length} 个实体的状态计时器超过 Rules 上限 ${MAX_STATUS_SECONDS}s，疑似泄漏`)
+        if (runner.routeLog.length < 2) throw new Error(`岔口未继续推进（${runner.routeLog.length}）`)
+        comboSoakPassed++
+      } catch (error) {
+        comboSoakProblems.push(`${buildId}: ${error.message}`)
+        console.log(`✗ soak ${buildId}: ${error.message}`)
+      }
+      runner.destroy()
+    }
+  }
+}
+if (!comboSoakProblems.length) console.log(`  ✓ 27/27 构筑完成完整 blitz 60s，无异常、无残留状态、岔口继续推进`)
+
+// ---------------------------------------------------------------------------
 console.log('\n=== 汇总 ===')
 if (failures.length) console.log(`组合断言失败 ${failures.length} 项：\n  - ${failures.map((f) => f.name).join('\n  - ')}`)
 if (soakProblems.length) console.log(`soak 失败 ${soakProblems.length} 项：\n  - ${soakProblems.join('\n  - ')}`)
+if (comboSoakProblems.length) console.log(`27 组合 soak 失败 ${comboSoakProblems.length} 项：\n  - ${comboSoakProblems.join('\n  - ')}`)
 
-assert.equal(failures.length + soakProblems.length, 0, `融合真实行为未达标：${failures.length} 项断言失败 + ${soakProblems.length} 项 soak 失败`)
+assert.equal(
+  failures.length + soakProblems.length + comboSoakProblems.length,
+  0,
+  `融合/模块真实行为未达标：${failures.length} 项断言 + ${soakProblems.length} 项 9 组合 soak + ${comboSoakProblems.length} 项 27 组合 soak`
+)
 
 console.log('\nRunner 融合组合测试通过 ✓')

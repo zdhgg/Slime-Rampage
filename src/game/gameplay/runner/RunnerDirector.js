@@ -7,9 +7,11 @@ import {
   RUNNER_ROUTES,
   RUNNER_SECONDARY_ELEMENTS,
   RUNNER_WEAPON_CORES,
+  RUNNER_WEAPON_MODULE_IDS,
   createRunnerSeed,
   getRunnerRoute,
   getRunnerSection,
+  getRunnerWeaponModule,
 } from './RunnerRules.js'
 
 /** 单个编队实体的分类：强化门 / 精英与障碍。 */
@@ -234,6 +236,41 @@ export class RunnerDirector {
         secondaryElement: elemId,
         name: elem.name,
         color: elem.color,
+        depth: 0.08,
+        previousDepth: 0.08,
+        speed: 0.115,
+        baseSpeed: 0.115,
+        armedDepth: RUNNER_MUTATION_ARM_DEPTH,
+        hp: 3,
+        maxHp: 3,
+        damage: 0,
+        score: 300,
+        hitFlash: 0,
+        active: true,
+      }
+    })
+  }
+
+  /**
+   * D1 第三槽：module 三选一。刻意使用独立 kind `module_mutation` 而不是 'gate'——
+   * B.1 已经证明磁暴只应该吸普通奖励门，让 module 门冒充 gate 等于把同一个
+   * 冻结 bug 重新埋一遍。这里让两者在数据上就不可能互相误伤。
+   */
+  createModuleChoice() {
+    const rowId = this._nextRowId++
+    const moduleIds = this._shuffle(RUNNER_WEAPON_MODULE_IDS)
+    return moduleIds.map((moduleId, lane) => {
+      const module = getRunnerWeaponModule(moduleId)
+      return {
+        id: this._nextEntityId++,
+        rowId,
+        lane,
+        type: `module-${moduleId}`,
+        kind: 'module_mutation',
+        reward: 'module',
+        weaponModule: moduleId,
+        name: module.name,
+        color: module.color,
         depth: 0.08,
         previousDepth: 0.08,
         speed: 0.115,

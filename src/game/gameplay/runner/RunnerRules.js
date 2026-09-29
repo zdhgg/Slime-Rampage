@@ -202,6 +202,58 @@ export const RUNNER_SECONDARY_ELEMENTS = {
   },
 }
 
+/**
+ * 第三槽 Weapon Module（Phase D1）。
+ *
+ * Module 与 Core / Element 严格正交：它不改写核心射击结构，也不换皮复制元素效果，
+ * 只额外负责一条独立的构筑轴。身份互不重复：
+ *   split    额外目标（一发命中扩散到其它目标）
+ *   ricochet 弹道与二次命中（同一颗弹体击破后转向继续飞）
+ *   amplify  单目标强化（对低血目标的条件增伤）
+ *
+ * 全部数值都是 D1 新设计合同，不是旧设计原有数值。
+ * 行为解释统一在 RunnerEffects，本表只提供数据。
+ */
+export const RUNNER_WEAPON_MODULE_IDS = ['split', 'ricochet', 'amplify']
+
+export const RUNNER_WEAPON_MODULES = {
+  split: {
+    id: 'split',
+    name: '分裂弹头',
+    shortLabel: '分裂',
+    color: '#7ce0c3',
+    icon: '⑂',
+    description: '命中时迸发 2 枚弹片，自动锁定附近其它目标',
+    splitCount: 2,
+    splitDamage: 0.45,
+    splitRange: 0.22,
+  },
+  ricochet: {
+    id: 'ricochet',
+    name: '回弹弹芯',
+    shortLabel: '回弹',
+    color: '#c9a6ff',
+    icon: '↩',
+    description: '击破目标后弹体转向下一个目标继续飞行，最多回弹 2 次',
+    ricochetCount: 2,
+    ricochetDecay: 0.7,
+  },
+  amplify: {
+    id: 'amplify',
+    name: '增幅棱镜',
+    shortLabel: '增幅',
+    color: '#ffd166',
+    icon: '◆',
+    description: '对生命低于 40% 的目标造成的伤害提升 60%',
+    amplifyHpRatio: 0.4,
+    amplifyBonus: 0.6,
+  },
+}
+
+export function getRunnerWeaponModule(id) {
+  return RUNNER_WEAPON_MODULES[id] || null
+}
+
 export const RUNNER_FUSION_WEAPONS = {
   'pierce:lightning': {
     id: 'pierce_lightning',
@@ -684,7 +736,11 @@ export const RUNNER_SUBMODES = {
     weaponChoiceTime: 10,
     weaponEvolveTime: 25,
     weaponOverdriveTime: 42,
-    // 岔口生成时刻：与 10/25/42 的武器节点错开
+    // D1 第三槽：排在元素选择（25s）之后 9 秒。变异门从生成到驶过碰撞线需要
+    // 7.7 秒（0.08 → 0.965，速度 0.115），9 秒保证两行选择门不会同时在场；
+    // 34 + 7.7 = 41.7s 结算，仍早于 42s 超载，也与 20/50 的岔口各留 14s 以上。
+    weaponModuleTime: 34,
+    // 岔口生成时刻：与 10/25/34/42 的武器节点错开
     forkTimes: [20, 50],
     sections: [
       {
@@ -745,7 +801,9 @@ export const RUNNER_SUBMODES = {
     weaponChoiceTime: 25,
     weaponEvolveTime: 65,
     weaponOverdriveTime: 110,
-    // 岔口生成时刻：与 25/65/110 的武器节点错开
+    // D1 第三槽：同样取「元素选择 + 9 秒」，结算于 81.7s，与岔口 60/90 各留 14s 以上
+    weaponModuleTime: 74,
+    // 岔口生成时刻：与 25/65/74/110 的武器节点错开
     forkTimes: [30, 60, 90, 120, 150],
     sections: [
       {
@@ -827,6 +885,8 @@ export const RUNNER_SUBMODES = {
     weaponChoiceTime: 25,
     weaponEvolveTime: 60,
     weaponOverdriveTime: 100,
+    // D1 第三槽：同样取「元素选择 + 9 秒」，结算于 76.7s，与 30s 步长的岔口错开
+    weaponModuleTime: 69,
     forkTimes: null, // 无尽模式由 getRunnerForkTimes 按 30s 步长推导
     sections: [],
   },
