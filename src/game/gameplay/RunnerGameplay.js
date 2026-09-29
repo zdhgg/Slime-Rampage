@@ -20,6 +20,8 @@ import {
   RUNNER_FEVER_SCORE_MULTIPLIER,
   RUNNER_FEVER_SHARDS_PER_CHARGE,
   RUNNER_FIRE_INTERVAL,
+  RUNNER_FORK_CLEAR_DEPTH,
+  RUNNER_FORK_SELECT_DEPTH,
   RUNNER_FUSION_WEAPONS,
   RUNNER_LANE_COMMIT_EPSILON,
   RUNNER_LANE_COUNT,
@@ -40,7 +42,10 @@ import {
   RUNNER_SUBMODES,
   RUNNER_TACTICAL_ITEMS,
   createRunnerSeed,
+  getRunnerForkTimes,
   getRunnerFusionWeapon,
+  getRunnerRoute,
+  getRunnerRouteByLane,
   getRunnerSection,
   getRunnerSubmode,
   getRunnerWeaponCore,
@@ -126,6 +131,12 @@ export class RunnerGameplay extends GameplayController {
     this.comboTimer = 0
     this.section = getRunnerSection(0)
     this.sectionNotice = 0
+    // 路线分叉状态：currentRouteId 为 null 表示尚未做出第一次路线选择。
+    this.currentRouteId = null
+    this.nextForkIndex = 0
+    this.activeForkId = null
+    this.routeLog = []
+    this._resolvedForkIds = new Set()
     this.damageFlash = 0
     this.shieldFlash = 0
     this.dashTimer = 0
@@ -225,6 +236,16 @@ export class RunnerGameplay extends GameplayController {
     return getRunnerFusionWeapon(this.weaponCore, this.secondaryElement)
   }
 
+  /** 当前已锁定的路线；第一次岔口之前为 null。 */
+  get currentRoute() {
+    return getRunnerRoute(this.currentRouteId)
+  }
+
+  /** 路线对遭遇密度的最小覆盖；未选路线时为 1，与 Phase B 前完全一致。 */
+  get routeSpawnIntervalScale() {
+    return this.currentRoute?.spawnIntervalMultiplier ?? 1
+  }
+
   reset(seed, submode = this.submode || 'marathon') {
     this._seed = createRunnerSeed(seed)
     this.director.reset(this._seed)
@@ -277,6 +298,11 @@ export class RunnerGameplay extends GameplayController {
     this.comboTimer = 0
     this.section = getRunnerSection(0, this.submode)
     this.sectionNotice = 1.8
+    this.currentRouteId = null
+    this.nextForkIndex = 0
+    this.activeForkId = null
+    this.routeLog = []
+    this._resolvedForkIds = new Set()
     this.damageFlash = 0
     this.shieldFlash = 0
     this.dashTimer = 0
@@ -371,6 +397,7 @@ export class RunnerGameplay extends GameplayController {
     }
 
     this._updateWeaponProgression()
+    this._updateForkSchedule()
     this._updateDirector(dt)
     // 世界推进按子弹时间 dilation 缩放；刷怪节奏保持真实 dt，避免改变刷怪数量。
     const worldDt = dt * this.worldTimeScale
@@ -512,7 +539,8 @@ export class RunnerGameplay extends GameplayController {
   _getLaneRisks() {
     const risks = [0, 0, 0]
     for (const entity of this.entities) {
-      if (!entity.active || entity.kind === 'mutation' || entity.kind === 'gate') continue
+      // 路线牌不是威胁：排除后车道风险读数才反映真实危险，岔口可读性不被污染。
+      if (!entity.active || entity.kind === 'mutation' || entity.kind === 'gate' || entity.kind === 'fork') continue
       const urgency = clamp((entity.depth - 0.34) / 0.66, 0, 1)
       let weight = urgency * (1 + Math.max(0, entity.damage || 0) * 0.42)
       if (entity.charging) weight += 0.9
@@ -580,9 +608,54 @@ export class RunnerGameplay extends GameplayController {
     if (this.weaponChoicePending) return
     this._encounterTimer -= dt
     if (this._encounterTimer > 0) return
-    const encounter = this.director.createEncounter(this.elapsedTime, this.entities.length, this.submode)
+    const encounter = this.director.createEncounter(
+      this.elapsedTime,
+      this.entities.length,
+      this.submode,
+      this.currentRouteId
+    )
     if (encounter.length) this.entities.push(...encounter)
-    this._encounterTimer = this.section.spawnInterval
+    this._encounterTimer = this.section.spawnInterval * this.routeSpawnIntervalScale
+  }
+
+  /**
+   * 岔口时刻表完全确定，不消费任何 RNG，到点即在三条车道各放一块路线牌。
+   * 刻意不受 weaponChoicePending / secondaryChoicePending 阻塞：这两个标志
+   * 存在「玩家未驶入变异门则永不复位」的历史缺陷，一旦被它挡住，路线分叉
+   * 也会跟着整局停摆。该缺陷属 FOLLOW-UP，本轮不修。
+   */
+  _updateForkSchedule() {
+    const forkTimes = getRunnerForkTimes(this.submode)
+    if (this.nextForkIndex >= forkTimes.length) return
+    if (this.elapsedTime < forkTimes[this.nextForkIndex]) return
+    const row = this.director.createForkRow(this.nextForkIndex, this.elapsedTime, this.submode)
+    this.entities.push(...row)
+    this.activeForkId = this.nextForkIndex
+    this.nextForkIndex += 1
+  }
+
+  /**
+   * 锁定岔口对应的路线：读取玩家此刻实际所在车道，映射到固定路线。
+   * 路线牌会在解析深度停留多帧，因此用 _resolvedForkIds 保证一个岔口只解析一次，
+   * 重复调用直接拒绝，不改写 currentRouteId、也不重复推送提示。
+   */
+  _resolveFork(fork) {
+    if (this._resolvedForkIds.has(fork.forkId)) return false
+    this._resolvedForkIds.add(fork.forkId)
+    const route = getRunnerRouteByLane(this.occupiedLane)
+    this.currentRouteId = route.id
+    this.activeForkId = null
+    this.routeLog.push({
+      forkId: fork.forkId,
+      routeId: route.id,
+      lane: this.occupiedLane,
+      elapsed: Number(this.elapsedTime.toFixed(4)),
+    })
+    for (const other of this.entities) {
+      if (other.kind === 'fork' && other.rowId === fork.rowId) other.resolved = true
+    }
+    this._showNotice(`路线 · ${route.label}`, route.color)
+    return true
   }
 
   _updateWeaponProgression() {
@@ -725,6 +798,18 @@ export class RunnerGameplay extends GameplayController {
       }
       else entity.depth += entity.speed * dt
       entity.hitFlash = Math.max(0, entity.hitFlash - dt)
+
+      // 路线牌：到达解析深度时锁定路线，随后整行移除。
+      // 既不参与碰撞也不可被子弹命中，因此必须先于通用命中/伤害分支处理。
+      if (entity.kind === 'fork') {
+        if (!entity.resolved && entity.depth >= RUNNER_FORK_SELECT_DEPTH) this._resolveFork(entity)
+        if (entity.resolved || entity.depth >= RUNNER_FORK_CLEAR_DEPTH) {
+          entity.active = false
+          this.entities.splice(i, 1)
+        }
+        continue
+      }
+
       if (entity.depth < RUNNER_COLLISION_DEPTH) continue
 
       const collides = entity.lane === this.occupiedLane
@@ -1542,6 +1627,14 @@ export class RunnerGameplay extends GameplayController {
       section: this.section.name,
       sectionIndex: this.section.index,
       sectionNotice: this.sectionNotice,
+      route: this.currentRoute
+        ? {
+            id: this.currentRoute.id,
+            label: this.currentRoute.label,
+            shortLabel: this.currentRoute.shortLabel,
+            color: this.currentRoute.color,
+          }
+        : null,
       lane: this.currentLane,
       targetLane: this.targetLane,
       switching: this.isSwitching,

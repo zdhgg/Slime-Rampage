@@ -37,6 +37,64 @@ export const RUNNER_COLLISION_DEPTH = 0.965
 export const RUNNER_LANE_LERP_PER_FRAME = 0.24
 export const RUNNER_LANE_COMMIT_EPSILON = 0.035
 
+// ---------------------------------------------------------------------------
+// 路线分叉（Phase B）：lane 与 route 一一固定映射，不做随机重排。
+// 玩家仍只用 left / right 换道；驶过 selectionDepth 即锁定对应路线。
+// 每条路线只带一个最小 modifier，复用既有 section 参数，不新增战斗系统。
+// ---------------------------------------------------------------------------
+export const RUNNER_ROUTE_IDS = ['blockade', 'armory', 'ruins']
+
+export const RUNNER_ROUTES = {
+  blockade: {
+    id: 'blockade',
+    lane: 0,
+    label: '封锁走廊',
+    shortLabel: '封锁',
+    color: '#7fb2c8',
+    // 安全线：遭遇更稀疏，其余不变
+    spawnIntervalMultiplier: 1.3,
+    hpMultiplier: 1,
+    preferPatternKind: null,
+  },
+  armory: {
+    id: 'armory',
+    lane: 1,
+    label: '军械库',
+    shortLabel: '军械',
+    color: '#f0b35f',
+    // 火力线：遭遇更密，并优先取用含强化门的编队
+    spawnIntervalMultiplier: 0.85,
+    hpMultiplier: 1,
+    preferPatternKind: 'gate',
+  },
+  ruins: {
+    id: 'ruins',
+    lane: 2,
+    label: '废墟捷径',
+    shortLabel: '废墟',
+    color: '#e07a5f',
+    // 高风险线：遭遇更密、敌人更硬，并优先取用含精英与障碍的编队
+    spawnIntervalMultiplier: 0.95,
+    hpMultiplier: 1.15,
+    preferPatternKind: 'danger',
+  },
+}
+
+/** 岔口解析深度：路线牌进入该深度时读取玩家当前车道并锁定路线。 */
+export const RUNNER_FORK_SELECT_DEPTH = 0.58
+/** 岔口清理深度：超过后移除路线牌，不参与任何碰撞。 */
+export const RUNNER_FORK_CLEAR_DEPTH = 0.93
+
+export function getRunnerRoute(id) {
+  return RUNNER_ROUTES[id] || null
+}
+
+/** 固定 lane -> route 映射，永不随机重排。 */
+export function getRunnerRouteByLane(lane) {
+  const index = Math.max(0, Math.min(RUNNER_LANE_COUNT - 1, Math.round(Number(lane) || 0)))
+  return RUNNER_ROUTES[RUNNER_ROUTE_IDS[index]] || null
+}
+
 export const RUNNER_WEAPON_CHOICE_TIME = 18
 export const RUNNER_WEAPON_EVOLVE_TIME = 48
 export const RUNNER_WEAPON_OVERDRIVE_TIME = 75
@@ -583,6 +641,8 @@ export const RUNNER_SUBMODES = {
     weaponChoiceTime: 10,
     weaponEvolveTime: 25,
     weaponOverdriveTime: 42,
+    // 岔口生成时刻：与 10/25/42 的武器节点错开
+    forkTimes: [20, 50],
     sections: [
       {
         id: 'blitz_outer',
@@ -642,6 +702,8 @@ export const RUNNER_SUBMODES = {
     weaponChoiceTime: 25,
     weaponEvolveTime: 65,
     weaponOverdriveTime: 110,
+    // 岔口生成时刻：与 25/65/110 的武器节点错开
+    forkTimes: [30, 60, 90, 120, 150],
     sections: [
       {
         id: 'outer',
@@ -722,12 +784,28 @@ export const RUNNER_SUBMODES = {
     weaponChoiceTime: 25,
     weaponEvolveTime: 60,
     weaponOverdriveTime: 100,
+    forkTimes: null, // 无尽模式由 getRunnerForkTimes 按 30s 步长推导
     sections: [],
   },
 }
 
 export function getRunnerSubmode(id) {
   return RUNNER_SUBMODES[id] || RUNNER_SUBMODES.marathon
+}
+
+/**
+ * 岔口生成时刻表。完全确定，不消耗任何 RNG——这是「第一次岔口之前
+ * encounter 随机序列不被扰动」的前提。无尽模式按 30s 步长推导。
+ */
+export function getRunnerForkTimes(submodeId) {
+  const submode = getRunnerSubmode(submodeId)
+  if (Array.isArray(submode.forkTimes)) return submode.forkTimes
+  if (submode.id === 'endless') {
+    const times = []
+    for (let t = 30; t <= 3600; t += 30) times.push(t)
+    return times
+  }
+  return RUNNER_SUBMODES.marathon.forkTimes
 }
 
 export function getRunnerSection(elapsed, submodeId = 'marathon') {

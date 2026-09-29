@@ -40,6 +40,9 @@ function onFeverClick() {
   <div class="runner-hud">
     <section class="vitals" aria-label="突围状态">
       <div class="mode-label">{{ hud.submodeName || '极速突围' }}</div>
+      <div v-if="hud.route" class="route-label" :style="{ '--route-color': hud.route.color }">
+        路线 <b>{{ hud.route.label }}</b>
+      </div>
       <div class="hp-row" :aria-label="`生命 ${hud.hp} / ${hud.maxHp}`">
         <span
           v-for="index in hud.maxHp"
@@ -250,6 +253,29 @@ function onFeverClick() {
   color: rgba(235, 244, 242, 0.72);
   font-size: 12px;
   font-weight: 800;
+}
+
+/* Phase B：当前已锁定的路线，随路线取色。 */
+.route-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: -4px 0 8px;
+  padding: 2px 7px;
+  width: fit-content;
+  border: 1px solid color-mix(in srgb, var(--route-color, #79d5e6) 45%, transparent);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--route-color, #79d5e6) 12%, transparent);
+  color: rgba(235, 244, 242, 0.7);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.route-label b {
+  color: var(--route-color, #79d5e6);
+  font-size: 11px;
+  font-weight: 900;
 }
 
 .hp-row {

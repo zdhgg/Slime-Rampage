@@ -50,11 +50,18 @@ const {
   RUNNER_FEVER_DURATION,
   RUNNER_FEVER_MAX_CHARGES,
   RUNNER_FEVER_SHARDS_PER_CHARGE,
+  RUNNER_FORK_CLEAR_DEPTH,
+  RUNNER_FORK_SELECT_DEPTH,
   RUNNER_MAX_GROUND_FIRES,
   RUNNER_MAX_HP,
   RUNNER_MAX_SHIELD,
+  RUNNER_ROUTE_IDS,
+  RUNNER_ROUTES,
   RUNNER_TACTICAL_ITEMS,
   RUNNER_WEAPON_CORES,
+  getRunnerForkTimes,
+  getRunnerRoute,
+  getRunnerRouteByLane,
 } = await import('./src/game/gameplay/runner/RunnerRules.js')
 const { createGameplay } = await import('./src/game/gameplay/GameplayFactory.js')
 
@@ -978,21 +985,71 @@ console.log('✓ Runner ground fires stay bounded and drain to empty')
   // soak 只验证生命周期/内存稳定性，用高血量排除战斗平衡对结果的干扰。
   soak.maxHp = 1e6
   soak.hp = soak.maxHp
+  // 「不得残留永久增益」不能简单断言局末为 0：局末合法地可能带着一个刚激活、
+  // 尚未到期的增益。正确判据是——每次激活都必须在声明时长内回到 0。
+  const soakFrame = 1 / 30
+  const buffDuration = {
+    hyperBoostTimer: RUNNER_TACTICAL_ITEMS.booster.duration,
+    bulletTimeTimer: RUNNER_TACTICAL_ITEMS.bullet_time.duration,
+    droneTimer: RUNNER_TACTICAL_ITEMS.drone.duration,
+  }
+  const buffWatch = {}
+  const buffActivations = {}
+  const buffLifetimes = []
+  for (const key of Object.keys(buffDuration)) {
+    buffWatch[key] = { last: 0, since: null }
+    buffActivations[key] = 0
+  }
   let maxGroundFires = 0
   let frames = 0
   const maxFrames = Math.ceil(soak.duration * 30) + 2
   for (; frames < maxFrames && soak.state === 'active'; frames++) {
     soak.hp = soak.maxHp
     soak.targetLane = chooseSimulationLane(soak)
-    soak.updateWorld(1 / 30)
+    soak.updateWorld(soakFrame)
     if (soak.groundFires.length > maxGroundFires) maxGroundFires = soak.groundFires.length
+    for (const key of Object.keys(buffDuration)) {
+      const value = soak[key]
+      const watch = buffWatch[key]
+      assert.ok(
+        value >= 0 && value <= buffDuration[key] + 1e-9,
+        `${key} 越界：${value}（声明上限 ${buffDuration[key]}）`
+      )
+      // drone/booster/bulletTime 采用「硬重置」语义：重复拾取会把计时器重新
+      // 拉满，属于既有设计（rapid 才是叠加）。因此数值在生效期间回升要视为
+      // 一次新的激活，否则会把合法续期误判成永久增益。
+      if (value > 0 && (watch.last <= 0 || value > watch.last)) {
+        watch.since = soak.elapsedTime
+        buffActivations[key] += 1
+      }
+      if (value <= 0 && watch.last > 0) {
+        buffLifetimes.push(soak.elapsedTime - watch.since)
+        watch.since = null
+      }
+      watch.last = value
+    }
   }
   assert.equal(soak.state, 'finished', '180s 局必须正常结束')
   assert.equal(soak.outcome, 'victory', '无伤跑完 180s 应判定为突围成功')
   assert.equal(soak.elapsedTime, 180)
-  assert.equal(soak.hyperBoostTimer, 0, '长局结束不得残留 hyper boost')
-  assert.equal(soak.bulletTimeTimer, 0, '长局结束不得残留 bullet time')
-  assert.equal(soak.droneTimer, 0, '长局结束不得残留 drone')
+  const totalActivations = Object.values(buffActivations).reduce((a, b) => a + b, 0)
+  assert.ok(totalActivations > 0, 'soak 必须真的触发过战术增益，否则该断言是空的')
+  const maxDeclaredDuration = Math.max(...Object.values(buffDuration))
+  for (const life of buffLifetimes) {
+    assert.ok(
+      life <= maxDeclaredDuration + soakFrame,
+      `增益实际存活 ${life.toFixed(3)}s，超过声明上限（永久增益）`
+    )
+  }
+  for (const key of Object.keys(buffDuration)) {
+    const watch = buffWatch[key]
+    if (watch.last <= 0 || watch.since == null) continue
+    const alive = soak.elapsedTime - watch.since
+    assert.ok(
+      alive < buffDuration[key] + soakFrame,
+      `${key} 在局末仍存活 ${alive.toFixed(3)}s，超出其声明时长（永久增益）`
+    )
+  }
   assert.ok(maxGroundFires <= RUNNER_MAX_GROUND_FIRES, `地火峰值越界：${maxGroundFires}`)
   assert.ok(Number.isFinite(soak.score) && Number.isFinite(soak.elapsedTime))
   assert.ok(soak.entities.every((e) => Number.isFinite(e.depth) && Number.isFinite(e.hp)))
@@ -1001,6 +1058,295 @@ console.log('✓ Runner ground fires stay bounded and drain to empty')
   soak.destroy()
 }
 console.log('✓ Runner 180s soak drains every buff and keeps arrays bounded')
+
+// ---------------------------------------------------------------------------
+// Phase B — 路线分叉 MVP：岔口 = 车道选择。
+// 目标只证明「换道可以成为路线决策」：3 条路线、固定 lane 映射、
+// 单次解析、真实影响后续 encounter、seed 可复现。不做完整风险收益系统。
+// ---------------------------------------------------------------------------
+
+// Phase B 之前记录下来的 Director encounter 基线（前 3 行）。
+// 用于证明新增的路线/岔口不会无意义地扰动既有 encounter 随机序列。
+const DIRECTOR_BASELINE = {
+  1001: '0:fever_shard/gate|1:attack/gate|2:hound/enemy;0:attack/gate|1:hound/enemy|2:fever_shard/gate;0:swarm/enemy|0:swarm/enemy|0:swarm/enemy|1:gate_magnet/gate|2:barrel/obstacle',
+  2026: '0:attack/gate|1:fever_shard/gate|2:scout/enemy;0:attack/gate|1:hound/enemy|2:fever_shard/gate;0:fever_shard/gate|1:hound/enemy|2:attack/gate',
+  4242: '0:gate_magnet/gate|1:barrel/obstacle|2:swarm/enemy|2:swarm/enemy|2:swarm/enemy;0:attack/gate|1:hound/enemy|2:fever_shard/gate;0:gate_magnet/gate|1:swarm/enemy|1:swarm/enemy|1:swarm/enemy|2:barrel/obstacle',
+}
+
+const directorRowSignature = (director) => {
+  const rows = []
+  for (let i = 0; i < 3; i++) {
+    const entities = director.createEncounter(0, 0, 'blitz')
+    rows.push(
+      entities.map((e) => `${e.lane}:${e.type}/${e.kind}${e.elite ? '*' : ''}`).join('|')
+    )
+  }
+  return rows.join(';')
+}
+
+// Test A — Director seeded determinism，且与 Phase B 前基线逐字一致。
+for (const seed of [1001, 2026, 4242]) {
+  const a = new RunnerDirector(seed)
+  const b = new RunnerDirector(seed)
+  const sigA = directorRowSignature(a)
+  const sigB = directorRowSignature(b)
+  assert.equal(sigA, sigB, `seed ${seed} 两次 Director 必须产生完全相同的 encounter`)
+  assert.equal(
+    sigA,
+    DIRECTOR_BASELINE[seed],
+    `seed ${seed} 的 encounter 基线不得被路线系统扰动`
+  )
+}
+console.log('✓ Phase B / Test A: Director stays deterministic and matches the pre-route baseline')
+
+// 路线契约：恰好 3 条，lane 0/1/2 固定一一对应，不可随机重排。
+assert.equal(RUNNER_ROUTE_IDS.length, 3, 'Phase B 固定三条路线')
+assert.equal(RUNNER_ROUTE_IDS.join(','), 'blockade,armory,ruins')
+for (let lane = 0; lane < 3; lane++) {
+  const route = getRunnerRouteByLane(lane)
+  assert.equal(RUNNER_ROUTES[RUNNER_ROUTE_IDS[lane]], route, `lane ${lane} 必须固定映射到 ${RUNNER_ROUTE_IDS[lane]}`)
+  assert.equal(route.lane, lane)
+  assert.ok(route.label && route.color, '每条路线必须有可读标签与颜色')
+  assert.ok(route.spawnIntervalMultiplier > 0, '每条路线必须有最小 spawn modifier')
+}
+assert.notEqual(
+  new Set([0, 1, 2].map((l) => getRunnerRouteByLane(l).spawnIntervalMultiplier)).size,
+  1,
+  '三条路线必须在生成参数上真实不同'
+)
+
+const ROUTE_FPS = 30
+/** 跑一局并记录完整生成轨迹 + 岔口解析日志；hp 拉满以隔离路线逻辑与战斗平衡。 */
+const simulateRunner = (seed, submode, policy, maxSeconds) => {
+  const sim = new RunnerGameplay()
+  const game = {
+    width: 1280,
+    height: 720,
+    ctx: ctx2d,
+    input: { state: { left: false, right: false } },
+    sound: simulationSound,
+    finishGameplay() {},
+  }
+  sim.attach(game)
+  sim.reset(seed, submode)
+  sim.state = 'active'
+  sim.countdown = 0
+  sim.maxHp = 1e6
+  sim.hp = 1e6
+  const seen = new Set()
+  const trace = []
+  // +2 帧余量：1/30 浮点累加会让 1800 帧略小于 60s，导致 duration 判定不触发。
+  const maxFrames = Math.ceil(maxSeconds * ROUTE_FPS) + 2
+  for (let frame = 0; frame < maxFrames && sim.state === 'active'; frame++) {
+    sim.hp = sim.maxHp
+    policy(sim)
+    sim.updateWorld(1 / ROUTE_FPS)
+    for (const entity of sim.entities) {
+      if (seen.has(entity.id)) continue
+      seen.add(entity.id)
+      trace.push({
+        t: Number(sim.elapsedTime.toFixed(4)),
+        lane: entity.lane,
+        type: entity.type,
+        kind: entity.kind,
+      })
+    }
+  }
+  return {
+    sim,
+    trace,
+    forkLog: sim.routeLog.map((entry) => ({ ...entry })),
+    span: trace.map((r) => `${r.t}|${r.lane}:${r.type}/${r.kind}`).join(';'),
+  }
+}
+const policyFree = () => () => {}
+const policyPinLane = (lane) => (sim) => { sim.targetLane = lane }
+
+// 像真实玩家一样主动驶入变异门以完成武器/元素选择。
+// 必要原因：若变异门未被驶中或射爆，weaponChoicePending 不会复位，遭遇生成会
+// 整局冻结（Phase B 之前就存在的缺陷，FOLLOW-UP）。不处理它，路线 modifier
+// 在玩法层就无从观测。
+const chooseLaneAwareOfChoices = (sim) => {
+  if (sim.weaponChoicePending) {
+    const mutation = sim.entities.find((e) => e.active && e.kind === 'mutation')
+    if (mutation) return mutation.lane
+  }
+  if (sim.secondaryChoicePending) {
+    const secondary = sim.entities.find((e) => e.active && e.kind === 'secondary_mutation')
+    if (secondary) return secondary.lane
+  }
+  return chooseSimulationLane(sim)
+}
+const policyLaneAware = () => (sim) => { sim.targetLane = chooseLaneAwareOfChoices(sim) }
+
+// Test B — 岔口按预定时刻表出现，且不与武器节点同刻。
+const blitzForkTimes = getRunnerForkTimes('blitz')
+assert.deepEqual(blitzForkTimes, [20, 50], '60s blitz 应在 20s / 50s 各出现一次岔口')
+for (const t of blitzForkTimes) {
+  assert.ok(!Object.values(RUNNER_TACTICAL_ITEMS).some((i) => i.duration === t))
+  for (const node of [10, 25, 42]) {
+    assert.ok(Math.abs(node - t) >= 5, `岔口 ${t}s 不得与武器节点 ${node}s 靠得太近`)
+  }
+}
+const forkWindowRun = simulateRunner(1001, 'blitz', policyFree, 60)
+const forkSpawns = forkWindowRun.trace.filter((e) => e.kind === 'fork')
+assert.ok(forkSpawns.length > 0, '60s 局内必须真的生成岔口实体')
+assert.ok(
+  forkSpawns[0].t >= 20 - 0.1 && forkSpawns[0].t < 26,
+  `首个岔口应在 20s 窗口出现，实际 ${forkSpawns[0].t}`
+)
+assert.equal(new Set(forkSpawns.map((e) => e.lane)).size, 3, '每个岔口必须在三条车道各放一块路线牌')
+console.log('✓ Phase B / Test B: forks appear on the scheduled 20s / 45s nodes')
+
+// Test C — lane 0/1/2 分别解析到三个不同 routeId。
+for (let lane = 0; lane < 3; lane++) {
+  const run = simulateRunner(3000 + lane, 'blitz', policyPinLane(lane), 60)
+  assert.ok(run.forkLog.length >= 1, `pin lane ${lane} 时必须至少解析一次岔口`)
+  const expected = RUNNER_ROUTE_IDS[lane]
+  assert.equal(run.forkLog[0].routeId, expected, `lane ${lane} 应解析为 ${expected}`)
+  assert.equal(run.forkLog[0].lane, lane, '解析日志必须记录当时所在车道')
+  assert.equal(run.sim.currentRouteId, expected, 'currentRouteId 必须跟随最后一次解析')
+}
+console.log('✓ Phase B / Test C: lanes 0/1/2 resolve to blockade / armory / ruins')
+
+// Test D — 同一个岔口只能 resolve 一次。
+{
+  const sim = new RunnerGameplay()
+  const game = {
+    width: 1280,
+    height: 720,
+    ctx: ctx2d,
+    input: { state: { left: false, right: false } },
+    sound: simulationSound,
+    finishGameplay() {},
+  }
+  sim.attach(game)
+  sim.reset(777, 'blitz')
+  sim.state = 'active'
+  sim.countdown = 0
+  let fork = null
+  for (let frame = 0; frame < 60 * 26 && !fork; frame++) {
+    sim.updateWorld(1 / 60)
+    fork = sim.entities.find((e) => e.kind === 'fork' && e.active) || null
+  }
+  assert.ok(fork, '应能在 26s 内拿到一个岔口实体')
+  // 把岔口钉在解析深度上，跨多帧停留，验证不会重复解析。
+  for (let frame = 0; frame < 40; frame++) {
+    fork.depth = RUNNER_FORK_SELECT_DEPTH
+    sim.updateWorld(1 / 60)
+  }
+  assert.equal(sim.routeLog.filter((e) => e.forkId === fork.forkId).length, 1, '一个岔口只能 resolve 一次')
+  const lockedRoute = sim.currentRouteId
+  const lockedLogLength = sim.routeLog.length
+  assert.equal(sim._resolveFork(fork), false, '重复解析必须被拒绝')
+  assert.equal(sim.currentRouteId, lockedRoute, '重复解析不得改写 currentRouteId')
+  assert.equal(sim.routeLog.length, lockedLogLength, '重复解析不得重复写 notice 日志')
+}
+console.log('✓ Phase B / Test D: a fork resolves exactly once even when held at selection depth')
+
+// Test E — 同 seed + 同选择：岔口序列与 encounter 序列完全一致。
+{
+  const runA = simulateRunner(2026, 'blitz', policyLaneAware(), 60)
+  const runB = simulateRunner(2026, 'blitz', policyLaneAware(), 60)
+  assert.equal(runA.span, runB.span, '同 seed + 同策略必须产生完全相同的 encounter 序列')
+  assert.deepEqual(runA.forkLog, runB.forkLog, '同 seed 的岔口解析序列必须完全一致')
+  assert.ok(runA.forkLog.length >= 2, '60s 局至少应解析两次岔口')
+}
+console.log('✓ Phase B / Test E: same seed + same choices reproduces fork and encounter sequences')
+
+// Test F — 同 seed 不同选择：岔口前一致，岔口后因 route modifier 出现可观察差异。
+{
+  // Director 层（精确）：同 seed 下，先走 N 次未选路线的遭遇，
+  // 再分别接 blockade / ruins，后续编队行必须因 modifier 而分歧。
+  const preRows = (routeAfter) => {
+    const d = new RunnerDirector(2026)
+    const pre = []
+    for (let i = 0; i < 6; i++) {
+      pre.push(d.createEncounter(0, 0, 'blitz', null).map((e) => `${e.lane}:${e.type}/${e.kind}`).join('|'))
+    }
+    const post = []
+    for (let i = 0; i < 8; i++) {
+      post.push(
+        d.createEncounter(0, 0, 'blitz', routeAfter).map((e) => `${e.lane}:${e.type}/${e.kind}`).join('|')
+      )
+    }
+    return { pre, post }
+  }
+  const dirA = preRows('blockade')
+  const dirB = preRows('ruins')
+  assert.deepEqual(dirA.pre, dirB.pre, 'Director 岔口前的遭遇行必须逐行一致')
+  assert.notEqual(dirA.post.join(';'), dirB.post.join(';'), 'Director 必须因路线 modifier 在岔口后分歧')
+
+  // 玩法层：岔口牌出现前走完全相同的策略；牌一出现就锁定目标车道，
+  // 使两次运行在「同一个决策点」上做出不同选择。
+  const policyDivergeAtFork = (lane) => (sim) => {
+    const approaching = sim.entities.some((e) => e.active && e.kind === 'fork' && !e.resolved)
+    sim.targetLane = approaching ? lane : chooseLaneAwareOfChoices(sim)
+  }
+  const laneA = simulateRunner(2026, 'blitz', policyDivergeAtFork(0), 55)
+  const laneB = simulateRunner(2026, 'blitz', policyDivergeAtFork(2), 55)
+  assert.notEqual(
+    laneA.forkLog[0].routeId,
+    laneB.forkLog[0].routeId,
+    '不同车道选择必须锁定不同路线'
+  )
+  assert.equal(laneA.forkLog[0].elapsed, laneB.forkLog[0].elapsed, '同 seed 下岔口解析时刻必须一致')
+  const firstResolveT = laneA.forkLog[0].elapsed
+  const preFork = (run) => run.trace.filter((e) => e.t <= firstResolveT)
+  assert.ok(
+    JSON.stringify(preFork(laneA)) === JSON.stringify(preFork(laneB)),
+    '第一次岔口解析之前的 encounter 历史必须完全一致'
+  )
+
+  // 玩法层：路线必须真的接入 _updateDirector 的遭遇节奏。
+  // 不在这里断言「局内遭遇条数不同」——既有缺陷（磁暴会吞掉携带 reward 的
+  // 武器变异门，导致 weaponChoicePending 永不复位、遭遇生成整局冻结）会让
+  // 该指标在多数种子下恒为 0。遭遇差异的权威断言见上面的 Director 层。
+  const encounterDelay = (run) => run.sim.section.spawnInterval * run.sim.routeSpawnIntervalScale
+  assert.equal(
+    encounterDelay(laneA),
+    laneA.sim.section.spawnInterval * getRunnerRoute('blockade').spawnIntervalMultiplier,
+    'blockade 必须按正式 modifier 缩放遭遇间隔'
+  )
+  assert.equal(
+    encounterDelay(laneB),
+    laneB.sim.section.spawnInterval * getRunnerRoute('ruins').spawnIntervalMultiplier,
+    'ruins 必须按正式 modifier 缩放遭遇间隔'
+  )
+  assert.ok(encounterDelay(laneA) > encounterDelay(laneB), 'blockade 的遭遇必须比 ruins 更稀疏')
+}
+console.log('✓ Phase B / Test F: same seed diverges only after the fork, via route modifiers')
+
+// Test G — 60s blitz 至少出现 2 个岔口。
+{
+  const run = simulateRunner(4242, 'blitz', policyLaneAware(), 60)
+  const forkIds = new Set(run.sim.routeLog.map((e) => e.forkId))
+  assert.ok(forkIds.size >= 2, `60s blitz 至少应出现 2 个岔口，实际 ${forkIds.size}`)
+  assert.ok(
+    run.sim.routeLog.every((e) => e.elapsed > 0 && e.elapsed < 60),
+    '岔口解析必须发生在 60s 局内'
+  )
+  assert.equal(run.sim.state, 'finished', '60s 局必须正常结束')
+}
+console.log('✓ Phase B / Test G: 60s blitz resolves at least two forks')
+
+// Test H — reset / 新局：路线状态归零，同 seed 可重新复现。
+{
+  const first = simulateRunner(2026, 'blitz', policyLaneAware(), 60)
+  assert.ok(first.sim.currentRouteId, '跑完后应已锁定一条路线')
+  first.sim.reset(2026, 'blitz')
+  assert.equal(first.sim.currentRouteId, null, 'reset 后 currentRouteId 必须归零')
+  assert.equal(first.sim.nextForkIndex, 0, 'reset 后岔口游标必须归零')
+  assert.equal(first.sim.routeLog.length, 0, 'reset 后路线日志必须清空')
+  assert.equal(first.sim._resolvedForkIds.size, 0, 'reset 后已解析岔口集合必须清空')
+  assert.ok(
+    first.sim.entities.every((e) => e.kind !== 'fork'),
+    'reset 后场上不得残留岔口实体'
+  )
+  const second = simulateRunner(2026, 'blitz', policyLaneAware(), 60)
+  assert.deepEqual(second.forkLog, first.forkLog, '同 seed 重新开局必须复现同一条路线历史')
+}
+console.log('✓ Phase B / Test H: reset zeroes route state and same seed reproduces the same route history')
 
 // Defeat must stop the engine and emit one result; restart clears the pause lock.
 engine.resetGameplaySession(9, 'marathon')

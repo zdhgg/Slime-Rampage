@@ -4,6 +4,7 @@ import {
   RUNNER_DURATION,
   RUNNER_PLAYER_DEPTH,
   RUNNER_RAPID_DURATION,
+  getRunnerRouteByLane,
 } from './RunnerRules.js'
 
 const TAU = Math.PI * 2
@@ -84,6 +85,7 @@ export class RunnerRenderer {
     this._drawFinishLine(ctx)
     this._drawEnemyThreats(ctx)
     this._drawEntities(ctx)
+    this._drawForkSigns(ctx)
     this._drawBullets(ctx)
     this._drawWorldEffects(ctx)
     this._drawFusionWave(ctx)
@@ -372,6 +374,54 @@ export class RunnerRenderer {
     for (let i = 0; i < 12; i++) {
       ctx.fillStyle = i % 2 === 0 ? 'rgba(224, 238, 242, 0.88)' : 'rgba(51, 81, 96, 0.9)'
       ctx.fillRect(left + i * tileW, y - tileH / 2, tileW + 1, tileH)
+    }
+  }
+
+  /**
+   * 岔口路线牌：三条车道各一块，绑定固定的 lane -> route 映射。
+   * 目标车道高亮，解析后由玩法层移除整行，因此本方法只负责可读性，不参与判定。
+   */
+  _drawForkSigns(ctx) {
+    const gameplay = this.gameplay
+    for (const entity of gameplay.entities) {
+      if (!entity.active || entity.kind !== 'fork') continue
+      const route = getRunnerRouteByLane(entity.lane)
+      const point = this.project(entity.lane, entity.depth)
+      const size = this.baseUnit * point.scale
+      const selected = entity.lane === gameplay.targetLane
+      const faded = clamp(0.4 + point.scale * 0.55, 0, 1)
+
+      ctx.save()
+      ctx.translate(point.x, point.y)
+
+      // 立杆
+      ctx.strokeStyle = `rgba(16, 24, 32, ${0.85 * faded})`
+      ctx.lineWidth = Math.max(2, size * 0.08)
+      ctx.beginPath()
+      ctx.moveTo(0, size * 0.55)
+      ctx.lineTo(0, -size * 0.86)
+      ctx.stroke()
+
+      // 牌面
+      const w = size * (selected ? 1.3 : 1.05)
+      const h = size * 0.44
+      const top = -size * 1.16
+      ctx.fillStyle = `rgba(8, 14, 20, ${0.84 * faded})`
+      ctx.fillRect(-w / 2, top, w, h)
+      ctx.strokeStyle = route.color
+      ctx.lineWidth = selected ? 3.5 : 2
+      ctx.strokeRect(-w / 2, top, w, h)
+      if (selected) {
+        ctx.fillStyle = route.color
+        ctx.fillRect(-w / 2, top, w, Math.max(2, size * 0.07))
+      }
+
+      ctx.fillStyle = selected ? '#f4fcff' : `rgba(226, 238, 244, ${0.84 * faded})`
+      ctx.font = `800 ${Math.max(9, Math.min(15, size * 0.24))}px "Segoe UI", "PingFang SC", sans-serif`
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(route.label, 0, top + h / 2)
+      ctx.restore()
     }
   }
 

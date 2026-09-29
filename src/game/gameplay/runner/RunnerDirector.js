@@ -3,11 +3,37 @@ import {
   RUNNER_ENTITY_TYPES,
   RUNNER_MAX_ENTITIES,
   RUNNER_MUTATION_ARM_DEPTH,
+  RUNNER_ROUTE_IDS,
+  RUNNER_ROUTES,
   RUNNER_SECONDARY_ELEMENTS,
   RUNNER_WEAPON_CORES,
   createRunnerSeed,
+  getRunnerRoute,
   getRunnerSection,
 } from './RunnerRules.js'
+
+/** 判定编队属于哪一类倾向：强化门 / 精英与障碍。 */
+function classifyPatternEntity(typeId) {
+  const config = RUNNER_ENTITY_TYPES[typeId]
+  if (!config) return { gate: false, danger: false }
+  return {
+    gate: config.kind === 'gate',
+    danger: !!config.elite || config.kind === 'hazard' || config.kind === 'obstacle',
+  }
+}
+
+/**
+ * 路线偏好只对既有 section.patterns 做编队池筛选，不额外消费 RNG：
+ * 未选路线（routeId 为 null）时返回原池，draw 次数与 Phase B 前完全一致。
+ */
+function selectRoutePatternPool(patterns, route) {
+  const kind = route?.preferPatternKind
+  if (!kind) return patterns
+  const preferred = patterns.filter((pattern) =>
+    pattern.some((typeId) => typeId && classifyPatternEntity(typeId)[kind])
+  )
+  return preferred.length ? preferred : patterns
+}
 
 export class RunnerDirector {
   constructor(seed) {
@@ -37,12 +63,20 @@ export class RunnerDirector {
     return result
   }
 
-  createEncounter(elapsed, activeCount = 0, submodeId = 'marathon') {
+  /**
+   * 生成一次遭遇行。
+   * routeId 为 null 时与 Phase B 前逐字一致（同一 draw 次数 + 同一编队池）；
+   * 选中路线后按路线 modifier 缩放血量并筛选编队池，从而真实改变后续遭遇。
+   */
+  createEncounter(elapsed, activeCount = 0, submodeId = 'marathon', routeId = null) {
     if (activeCount >= RUNNER_MAX_ENTITIES) return []
     const section = getRunnerSection(elapsed, submodeId)
-    const source = section.patterns[Math.floor(this.random() * section.patterns.length)]
+    const route = getRunnerRoute(routeId)
+    const pool = selectRoutePatternPool(section.patterns, route)
+    const source = pool[Math.floor(this.random() * pool.length)]
     const pattern = this._shuffle(source)
     const rowId = this._nextRowId++
+    const hpScale = section.hpMultiplier * (route?.hpMultiplier || 1)
     const entities = []
 
     for (let lane = 0; lane < pattern.length; lane++) {
@@ -52,7 +86,7 @@ export class RunnerDirector {
       const count = Math.min(config.packCount || 1, RUNNER_MAX_ENTITIES - activeCount - entities.length)
       for (let member = 0; member < count; member++) {
         const depth = RUNNER_ENTITY_SPAWN_DEPTH + member * (config.packSpacing || 0)
-        const maxHp = Math.max(1, Math.ceil(config.hp * section.hpMultiplier))
+        const maxHp = Math.max(1, Math.ceil(config.hp * hpScale))
         entities.push({
           id: this._nextEntityId++,
           rowId,
@@ -97,6 +131,45 @@ export class RunnerDirector {
       }
     }
     return entities
+  }
+
+  /**
+   * 生成一次岔口：三条车道各一块路线牌，lane -> route 为固定映射，永不随机重排。
+   * 本方法完全不调用 random()——这是「第一次岔口之前 encounter 随机序列
+   * 不被无意义扰动」的前提；只有 rowId / entityId 计数器会前进。
+   */
+  createForkRow(forkId, elapsed, submodeId = 'marathon') {
+    const section = getRunnerSection(elapsed, submodeId)
+    const rowId = this._nextRowId++
+    return RUNNER_ROUTE_IDS.map((routeId, lane) => {
+      const route = RUNNER_ROUTES[routeId]
+      return {
+        id: this._nextEntityId++,
+        rowId,
+        forkId,
+        lane,
+        type: `fork-${routeId}`,
+        kind: 'fork',
+        routeId,
+        name: route.label,
+        shortName: route.shortLabel,
+        color: route.color,
+        depth: RUNNER_ENTITY_SPAWN_DEPTH,
+        previousDepth: RUNNER_ENTITY_SPAWN_DEPTH,
+        speed: section.advanceSpeed,
+        baseSpeed: section.advanceSpeed,
+        // 路线牌不可被子弹命中、不参与碰撞、不计分
+        hp: 0,
+        maxHp: 0,
+        damage: 0,
+        score: 0,
+        reward: null,
+        behavior: null,
+        elite: false,
+        hitFlash: 0,
+        active: true,
+      }
+    })
   }
 
   createWeaponChoice() {
