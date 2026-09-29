@@ -273,6 +273,10 @@ export const RUNNER_FUSION_WEAPONS = {
     description: '腐蚀叠满 3 层时触发过载电击引发大硬直与额外爆发',
     shockThreshold: 3,
     shockDamage: 2.5,
+    // Phase D0 补：文案承诺「大硬直」却没有时长字段，效果无处落地。
+    // 取值与已上线的 burst_frost.freezeDuration 同为 1.2s——「硬直」在本作里
+    // 就是完全停住，这是唯一一个已经过真实对局验证的停顿时长，不另造数值。
+    shockDuration: 1.2,
   },
   'corrosion:flame': {
     id: 'corrosion_flame',
@@ -293,6 +297,9 @@ export const RUNNER_FUSION_WEAPONS = {
     description: '被减速的腐蚀目标受到所有子弹伤害额外提升 40%',
     vulnerabilityBonus: 0.4,
     slowRatio: 0.45,
+    // Phase D0 补：本组合自带减速却没有时长字段，增伤条件因此永远无法判断。
+    // 取值与 pierce_frost.slowDuration 一致（3.0s），同样是复用既有已上线数值。
+    slowDuration: 3.0,
   },
 }
 

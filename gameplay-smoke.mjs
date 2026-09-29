@@ -543,9 +543,14 @@ assert.equal(runner.fusionWeapon?.name, '地狱火核弹')
 runner.weaponCore = 'corrosion'
 runner.secondaryElement = 'frost'
 assert.equal(runner.fusionWeapon?.id, 'corrosion_frost')
-shieldProbe.frostTimer = 3.0
+// 减速状态必须由真实腐蚀命中产生。旧写法是 shieldProbe.frostTimer = 3.0 ——
+// 游戏从头到尾不会给任何实体赋 frostTimer，测试自己捏出前置条件，
+// 于是「脆化霜蚀增伤」在真实对局里一次都没触发过，而这条断言一直是绿的。
+const chillHit = runner._hitEntity(shieldProbe).damage
+assert.ok((shieldProbe.slowTimer || 0) > 0, '脆化霜蚀的减速必须由真实腐蚀命中挂上')
 const brittleHit = runner._hitEntity(shieldProbe).damage
-assert.ok(brittleHit > corrosionHit1, '脆化霜蚀对冰冻减速目标有增伤')
+assert.ok(brittleHit > chillHit, '脆化霜蚀对被减速目标有增伤')
+assert.ok(brittleHit > corrosionHit1, '脆化霜蚀对被减速目标有增伤')
 
 // Tactical pickups and interactive objects
 runner._activateMagnet()

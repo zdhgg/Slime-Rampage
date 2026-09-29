@@ -54,6 +54,7 @@ import {
   runnerDistanceRemaining,
   runnerProgress,
 } from './runner/RunnerRules.js'
+import { findRunnerEffect, planRunnerEffects } from './runner/RunnerEffects.js'
 
 const HIT_RING_LIFE = 0.22
 const COMBO_WINDOW = 1.8
@@ -813,6 +814,150 @@ export class RunnerGameplay extends GameplayController {
     return this.weaponDefinition?.levels[Math.max(0, this.weaponLevel - 1)] || null
   }
 
+  /**
+   * 冻结与减速的计时器，按世界推进时间递减（与地火 duration 同口径：
+   * 子弹时间下世界被拉长，同一份「1.2 秒」自然换来更多真实操作时间）。
+   * 两者都必须在到期时归零并恢复速度，否则就是永久状态——这正是 burst_frost 曾经的 bug。
+   */
+  _tickEntityStatus(entity, dt) {
+    if (entity.freezeTimer > 0) entity.freezeTimer = Math.max(0, entity.freezeTimer - dt)
+    if (entity.slowTimer > 0) {
+      entity.slowTimer = Math.max(0, entity.slowTimer - dt)
+      if (entity.slowTimer === 0) entity.slowRatio = 0
+    }
+  }
+
+  /**
+   * 实体当前实际推进速度：冻结完全停止，减速按比例削减。
+   * 刻意不改写 entity.speed——archer/mage 的攻击状态机与 charger 的冲锋
+   * 都会自行改写 speed，在这里乘算才不会和它们打架。
+   */
+  _effectiveSpeed(entity) {
+    if (entity.freezeTimer > 0) return 0
+    if (entity.slowTimer > 0) return entity.speed * (1 - (entity.slowRatio || 0))
+    return entity.speed
+  }
+
+  _applyFreeze(entity, duration) {
+    if (!duration) return
+    entity.freezeTimer = Math.max(entity.freezeTimer || 0, duration)
+  }
+
+  _applySlow(entity, effect) {
+    if (!effect.duration) return
+    entity.slowTimer = Math.max(entity.slowTimer || 0, effect.duration)
+    entity.slowRatio = Math.max(entity.slowRatio || 0, effect.ratio)
+  }
+
+  /** 在车道上留下一块（或续命）地火，cap 与到期销毁仍由 _pushGroundFire / _updateGroundFires 负责。 */
+  _mergeGroundFire(lane, depth, effect) {
+    const existing = this.groundFires.find((f) => f.lane === lane && Math.abs(f.depth - depth) < 0.08)
+    if (existing) {
+      existing.duration = Math.max(existing.duration, effect.duration)
+      return
+    }
+    this._pushGroundFire(lane, depth, effect.duration, effect.damage)
+  }
+
+  /**
+   * 一次命中的融合结算：减速、过载电击。
+   * 增伤（vulnerability）不进这里——它要在算伤害之前生效，由 _calculateDamage 读取。
+   */
+  _applyFusionOnHit(target) {
+    for (const effect of planRunnerEffects(this.fusionWeapon, 'onHit')) {
+      if (effect.kind === 'slow') this._applySlow(target, effect)
+      else if (effect.kind === 'corrosionShock' && (target.corrosionStacks || 0) >= effect.threshold) {
+        this._triggerCorrosionShock(target, effect)
+      }
+    }
+  }
+
+  /**
+   * 腐蚀叠满阈值：清空叠层、造成硬直，并按 shockDamage 追加一次过载伤害。
+   * 叠层清零后不会立刻再次触发（1 < threshold），因此不会递归爆栈。
+   */
+  _triggerCorrosionShock(target, effect) {
+    target.corrosionStacks = 0
+    this._applyFreeze(target, effect.duration)
+    this.rings.push({ lane: target.lane, depth: target.depth, life: 0.3, maxLife: 0.3, color: '#c0ff73', radiusScale: 2.4 })
+    this._hitEntity(
+      target,
+      // discharge：过载放电本身不是一次新的腐蚀命中，不能顺手再叠一层，
+      // 否则「叠满即清空」会立刻被自己重新填回 1 层。
+      { core: this.weaponCore, coreLevel: this.weaponLevel, damageMultiplier: effect.damage, discharge: true },
+      { silent: true, splash: true, skipFusionOnHit: true }
+    )
+  }
+
+  /**
+   * 贯穿后的融合结算：折射雷弧、熔岩火海、减速、破甲。
+   * 目标按固定顺序挑选（车道 → 深度 → id），不使用任何随机。
+   */
+  _applyFusionOnPierce(target) {
+    for (const effect of planRunnerEffects(this.fusionWeapon, 'onPierce')) {
+      if (effect.kind === 'adjacentArc') this._arcToAdjacentLanes(target, effect)
+      else if (effect.kind === 'groundFire') this._mergeGroundFire(target.lane, target.depth, effect)
+      else if (effect.kind === 'slow') this._applySlow(target, effect)
+      else if (effect.kind === 'armorBreak') target.armor = Math.max(0, (target.armor || 0) * (1 - effect.amount))
+    }
+  }
+
+  /** 相邻车道各取最近的合法目标结算雷弧，不重复命中主目标。 */
+  _arcToAdjacentLanes(primary, effect) {
+    const lanes = [primary.lane - 1, primary.lane + 1].filter((lane) => lane >= 0 && lane < 3)
+    for (const lane of lanes) {
+      const target = this._nearestTargetInLane(lane, primary.depth, 0.14, primary.id)
+      if (!target) continue
+      this.rings.push({ lane, depth: target.depth, life: 0.2, maxLife: 0.2, color: '#7be8ff' })
+      this._hitEntity(target, { core: this.weaponCore, coreLevel: this.weaponLevel, damageMultiplier: effect.damageRatio }, { silent: true, splash: true })
+    }
+  }
+
+  /**
+   * 爆裂迸发的自动锁敌火花：从同车道与相邻车道里按固定顺序取前 count 个目标。
+   * 「自动锁敌」解释为「自动获取目标」而不是新增追踪弹体——后者是 Phase E 的表现层。
+   */
+  _sparksToNearbyTargets(primary, effect) {
+    const lanes = [primary.lane, primary.lane - 1, primary.lane + 1].filter((lane) => lane >= 0 && lane < 3)
+    const candidates = []
+    for (const lane of lanes) {
+      for (const entity of this.entities) {
+        if (!entity.active || entity.hp <= 0 || entity.id === primary.id) continue
+        if (entity.lane !== lane || entity.kind === 'mutation' || entity.kind === 'secondary_mutation') continue
+        if (Math.abs(entity.depth - primary.depth) > 0.16) continue
+        candidates.push(entity)
+      }
+    }
+    candidates.sort((a, b) => a.lane - b.lane || b.depth - a.depth || a.id - b.id)
+    for (const entity of candidates.slice(0, effect.count)) {
+      this.rings.push({ lane: entity.lane, depth: entity.depth, life: 0.2, maxLife: 0.2, color: '#ffd859' })
+      this._hitEntity(entity, { core: this.weaponCore, coreLevel: this.weaponLevel, damageMultiplier: effect.damage }, { silent: true, splash: true })
+    }
+  }
+
+  /** 指定车道里离玩家最近（depth 最大）的合法伤害目标；没有则返回 null。 */
+  _nearestTargetInLane(lane, depth, tolerance, excludeId) {
+    let best = null
+    for (const entity of this.entities) {
+      if (!entity.active || entity.hp <= 0 || entity.id === excludeId) continue
+      if (entity.kind === 'mutation' || entity.kind === 'secondary_mutation') continue
+      if (entity.lane !== lane || Math.abs(entity.depth - depth) > tolerance) continue
+      if (!best || entity.depth > best.depth) best = entity
+    }
+    return best
+  }
+
+  /** 被腐蚀目标阵亡时的殉爆，范围与伤害取自 Rules。 */
+  _deathBlast(dead, effect) {
+    this.rings.push({ lane: dead.lane, depth: dead.depth, life: 0.3, maxLife: 0.3, color: '#ff9a42', radiusScale: 2.2 })
+    const targets = this.entities.filter(
+      (other) => other.active && other.hp > 0 && other.lane === dead.lane && Math.abs(other.depth - dead.depth) <= effect.radius
+    )
+    for (const target of targets) {
+      this._hitEntity(target, { core: this.weaponCore, coreLevel: this.weaponLevel, damageMultiplier: effect.damage }, { silent: true, splash: true })
+    }
+  }
+
   _updateEntities(dt) {
     for (let i = this.entities.length - 1; i >= 0; i--) {
       const entity = this.entities[i]
@@ -820,12 +965,13 @@ export class RunnerGameplay extends GameplayController {
         this.entities.splice(i, 1)
         continue
       }
+      this._tickEntityStatus(entity, dt)
       entity.previousDepth = entity.depth
       if (entity.behavior === 'charge') this._updateCharger(entity, dt)
       else if (entity.behavior === 'archer' || entity.behavior === 'mage') {
         this._updateRangedEnemy(entity, dt)
       }
-      else entity.depth += entity.speed * dt
+      else entity.depth += this._effectiveSpeed(entity) * dt
       entity.hitFlash = Math.max(0, entity.hitFlash - dt)
 
       // 路线牌：到达解析深度时锁定路线，随后整行移除。
@@ -872,7 +1018,7 @@ export class RunnerGameplay extends GameplayController {
       }
       return
     }
-    entity.depth += entity.speed * dt
+    entity.depth += this._effectiveSpeed(entity) * dt
   }
 
   _updateRangedEnemy(entity, dt) {
@@ -904,7 +1050,7 @@ export class RunnerGameplay extends GameplayController {
       return
     }
 
-    entity.depth += entity.speed * dt
+    entity.depth += this._effectiveSpeed(entity) * dt
   }
 
   _spawnEnemyArrow(entity) {
@@ -1068,6 +1214,8 @@ export class RunnerGameplay extends GameplayController {
           // 保留在刚穿过目标的位置，下一帧继续检查本帧跨过的后续目标。
           bullet.depth = target.depth - 0.003
           this.weaponStats.pierced += 1
+          // 贯穿类融合效果在此结算：折射雷弧 / 熔岩火海 / 减速 / 破甲。
+          this._applyFusionOnPierce(target)
         } else {
           this.bullets.splice(i, 1)
         }
@@ -1123,7 +1271,14 @@ export class RunnerGameplay extends GameplayController {
       this._damageStyleFor(entity, source, options),
       entity.corrosionStacks || 0
     )
-    if (entity.hp > 0) return { killed: false, damage }
+    if (entity.hp > 0) {
+      if (!options.skipFusionOnHit) this._applyFusionOnHit(entity)
+      // 融合效果（过载电击）可能把目标打死：若它还没被结算过就补一次，
+      // 已经由效果本身结算过（active=false）则绝不能重复计入击杀。
+      if (entity.hp > 0 || !entity.active) return { killed: false, damage }
+      this._defeatEntity(entity)
+      return { killed: true, damage }
+    }
 
     this._defeatEntity(entity)
     return { killed: true, damage }
@@ -1207,7 +1362,7 @@ export class RunnerGameplay extends GameplayController {
     const config = core?.levels[level - 1]
     let damage = this.attackDamage * (source?.damageMultiplier || 1)
 
-    if (coreId === 'corrosion' && entity.kind !== 'gate' && entity.kind !== 'mutation' && entity.kind !== 'secondary_mutation') {
+    if (coreId === 'corrosion' && !source?.discharge && entity.kind !== 'gate' && entity.kind !== 'mutation' && entity.kind !== 'secondary_mutation') {
       const stacks = entity.corrosionStacks || 0
       damage *= 1 + stacks * config.stackBonus
       entity.corrosionStacks = Math.min(config.maxStacks, stacks + 1)
@@ -1215,8 +1370,13 @@ export class RunnerGameplay extends GameplayController {
       if (entity.kind === 'hazard' || entity.kind === 'obstacle') damage *= config.barrierDamage
     }
 
-    if (this.fusionWeapon?.id === 'corrosion_frost' && (entity.frostTimer > 0 || entity.freezeTimer > 0)) {
-      damage *= 1.4
+    // 脆化霜蚀：被本组合减速到的目标吃到额外增伤。
+    // 判据是「目标当前处于减速状态」，而不是某个只有别的组合才会写的计时器——
+    // 旧实现读 frostTimer（游戏从不赋值）/ freezeTimer（只有 burst_frost 会写），
+    // 而一局同时只可能有一个融合，因此该条件恒为假，增伤从未生效过。
+    const vulnerability = findRunnerEffect(planRunnerEffects(this.fusionWeapon, 'onHit'), 'vulnerability')
+    if (vulnerability && (entity.slowTimer || 0) > 0) {
+      damage *= 1 + vulnerability.bonus
     }
 
     if (entity.armor > 0) {
@@ -1249,7 +1409,14 @@ export class RunnerGameplay extends GameplayController {
     const core = getRunnerWeaponCore('burst')
     const config = core.levels[clamp(bullet.coreLevel, 1, 3) - 1]
     const fusion = this.fusionWeapon
-    const radiusMultiplier = fusion?.id === 'burst_flame' ? 1.5 : (fusion?.id === 'burst_frost' ? 1.25 : 1)
+    // 爆裂类融合效果一次性规划：半径放大、冻结、焦土、锁敌火花。
+    // 具体效果由 Rules 的数据字段决定，这里不再出现任何组合 id。
+    const effects = planRunnerEffects(fusion, 'onExplosion')
+    const blast = findRunnerEffect(effects, 'blastRadius')
+    const freeze = findRunnerEffect(effects, 'freeze')
+    const groundFire = findRunnerEffect(effects, 'groundFire')
+    const sparks = findRunnerEffect(effects, 'sparks')
+    const radiusMultiplier = blast ? blast.multiplier : 1
     const radius = config.radius * radiusMultiplier
     this.weaponStats.explosions += 1
     this.rings.push({
@@ -1261,29 +1428,7 @@ export class RunnerGameplay extends GameplayController {
       radiusScale: 2.7 * radiusMultiplier,
     })
 
-    if (fusion?.id === 'burst_flame') {
-      const existing = this.groundFires.find(
-        (f) => f.lane === primary.lane && Math.abs(f.depth - primary.depth) < 0.08
-      )
-      if (existing) {
-        existing.duration = Math.max(existing.duration, 3.0)
-      } else {
-        this._pushGroundFire(primary.lane, primary.depth, 3.0, 1.0)
-      }
-    }
-
-    if (fusion?.id === 'burst_lightning') {
-      const adjLanes = [primary.lane - 1, primary.lane + 1].filter((l) => l >= 0 && l < 3)
-      for (const adjLane of adjLanes) {
-        for (const target of this.entities) {
-          if (target.active && target.hp > 0 && target.lane === adjLane && Math.abs(target.depth - primary.depth) <= 0.12) {
-            this._hitEntity(target, { core: 'burst', damageMultiplier: 0.75 }, { silent: true, splash: true })
-            this.rings.push({ lane: adjLane, depth: target.depth, life: 0.2, maxLife: 0.2, color: '#ffd859' })
-            break
-          }
-        }
-      }
-    }
+    if (groundFire) this._mergeGroundFire(primary.lane, primary.depth, groundFire)
 
     const targets = this.entities.filter(
       (entity) =>
@@ -1299,16 +1444,14 @@ export class RunnerGameplay extends GameplayController {
         Math.abs(entity.depth - primary.depth) <= radius
     )
     for (const entity of targets) {
-      if (fusion?.id === 'burst_frost') {
-        entity.freezeTimer = 1.2
-        entity.speed = 0
-      }
+      if (freeze) this._applyFreeze(entity, freeze.duration)
       this._hitEntity(
         entity,
         { core: 'burst', coreLevel: bullet.coreLevel, damageMultiplier: config.damage },
         { silent: true, splash: true }
       )
     }
+    if (sparks) this._sparksToNearbyTargets(primary, sparks)
     const arrows = this.enemyProjectiles.filter(
       (projectile) =>
         projectile.active &&
@@ -1358,22 +1501,11 @@ export class RunnerGameplay extends GameplayController {
       return
     }
 
-    if (entity.corrosionStacks > 0 && this.secondaryElement === 'flame') {
-      this.rings.push({
-        lane: entity.lane,
-        depth: entity.depth,
-        life: 0.3,
-        maxLife: 0.3,
-        color: '#ff9a42',
-        radiusScale: 2.2,
-      })
-      const splashTargets = this.entities.filter(
-        (other) => other.active && other.hp > 0 && other.lane === entity.lane && Math.abs(other.depth - entity.depth) <= 0.09
-      )
-      for (const splash of splashTargets) {
-        this._hitEntity(splash, { core: 'corrosion', damageMultiplier: 2.2 }, { silent: true, splash: true })
-      }
-    }
+    // 酸焰殉爆：只有真正带着腐蚀叠层的目标阵亡才触发，范围与伤害取自 Rules。
+    // 旧实现判的是 secondaryElement === 'flame'——那是元素判断而不是融合判断，
+    // 任何带火焰元素的击杀都会误触发，只是恰好被「叠层只由腐蚀写入」掩盖了。
+    const deathBlast = findRunnerEffect(planRunnerEffects(this.fusionWeapon, 'onKill'), 'deathBlast')
+    if (deathBlast && (entity.corrosionStacks || 0) > 0) this._deathBlast(entity, deathBlast)
 
     this.kills += 1
     this.combo += 1
