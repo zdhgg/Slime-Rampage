@@ -1001,6 +1001,21 @@ export class RunnerGameplay extends GameplayController {
     }
   }
 
+  /**
+   * 爆裂主目标是否可以被状态效果作用（D1.2 正式合同）。
+   *
+   * 主目标是「敌人投射物」时（子弹打掉了飞行道具也会引爆）它根本不是实体，
+   * 不该被挂状态；已死亡的实体不挂无意义状态；选择门是玩家界面不是敌人；
+   * lane / depth 校验只是把既有爆炸空间规则照抄一遍，不构成任何扩张。
+   */
+  _canTakeBlastStatus(primary, radius) {
+    if (!primary || primary.kind === 'arrow') return false
+    if (!primary.active || primary.hp <= 0) return false
+    if (this._isChoiceGate(primary)) return false
+    if (primary.lane === undefined || primary.depth === undefined) return false
+    return true
+  }
+
   /** 指定车道里离玩家最近（depth 最大）的合法伤害目标；没有则返回 null。 */
   _nearestTargetInLane(lane, depth, tolerance, excludeId) {
     let best = null
@@ -1374,7 +1389,21 @@ export class RunnerGameplay extends GameplayController {
         if (targetIsProjectile) this._hitEnemyProjectile(target, bullet)
         else result = this._hitEntity(target, bullet)
         if (bullet.explosive) this._explodeAt(target, bullet)
-        if (canPierce) {
+        // D1.1：击破与贯穿是同一颗弹体在同一帧里的两种互斥命运，任何一帧只会命中其一。
+        //
+        // 旧实现把回弹挂在贯穿分支的 else 上，也就是「只有 remainingHits 归零后的一次
+        // 击破才回弹」。对 burst/corrosion 这没问题（canPierce 恒为 false），但 pierce 的
+        // remainingHits 随武器等级升到 2~3，于是它在整个 module 生命周期里几乎不再归零：
+        // 实测 270 局真实对局 0 次回弹，pierce × ricochet 是一个死 module。
+        //
+        // Rules 文案写的是「击破目标后弹体转向下一个目标继续飞行」，触发条件是击破本身，
+        // 不是「贯穿耗尽」。因此这里把击破提为回弹触发点，并给出单一转换规则：
+        //   击破且还有回弹次数 -> 转向（不再沿原车道继续贯穿）
+        //   击破但回弹次数用尽 -> 照常贯穿
+        //   没有击破           -> 照常贯穿
+        // 转向成功时不消耗 remainingHits，回弹成功本身已经是一次命中，弹体不会因此多活。
+        const ricocheted = !!result?.killed && this._tryRicochet(bullet, target)
+        if (canPierce && !ricocheted) {
           bullet.remainingHits -= 1
           bullet.damageMultiplier *= bullet.pierceDecay
           // 保留在刚穿过目标的位置，下一帧继续检查本帧跨过的后续目标。
@@ -1382,9 +1411,7 @@ export class RunnerGameplay extends GameplayController {
           this.weaponStats.pierced += 1
           // 贯穿类融合效果在此结算：折射雷弧 / 熔岩火海 / 减速 / 破甲。
           this._applyFusionOnPierce(target)
-        } else if (result?.killed && this._tryRicochet(bullet, target)) {
-          // 回弹：弹体留在场上继续飞行，不消耗本帧的弹体槽位
-        } else {
+        } else if (!ricocheted) {
           this.bullets.splice(i, 1)
         }
       } else if (bullet.depth <= 0) {
@@ -1613,7 +1640,9 @@ export class RunnerGameplay extends GameplayController {
 
     if (groundFire) this._mergeGroundFire(primary.lane, primary.depth, groundFire)
 
-    const targets = this.entities.filter(
+    // 伤害目标集：主目标已经吃过子弹的直接伤害，AoE 伤害必须继续排除它，
+    // 否则同一发会结算两次伤害。`entity.id !== primary.id` 就是这条去重规则。
+    const damageTargets = this.entities.filter(
       (entity) =>
         entity.active &&
         // 范围伤害只打还有血的实体：路线牌 hp 为 0（不可射击/不碰撞），
@@ -1625,8 +1654,23 @@ export class RunnerGameplay extends GameplayController {
         !this._isChoiceGate(entity) &&
         Math.abs(entity.depth - primary.depth) <= radius
     )
-    for (const entity of targets) {
+
+    // 状态目标集（D1.2 正式合同）：主目标如果在直接伤害结算后仍然存活，
+    // 同样被冻住。**伤害目标集与状态目标集不是同一件事**——排除主目标是为了
+    // 不重复结算伤害，不是为了不让它吃到状态效果。
+    //
+    // 边界全部来自合同，不做任何扩张：不跨车道、不改 radius、不改 freezeDuration、
+    // 主目标已死不挂状态、选择门不是合法目标。而且只对 freeze 生效——
+    // sparks / groundFire / 其它元素的爆炸语义一律不动。
+    let statusTargets = damageTargets
+    if (freeze && this._canTakeBlastStatus(primary, radius)) {
+      statusTargets = damageTargets.includes(primary) ? damageTargets : [...damageTargets, primary]
+    }
+
+    for (const entity of statusTargets) {
       if (freeze) this._applyFreeze(entity, freeze.duration)
+    }
+    for (const entity of damageTargets) {
       this._hitEntity(
         entity,
         { core: 'burst', coreLevel: bullet.coreLevel, damageMultiplier: config.damage },

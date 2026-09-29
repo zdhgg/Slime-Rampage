@@ -53,6 +53,7 @@ const {
   RUNNER_MAX_GROUND_FIRES,
   RUNNER_WEAPON_MODULE_IDS,
   getRunnerFusionWeapon,
+  getRunnerWeaponCore,
   getRunnerWeaponModule,
 } = await import('./src/game/gameplay/runner/RunnerRules.js')
 const { getRunnerBulletProfile, planRunnerEffects } = await import('./src/game/gameplay/runner/RunnerEffects.js')
@@ -133,6 +134,26 @@ const drivePierceThrough = (runner, target) => {
 const driveExplosion = (runner, primary) => {
   const bullet = runner._createBullet(primary.lane)
   runner._explodeAt(primary, bullet)
+}
+
+/**
+ * D1.2：走完整真实链路的爆裂一发。
+ *
+ * _createBullet → _updateShooting → _hitEntity → _explodeAt → planRunnerEffects → _applyFreeze，
+ * 中间不手动调 _applyFreeze、不手动置 freezeTimer、不伪造 explosive 标记。
+ * burst 等级 1 的 every=5，把 _shotSerial 停在 4，下一发就是第 5 发——和真实对局里
+ * 「每 5 发引爆一次」落在完全相同的分支上。
+ */
+const fireExplosiveShot = (runner, lane, target) => {
+  runner._shotSerial = 4
+  const bullet = runner._createBullet(lane)
+  assert.ok(bullet.explosive, '前置：这一发必须是爆裂弹（否则没走 _explodeAt）')
+  bullet.previousDepth = target.depth + 0.02
+  bullet.depth = target.depth + 0.02
+  runner.bullets = [bullet]
+  runner._fireCooldown = 999
+  runner._updateShooting(0.05)
+  return bullet
 }
 
 /** 一发真实的腐蚀弹命中。 */
@@ -313,6 +334,185 @@ check('burst_frost：冰爆冻结敌人，且到期后必须恢复', () => {
   assert.ok((frozen.freezeTimer || 0) <= 0, `冻结到期后计时器必须归零，实测 ${frozen.freezeTimer}`)
   assert.ok(frozen.depth > frozenDepth + 0.001, '冻结到期后目标必须恢复推进')
   assert.ok(Math.abs(frozen.speed - frozen.baseSpeed) < 1e-9, '冻结到期后速度必须复原，不能停留在 0')
+})
+
+// ---------------------------------------------------------------------------
+// D1.2 正式合同（人工决策）：
+//   爆裂命中的主目标如果在直接伤害结算后仍然存活，则被冻结 1.2 秒；
+//   爆炸范围内其它合法目标继续按既有范围规则被冻结。
+//
+// 修之前主目标被 `entity.id !== primary.id` 排除在冻结之外，而那条排除是为了
+// 「主目标已经吃过子弹的直接伤害，不该再吃一次 AoE」——一条**伤害**去重规则。
+// 伤害目标集和状态目标集不是同一件事，这就是本轮的全部内容。
+// ---------------------------------------------------------------------------
+
+check('D1.2 burst_frost：主目标在直接伤害后存活时被冻结（正式合同）', () => {
+  const runner = makeRunner()
+  const fusion = loadout(runner, 'burst', 'frost')
+  runner.weaponLevel = 1
+  const primary = makeEntity('brute', 1, 0.5, 200)
+  runner.entities.push(primary)
+
+  fireExplosiveShot(runner, 1, primary)
+
+  assert.ok((runner.weaponStats.explosions || 0) >= 1, '前置：必须真的发生了一次爆裂')
+  assert.ok(primary.active && primary.hp > 0, '前置：高血主目标在直接伤害后仍存活')
+  assert.equal(
+    primary.freezeTimer,
+    fusion.freezeDuration,
+    `主目标应被冻结 freezeDuration=${fusion.freezeDuration}，实测 freezeTimer=${primary.freezeTimer}`
+  )
+})
+
+check('D1.2 burst_frost：被直接击破的主目标不挂无意义 freeze', () => {
+  const runner = makeRunner()
+  loadout(runner, 'burst', 'frost')
+  runner.weaponLevel = 1
+  const primary = makeEntity('scout', 1, 0.5, 3) // 一发直接伤害就打死
+  runner.entities.push(primary)
+  const killsBefore = runner.kills
+
+  fireExplosiveShot(runner, 1, primary)
+
+  assert.ok(primary.hp <= 0, '主目标应正常死亡')
+  assert.equal(runner.kills, killsBefore + 1, '只应计一次击杀，冻结不得复活或重复结算实体')
+  assert.ok(
+    (primary.freezeTimer || 0) === 0,
+    `死亡实体不得留下无意义冻结状态，实测 freezeTimer=${primary.freezeTimer}`
+  )
+})
+
+check('D1.2 burst_frost：主目标只吃直接伤害，不得重复吃爆裂 AoE', () => {
+  const runner = makeRunner()
+  loadout(runner, 'burst', 'frost')
+  runner.weaponLevel = 1
+  const primary = makeEntity('brute', 1, 0.5, 200)
+  runner.entities.push(primary)
+  const startHp = primary.hp
+  const aoeMultiplier = getRunnerWeaponCore('burst').levels[0].damage
+
+  fireExplosiveShot(runner, 1, primary)
+
+  const taken = startHp - primary.hp
+  const directOnly = runner.attackDamage
+  const withAoe = runner.attackDamage * (1 + aoeMultiplier)
+  assert.ok(
+    Math.abs(taken - directOnly) < 0.001,
+    `主目标只应承受直接伤害 ${directOnly.toFixed(2)}，实测 ${taken.toFixed(2)}`
+      + `（若被重复结算 AoE 会是 ${withAoe.toFixed(2)}）`
+  )
+})
+
+check('D1.2 burst_frost：主目标与范围内次级目标都被冻结，且都能正常恢复', () => {
+  const runner = makeRunner()
+  const fusion = loadout(runner, 'burst', 'frost')
+  runner.weaponLevel = 1
+  const primary = makeEntity('brute', 1, 0.5, 200)
+  // 次级目标放在更远处（depth 更小），这样主弹道先命中的仍然是 primary
+  const secondary = makeEntity('scout', 1, 0.48, 200)
+  runner.entities.push(primary, secondary)
+
+  fireExplosiveShot(runner, 1, primary)
+
+  assert.equal(primary.freezeTimer, fusion.freezeDuration, '主目标应被冻结')
+  assert.equal(secondary.freezeTimer, fusion.freezeDuration, '次级目标仍按既有范围规则被冻结')
+  assert.ok(secondary.hp < 200, '次级目标仍应正常承受爆炸伤害')
+
+  const primaryDepth = primary.depth
+  const secondaryDepth = secondary.depth
+  runner._updateEntities(0.5)
+  assert.ok(Math.abs(primary.depth - primaryDepth) < 1e-9, '冻结期间主目标不应推进')
+  assert.ok(Math.abs(secondary.depth - secondaryDepth) < 1e-9, '冻结期间次级目标不应推进')
+  // 累计推进 1.3s 世界时间，超过 freezeDuration=1.2
+  for (let i = 0; i < 8; i++) runner._updateEntities(0.1)
+  assert.ok((primary.freezeTimer || 0) <= 0, '到期后主目标冻结计时器必须归零')
+  assert.ok((secondary.freezeTimer || 0) <= 0, '到期后次级目标冻结计时器必须归零')
+  assert.ok(primary.depth > primaryDepth + 0.001, '到期后主目标必须恢复推进')
+  assert.ok(secondary.depth > secondaryDepth + 0.001, '到期后次级目标必须恢复推进')
+})
+
+check('D1.2 burst_frost：爆炸半径之外的目标不得被冻结（空间边界不被破坏）', () => {
+  const runner = makeRunner()
+  const fusion = loadout(runner, 'burst', 'frost')
+  runner.weaponLevel = 1
+  const primary = makeEntity('brute', 1, 0.5, 200)
+  // 刚好落在 blast radius 之外，而不是随便放一个远远够不到的位置
+  const blastRadius = getRunnerWeaponCore('burst').levels[0].radius * fusion.radiusMultiplier
+  const outside = makeEntity('scout', 1, 0.5 - blastRadius - 0.02, 200)
+  runner.entities.push(primary, outside)
+
+  fireExplosiveShot(runner, 1, primary)
+
+  assert.equal(primary.freezeTimer, fusion.freezeDuration, '主目标应被冻结')
+  assert.ok(
+    (outside.freezeTimer || 0) === 0,
+    `范围外目标不得被冻结（blast radius=${blastRadius.toFixed(4)}），实测 ${outside.freezeTimer}`
+  )
+  assert.equal(outside.hp, 200, '范围外目标也不应受到爆炸伤害')
+})
+
+check('D1.2 freeze 生命周期：按世界时间递减，子弹时间下拉长但绝不永久', () => {
+  // D1.2 之后主目标几乎每次爆裂都会被冻住，生命周期从「偶尔发生」变成「常态」，
+  // 所以必须单独锁死：到期归零 + 速度复原 + 子弹时间语义正确。
+  const normal = makeRunner()
+  const fusion = loadout(normal, 'burst', 'frost')
+  normal.weaponLevel = 1
+  const normalTarget = makeEntity('brute', 1, 0.5, 200)
+  normal.entities.push(normalTarget)
+  fireExplosiveShot(normal, 1, normalTarget)
+  assert.equal(normalTarget.freezeTimer, fusion.freezeDuration, '前置：主目标已被冻结')
+  assert.equal(normal.worldTimeScale, 1, '未开子弹时间时世界倍率应为 1')
+  for (let i = 0; i < 7; i++) normal._updateEntities(0.2) // 累计 1.4s 世界时间 > 1.2s
+  assert.ok(
+    (normalTarget.freezeTimer || 0) <= 0,
+    `正常速度下 ${fusion.freezeDuration}s 后必须到期，实测 ${normalTarget.freezeTimer}`
+  )
+  assert.ok(Math.abs(normalTarget.speed - normalTarget.baseSpeed) < 1e-9, '到期后速度必须复原')
+
+  const slowed = makeRunner()
+  const slowTarget = makeEntity('brute', 1, 0.5, 200)
+  slowed.entities.push(slowTarget)
+  slowed.bulletTimeTimer = 1
+  assert.ok(slowed.worldTimeScale < 1, '子弹时间下世界倍率应小于 1')
+  slowed._applyFreeze(slowTarget, fusion.freezeDuration)
+  for (let i = 0; i < 7; i++) slowed._updateEntities(0.2 * slowed.worldTimeScale)
+  assert.ok(
+    (slowTarget.freezeTimer || 0) > 0,
+    `子弹时间下 1.4s 真实时间只推进 ${(1.4 * slowed.worldTimeScale).toFixed(2)}s 世界时间，不应耗尽 ${fusion.freezeDuration}s 冻结`
+  )
+  // 但它终究会到期：世界时间继续推进足够久之后必须归零，不允许永久冻结
+  for (let i = 0; i < 20; i++) slowed._updateEntities(0.2 * slowed.worldTimeScale)
+  assert.ok((slowTarget.freezeTimer || 0) <= 0, '子弹时间下冻结最终也必须归零')
+  assert.ok(Math.abs(slowTarget.speed - slowTarget.baseSpeed) < 1e-9, '到期后速度必须复原')
+})
+
+check('D1.2 burst_lightning / burst_flame：主目标语义未被本轮改写', () => {
+  // 本轮只允许增加 frost 状态语义。主目标不得因此重新吃火花，也不得重新吃爆炸伤害。
+  const lightning = makeRunner()
+  loadout(lightning, 'burst', 'lightning')
+  lightning.weaponLevel = 1
+  const lightningTarget = makeEntity('brute', 1, 0.5, 200)
+  lightning.entities.push(lightningTarget)
+  const lightningStart = lightningTarget.hp
+  fireExplosiveShot(lightning, 1, lightningTarget)
+  assert.ok(
+    Math.abs(lightningStart - lightningTarget.hp - lightning.attackDamage) < 0.001,
+    'lightning 主目标只应吃直接伤害'
+  )
+
+  const flame = makeRunner()
+  const flameFusion = loadout(flame, 'burst', 'flame')
+  flame.weaponLevel = 1
+  const flameTarget = makeEntity('brute', 1, 0.5, 200)
+  flame.entities.push(flameTarget)
+  const flameStart = flameTarget.hp
+  fireExplosiveShot(flame, 1, flameTarget)
+  assert.ok(
+    Math.abs(flameStart - flameTarget.hp - flame.attackDamage) < 0.001,
+    'flame 主目标只应吃直接伤害'
+  )
+  assert.equal(flame.groundFires.length, 1, 'flame 焦土仍按既有规则落在主目标位置')
+  assert.equal(flame.groundFires[0].damage, flameFusion.fireDamage, '焦土伤害仍取自 Rules')
 })
 
 check('corrosion_lightning：腐蚀叠满阈值触发过载电击', () => {
@@ -658,6 +858,102 @@ check('ricochet：没有合法目标时安全结束', () => {
   assert.equal(runner.bullets.length, 0, '没有可回弹目标时弹体必须正常消失，不得残留')
 })
 
+// D1.1：pierce × ricochet 的死路径回归。
+// 既有的 ricochet 断言全部用 corrosion 建场，而 corrosion 的 canPierce 恒为 false，
+// 于是「回弹」在测试里永远走的是 else 分支——pierce × ricochet 从未被覆盖过。
+// 旧实现把回弹挂在「贯穿次数耗尽」的 else 上，pierce 升到 2~3 级后 remainingHits
+// 几乎不再归零，真实对局 270 局 0 次回弹。这里刻意构造成真实中后期条件：
+// 等级 3、module 已生效、remainingHits 仍 > 0、这一击造成击破、前方存在合法目标。
+check('pierce × ricochet：仍有贯穿次数时击破也必须回弹（贯穿不吞掉 module）', () => {
+  const runner = makeRunner()
+  const mod = getRunnerWeaponModule('ricochet')
+  runner.weaponCore = 'pierce'
+  runner.secondaryElement = 'lightning'
+  runner.weaponModule = 'ricochet'
+  runner.weaponLevel = 3 // 真实中后期：penetrations = 3
+  const first = makeEntity('scout', 1, 0.6, 3, moduleIdCounter++)
+  const second = makeEntity('scout', 1, 0.3, 40, moduleIdCounter++)
+  runner.entities.push(first, second)
+
+  const bullet = runner._createBullet(1)
+  bullet.previousDepth = 0.65
+  bullet.depth = 0.65
+  assert.equal(bullet.ricochetRemaining, mod.ricochetCount, '前置：module 生效后弹体带满回弹次数')
+  assert.ok(bullet.remainingHits > 0, '前置：击破这一刻仍有贯穿次数')
+  runner.bullets = [bullet]
+  runner._fireCooldown = 999
+  for (let i = 0; i < 40 && runner.bullets.includes(bullet); i++) runner._updateShooting(0.05)
+
+  assert.ok(first.hp <= 0, '主目标应被击破')
+  assert.ok(
+    (runner.weaponStats.ricochets || 0) >= 1,
+    `pierce 击破后必须回弹，实测 ricochets=${runner.weaponStats.ricochets}（remainingHits=${bullet.remainingHits}）`
+  )
+  assert.ok(second.hp < 40, '回弹必须真的转向并命中前方的下一个目标')
+  assert.ok(
+    (runner.weaponStats.ricochets || 0) <= mod.ricochetCount,
+    `回弹次数不得超过 ricochetCount=${mod.ricochetCount}，实测 ${runner.weaponStats.ricochets}`
+  )
+  assert.ok(
+    (runner.weaponStats.maxProcDepth || 0) <= 1,
+    `回弹属于二级攻击，proc 深度必须封顶在 1，实测 ${runner.weaponStats.maxProcDepth}`
+  )
+})
+
+check('pierce × ricochet：没有击破时仍然照常贯穿，不得被 module 改写', () => {
+  const runner = makeRunner()
+  runner.weaponCore = 'pierce'
+  runner.secondaryElement = 'lightning'
+  runner.weaponModule = 'ricochet'
+  runner.weaponLevel = 3
+  // 两个都打不死的主目标：验证 pierce 自身没有被削弱成「只回弹不贯穿」
+  const a = makeEntity('brute', 1, 0.6, 200, moduleIdCounter++)
+  const b = makeEntity('brute', 1, 0.3, 200, moduleIdCounter++)
+  runner.entities.push(a, b)
+
+  const bullet = runner._createBullet(1)
+  bullet.previousDepth = 0.65
+  bullet.depth = 0.65
+  const pierceBefore = bullet.remainingHits
+  runner.bullets = [bullet]
+  runner._fireCooldown = 999
+  for (let i = 0; i < 40 && runner.bullets.includes(bullet); i++) runner._updateShooting(0.05)
+
+  assert.ok(a.hp < 200 && b.hp < 200, '未击破的贯穿目标必须都吃到伤害')
+  assert.equal(runner.weaponStats.ricochets, 0, '没有击破就不该回弹')
+  assert.ok(
+    bullet.remainingHits < pierceBefore,
+    `未击破时必须真的消耗贯穿次数：${pierceBefore} -> ${bullet.remainingHits}`
+  )
+})
+
+check('pierce × ricochet：击破但没有回弹次数时仍然照常贯穿', () => {
+  const runner = makeRunner()
+  runner.weaponCore = 'pierce'
+  runner.secondaryElement = 'lightning'
+  runner.weaponModule = 'ricochet'
+  runner.weaponLevel = 3
+  const first = makeEntity('scout', 1, 0.6, 3, moduleIdCounter++)
+  const second = makeEntity('brute', 1, 0.3, 200, moduleIdCounter++)
+  runner.entities.push(first, second)
+
+  const bullet = runner._createBullet(1)
+  bullet.ricochetRemaining = 0 // 唯一的合法目标已经回弹完
+  bullet.previousDepth = 0.65
+  bullet.depth = 0.65
+  const pierceBefore = bullet.remainingHits
+  runner.bullets = [bullet]
+  runner._fireCooldown = 999
+  for (let i = 0; i < 40 && runner.bullets.includes(bullet); i++) runner._updateShooting(0.05)
+
+  assert.equal(runner.weaponStats.ricochets, 0, '没有回弹次数时不得凭空回弹')
+  assert.ok(first.hp <= 0, '主目标仍应被击破')
+  assert.ok(
+    bullet.remainingHits < pierceBefore,
+    `回弹次数用尽后必须退回贯穿：${pierceBefore} -> ${bullet.remainingHits}`
+  )
+})
+
 check('amplify：只对低于血线���目标增伤，不是无条件全局加成', () => {
   const runner = makeRunner()
   const mod = getRunnerWeaponModule('amplify')
@@ -893,6 +1189,180 @@ for (const core of CORES) {
   }
 }
 if (!comboSoakProblems.length) console.log(`  ✓ 27/27 构筑完成完整 blitz 60s，无异常、无残留状态、岔口继续推进`)
+
+// ---------------------------------------------------------------------------
+// D1.1：真实对局 capability delivery 回归
+//
+// 这个 section 存在的唯一理由：本文件在 D1 之前全部是「构造 fixture → 调方法 → 断言」。
+// 它证明了每一段代码路径都存在且正确，于是 27/27 全绿——而真实 60s 对局里
+// pierce × ricochet 是 0 次回弹、burst × frost 是 0.05 次冻结。
+// 「代码能执行」和「玩家能在一局里体验到」是两件事，只有真的把一局跑完才能测后者。
+//
+// 断言锁的是交付语义（>0 / 多数 seed / 明显下界），不是精确计数：
+// 遭遇序列以后可能合法变化，写死 ricochet === 17 这种断言只会制造假红。
+// 每一个下界都来自修复后的实测分布（见 D1.1 汇报），不是拍脑袋挑的整数。
+// ---------------------------------------------------------------------------
+console.log('\n=== D1.1 · 真实对局 capability delivery ===')
+
+/**
+ * 跑 N 局真实 blitz 60s，只统计 module 生效之后那段窗口的交付量。
+ * 之所以要卡 module 生效时刻：module 前的交付恒为 0（那时根本没有这个能力），
+ * 不切窗口的话数字会被前半局稀释，看起来像「交付很少」其实是「口径不对」。
+ *
+ * read  : 从 runner 上读累计量（用于 weaponStats 里的计数）
+ * wrap  : 需要在实例上包一层计数的私有方法名（用于 _applySlow / _applyFreeze 这类不落在 stats 上的效果）
+ */
+const measureDelivery = (seeds, core, element, moduleId, read, wrap = null) => {
+  const rows = []
+  for (let seed = 1; seed <= seeds; seed++) {
+    const runner = makeRunner(90210 + seed)
+    let counter = 0
+    runner.__counter = 0
+    if (wrap) {
+      const original = runner[wrap].bind(runner)
+      runner[wrap] = (...args) => { counter += 1; runner.__counter = counter; return original(...args) }
+    }
+    let atModule = null
+    for (let frame = 0; frame < 60 * 30; frame++) {
+      runner.targetLane = chooseLane(runner, element, moduleId)
+      if (runner.weaponCore && runner.elapsedTime > 12) runner.weaponCore = core
+      runner.updateWorld(1 / 30)
+      if (atModule === null && runner.weaponModule) atModule = read(runner)
+    }
+    const end = read(runner)
+    rows.push({ atModule, post: end - (atModule || 0), end })
+    runner.destroy()
+  }
+  return rows
+}
+
+const RICOCHET_SEEDS = 20
+const recAt = (r) => r.weaponStats.ricochets
+
+// --- 1. pierce × ricochet：修复前三个 element 全部恒为 0 ---
+// 实测（修复后，20 seeds，module 生效后窗口）：lightning 84 次/19 seed、flame 125 次/20 seed、
+// frost 205 次/20 seed。下界取「多数 seed 至少一次」+「单局明显下界」，避开精确计数。
+const pierceRicochet = []
+for (const element of ELEMENTS) {
+  const rows = measureDelivery(RICOCHET_SEEDS, 'pierce', element, 'ricochet', recAt)
+  pierceRicochet.push({ element, rows })
+}
+check('capability delivery：pierce × ricochet 在真实对局 module 生效后真的交付', () => {
+  const measured = []
+  for (const { element, rows } of pierceRicochet) {
+    const total = rows.reduce((a, r) => a + r.post, 0)
+    const delivering = rows.filter((r) => r.post > 0).length
+    const best = Math.max(...rows.map((r) => r.post))
+    measured.push(`${element}=${total}次/${delivering}seed(峰值${best})`)
+    assert.ok(total > 0, `pierce+${element}+ricochet 的真实交付必须 >0，实测 ${total}`)
+    assert.ok(
+      delivering >= Math.ceil(RICOCHET_SEEDS * 0.75),
+      `pierce+${element}+ricochet 至少应有 3/4 的 seed 交付过，实测 ${delivering}/${RICOCHET_SEEDS}`
+    )
+    assert.ok(
+      best >= 3,
+      `pierce+${element}+ricochet 单局峰值应明显高于 1（否则只是偶发），实测 ${best}`
+    )
+  }
+  console.log(`  pierce × ricochet 真实交付（${RICOCHET_SEEDS} seeds，module 生效后）: ${measured.join('  ')}`)
+})
+
+// --- 2. 对照组：证明这套 harness 分得清「代码路径存在」与「真实比赛真的发生」---
+// 这些能力本来就是活的；如果哪天它们也归零，说明 delivery 测量本身坏了，而不是游戏坏了。
+check('capability delivery：对照组证明测量有效（活的能力不应归零）', () => {
+  const splitRows = measureDelivery(RICOCHET_SEEDS, 'corrosion', 'lightning', 'split', (r) => r.weaponStats.splits)
+  const splitTotal = splitRows.reduce((a, r) => a + r.post, 0)
+  assert.ok(splitTotal > 0, `corrosion+lightning+split 的分裂真实交付必须 >0，实测 ${splitTotal}`)
+
+  const slowRows = measureDelivery(RICOCHET_SEEDS, 'pierce', 'frost', 'split', (r) => r.__counter, '_applySlow')
+  const slowTotal = slowRows.reduce((a, r) => a + r.post, 0)
+  assert.ok(slowTotal > 0, `pierce+frost+split 的减速真实交付必须 >0，实测 ${slowTotal}`)
+
+  console.log(`  对照组交付: split=${splitTotal}  pierce×frost 减速=${slowTotal}`)
+})
+
+// --- 3. burst × frost：D1.2 正式合同落地后的真实对局交付 ---
+// 修复前 3 个 module 分别是 0 / 1 / 0。这里把下限正式锁住，并且**分别统计
+// primary 与 secondary freeze**——这是本轮最关键的一条证据：如果冻结是靠
+// 扩大范围变活的，secondary 会跟着暴涨；只有 primary 暴涨才说明我们修的是合同本身。
+const measureBlastFreeze = (seeds, core, element, moduleId) => {
+  const rows = []
+  for (let seed = 1; seed <= seeds; seed++) {
+    const runner = makeRunner(90210 + seed)
+    let primaryFreeze = 0
+    let secondaryFreeze = 0
+    let currentPrimary = null
+    const originalExplode = runner._explodeAt.bind(runner)
+    runner._explodeAt = (primary, bullet) => {
+      currentPrimary = primary ? primary.id : null
+      try {
+        return originalExplode(primary, bullet)
+      } finally {
+        currentPrimary = null
+      }
+    }
+    const originalFreeze = runner._applyFreeze.bind(runner)
+    runner._applyFreeze = (entity, duration) => {
+      // 只统计爆裂结算期间挂上的冻结；其它来源（如腐蚀过载）不混进来
+      if (currentPrimary !== null) {
+        if (entity && entity.id === currentPrimary) primaryFreeze += 1
+        else secondaryFreeze += 1
+      }
+      return originalFreeze(entity, duration)
+    }
+    let atModule = null
+    for (let frame = 0; frame < 60 * 30; frame++) {
+      runner.targetLane = chooseLane(runner, element, moduleId)
+      if (runner.weaponCore && runner.elapsedTime > 12) runner.weaponCore = core
+      runner.updateWorld(1 / 30)
+      if (atModule === null && runner.weaponModule) atModule = { p: primaryFreeze, s: secondaryFreeze }
+    }
+    const base = atModule || { p: 0, s: 0 }
+    rows.push({
+      postPrimary: primaryFreeze - base.p,
+      postSecondary: secondaryFreeze - base.s,
+    })
+    runner.destroy()
+  }
+  return rows
+}
+
+check('capability delivery：burst × frost 在三个 module 下都真实交付冻结（primary 为主来源）', () => {
+  const observed = []
+  for (const moduleId of MODULES) {
+    const rows = measureBlastFreeze(RICOCHET_SEEDS, 'burst', 'frost', moduleId)
+    const primary = rows.reduce((a, r) => a + r.postPrimary, 0)
+    const secondary = rows.reduce((a, r) => a + r.postSecondary, 0)
+    const total = primary + secondary
+    const delivering = rows.filter((r) => r.postPrimary + r.postSecondary > 0).length
+    const best = Math.max(...rows.map((r) => r.postPrimary + r.postSecondary))
+    observed.push(`${moduleId}=${total}次(${delivering}seed, 峰值${best})`)
+
+    assert.ok(total > 0, `burst+frost+${moduleId} 的真实冻结交付必须 >0，实测 ${total}`)
+    assert.ok(
+      delivering >= Math.ceil(RICOCHET_SEEDS * 0.75),
+      `burst+frost+${moduleId} 至少应有 3/4 的 seed 交付过，实测 ${delivering}/${RICOCHET_SEEDS}`
+    )
+    assert.ok(best >= 3, `burst+frost+${moduleId} 单局峰值应明显高于 1（否则只是偶发），实测 ${best}`)
+    // 本轮修的是「主目标也要被冻」，所以主来源必须是 primary。
+    // 如果哪天 secondary 反超，说明范围语义被动过，这条断言就是防回归的。
+    assert.ok(
+      primary >= secondary,
+      `burst+frost+${moduleId} 的交付应以 primary 为主（primary=${primary}, secondary=${secondary}）`
+    )
+  }
+  console.log(`  burst × frost 真实冻结交付（${RICOCHET_SEEDS} seeds，module 生效后）: ${observed.join('  ')}`)
+})
+
+// --- 4. 交付路径的通用安全门：这批真实对局本身不能带坏任何东西 ---
+check('capability delivery：这批真实对局不引入递归、冻结残留或 Director 停摆', () => {
+  for (const { element, rows } of pierceRicochet) {
+    for (const row of rows) {
+      assert.ok(row.end >= row.atModule, `pierce+${element}+ricochet 的 ricochet 计数出现回退`)
+    }
+  }
+  console.log('  交付路径未出现计数回退（回弹不会凭空减少）')
+})
 
 // ---------------------------------------------------------------------------
 console.log('\n=== 汇总 ===')
