@@ -1,10 +1,9 @@
 <script setup>
-import { computed, ref } from 'vue'
-import TowerDefenseMutationModal from './TowerDefenseMutationModal.vue'
+import { computed } from 'vue'
+import TowerDefenseBuildMenu from './TowerDefenseBuildMenu.vue'
+import TowerDefenseUpgradePanel from './TowerDefenseUpgradePanel.vue'
 import {
-  ArrowUp,
   Coins,
-  Crosshair,
   FastForward,
   Flag,
   Heart,
@@ -12,16 +11,12 @@ import {
   Pause,
   Play,
   RotateCcw,
-  ShieldCheck,
   Sparkles,
   Star,
-  Timer,
   TowerControl,
-  Trash2,
   Volume2,
   VolumeX,
   X,
-  Zap,
 } from 'lucide-vue-next'
 
 const props = defineProps({
@@ -32,14 +27,14 @@ const props = defineProps({
 
 const emit = defineEmits([
   'select-tower',
-  'set-tower-strategy',
+  'preview-tower',
   'select-tower-branch',
+  'select-tower-strategy',
   'upgrade',
   'sell',
   'clear-obstacle',
   'trigger-trap',
   'relocate-tower',
-  'pet-tower',
   'deselect',
   'toggle-mute',
   'toggle-pause',
@@ -48,28 +43,11 @@ const emit = defineEmits([
   'next-stage',
   'restart-stage',
   'advance-tutorial',
-  'select-mutation',
   'skip-tutorial',
   'cycle-speed',
   'call-early',
-  'skip-mutation',
 ])
 
-// 突变可暂存：默认不弹窗，角落芯片提示，点开再选
-const mutationModalOpen = ref(false)
-
-const towerIcons = {
-  bolt: Zap,
-  rapid: Crosshair,
-  cannon: TowerControl,
-  blast: TowerControl,
-  crystal: ShieldCheck,
-  frost: Timer,
-  slow: Timer,
-  shock: Zap,
-  arcane: Sparkles,
-  radiant: Star,
-}
 
 const towerChoices = computed(() => {
   const choices = props.hud.towerChoices || props.hud.towerTypes || props.hud.availableTowers || []
@@ -82,7 +60,6 @@ const selectedSlot = computed(() => props.hud.selectedSlot || null)
 const isLockedSlotSelected = computed(() => !!selectedSlot.value?.isLocked)
 const isEmptySlotSelected = computed(() => isSlotSelected.value && !selectedTower.value)
 const selectedSlotNumber = computed(() => (selectedSlotIndex.value >= 0 ? selectedSlotIndex.value + 1 : ''))
-const selectedBuildType = computed(() => props.hud.selectedTowerTypeId || props.hud.selectedTowerType || '')
 const money = computed(() => props.hud.coins ?? props.hud.gold ?? props.hud.currency ?? 0)
 const lives = computed(() => props.hud.lives ?? props.hud.baseHp ?? props.hud.hp ?? 0)
 const maxLives = computed(() => props.hud.maxLives ?? props.hud.maxBaseHp ?? props.hud.maxHp ?? 0)
@@ -103,8 +80,6 @@ const nextWaveLine = computed(() => formatComposition(nextWaveComposition.value)
 const showPhaseChip = computed(() => props.hud.phase === 'intermission')
 const earlyCallBonus = computed(() => props.hud.earlyCallBonus || 0)
 const gameSpeed = computed(() => props.hud.gameSpeed || 1)
-const pendingOfferCount = computed(() => props.hud.pendingMutationOffers?.length || 0)
-const mutationSkipBonus = computed(() => props.hud.mutationSkipBonus ?? 20)
 const feedback = computed(() => {
   const value = props.hud.feedback
   if (!value) return null
@@ -127,44 +102,6 @@ const availableLeapSlots = computed(() => {
   return buildSlots.value.filter((s) => !s.occupied && !s.isLocked && s.slotIndex !== selectedTower.value.slotIndex)
 })
 
-const selectedLevel = computed(() => selectedTower.value?.level ?? selectedTower.value?.lv ?? 1)
-const selectedMaxLevel = computed(() => selectedTower.value?.maxLevel ?? selectedTower.value?.maxLv ?? 3)
-const selectedUpgradeCost = computed(() => selectedTower.value?.upgradeCost ?? props.hud.upgradeCost ?? 0)
-const selectedSellValue = computed(() => selectedTower.value?.sellValue ?? selectedTower.value?.refund ?? props.hud.sellValue ?? 0)
-const selectedDps = computed(() => {
-  if (!selectedTower.value) return null
-  if (selectedTower.value.dps != null) return selectedTower.value.dps
-  const interval = Number(selectedTower.value.fireInterval)
-  return interval > 0 ? Number(selectedTower.value.damage || 0) / interval : null
-})
-const selectedAttackSpeed = computed(() => {
-  if (!selectedTower.value) return null
-  if (selectedTower.value.attackSpeed != null) return selectedTower.value.attackSpeed
-  const interval = Number(selectedTower.value.fireInterval)
-  return interval > 0 ? 1 / interval : null
-})
-const targetStrategies = computed(() => {
-  const strategies = selectedTower.value?.targetStrategies || []
-  return Array.isArray(strategies) ? strategies : Object.values(strategies)
-})
-const currentStrategyId = computed(() => optionId(selectedTower.value?.targetStrategy))
-const currentStrategy = computed(() => {
-  return targetStrategies.value.find((strategy) => optionId(strategy) === currentStrategyId.value)
-    || selectedTower.value?.targetStrategy
-    || null
-})
-const branchOptions = computed(() => {
-  const options = selectedTower.value?.branchOptions || []
-  return Array.isArray(options) ? options : Object.values(options)
-})
-const selectedBranchId = computed(() => optionId(selectedTower.value?.branch))
-const canUpgrade = computed(() => {
-  if (!selectedTower.value) return false
-  if (selectedTower.value.canUpgrade != null) return selectedTower.value.canUpgrade
-  if (selectedLevel.value >= selectedMaxLevel.value) return false
-  return selectedUpgradeCost.value <= money.value
-})
-const canSell = computed(() => !!selectedTower.value && selectedTower.value.canSell !== false)
 const stateLabel = computed(() => {
   const labels = {
     countdown: '部署准备',
@@ -198,6 +135,7 @@ function normalizeEnemyEntry(entry) {
   return {
     id,
     name: entry?.name || entry?.label || entry?.typeName || id,
+    traits: entry?.traits || [],
     count: Number(entry?.count ?? entry?.amount ?? entry?.quantity ?? entry?.total ?? 0),
   }
 }
@@ -213,102 +151,16 @@ function compositionTitles(items) {
     .join('\n')
 }
 
-function onSelectMutation(mutationId) {
-  mutationModalOpen.value = false
-  emit('select-mutation', mutationId)
-}
-
-function onSkipMutation() {
-  mutationModalOpen.value = false
-  emit('skip-mutation')
-}
-
-const towerTagMap = {
-  rapid: { role: '强酸喷射 · 极速破甲', badge: '强酸', badgeColor: '#58c9a5', glow: 'rgba(88, 201, 165, 0.16)' },
-  slow: { role: '急冻冰霜 · 范围减速', badge: '极寒', badgeColor: '#74bce8', glow: 'rgba(116, 188, 232, 0.16)' },
-  blast: { role: '熔岩爆浆 · 重装范围', badge: '熔岩', badgeColor: '#efad58', glow: 'rgba(239, 173, 88, 0.16)' },
-  shock: { role: '连环闪电 · 麻痹打断', badge: '雷系', badgeColor: '#a55eea', glow: 'rgba(165, 94, 234, 0.16)' },
-  arcane: { role: '引力黑洞 · 真实伤害', badge: '虚空', badgeColor: '#8854d0', glow: 'rgba(136, 84, 208, 0.16)' },
-  radiant: { role: '圣堂光环 · 攻速激励', badge: '圣光', badgeColor: '#f1c40f', glow: 'rgba(241, 196, 15, 0.16)' },
-}
-
-function towerMeta(tower) {
-  const type = towerType(tower)
-  return towerTagMap[type] || { role: '史莱姆守护战宠', badge: '守卫', badgeColor: '#9be1a0', glow: 'rgba(155, 225, 160, 0.16)' }
-}
-
-const selectedMeta = computed(() => towerMeta(selectedTower.value))
-
-function towerType(tower) {
-  return tower?.id || tower?.typeId || tower?.type || tower?.key
-}
-
-function towerIcon(tower) {
-  return towerIcons[tower?.shape] || towerIcons[towerType(tower)] || TowerControl
-}
-
-function towerDisabled(tower) {
-  if (tower.unlocked === false) return true
-
-  return !!(tower.disabled || tower.locked || tower.affordable === false || (tower.cost || 0) > money.value)
-}
-
-function selectTower(tower) {
-  const type = towerType(tower)
-  if (type) emit('select-tower', type)
-}
-
-function optionId(option) {
-  if (option == null) return ''
-  return typeof option === 'object' ? option.id || option.key || option.value || option.type || '' : option
-}
-
-function optionLabel(option, fallback = '') {
-  if (option == null) return fallback
-  return typeof option === 'object'
-    ? option.name || option.label || option.title || option.id || fallback
-    : String(option)
-}
-
-function optionDescription(option) {
-  return typeof option === 'object'
-    ? option.description || option.effectText || option.effect || option.desc || ''
-    : ''
-}
-
-function cycleTargetStrategy() {
-  if (targetStrategies.value.length < 1) return
-  const currentIndex = targetStrategies.value.findIndex((strategy) => optionId(strategy) === currentStrategyId.value)
-  const next = targetStrategies.value[(currentIndex + 1) % targetStrategies.value.length]
-  const id = optionId(next)
-  if (id) emit('set-tower-strategy', id)
-}
-
-function selectBranch(branch) {
-  const id = optionId(branch)
-  if (id) emit('select-tower-branch', id)
-}
-
-function leapToSlot(targetSlotIndex) {
-  if (!selectedTower.value) return
-  emit('relocate-tower', { from: selectedTower.value.slotIndex, to: targetSlotIndex })
-}
-
 function displayNumber(value) {
   return Number(value || 0).toLocaleString('en-US')
 }
 
-function displayStat(value, digits = 1) {
-  const number = Number(value)
-  if (!Number.isFinite(number)) return value ?? '—'
-  return Number.isInteger(number) ? number : Number(number.toFixed(digits))
-}
 </script>
 
 <template>
   <div class="tower-defense-hud" aria-label="塔防战况">
     <header class="defense-header">
-      <div class="defense-brand" :title="hud.chapterName || ''">
+      <div class="defense-brand" :title="[hud.tactic?.description, hud.assault?.hint].filter(Boolean).join(' ')">
         <TowerControl :size="20" :stroke-width="1.7" aria-hidden="true" />
         <strong>{{ hud.stageName || hud.mapName || hud.levelName || '母巢防线' }}</strong>
       </div>
@@ -340,7 +192,7 @@ function displayStat(value, digits = 1) {
           <button
             class="system-button speed-btn"
             type="button"
-            :title="`游戏速度 ×${gameSpeed}（快捷键 F）`"
+            :title="`游戏速度 ×${gameSpeed}`"
             :aria-label="`游戏速度 ×${gameSpeed}`"
             @click="emit('cycle-speed')"
           >
@@ -382,34 +234,33 @@ function displayStat(value, digits = 1) {
     </header>
 
     <div class="wave-intel" aria-label="波次情报">
-      <span v-if="currentWaveLine" :title="compositionTitles(currentWaveComposition)">本波 {{ currentWaveLine }}</span>
-      <span v-if="nextWaveLine" class="next" :title="compositionTitles(nextWaveComposition)">下波 {{ nextWaveLine }}</span>
+      <span v-if="hud.miniBoss && hud.phase === 'intermission'" :title="`${hud.miniBoss.mechanic} ${hud.miniBoss.counter} 漏过损失 ${hud.miniBoss.damage} 点耐久。`">◆ 最终波：{{ hud.miniBoss.name }}</span>
+      <span v-if="hud.assault && hud.phase === 'intermission'" :title="hud.tactic?.description">{{ hud.assault.name }} · {{ hud.assault.hint }}</span>
+      <span v-if="currentWaveLine" :title="[hud.currentWavePacing?.hint, compositionTitles(currentWaveComposition)].filter(Boolean).join('\n')">本波{{ hud.currentWavePacing ? ' · ' + hud.currentWavePacing.name : '' }} {{ currentWaveLine }}</span>
+      <span v-if="nextWaveLine" class="next" :title="[hud.nextWavePacing?.hint, compositionTitles(nextWaveComposition)].filter(Boolean).join('\n')">下波{{ hud.nextWavePacing ? ' · ' + hud.nextWavePacing.name : '' }} {{ nextWaveLine }}</span>
     </div>
 
     
     <!-- Stage 1 Interactive Tutorial Floating Banner -->
-    <Transition name="fade">
+    <Transition name="tutorial">
       <div v-if="hud.tutorial?.active" class="tutorial-banner">
         <div class="tutorial-content">
           <div class="tutorial-badge-row">
-            <span class="tutorial-badge">🌱 新手启程指引 ({{ hud.tutorial.step }}/4)</span>
+            <span class="tutorial-badge">🌱 新手启程指引 ({{ hud.tutorial.step }}/3)</span>
             <button class="tutorial-skip-link" type="button" @click="emit('skip-tutorial')">跳过引导 ✕</button>
           </div>
           <p v-if="hud.tutorial.step === 1" class="tutorial-text">
-            👈 <strong>第一步 · 召唤守卫</strong>：点击地图上发光绿色光圈地块，选择并召唤你的第一只【强酸史莱姆】！
+            <strong>第一步 · 召唤守卫</strong>：点击路边带「＋」的圆圈，召唤一只强酸史莱姆。它会自动攻击经过的敌人。
           </p>
           <p v-else-if="hud.tutorial.step === 2" class="tutorial-text">
-            🍄 <strong>第二步 · 战术机关</strong>：敌人经过时，直接点击路边的【毒孢子大蘑菇】释放范围剧毒！
+            <strong>第二步 · 升级守卫</strong>：选中已召唤的史莱姆，点击「升级」提升火力。击败敌人会获得更多养分。
           </p>
           <p v-else-if="hud.tutorial.step === 3" class="tutorial-text">
-            💖 <strong>第三步 · 互动鼓舞</strong>：点击已召唤的史莱姆，可进行【抚摸鼓舞】提升攻速，或【换位跳跃】！
-          </p>
-          <p v-else-if="hud.tutorial.step === 4" class="tutorial-text">
-            🛡️ <strong>第四步 · 备战迎敌</strong>：准备就绪！迎战第一波巡逻步兵，保卫母巢之王吧！
+            <strong>第三步 · 扩建防线</strong>：第三波起小队密集进场，趁波间补到两至三座守卫，覆盖前后两段道路。两座强酸配合一座极寒会更稳。
           </p>
         </div>
-        <button class="tutorial-next-btn" type="button" @click="emit('advance-tutorial')">
-          {{ hud.tutorial.step === 4 ? '开始防御战 ⚔️' : '下一步 →' }}
+        <button v-if="!hud.waitingForFirstTower" class="tutorial-next-btn" type="button" @click="emit('advance-tutorial')">
+          {{ hud.tutorial.step === 3 ? '明白了' : '下一步 →' }}
         </button>
       </div>
     </Transition>
@@ -421,108 +272,18 @@ function displayStat(value, digits = 1) {
 
     <Transition name="panel-fade">
       <section
-        v-if="selectedTower || isEmptySlotSelected"
+        v-if="selectedTower || isLockedSlotSelected"
         class="tower-controls"
         aria-label="史莱姆守卫选择与操作"
       >
-        <!-- 1. 已选中史莱姆守卫：展示进化、放生、索敌、突变、抚摸与弹跳 -->
-        <div v-if="selectedTower" class="selected-tower" :style="{ borderColor: `${selectedMeta.badgeColor}55` }">
-          <div class="selected-heading">
-            <div>
-              <div class="selected-sub">
-                <span>已选史莱姆</span>
-                <span class="role-badge" :style="{ borderColor: `${selectedMeta.badgeColor}55`, color: selectedMeta.badgeColor }">{{ selectedMeta.badge }}</span>
-              </div>
-              <strong :style="{ color: selectedTower.color || '#f2f6ed' }">{{ selectedTower.name || '史莱姆守卫' }}</strong>
-            </div>
-            <div class="heading-actions">
-              <b class="tower-level" :style="{ color: selectedMeta.badgeColor }">Lv.{{ selectedLevel }}<small> / {{ selectedMaxLevel }}</small></b>
-              <button class="close-card-btn" type="button" title="取消选中" aria-label="取消选中" @click="emit('deselect')">
-                <X :size="13" aria-hidden="true" />
-              </button>
-            </div>
-          </div>
-
-          <!-- ✨ 闪光特质开盲盒提示 -->
-          <div v-if="selectedTower.shinyTrait" class="shiny-trait-banner" :style="{ borderColor: selectedTower.shinyTrait.color }">
-            <span class="shiny-icon">{{ selectedTower.shinyTrait.icon }}</span>
-            <div class="shiny-text">
-              <strong :style="{ color: selectedTower.shinyTrait.color }">✨ 闪光特质：【{{ selectedTower.shinyTrait.name }}】</strong>
-              <small>{{ selectedTower.shinyTrait.description }}</small>
-            </div>
-          </div>
-
-          <!-- 地脉共鸣提示 -->
-          <div v-if="selectedTower.resonance?.isResonant" class="resonance-banner">
-            <Zap :size="13" aria-hidden="true" />
-            <span>【{{ selectedTower.resonance.leylineName }}】共鸣激活：{{ selectedTower.resonance.description }}</span>
-          </div>
-
-          <dl class="tower-stats">
-            <div v-if="selectedDps != null"><dt>DPS</dt><dd class="stat-highlight">{{ displayStat(selectedDps) }}</dd></div>
-            <div v-if="selectedAttackSpeed != null"><dt>攻速</dt><dd>{{ displayStat(selectedAttackSpeed, 2) }}/s</dd></div>
-            <div v-if="selectedTower.damage != null"><dt>威力</dt><dd>{{ displayStat(selectedTower.damage) }}</dd></div>
-            <div v-if="selectedTower.range != null"><dt>感知</dt><dd>{{ displayStat(selectedTower.range, 2) }}</dd></div>
-          </dl>
-          <p v-if="selectedTower.effectText" class="tower-effect">{{ selectedTower.effectText }}</p>
-          <button v-if="targetStrategies.length" class="strategy-button" type="button" @click="cycleTargetStrategy">
-            <span>索敌倾向</span><strong>{{ optionLabel(currentStrategy, '默认') }}</strong><small>切换</small>
-          </button>
-          <div v-if="selectedLevel >= 2 && branchOptions.length" class="branch-section">
-            <span class="section-label">{{ selectedLevel === 2 ? 'Lv.3 突变方向预选' : '已突变基因' }}</span>
-            <div class="branch-options">
-              <button
-                v-for="branch in branchOptions"
-                :key="optionId(branch)"
-                class="branch-button"
-                :class="{
-                  selected: optionId(branch) === selectedBranchId,
-                  disabled: selectedLevel > 2 && optionId(branch) !== selectedBranchId,
-                }"
-                :disabled="selectedLevel > 2"
-                type="button"
-                :title="optionDescription(branch)"
-                @click="selectBranch(branch)"
-              >
-                <strong>{{ optionLabel(branch, '突变') }}</strong>
-                <small v-if="optionDescription(branch)">{{ optionDescription(branch) }}</small>
-              </button>
-            </div>
-          </div>
-
-          <!-- 互动操作：抚摸鼓舞与弹跳调度 -->
-          <div class="pet-and-leap-row">
-            <button class="pet-btn" type="button" title="轻抚鼓舞史莱姆（4秒内攻速+15%）" @click="emit('pet-tower', selectedTower.slotIndex)">
-              <Heart :size="13" aria-hidden="true" />
-              <span>抚摸鼓舞</span>
-            </button>
-            <div v-if="availableLeapSlots.length" class="leap-dropdown">
-              <span class="leap-label">弹跳至:</span>
-              <button
-                v-for="slot in availableLeapSlots"
-                :key="`leap-${slot.slotIndex}`"
-                class="leap-slot-chip"
-                :disabled="!selectedTower.canRelocate"
-                type="button"
-                @click="leapToSlot(slot.slotIndex)"
-              >
-                #{{ slot.slotIndex + 1 }}
-              </button>
-            </div>
-          </div>
-
-          <div class="tower-actions">
-            <button class="upgrade-button" type="button" :disabled="!canUpgrade" @click="emit('upgrade')">
-              <ArrowUp :size="15" aria-hidden="true" />
-              <span>{{ selectedLevel >= selectedMaxLevel ? '已达顶级' : '基因进化' }}</span>
-              <b v-if="selectedLevel < selectedMaxLevel"><Coins :size="11" aria-hidden="true" />{{ selectedUpgradeCost }}</b>
-            </button>
-            <button class="sell-button" type="button" :disabled="!canSell" @click="emit('sell')">
-              <Trash2 :size="14" aria-hidden="true" />放生
-              <small v-if="selectedSellValue">+{{ selectedSellValue }}</small>
-            </button>
-          </div>
-        </div>
+        <TowerDefenseUpgradePanel
+          v-if="selectedTower" :key="selectedTower.slotIndex"
+          :tower="selectedTower" :money="money" :introductory="!!hud.introductory" :leap-slots="availableLeapSlots"
+          @upgrade="emit('upgrade')" @sell="emit('sell')" @close="emit('deselect')"
+          @branch="emit('select-tower-branch', $event)"
+          @strategy="emit('select-tower-strategy', $event)"
+          @relocate="emit('relocate-tower', $event)"
+        />
 
         <!-- 2. 选中封印障碍槽位：开垦解锁 -->
         <div v-else-if="isLockedSlotSelected" class="locked-slot-card">
@@ -536,7 +297,7 @@ function displayStat(value, digits = 1) {
             </button>
           </div>
           <p class="obstacle-desc">
-            开垦此高台可清除荆棘障碍，释放被封印的远古能量，立即收获 <strong>+{{ selectedSlot.lockReward }}</strong> 养分，并解锁为全系增益的【超导晶脉】高台！
+            支付养分清除荆棘，解锁带有全系增益的超导晶脉。开垦不会返还养分，请结合防线位置决定是否投资。
           </p>
           <button
             class="clear-obstacle-btn"
@@ -550,77 +311,17 @@ function displayStat(value, digits = 1) {
           </button>
         </div>
 
-        <!-- 3. 选中空槽位：展示召唤面板，点击史莱姆守卫直接召唤到该地块 -->
-        <div v-else-if="isEmptySlotSelected" class="tower-palette">
-          <div class="palette-heading">
-            <div>
-              <span>召唤史莱姆守卫</span>
-              <small>守卫点 #{{ selectedSlotNumber }} · 点击直接召唤</small>
-            </div>
-            <button class="close-card-btn" type="button" title="取消选中" aria-label="取消选中" @click="emit('deselect')">
-              <X :size="13" aria-hidden="true" />
-            </button>
-          </div>
-
-          <!-- 地脉属性提示 -->
-          <div v-if="selectedSlot?.leyline" class="leyline-recommendation" :style="{ borderColor: `${selectedSlot.leyline.color}55` }">
-            <strong :style="{ color: selectedSlot.leyline.color }">🌿 {{ selectedSlot.leyline.leylineName }}</strong>
-            <small>{{ selectedSlot.leyline.description }}</small>
-          </div>
-
-          <div class="tower-options">
-            <button
-              v-for="tower in towerChoices"
-              :key="towerType(tower)"
-              class="tower-option"
-              :class="[towerType(tower), { disabled: towerDisabled(tower), locked: tower.unlocked === false }]"
-              :disabled="towerDisabled(tower)"
-              :style="{ '--accent': towerMeta(tower).badgeColor, '--glow': towerMeta(tower).glow }"
-              :aria-label="`${tower.name || '史莱姆'}，花费 ${tower.cost || 0}`"
-              type="button"
-              @click="selectTower(tower)"
-            >
-              <div class="tower-opt-icon" :style="{ color: towerMeta(tower).badgeColor }">
-                <component :is="towerIcon(tower)" :size="20" :stroke-width="1.8" aria-hidden="true" />
-              </div>
-              <div class="tower-opt-content">
-                <div class="tower-opt-top">
-                  <strong class="tower-opt-name">{{ tower.name || '史莱姆' }}</strong>
-                  <span class="role-badge" :style="{ borderColor: `${towerMeta(tower).badgeColor}55`, color: towerMeta(tower).badgeColor }">{{ towerMeta(tower).badge }}</span>
-                </div>
-                <span class="tower-opt-desc">{{ towerMeta(tower).role }}</span>
-              </div>
-              <b v-if="tower.unlocked !== false" class="tower-opt-cost"><Coins :size="11" aria-hidden="true" />{{ tower.cost ?? 0 }}</b>
-              <span v-else class="tower-lock-chip">🔒 第 {{ tower.unlockStage }} 关解锁</span>
-            </button>
-            <span v-if="!towerChoices.length" class="tower-empty">等待史莱姆基因解锁</span>
-          </div>
-        </div>
       </section>
     </Transition>
 
-    <!-- Roguelike 3-Card Mutation：可暂存，不阻塞战斗；点芯片打开 -->
-    <button
-      v-if="pendingOfferCount > 0 && !mutationModalOpen"
-      class="mutation-pending-chip"
-      type="button"
-      title="有未选择的基因突变，点击打开（战斗不会暂停）"
-      @click="mutationModalOpen = true"
-    >
-      🧬 突变待选 ×{{ pendingOfferCount }}
-    </button>
-    <Transition name="fade">
-      <TowerDefenseMutationModal
-        v-if="pendingOfferCount > 0 && mutationModalOpen && hud.pendingMutationChoices?.length"
-        :choices="hud.pendingMutationChoices"
-        :skippable="true"
-        :skip-bonus="mutationSkipBonus"
-        :pending-count="pendingOfferCount"
-        @select="onSelectMutation"
-        @skip="onSkipMutation"
-        @dismiss="mutationModalOpen = false"
-      />
-    </Transition>
+    <TowerDefenseBuildMenu
+      v-if="isEmptySlotSelected && !isLockedSlotSelected && selectedSlot && !hud.outcome"
+      :slot="selectedSlot" :choices="towerChoices" :money="money"
+      @select="emit('select-tower', $event)" @preview="emit('preview-tower', $event)"
+      @close="emit('deselect')"
+    />
+
+
 
     <!-- Stage Victory / Defeat Outcome Dialog -->
     <Transition name="fade">
@@ -822,79 +523,6 @@ function displayStat(value, digits = 1) {
   color: rgba(11, 25, 18, 0.85);
 }
 
-/* 地脉共鸣横幅 */
-.resonance-banner {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 6px;
-  padding: 4px 7px;
-  border-radius: 4px;
-  background: rgba(46, 204, 113, 0.14);
-  border: 1px solid rgba(46, 204, 113, 0.38);
-  color: #a8ff78;
-  font-size: 8.5px;
-  line-height: 1.3;
-}
-
-/* 抚摸鼓舞与弹跳换位 */
-.pet-and-leap-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  margin-top: 8px;
-  padding-top: 6px;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
-}
-.pet-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 8px;
-  border: 1px solid rgba(255, 107, 129, 0.45);
-  border-radius: 4px;
-  background: rgba(255, 107, 129, 0.12);
-  color: #ff6b81;
-  font-size: 9px;
-  font-weight: 700;
-  cursor: pointer;
-  pointer-events: auto;
-  transition: all 0.15s ease;
-}
-.pet-btn:hover {
-  background: #ff6b81;
-  color: #fff;
-}
-.leap-dropdown {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-.leap-label {
-  font-size: 8.5px;
-  color: rgba(238, 245, 242, 0.5);
-}
-.leap-slot-chip {
-  padding: 2px 6px;
-  border: 1px solid rgba(121, 213, 230, 0.35);
-  border-radius: 3px;
-  background: rgba(121, 213, 230, 0.08);
-  color: #79d5e6;
-  font-size: 8.5px;
-  font-weight: 700;
-  cursor: pointer;
-  pointer-events: auto;
-}
-.leap-slot-chip:hover:not(:disabled) {
-  background: #79d5e6;
-  color: #0b171c;
-}
-.leap-slot-chip:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
-}
-
 /* 封印节点卡片 */
 .locked-slot-card {
   width: 100%;
@@ -947,25 +575,6 @@ function displayStat(value, digits = 1) {
   gap: 3px;
   color: #4a2800;
   font-size: 9.5px;
-}
-
-/* 地脉推荐提示 */
-.leyline-recommendation {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin-top: 6px;
-  padding: 4px 7px;
-  border: 1px solid;
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.04);
-}
-.leyline-recommendation strong {
-  font-size: 9.5px;
-}
-.leyline-recommendation small {
-  color: rgba(238, 245, 242, 0.62);
-  font-size: 8.5px;
 }
 
 .defense-header {
@@ -1023,28 +632,6 @@ function displayStat(value, digits = 1) {
 }
 .speed-label { font-size: 11px; font-variant-numeric: tabular-nums; }
 
-.mutation-pending-chip {
-  position: absolute;
-  left: 50%;
-  bottom: 20px;
-  transform: translateX(-50%);
-  z-index: 5;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 14px;
-  border: 1px solid rgba(165, 94, 234, 0.65);
-  border-radius: 999px;
-  background: rgba(24, 14, 36, 0.92);
-  color: #cda9f5;
-  font-size: 11px;
-  font-weight: 800;
-  cursor: pointer;
-  pointer-events: auto;
-  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.55), 0 0 14px rgba(165, 94, 234, 0.35);
-  animation: chip-pulse 1.6s infinite ease-in-out;
-}
-.mutation-pending-chip:hover { background: rgba(44, 24, 66, 0.95); }
 @keyframes chip-pulse {
   0%, 100% { box-shadow: 0 4px 18px rgba(0, 0, 0, 0.55), 0 0 10px rgba(165, 94, 234, 0.3); }
   50% { box-shadow: 0 4px 18px rgba(0, 0, 0, 0.55), 0 0 20px rgba(165, 94, 234, 0.55); }
@@ -1132,24 +719,12 @@ function displayStat(value, digits = 1) {
   flex-direction: column;
   align-items: flex-end;
   gap: 10px;
-  max-width: min(340px, calc(100vw - 48px));
+  max-width: min(352px, calc(100vw - 48px));
   pointer-events: auto;
 }
-.tower-palette, .selected-tower {
-  width: 100%;
-  min-width: 260px;
-  max-width: 340px;
-  padding: 10px;
-  border: 1px solid rgba(215, 166, 87, 0.28);
-  border-radius: 5px;
-  background: rgba(8, 13, 15, 0.88);
-  backdrop-filter: blur(5px);
-  pointer-events: auto;
-}
-.palette-heading, .selected-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
-.palette-heading span, .selected-heading span, .section-label { color: rgba(238, 245, 242, 0.54); font-size: 10px; font-weight: 800; }
+.palette-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.palette-heading span { color: rgba(238, 245, 242, 0.54); font-size: 10px; font-weight: 800; }
 .palette-heading small { color: rgba(238, 245, 242, 0.34); font-size: 9px; }
-.heading-actions { display: flex; align-items: center; gap: 8px; }
 .close-card-btn {
   display: grid;
   place-items: center;
@@ -1186,102 +761,7 @@ function displayStat(value, digits = 1) {
   color: #9be1a0;
   flex: none;
 }
-.selected-sub { display: flex; align-items: center; gap: 6px; }
-.role-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 1px 5px;
-  border: 1px solid;
-  border-radius: 3px;
-  font-size: 8px;
-  font-weight: 800;
-  line-height: 1.2;
-  letter-spacing: 0.5px;
-  background: rgba(255, 255, 255, 0.05);
-}
-.stat-highlight {
-  color: #79d5e6 !important;
-  font-weight: 700;
-}
-.tower-options { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
-.tower-option {
-  display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) auto;
-  align-items: center;
-  column-gap: 8px;
-  min-width: 0;
-  min-height: 48px;
-  padding: 6px 9px;
-  border: 1px solid rgba(255, 255, 255, 0.13);
-  border-radius: 4px;
-  color: rgba(238, 245, 242, 0.88);
-  background: rgba(255, 255, 255, 0.04);
-  font: inherit;
-  font-size: 10px;
-  text-align: left;
-  cursor: pointer;
-  pointer-events: auto;
-  transition: border-color 0.15s ease, background 0.15s ease, transform 0.12s ease;
-}
-.tower-opt-icon {
-  display: grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 4px;
-  background: rgba(0, 0, 0, 0.35);
-}
-.tower-opt-content { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.tower-opt-top { display: flex; align-items: center; gap: 6px; }
-.tower-opt-name { color: #f2f6ed; font-size: 11px; font-weight: 800; }
-.tower-opt-desc { color: rgba(238, 245, 242, 0.52); font-size: 8.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tower-opt-cost {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  padding: 3px 6px;
-  border-radius: 3px;
-  color: #f1d487;
-  background: rgba(241, 212, 135, 0.1);
-  font-size: 10px;
-  font-variant-numeric: tabular-nums;
-}
-.tower-option:hover:not(:disabled) {
-  border-color: var(--accent, #91dc8c);
-  background: var(--glow, rgba(145, 220, 140, 0.12));
-  transform: translateX(-2px);
-}
-.tower-option.disabled { cursor: not-allowed; opacity: 0.38; }
-.tower-empty { padding: 12px 4px; color: rgba(238, 245, 242, 0.4); font-size: 10px; }
-
-.selected-tower { border-color: rgba(121, 213, 230, 0.35); }
-.selected-heading strong { display: block; margin-top: 3px; overflow: hidden; color: #f2f6ed; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
-.tower-level { flex: none; color: #79d5e6; font-size: 13px; font-variant-numeric: tabular-nums; }
-.tower-level small { color: rgba(121, 213, 230, 0.55); font-size: 10px; }
-.tower-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; margin: 9px 0 0; padding-top: 8px; border-top: 1px solid rgba(255, 255, 255, 0.1); }
-.tower-stats div { min-width: 0; }
-.tower-stats dt { overflow: hidden; color: rgba(238, 245, 242, 0.4); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
-.tower-stats dd { margin: 2px 0 0; color: #e9f0eb; font-size: 11px; font-variant-numeric: tabular-nums; }
-.tower-effect { margin: 7px 0 0; overflow: hidden; color: rgba(238, 245, 242, 0.62); font-size: 9px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
-.strategy-button { display: flex; align-items: center; gap: 7px; width: 100%; min-height: 28px; margin-top: 7px; padding: 4px 7px; border: 1px solid rgba(121, 213, 230, 0.3); border-radius: 4px; color: rgba(238, 245, 242, 0.64); background: rgba(121, 213, 230, 0.07); font: inherit; font-size: 9px; text-align: left; cursor: pointer; pointer-events: auto; }
-.strategy-button strong { overflow: hidden; color: #bce9ed; text-overflow: ellipsis; white-space: nowrap; }
-.strategy-button small { margin-left: auto; color: rgba(238, 245, 242, 0.38); }
-.branch-section { margin-top: 8px; }
-.branch-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; margin-top: 4px; }
-.branch-button { min-width: 0; min-height: 34px; padding: 4px 6px; border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 4px; color: rgba(238, 245, 242, 0.65); background: rgba(255, 255, 255, 0.04); font: inherit; text-align: left; cursor: pointer; pointer-events: auto; }
-.branch-button strong, .branch-button small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.branch-button strong { font-size: 9px; }
-.branch-button small { margin-top: 2px; color: rgba(238, 245, 242, 0.4); font-size: 8px; }
-.branch-button.selected { border-color: #d7a657; color: #f1d487; background: rgba(215, 166, 87, 0.13); }
-.tower-actions { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 6px; margin-top: 8px; }
-.tower-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-width: 0; min-height: 32px; padding: 0 7px; border: 1px solid rgba(145, 220, 140, 0.52); border-radius: 4px; color: #122016; background: #91dc8c; font: inherit; font-size: 10px; font-weight: 800; cursor: pointer; pointer-events: auto; }
-.tower-actions button b { display: inline-flex; align-items: center; gap: 2px; color: #2e4b2d; font-size: 9px; }
-.tower-actions button small { color: #9be1a0; font-size: 9px; }
-.tower-actions button:disabled { cursor: not-allowed; opacity: 0.36; }
-.tower-actions button:hover:not(:disabled) { background: #a5e99f; }
-.tower-actions .sell-button { border-color: rgba(223, 118, 95, 0.52); color: #f1d5cd; background: rgba(223, 118, 95, 0.12); }
-.tower-actions .sell-button:hover:not(:disabled) { background: rgba(223, 118, 95, 0.22); }
-.system-button:focus-visible, .tower-option:focus-visible, .strategy-button:focus-visible, .branch-button:focus-visible, .tower-actions button:focus-visible, .close-card-btn:focus-visible { outline: 2px solid #d7ffba; outline-offset: 2px; }
+.system-button:focus-visible, .close-card-btn:focus-visible { outline: 2px solid #d7ffba; outline-offset: 2px; }
 
 .panel-fade-enter-active,
 .panel-fade-leave-active {
@@ -1311,14 +791,26 @@ function displayStat(value, digits = 1) {
   .wave-intel { top: 58px; font-size: 8px; }
   .defense-status { top: 78px; max-width: calc(100vw - 28px); }
   .tower-controls { right: 10px; bottom: 10px; left: 10px; max-width: none; }
-  .tower-palette, .selected-tower { min-width: 0; max-width: none; }
-  .tower-options { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .tower-option { grid-template-columns: 1fr; justify-items: center; min-height: 40px; padding: 4px 3px; text-align: center; }
-  .tower-option svg { grid-row: auto; }
-  .tower-option span { max-width: 100%; font-size: 9px; }
-  .tower-option b { display: none; }
-  .tower-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  .tower-effect { max-width: 100%; }
+}
+
+@media (max-width: 620px) and (orientation: portrait) {
+  .defense-header {
+    top: 10px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: 32px 24px 30px;
+    gap: 5px 8px;
+  }
+  .defense-brand { grid-column: 1; grid-row: 1; min-width: 0; }
+  .defense-brand strong { max-width: 100%; }
+  .header-right { display: contents; }
+  .system-controls { grid-column: 2; grid-row: 1; }
+  .metric-cell { grid-row: 2; justify-self: start; }
+  .lives-cell { justify-self: end; }
+  .wave-pill { position: static; grid-column: 1 / -1; grid-row: 3; transform: none; justify-self: center; }
+  .wave-intel { top: 108px; gap: 8px; font-size: 10px; line-height: 16px; }
+  .wave-intel > span:first-child { max-width: 42vw; }
+  .defense-status { top: 132px; }
 }
 
 .stage-outcome-backdrop {
@@ -1452,10 +944,11 @@ function displayStat(value, digits = 1) {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .wave-track em, .lives-bar em, .tower-option, .tower-actions button, .panel-fade-enter-active, .panel-fade-leave-active { transition: none; }
+  .wave-track em, .lives-bar em, .tower-actions button, .panel-fade-enter-active, .panel-fade-leave-active { transition: none; }
 }
 
 .tutorial-banner {
+  box-sizing: border-box;
   position: absolute;
   top: 68px;
   left: 50%;
@@ -1473,12 +966,20 @@ function displayStat(value, digits = 1) {
   z-index: 100;
   backdrop-filter: blur(8px);
   pointer-events: auto;
-  animation: pulse-border 2s infinite ease-in-out;
 }
 
-@keyframes pulse-border {
-  0%, 100% { border-color: #2ecc71; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.7), 0 0 15px rgba(46, 204, 113, 0.3); }
-  50% { border-color: #55efc4; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.7), 0 0 25px rgba(85, 239, 196, 0.5); }
+.tutorial-enter-active,
+.tutorial-leave-active {
+  transition: opacity 0.16s ease;
+}
+
+.tutorial-enter-from,
+.tutorial-leave-to {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tutorial-enter-active, .tutorial-leave-active { transition: none; }
 }
 
 .tutorial-content {
@@ -1540,95 +1041,6 @@ function displayStat(value, digits = 1) {
   transform: scale(1.04);
 }
 
-.tower-option.locked {
-  opacity: 0.55;
-  filter: grayscale(0.65);
-  cursor: not-allowed;
-  border-color: rgba(255, 255, 255, 0.1) !important;
-}
-
-.tower-lock-chip {
-  font-size: 10px;
-  font-weight: 700;
-  color: #ff7675;
-  background: rgba(255, 118, 117, 0.15);
-  padding: 3px 6px;
-  border-radius: 4px;
-  border: 1px solid rgba(255, 118, 117, 0.35);
-}
-
-
-.shiny-trait-banner {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  background: rgba(255, 209, 102, 0.12);
-  border: 1px solid #ffd166;
-  border-radius: 6px;
-  margin-bottom: 8px;
-}
-.shiny-icon {
-  font-size: 18px;
-}
-.shiny-text {
-  display: flex;
-  flex-direction: column;
-}
-.shiny-text strong {
-  font-size: 11px;
-}
-.shiny-text small {
-  font-size: 10px;
-  color: rgba(238, 245, 242, 0.7);
-}
-
-
-.active-mutations-tray {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 6px;
-}
-.mutation-chip-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.mutation-mini-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: rgba(15, 26, 36, 0.85);
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  font-size: 11px;
-  color: #eef5f2;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
-  cursor: help;
-  transition: transform 0.15s ease;
-}
-.mutation-mini-chip:hover {
-  transform: scale(1.08);
-}
-.mutation-mini-chip.common {
-  border-color: #2ecc71;
-  color: #2ecc71;
-}
-.mutation-mini-chip.rare {
-  border-color: #38d2ff;
-  color: #38d2ff;
-}
-.mutation-mini-chip.epic {
-  border-color: #a55eea;
-  color: #a55eea;
-}
-.mutation-mini-chip.legendary {
-  border-color: #ffd166;
-  color: #ffd166;
-  background: linear-gradient(180deg, rgba(30, 25, 15, 0.9) 0%, rgba(15, 20, 26, 0.9) 100%);
-}
 .chip-icon {
   font-size: 12px;
 }

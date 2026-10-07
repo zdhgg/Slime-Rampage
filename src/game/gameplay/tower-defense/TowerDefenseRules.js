@@ -1,3 +1,4 @@
+import { CAMPAIGN_TOWER_UNLOCKS, EXTRA_TOWERS, EXTRA_ENEMIES } from './TowerDefenseContent.js'
 export const TOWER_DEFENSE_WAVE_COUNT = 10
 export const TOWER_DEFENSE_STARTING_GOLD = 240
 export const TOWER_DEFENSE_BASE_HP = 20
@@ -45,7 +46,7 @@ export const TOWER_DEFENSE_LEYLINE_TYPES = Object.freeze({
     color: '#38d2ff',
     glow: 'rgba(56, 210, 255, 0.45)',
     preferredType: 'slow',
-    description: '极寒史莱姆驻扎：减速范围 +20%，减速时长 +20%',
+    description: '极寒史莱姆驻扎：射程 +15%，减速时长 +20%，减速强度 +8%',
     statBuff: { rangeMultiplier: 1.15, slowDurationMultiplier: 1.20, slowRatioBonus: 0.08 },
   },
   magma: {
@@ -63,7 +64,7 @@ export const TOWER_DEFENSE_LEYLINE_TYPES = Object.freeze({
     color: '#ffeaa7',
     glow: 'rgba(255, 234, 167, 0.55)',
     preferredType: 'all',
-    description: '全系共鸣：射程 +20%，攻速 +15%',
+    description: '全系共鸣：射程 +20%，攻速 +15%，伤害 +10%',
     statBuff: { rangeMultiplier: 1.20, speedMultiplier: 1.15, damageMultiplier: 1.10 },
   },
 })
@@ -87,7 +88,7 @@ export const TOWER_DEFENSE_TRAPS = Object.freeze([
     id: 'spore_shroom',
     name: '毒孢子大蘑菇',
     shortDesc: '入口 50% 减速 + 毒蚀伤害',
-    description: '引爆浓厚剧毒孢子，大范围减速 50% 并造成 35 点持续毒蚀伤害',
+    description: '引爆浓厚剧毒孢子，大范围减速 50% 并造成 35 点伤害',
     pos: { x: 0.17, y: 0.08 },
     targetPos: { x: 0.17, y: 0.18 },
     radius: 0.15,
@@ -127,8 +128,8 @@ export const TOWER_DEFENSE_TRAPS = Object.freeze([
   },
 ])
 
-export function getSlotLeylineResonance(slotIndex, towerTypeId) {
-  const leylineId = TOWER_DEFENSE_SLOT_LEYLINES[slotIndex] || 'acid'
+export function getSlotLeylineResonance(slotIndex, towerTypeId, slots = null) {
+  const leylineId = slots ? slots[slotIndex]?.leyline : (TOWER_DEFENSE_SLOT_LEYLINES[slotIndex] || 'acid')
   const leyline = TOWER_DEFENSE_LEYLINE_TYPES[leylineId]
   if (!leyline) return { isResonant: false, leylineId, buff: null }
   const isResonant = !towerTypeId || leyline.preferredType === 'all' || leyline.preferredType === towerTypeId
@@ -156,6 +157,7 @@ function enemyType(id, data) {
 }
 
 export const TOWER_DEFENSE_ENEMY_TYPES = Object.freeze({
+  ...Object.fromEntries(Object.entries(EXTRA_ENEMIES).map(([id, data]) => [id, enemyType(id, data)])),
   grunt: enemyType('grunt', {
     name: '步战者',
     shortName: '步战',
@@ -189,7 +191,7 @@ export const TOWER_DEFENSE_ENEMY_TYPES = Object.freeze({
     reward: 21,
     damage: 3,
     size: 1.22,
-    traits: { armor: 0.48, slowResistance: 0.28 },
+    traits: { armor: 0.58, slowResistance: 0.28 },
   }),
   swarm: enemyType('swarm', {
     name: '群袭体',
@@ -243,7 +245,7 @@ export const TOWER_DEFENSE_ENEMY_TYPES = Object.freeze({
     shortName: '攻城兽',
     shape: 'boss',
     color: '#df4f46',
-    hp: 1280,
+    hp: 850,
     speed: 0.035,
     reward: 190,
     damage: 10,
@@ -276,6 +278,9 @@ export function getEnemyTraitTags(typeId) {
   if ((type.traits.slowResistance || 0) > 0) tags.push({ icon: '❄️', label: `减速抗性 ${Math.round(type.traits.slowResistance * 100)}%` })
   if (type.traits.empPulse) tags.push({ icon: '⚡', label: `EMP 脉冲：周期性瘫痪附近守卫 ${type.traits.empPulse.duration} 秒` })
   if (type.speed >= 0.085) tags.push({ icon: '💨', label: '高速行军' })
+  for (const [key, label] of Object.entries({ regeneration: '再生（腐蚀抑制）', sprint: '周期冲刺', wardRadius: '邻军补盾', berserk: '半血狂暴加速', cloaked: '隐匿（近身或观测显露）' })) {
+    if (type.traits[key]) tags.push({ icon: '◆', label })
+  }
   if (type.boss) tags.push({ icon: '👑', label: '首领（狂暴二阶段）' })
   return tags
 }
@@ -307,9 +312,10 @@ function towerType(id, data) {
 }
 
 export const TOWER_DEFENSE_TOWER_TYPES = Object.freeze({
+  ...Object.fromEntries(Object.entries(EXTRA_TOWERS).map(([id, data]) => [id, towerType(id, data)])),
   rapid: towerType('rapid', {
     name: '强酸史莱姆',
-    description: '极速连喷强酸毒液弹，单体破甲输出',
+    description: '极速连喷强酸毒液弹，单体输出，可专精穿甲',
     color: '#58c9a5',
     cost: 65,
     targeting: 'first',
@@ -318,19 +324,19 @@ export const TOWER_DEFENSE_TOWER_TYPES = Object.freeze({
       { damage: 6, range: 0.205, fireInterval: 0.30, fireKind: 'single' },
       { damage: 9, range: 0.218, fireInterval: 0.255, fireKind: 'single' },
     ],
-    upgradeCosts: [55, 92, 132],
+    upgradeCosts: [55, 110, 236],
     branches: {
       gatling: {
         name: '暴走连喷',
-        description: '多头连环疾速喷吐，优先收割低生命目标',
-        level3: { damage: 7, range: 0.225, fireInterval: 0.20, fireKind: 'burst', burst: 3, burstScale: 0.58 },
-        level4: { damage: 9, range: 0.232, fireInterval: 0.16, fireKind: 'burst', burst: 4, burstScale: 0.62 },
+        description: '多头连环喷吐，擅长收割轻甲目标',
+        level3: { damage: 7, range: 0.215, fireInterval: 0.30, fireKind: 'burst', burst: 3, burstScale: 0.58 },
+        level4: { damage: 8, range: 0.225, fireInterval: 0.28, fireKind: 'burst', burst: 3, burstScale: 0.58 },
       },
       sniper: {
         name: '独角穿甲',
         description: '高能长程强酸射线，无视大部分护甲',
-        level3: { damage: 36, range: 0.34, fireInterval: 0.92, fireKind: 'single', armorPierce: 0.72 },
-        level4: { damage: 58, range: 0.40, fireInterval: 0.82, fireKind: 'single', armorPierce: 0.82 },
+        level3: { damage: 36, range: 0.30, fireInterval: 0.92, fireKind: 'single', armorPierce: 0.72 },
+        level4: { damage: 49, range: 0.33, fireInterval: 0.82, fireKind: 'single', armorPierce: 0.82 },
       },
     },
   }),
@@ -345,46 +351,46 @@ export const TOWER_DEFENSE_TOWER_TYPES = Object.freeze({
       { damage: 5, range: 0.22, fireInterval: 0.72, fireKind: 'slow', slowRatio: 0.46, slowDuration: 1.7 },
       { damage: 8, range: 0.232, fireInterval: 0.64, fireKind: 'slow', slowRatio: 0.50, slowDuration: 2.0 },
     ],
-    upgradeCosts: [65, 98, 138],
+    upgradeCosts: [65, 98, 186],
     branches: {
       'frost-field': {
         name: '霜雪领域',
         description: '叠加极寒霜晶，三层霜冻极速冰封',
         level3: { damage: 10, range: 0.25, fireInterval: 0.58, fireKind: 'freeze', slowRatio: 0.56, slowDuration: 2.2, freezeDuration: 0.8 },
-        level4: { damage: 14, range: 0.27, fireInterval: 0.50, fireKind: 'freeze', slowRatio: 0.62, slowDuration: 2.5, freezeDuration: 1.1 },
+        level4: { damage: 12, range: 0.27, fireInterval: 0.50, fireKind: 'freeze', slowRatio: 0.62, slowDuration: 2.5, freezeDuration: 1.1 },
       },
       'ice-chain': {
         name: '冰脉连锁',
         description: '寒流在多个邻近目标之间连锁跳转',
         level3: { damage: 9, range: 0.25, fireInterval: 0.62, fireKind: 'chain', slowRatio: 0.42, slowDuration: 1.7, chainCount: 3, chainRange: 0.12, chainScale: 0.72 },
-        level4: { damage: 12, range: 0.27, fireInterval: 0.54, fireKind: 'chain', slowRatio: 0.46, slowDuration: 2.0, chainCount: 4, chainRange: 0.14, chainScale: 0.78 },
+        level4: { damage: 10, range: 0.27, fireInterval: 0.54, fireKind: 'chain', slowRatio: 0.46, slowDuration: 2.0, chainCount: 4, chainRange: 0.14, chainScale: 0.78 },
       },
     },
   }),
   blast: towerType('blast', {
     name: '熔岩史莱姆',
-    description: '吐出巨大熔岩爆浆，大范围重伤与穿甲',
+    description: '吐出巨大熔岩爆浆，大范围清理密集敌军，重甲需要友军支援',
     color: '#efad58',
     cost: 90,
     targeting: 'first',
     shape: 'cannon',
     levels: [
-      { damage: 12, range: 0.19, fireInterval: 1.12, fireKind: 'splash', splashRadius: 0.105, armorPierce: 0.45 },
-      { damage: 19, range: 0.205, fireInterval: 1.02, fireKind: 'splash', splashRadius: 0.114, armorPierce: 0.48 },
+      { damage: 12, range: 0.19, fireInterval: 1.12, fireKind: 'splash', splashRadius: 0.105, armorPierce: 0.1, splashTargets: 4 },
+      { damage: 19, range: 0.205, fireInterval: 1.02, fireKind: 'splash', splashRadius: 0.114, armorPierce: 0.1, splashTargets: 4 },
     ],
-    upgradeCosts: [75, 112, 152],
+    upgradeCosts: [75, 112, 205],
     branches: {
       'heavy-shell': {
         name: '黑曜重炮',
         description: '巨型熔岩弹砸落，超大范围破坏与震波',
-        level3: { damage: 34, range: 0.22, fireInterval: 1.22, fireKind: 'splash', splashRadius: 0.145, armorPierce: 0.72 },
-        level4: { damage: 52, range: 0.235, fireInterval: 1.12, fireKind: 'splash', splashRadius: 0.17, armorPierce: 0.82 },
+        level3: { damage: 34, range: 0.22, fireInterval: 1.22, fireKind: 'splash', splashRadius: 0.145, armorPierce: 0.15, splashTargets: 5 },
+        level4: { damage: 44, range: 0.235, fireInterval: 1.12, fireKind: 'splash', splashRadius: 0.17, armorPierce: 0.2, splashTargets: 6 },
       },
       'burn-zone': {
         name: '炽热焦土',
         description: '熔浆溅落形成持续燃烧的烈焰火海',
-        level3: { damage: 25, range: 0.215, fireInterval: 1.05, fireKind: 'burn', splashRadius: 0.12, burnDamage: 7, burnDuration: 2.8, armorPierce: 0.55 },
-        level4: { damage: 35, range: 0.23, fireInterval: 0.96, fireKind: 'burn', splashRadius: 0.14, burnDamage: 11, burnDuration: 3.4, armorPierce: 0.62 },
+        level3: { damage: 25, range: 0.215, fireInterval: 1.05, fireKind: 'burn', splashRadius: 0.12, burnDamage: 7, burnDuration: 2.8, armorPierce: 0.1, splashTargets: 4 },
+        level4: { damage: 30, range: 0.23, fireInterval: 0.96, fireKind: 'burn', splashRadius: 0.14, burnDamage: 11, burnDuration: 3.4, armorPierce: 0.1, splashTargets: 5 },
       },
     },
   }),
@@ -396,28 +402,28 @@ export const TOWER_DEFENSE_TOWER_TYPES = Object.freeze({
     targeting: 'first',
     shape: 'shock',
     levels: [
-      { damage: 8, range: 0.21, fireInterval: 0.52, fireKind: 'chain_shock', chainCount: 3, chainRange: 0.14, stunDuration: 0.15 },
-      { damage: 13, range: 0.225, fireInterval: 0.46, fireKind: 'chain_shock', chainCount: 4, chainRange: 0.16, stunDuration: 0.2 },
+      { damage: 8, range: 0.21, fireInterval: 0.52, fireKind: 'chain_shock', chainScale: 0.72, chainCount: 3, chainRange: 0.14, stunDuration: 0.15 },
+      { damage: 13, range: 0.225, fireInterval: 0.46, fireKind: 'chain_shock', chainScale: 0.72, chainCount: 4, chainRange: 0.16, stunDuration: 0.2 },
     ],
-    upgradeCosts: [70, 105, 145],
+    upgradeCosts: [70, 105, 196],
     branches: {
       overload: {
         name: '高压过载',
-        description: '超强电弧风暴，跳跃5个目标并造成连锁微眩晕',
-        level3: { damage: 18, range: 0.24, fireInterval: 0.40, fireKind: 'chain_shock', chainCount: 5, chainRange: 0.18, stunDuration: 0.35 },
-        level4: { damage: 26, range: 0.26, fireInterval: 0.34, fireKind: 'chain_shock', chainCount: 6, chainRange: 0.20, stunDuration: 0.5 },
+        description: '扩大连锁目标数，以较短的单次眩晕换取群攻能力',
+        level3: { damage: 18, range: 0.24, fireInterval: 0.48, fireKind: 'chain_shock', chainScale: 0.72, chainCount: 5, chainRange: 0.18, stunDuration: 0.12 },
+        level4: { damage: 19, range: 0.26, fireInterval: 0.44, fireKind: 'chain_shock', chainScale: 0.72, chainCount: 6, chainRange: 0.20, stunDuration: 0.15 },
       },
       'hyper-beam': {
         name: '超导光束',
         description: '高能持续聚焦雷霆光束，对单体目标呈高倍穿甲增伤',
         level3: { damage: 45, range: 0.32, fireInterval: 0.85, fireKind: 'single', armorPierce: 0.8 },
-        level4: { damage: 72, range: 0.38, fireInterval: 0.75, fireKind: 'single', armorPierce: 0.9 },
+        level4: { damage: 61, range: 0.32, fireInterval: 0.75, fireKind: 'single', armorPierce: 0.9 },
       },
     },
   }),
   arcane: towerType('arcane', {
     name: '虚空史莱姆',
-    description: '释放暗影引力黑洞，强力聚怪牵引并撕裂护甲',
+    description: '释放暗影引力黑洞，牵引减速，可专精破盾真伤',
     color: '#8854d0',
     cost: 100,
     targeting: 'first',
@@ -426,19 +432,19 @@ export const TOWER_DEFENSE_TOWER_TYPES = Object.freeze({
       { damage: 10, range: 0.23, fireInterval: 0.95, fireKind: 'vortex', splashRadius: 0.12, pullForce: 0.04 },
       { damage: 16, range: 0.245, fireInterval: 0.85, fireKind: 'vortex', splashRadius: 0.135, pullForce: 0.06 },
     ],
-    upgradeCosts: [85, 125, 170],
+    upgradeCosts: [85, 125, 230],
     branches: {
       singularity: {
         name: '奇点坍缩',
         description: '超大范围引力黑洞，吸聚大批敌军并造成大范围震波',
         level3: { damage: 26, range: 0.26, fireInterval: 0.80, fireKind: 'vortex', splashRadius: 0.16, pullForce: 0.10 },
-        level4: { damage: 40, range: 0.28, fireInterval: 0.70, fireKind: 'vortex', splashRadius: 0.19, pullForce: 0.14 },
+        level4: { damage: 34, range: 0.28, fireInterval: 0.70, fireKind: 'vortex', splashRadius: 0.19, pullForce: 0.14 },
       },
       'void-rift': {
         name: '虚空裂隙',
         description: '直接撕裂空间，造成无视护甲与护盾的纯粹穿透伤害',
-        level3: { damage: 55, range: 0.25, fireInterval: 1.10, fireKind: 'single', armorPierce: 1.0 },
-        level4: { damage: 90, range: 0.28, fireInterval: 0.98, fireKind: 'single', armorPierce: 1.0 },
+        level3: { damage: 55, range: 0.25, fireInterval: 1.10, fireKind: 'single', armorPierce: 1.0, shieldBypass: true },
+        level4: { damage: 76, range: 0.28, fireInterval: 0.98, fireKind: 'single', armorPierce: 1.0, shieldBypass: true },
       },
     },
   }),
@@ -450,35 +456,28 @@ export const TOWER_DEFENSE_TOWER_TYPES = Object.freeze({
     targeting: 'first',
     shape: 'radiant',
     levels: [
-      { damage: 8, range: 0.24, fireInterval: 0.80, fireKind: 'aura', auraSpeedBoost: 0.25, auraRadius: 0.24 },
-      { damage: 14, range: 0.26, fireInterval: 0.72, fireKind: 'aura', auraSpeedBoost: 0.30, auraRadius: 0.26 },
+      { damage: 8, range: 0.24, fireInterval: 0.80, fireKind: 'aura', auraSpeedBoost: 0.12, auraRadius: 0.24 },
+      { damage: 14, range: 0.26, fireInterval: 0.72, fireKind: 'aura', auraSpeedBoost: 0.18, auraRadius: 0.26 },
     ],
-    upgradeCosts: [90, 135, 180],
+    upgradeCosts: [90, 135, 243],
     branches: {
       'solar-flare': {
         name: '炽阳新星',
         description: '周期性爆发超强太阳耀斑，眩晕震慑范围敌军',
-        level3: { damage: 32, range: 0.28, fireInterval: 0.90, fireKind: 'nova', auraSpeedBoost: 0.35, auraRadius: 0.28, stunDuration: 0.6 },
-        level4: { damage: 50, range: 0.30, fireInterval: 0.80, fireKind: 'nova', auraSpeedBoost: 0.40, auraRadius: 0.30, stunDuration: 1.0 },
+        level3: { damage: 32, range: 0.28, fireInterval: 0.90, fireKind: 'nova', splashRadius: 0.14, auraSpeedBoost: 0.22, auraRadius: 0.28, stunDuration: 0.3 },
+        level4: { damage: 42, range: 0.30, fireInterval: 0.80, fireKind: 'nova', splashRadius: 0.14, auraSpeedBoost: 0.25, auraRadius: 0.30, stunDuration: 0.4 },
       },
       sanctuary: {
         name: '圣堂庇护',
-        description: '扩大光环范围，为临近所有史莱姆提供 +45% 攻速狂热',
-        level3: { damage: 20, range: 0.34, fireInterval: 0.65, fireKind: 'aura', auraSpeedBoost: 0.45, auraRadius: 0.34 },
-        level4: { damage: 30, range: 0.38, fireInterval: 0.55, fireKind: 'aura', auraSpeedBoost: 0.55, auraRadius: 0.38 },
+        description: '扩大光环范围，为临近所有史莱姆提供 最高 +35% 攻速（同类光环不叠加）',
+        level3: { damage: 20, range: 0.34, fireInterval: 0.65, fireKind: 'aura', auraSpeedBoost: 0.30, auraRadius: 0.34 },
+        level4: { damage: 26, range: 0.38, fireInterval: 0.55, fireKind: 'aura', auraSpeedBoost: 0.35, auraRadius: 0.38 },
       },
     },
   }),
 })
 
-export const TOWER_UNLOCK_MAP = Object.freeze({
-  rapid: 1,
-  slow: 1,
-  blast: 2,
-  shock: 5,
-  arcane: 21,
-  radiant: 41,
-})
+export const TOWER_UNLOCK_MAP = CAMPAIGN_TOWER_UNLOCKS
 
 export function isTowerUnlocked(typeId, stageId = 1, customUnlockedSet = null) {
   if (customUnlockedSet && customUnlockedSet.has(typeId)) return true
@@ -579,21 +578,32 @@ export function getWaveComposition(waveIndex) {
 export function getWaveCompositionFromWaves(waves, waveIndex) {
   const definition = waves?.[waveIndex]
   if (!definition) return []
-  const counts = new Map()
-  for (const entry of definition.groups) counts.set(entry.type, (counts.get(entry.type) || 0) + entry.count)
-  return Array.from(counts, ([id, count]) => {
-    const type = getEnemyType(id)
-    return { id, name: type.shortName || type.name, count, color: type.color, shape: type.shape, traits: getEnemyTraitTags(id) }
+  const entries = new Map()
+  for (const group of definition.groups) {
+    const id = group.miniBoss ? `mini_${group.miniBoss.id}` : group.type
+    const previous = entries.get(id)
+    entries.set(id, { group, count: (previous?.count || 0) + group.count })
+  }
+  return Array.from(entries, ([id, { group, count }]) => {
+    const type = getEnemyType(group.type)
+    const mini = group.miniBoss
+    const traits = mini ? [
+      { icon: '◆', label: mini.mechanic }, { icon: '↳', label: mini.counter },
+      { icon: '⚠', label: `漏过损失 ${mini.damage} 点巢心耐久` },
+    ] : getEnemyTraitTags(group.type)
+    if (group.bossChapter) traits.push({ icon: '◆', label: `二阶段：${['重甲再生', '晶盾冲锋', '熔血裂殖', '电磁压制', '王庭协同'][group.bossChapter - 1]}` })
+    if (group.coreDamage >= 20) traits.push({ icon: '⚠', label: '抵达母巢即失败，必须击杀' })
+    return { id, name: mini ? `小首领·${mini.name}` : group.bossName || type.shortName || type.name, count, color: mini?.color || type.color, shape: type.shape, traits }
   })
 }
 
-export function getWaveBaseDamage(waveIndex) {
-  const definition = TOWER_DEFENSE_WAVES[waveIndex]
+export function getWaveBaseDamage(waveIndex, waves = TOWER_DEFENSE_WAVES) {
+  const definition = waves[waveIndex]
   if (!definition) return 0
-  return definition.groups.reduce((sum, entry) => sum + getEnemyType(entry.type).damage * entry.count, 0)
+  return definition.groups.reduce((sum, entry) => sum + (entry.coreDamage || entry.miniBoss?.damage || getEnemyType(entry.type).damage) * entry.count, 0)
 }
 
-export function getTowerStats(typeId, level = 1, branchId = null, slotIndex = null) {
+export function getTowerStats(typeId, level = 1, branchId = null, slotIndex = null, slots = null) {
   const type = TOWER_DEFENSE_TOWER_TYPES[typeId]
   if (!type) return null
   const rank = Math.max(1, Math.min(4, Math.floor(level)))
@@ -603,7 +613,7 @@ export function getTowerStats(typeId, level = 1, branchId = null, slotIndex = nu
     : { ...(rank === 3 ? branch.level3 : branch.level4), branchId: branch.id }
 
   if (slotIndex != null) {
-    const resonance = getSlotLeylineResonance(slotIndex, typeId)
+    const resonance = getSlotLeylineResonance(slotIndex, typeId, slots)
     if (resonance.isResonant && resonance.buff) {
       if (resonance.buff.damageMultiplier) stats.damage = Math.round(stats.damage * resonance.buff.damageMultiplier)
       if (resonance.buff.rangeMultiplier) stats.range = +(stats.range * resonance.buff.rangeMultiplier).toFixed(3)
@@ -638,200 +648,4 @@ export function getTowerBranchOptions(typeId) {
     name: branch.name,
     description: branch.description,
   }))
-}
-
-/** 5 Shiny Slime Traits (20% chance on summon) */
-export const SLIME_SHINY_TRAITS = Object.freeze({
-  greedy: {
-    id: 'greedy',
-    name: '贪吃鬼',
-    icon: '🌟',
-    color: '#ffd166',
-    description: '击杀敌人额外掉落 +50% 养分',
-    bonusGoldMul: 1.5,
-  },
-  hasty: {
-    id: 'hasty',
-    name: '疾风迅捷',
-    icon: '⚡',
-    color: '#2ecc71',
-    description: '基础攻击速度提升 +30%',
-    speedMul: 1.3,
-  },
-  sniper: {
-    id: 'sniper',
-    name: '鹰眼索敌',
-    icon: '🎯',
-    color: '#38d2ff',
-    description: '射程提升 +25%，优先索敌高速目标',
-    rangeMul: 1.25,
-  },
-  critical: {
-    id: 'critical',
-    name: '致命暴击',
-    icon: '💥',
-    color: '#ff7675',
-    description: '每次攻击有 25% 概率造成 2.2 倍暴击伤害',
-    critChance: 0.25,
-    critMul: 2.2,
-  },
-  beloved: {
-    id: 'beloved',
-    name: '母巢宠儿',
-    icon: '👑',
-    color: '#a55eea',
-    description: '抚摸鼓舞时攻速提升增加至 +80%',
-    petSpeedBoost: 0.80,
-  },
-});
-
-/** 16+ Roguelike Mutation Cards */
-export const TOWER_DEFENSE_MUTATIONS = Object.freeze([
-  {
-    id: 'acid_pool',
-    name: '酸液喷涌',
-    icon: '🌿',
-    rarity: 'rare',
-    theme: 'rapid',
-    description: '强酸史莱姆攻击命中后在地面留下融甲酸池（持续 3 秒，每秒 15 点融甲伤害）',
-  },
-  {
-    id: 'frost_deep_freeze',
-    name: '绝对零度',
-    icon: '❄️',
-    rarity: 'epic',
-    theme: 'slow',
-    description: '极寒史莱姆减速叠至 3 层时直接深度冰封目标 1.5 秒',
-  },
-  {
-    id: 'magma_blast_zone',
-    name: '炽热焦土',
-    icon: '🔥',
-    rarity: 'rare',
-    theme: 'blast',
-    description: '熔岩史莱姆爆炸范围扩大 +35%，且地面火海持续时间延长 2 秒',
-  },
-  {
-    id: 'shock_hyper_chain',
-    name: '超导过载',
-    icon: '⚡',
-    rarity: 'rare',
-    theme: 'shock',
-    description: '雷鸣史莱姆电弧跳跃目标数 +2，且跳跃伤害不再衰减',
-  },
-  {
-    id: 'void_singularity',
-    name: '引力撕裂',
-    icon: '🔮',
-    rarity: 'epic',
-    theme: 'arcane',
-    description: '虚空史莱姆黑洞吸附范围 +40%，对被吸附敌人造成 1.5 倍纯粹伤害',
-  },
-  {
-    id: 'radiant_fervor',
-    name: '圣堂狂热',
-    icon: '☀️',
-    rarity: 'epic',
-    theme: 'radiant',
-    description: '炽阳史莱姆光环攻速加成提升至 +60%',
-  },
-  {
-    id: 'nutrient_harvest',
-    name: '吞噬饕餮',
-    icon: '💰',
-    rarity: 'common',
-    theme: 'economy',
-    description: '所有敌人被消灭时额外掉落 +25% 养分',
-  },
-  {
-    id: 'spore_chain_reaction',
-    name: '殉爆孢子',
-    icon: '🍄',
-    rarity: 'rare',
-    theme: 'trap',
-    description: '被战术机关命中的敌人，阵亡时产生范围连锁爆炸造成 50 点伤害',
-  },
-  {
-    id: 'spiritual_affinity',
-    name: '灵性亲和',
-    icon: '💖',
-    rarity: 'common',
-    theme: 'interaction',
-    description: '抚摸鼓舞冷却时间缩短 50%，鼓舞持续时间提升至 8 秒',
-  },
-  {
-    id: 'leap_earthquake',
-    name: '泰山压顶',
-    icon: '🦘',
-    rarity: 'rare',
-    theme: 'interaction',
-    description: '史莱姆战术换位落地时震晕周围大范围敌人 1.8 秒',
-  },
-  {
-    id: 'hive_thorns',
-    name: '母巢荆棘',
-    icon: '🛡️',
-    rarity: 'common',
-    theme: 'hive',
-    description: '母巢核心获得反伤电网，靠近核心的敌人受到持续 30 DPS 雷击',
-  },
-  {
-    id: 'rapid_gatling_frenzy',
-    name: '狂暴弹幕',
-    icon: '🎯',
-    rarity: 'epic',
-    theme: 'rapid',
-    description: '强酸史莱姆攻击速度提升 +35%，连续命中同目标伤害每次 +10%',
-  },
-  {
-    id: 'frost_blizzard_storm',
-    name: '寒霜暴风',
-    icon: '🌨️',
-    rarity: 'rare',
-    theme: 'slow',
-    description: '极寒史莱姆攻击范围扩大 +25%，减速比例额外提升 +15%',
-  },
-  {
-    id: 'magma_meteor_rain',
-    name: '流星火雨',
-    icon: '☄️',
-    rarity: 'legendary',
-    theme: 'blast',
-    description: '熔岩史莱姆攻击时有 25% 概率额外附赠一颗小型陨石轰炸',
-  },
-  {
-    id: 'shock_plasma_storm',
-    name: '等离子风暴',
-    icon: '🌩️',
-    rarity: 'legendary',
-    theme: 'shock',
-    description: '雷鸣史莱姆暴击率提升 +30%，暴击时引发全屏微型麻痹静电',
-  },
-  {
-    id: 'gene_overclock',
-    name: '基因超频',
-    icon: '🧬',
-    rarity: 'legendary',
-    theme: 'all',
-    description: '全场所有史莱姆攻击力 +25%，攻击速度 +20%',
-  },
-]);
-
-/**
- * Deterministically pick 3 random mutation choices based on unlocked towers & active mutations.
- */
-export function getRandomMutationChoices(count = 3, activeMutations = [], unlockedTowers = ['rapid', 'slow']) {
-  const activeIds = new Set(activeMutations.map((m) => m.id || m));
-  const available = TOWER_DEFENSE_MUTATIONS.filter((m) => {
-    if (activeIds.has(m.id)) return false;
-    // Check if tower theme is unlocked
-    if (['rapid', 'slow', 'blast', 'shock', 'arcane', 'radiant'].includes(m.theme)) {
-      return unlockedTowers.includes(m.theme);
-    }
-    return true;
-  });
-
-  // Shuffle and pick
-  const shuffled = [...available].sort(() => Math.random() - 0.5);
-  return shuffled.slice(0, count);
 }

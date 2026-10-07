@@ -58,7 +58,7 @@ export class TowerDefenseDirector {
 
     if (this.phase === 'spawning') this._spawnDueEnemies(events)
 
-    if (this.phase === 'waiting' && activeEnemyCount === 0) {
+    if (this.phase === 'waiting' && activeEnemyCount === 0 && events.spawns.length === 0) {
       this.completedWaves = this.waveIndex + 1
       events.waveCompleted = this.completedWaves
       if (this.completedWaves >= this.waves.length) {
@@ -67,7 +67,7 @@ export class TowerDefenseDirector {
         events.allCompleted = true
       } else {
         this.phase = 'intermission'
-        this.timer = TOWER_DEFENSE_INTERMISSION
+        this.timer = this.waves[this.waveIndex]?.intermission ?? TOWER_DEFENSE_INTERMISSION
       }
     }
 
@@ -96,14 +96,20 @@ export class TowerDefenseDirector {
   }
 
   _createEnemy(group) {
-    const type = getEnemyType(group.type)
+    const base = getEnemyType(group.type)
+    const mini = group.miniBoss
+    const type = mini ? { ...base, ...mini, id: base.id, traits: { ...base.traits, ...mini.traits } } : base
     const scale = Number.isFinite(group.scale) ? group.scale : 1
     const hp = Math.max(1, Math.round(type.hp * scale))
     const shield = Math.max(0, Math.round(type.traits.shield * scale))
     return {
+      ...type.traits,
+      miniBoss: mini ? { id: mini.id, mechanic: mini.mechanic, counter: mini.counter } : null,
+      broodThresholdIndex: 0,
+      bossChapter: group.bossChapter || 1,
       id: this._nextEnemyId++,
       typeId: type.id,
-      name: type.name,
+      name: group.bossName || type.name,
       shape: type.shape,
       wave: this.waveIndex + 1,
       progress: 0,
@@ -111,8 +117,8 @@ export class TowerDefenseDirector {
       maxHp: hp,
       speed: type.speed,
       baseSpeed: type.speed,
-      reward: Math.max(1, Math.round(type.reward * Math.sqrt(scale))),
-      damage: type.damage,
+      reward: Math.max(1, Math.round(type.reward * (group.rewardScale ?? 1))),
+      damage: group.coreDamage || type.damage,
       color: type.color,
       size: type.size,
       boss: !!type.boss,

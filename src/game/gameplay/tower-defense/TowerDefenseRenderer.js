@@ -1,3 +1,5 @@
+import { createTowerScenery, paintTowerScenery, drawTowerAtmosphere } from './TowerDefenseScenery.js'
+import { getTowerDefenseLayout, fitTowerDefensePresentation, projectTowerDefensePoint, unprojectTowerDefensePoint } from './TowerDefenseLayout.js'
 import { AssetManager } from '../../AssetManager.js'
 import {
   TOWER_DEFENSE_BUILD_SLOTS,
@@ -7,15 +9,14 @@ import {
   TOWER_DEFENSE_TOWER_TYPES,
   TOWER_DEFENSE_TRAPS,
   getEnemyTraitTags,
-  getSlotLeylineResonance,
   getTowerDefensePathPosition,
-  getTowerStats,
 } from './TowerDefenseRules.js'
 
 const TAU = Math.PI * 2
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value))
 
 const ENEMY_ROLE_MAP = {
+  regenerator: 'golem', sprinter: 'hound', warder: 'mage', berserker: 'berserker', broodmother: 'golem', stalker: 'assassin', siege: 'boss_knight', emp: 'mage',
   grunt: 'knight',
   runner: 'assassin',
   tank: 'berserker',
@@ -37,36 +38,28 @@ export class TowerDefenseRenderer {
     this.boardWidth = 0
     this.boardHeight = 0
     this.unit = 0
+    this._sceneryCanvas = null
+    this._scenery = null
   }
 
   ensureLayout() {
     const game = this.gameplay.game
-    if (!game || (game.width === this.width && game.height === this.height)) return
-    this.width = Math.max(1, game.width)
-    this.height = Math.max(1, game.height)
-    const side = clamp(this.width * 0.035, 18, 54)
-    const top = clamp(this.height * 0.11, 58, 92)
-    const bottom = clamp(this.height * 0.055, 24, 48)
-    this.left = side
-    this.top = top
-    this.boardWidth = Math.max(1, this.width - side * 2)
-    this.boardHeight = Math.max(1, this.height - top - bottom)
-    this.unit = clamp(Math.min(this.boardWidth, this.boardHeight) * 0.064, 28, 56)
+    const config = this.gameplay.stageConfig
+    if (!game || (game.width === this.width && game.height === this.height && this._layoutConfig === config)) return
+    const layout = getTowerDefenseLayout(Math.max(1, game.width), Math.max(1, game.height))
+    Object.assign(this, config?.buildSlots
+      ? fitTowerDefensePresentation(layout, config.buildSlots, config.path, config.traps)
+      : layout)
+    this._layoutConfig = config
   }
 
   project(point) {
-    return {
-      x: this.left + point.x * this.boardWidth,
-      y: this.top + point.y * this.boardHeight,
-    }
+    return projectTowerDefensePoint(point, this)
   }
 
   unproject(x, y) {
     this.ensureLayout()
-    return {
-      x: (x - this.left) / this.boardWidth,
-      y: (y - this.top) / this.boardHeight,
-    }
+    return unprojectTowerDefensePoint(x, y, this)
   }
 
   getSlotIndexAt(x, y, occupiedOnly = false) {
@@ -90,813 +83,65 @@ export class TowerDefenseRenderer {
   render(ctx) {
     if (!ctx) return
     this.ensureLayout()
-    this._drawBackdrop(ctx)
-    this._drawEnvironmentDecorations(ctx)
-    this._drawPath(ctx)
+    this._drawCachedScenery(ctx)
+    drawTowerAtmosphere(ctx, this, this._scenery, this.gameplay.elapsedTime || 0)
+    const path = this.gameplay.stageConfig?.path || TOWER_DEFENSE_PATH
+    this._drawWarpPortal(ctx, this.project(path[0]))
+    this._drawSlimeBase(ctx, this.project(path.at(-1)))
     this._drawBurnZones(ctx)
     this._drawBuildSlots(ctx)
     this._drawTraps(ctx)
     this._drawEnemies(ctx)
     this._drawTowers(ctx)
+    this._drawBuildPreview(ctx)
     this._drawShots(ctx)
     this._drawTrapEvents(ctx)
-    this._drawAmbientParticles(ctx)
     this._drawTutorialGuide(ctx)
     this._drawStatus(ctx)
   }
 
-  _drawBackdrop(ctx) {
-    const chapterId = this.gameplay.stageConfig?.chapterId || 1
-    const stageId = this.gameplay.currentStageId || 1
-    const timeOfDay = this.gameplay.stageConfig?.timeOfDay || 'noon'
-    const theme = this.gameplay.stageConfig?.theme || {}
-    const u = this.unit
-
-    // 1. Base Gradient Canvas
-    ctx.fillStyle = theme.bgBase || '#0e1815'
-    ctx.fillRect(0, 0, this.width, this.height)
-
-    const grad = ctx.createRadialGradient(
-      this.left + this.boardWidth * 0.5,
-      this.top + this.boardHeight * 0.45,
-      u * 1.5,
-      this.left + this.boardWidth * 0.5,
-      this.top + this.boardHeight * 0.5,
-      Math.max(this.boardWidth, this.boardHeight) * 0.72
-    )
-
-    if (chapterId === 1) {
-      // 🌿 Verdant Deep Forest Canopy with Time-of-Day variation
-      if (timeOfDay === 'dawn') {
-        grad.addColorStop(0, '#1a3829')
-        grad.addColorStop(0.5, '#0f271d')
-        grad.addColorStop(1, '#081610')
-      } else if (timeOfDay === 'amber_dusk') {
-        grad.addColorStop(0, '#283318')
-        grad.addColorStop(0.5, '#1a2410')
-        grad.addColorStop(1, '#0d1308')
-      } else if (timeOfDay === 'twilight') {
-        grad.addColorStop(0, '#1c2432')
-        grad.addColorStop(0.5, '#111822')
-        grad.addColorStop(1, '#090d14')
-      } else if (timeOfDay === 'midnight') {
-        grad.addColorStop(0, '#112220')
-        grad.addColorStop(0.5, '#091514')
-        grad.addColorStop(1, '#040b0a')
-      } else {
-        grad.addColorStop(0, '#152f23')
-        grad.addColorStop(0.5, '#0e2319')
-        grad.addColorStop(1, '#07130e')
-      }
-    } else if (chapterId === 2) {
-      grad.addColorStop(0, '#142738')
-      grad.addColorStop(0.55, '#0d1a26')
-      grad.addColorStop(1, '#060e15')
-    } else if (chapterId === 3) {
-      grad.addColorStop(0, '#2d140e')
-      grad.addColorStop(0.55, '#1e0c08')
-      grad.addColorStop(1, '#100503')
-    } else if (chapterId === 4) {
-      grad.addColorStop(0, '#1e1430')
-      grad.addColorStop(0.55, '#140c22')
-      grad.addColorStop(1, '#0a0512')
-    } else {
-      grad.addColorStop(0, '#282012')
-      grad.addColorStop(0.55, '#1b140a')
-      grad.addColorStop(1, '#0d0a04')
+  _drawCachedScenery(ctx) {
+    const gp = this.gameplay
+    const config = gp.stageConfig
+    const slots = gp.buildSlots || TOWER_DEFENSE_BUILD_SLOTS
+    const traps = gp.traps || TOWER_DEFENSE_TRAPS
+    const dpr = Number(gp.game?.dpr) || 1
+    if (!this._sceneryCanvas || this._sceneryConfig !== config || this._scenerySlots !== slots ||
+        this._sceneryTraps !== traps || this._sceneryWidth !== this.width || this._sceneryHeight !== this.height ||
+        this._sceneryDpr !== dpr || this._sceneryTime !== config?.timeOfDay || this._sceneryTheme !== config?.theme) {
+      const resolved = { ...config, id: gp.currentStageId || 1, path: config?.path || TOWER_DEFENSE_PATH }
+      this._scenery = createTowerScenery(this, resolved, slots, traps)
+      const canvas = this._sceneryCanvas || document.createElement('canvas')
+      // One bounded viewport cache, never a growing collection of 99 level images.
+      const scale = Math.min(2, Math.max(1, dpr), Math.sqrt(8388608 / (this.width * this.height)))
+      canvas.width = Math.ceil(this.width * scale)
+      canvas.height = Math.ceil(this.height * scale)
+      const offscreen = canvas.getContext('2d')
+      offscreen.setTransform(scale, 0, 0, scale, 0, 0)
+      paintTowerScenery(offscreen, this, this._scenery, resolved)
+      this._sceneryCanvas = canvas
+      this._sceneryConfig = config
+      this._scenerySlots = slots
+      this._sceneryTraps = traps
+      this._sceneryWidth = this.width
+      this._sceneryHeight = this.height
+      this._sceneryDpr = dpr
+      this._sceneryTime = config?.timeOfDay
+      this._sceneryTheme = config?.theme
     }
-
-    ctx.fillStyle = grad
-    ctx.fillRect(this.left, this.top, this.boardWidth, this.boardHeight)
-
-    // 2. Organic Floor Texturing (Moss patches, soil spots, stone pavers)
-    this._drawGroundTexture(ctx, chapterId)
+    ctx.drawImage(this._sceneryCanvas, 0, 0, this.width, this.height)
   }
 
-  _drawGroundTexture(ctx, chapterId) {
-    const u = this.unit
-    ctx.save()
-
-    if (chapterId === 1) {
-      // 🌿 Forest Floor: Dappled canopy moonlight & moss patches
-      const patches = [
-        { x: 0.12, y: 0.25, r: 1.4, color: 'rgba(46, 204, 113, 0.05)' },
-        { x: 0.82, y: 0.32, r: 1.8, color: 'rgba(39, 174, 96, 0.06)' },
-        { x: 0.35, y: 0.78, r: 1.6, color: 'rgba(88, 201, 165, 0.05)' },
-        { x: 0.68, y: 0.65, r: 2.1, color: 'rgba(46, 204, 113, 0.04)' },
-        { x: 0.50, y: 0.18, r: 1.3, color: 'rgba(38, 222, 129, 0.05)' },
-      ]
-      for (const p of patches) {
-        const pt = this.project(p)
-        const rad = p.r * u
-        const g = ctx.createRadialGradient(pt.x, pt.y, 0, pt.x, pt.y, rad)
-        g.addColorStop(0, p.color)
-        g.addColorStop(1, 'rgba(0,0,0,0)')
-        ctx.fillStyle = g
-        ctx.beginPath()
-        ctx.arc(pt.x, pt.y, rad, 0, TAU)
-        ctx.fill()
-      }
-    } else if (chapterId === 2) {
-      // ❄️ Glacial: Frost crystal patches
-      const patches = [
-        { x: 0.2, y: 0.3, r: 1.8, color: 'rgba(56, 210, 255, 0.06)' },
-        { x: 0.75, y: 0.25, r: 2.2, color: 'rgba(56, 210, 255, 0.05)' },
-        { x: 0.4, y: 0.8, r: 1.9, color: 'rgba(56, 210, 255, 0.06)' },
-      ]
-      for (const p of patches) {
-        const pt = this.project(p)
-        const rad = p.r * u
-        const g = ctx.createRadialGradient(pt.x, pt.y, 0, pt.x, pt.y, rad)
-        g.addColorStop(0, p.color)
-        g.addColorStop(1, 'rgba(0,0,0,0)')
-        ctx.fillStyle = g
-        ctx.beginPath()
-        ctx.arc(pt.x, pt.y, rad, 0, TAU)
-        ctx.fill()
-      }
-    } else if (chapterId === 3) {
-      // 🔥 Volcanic: Magma fissure glows
-      const patches = [
-        { x: 0.25, y: 0.2, r: 1.8, color: 'rgba(255, 107, 107, 0.08)' },
-        { x: 0.8, y: 0.6, r: 2.2, color: 'rgba(255, 159, 67, 0.07)' },
-        { x: 0.3, y: 0.85, r: 1.7, color: 'rgba(255, 107, 107, 0.08)' },
-      ]
-      for (const p of patches) {
-        const pt = this.project(p)
-        const rad = p.r * u
-        const g = ctx.createRadialGradient(pt.x, pt.y, 0, pt.x, pt.y, rad)
-        g.addColorStop(0, p.color)
-        g.addColorStop(1, 'rgba(0,0,0,0)')
-        ctx.fillStyle = g
-        ctx.beginPath()
-        ctx.arc(pt.x, pt.y, rad, 0, TAU)
-        ctx.fill()
-      }
-    }
-
-    ctx.restore()
-  }
-
-  _drawEnvironmentDecorations(ctx) {
-    const stageId = this.gameplay.currentStageId || 1
-    const chapterId = this.gameplay.stageConfig?.chapterId || 1
-    const stageInChapter = this.gameplay.stageConfig?.stageInChapter || (stageId - (chapterId - 1) * 20)
-    const tier = Math.min(3, Math.max(0, Math.floor((stageInChapter - 1) / 5))) // 0: 1-5, 1: 6-10, 2: 11-15, 3: 16-20
-
-    if (chapterId === 1) {
-      this._drawForestElements(ctx, stageId, tier)
-    } else if (chapterId === 2) {
-      this._drawGlacialElements(ctx, stageId, tier)
-    } else if (chapterId === 3) {
-      this._drawVolcanicElements(ctx, stageId, tier)
-    } else if (chapterId === 4) {
-      this._drawSuperconductorElements(ctx, stageId, tier)
-    } else {
-      this._drawImperialElements(ctx, stageId, tier)
-    }
-  }
-
-  _drawForestElements(ctx, stageId = 1, tier = 0) {
-    const u = this.unit
-    const elapsed = this.gameplay.elapsedTime || 0
-
-    // 1. Trees adapted to sub-biome tier
-    const treeTypes = tier === 0 ? ['oak', 'pine'] : tier === 1 ? ['pine', 'pine'] : tier === 2 ? ['moss_willow', 'oak'] : ['ancient_colossus', 'oak']
-    const baseTrees = [
-      { x: 0.04, y: 0.05, r: 1.30, type: treeTypes[0] },
-      { x: 0.94, y: 0.06, r: 1.35, type: treeTypes[1] },
-      { x: 0.04, y: 0.94, r: 1.30, type: treeTypes[0] },
-      { x: 0.94, y: 0.94, r: 1.40, type: treeTypes[1] },
-      { x: 0.52, y: 0.04, r: 1.15, type: treeTypes[0] },
-    ]
-    if (tier >= 1) {
-      baseTrees.push({ x: 0.05, y: 0.48, r: 1.10, type: treeTypes[1] })
-      baseTrees.push({ x: 0.93, y: 0.48, r: 1.15, type: treeTypes[0] })
-    }
-    for (const tree of baseTrees) {
-      const pt = this.project(tree)
-      this._drawCanopyTree(ctx, pt.x, pt.y, tree.r * u, tree.type)
-    }
-
-    // 2. Bushes & Shrubs
-    const bushes = [
-      { x: 0.15, y: 0.10, s: 0.55 },
-      { x: 0.38, y: 0.08, s: 0.65 },
-      { x: 0.72, y: 0.08, s: 0.60 },
-      { x: 0.08, y: 0.78, s: 0.65 },
-      { x: 0.35, y: 0.88, s: 0.55 },
-      { x: 0.68, y: 0.88, s: 0.60 },
-    ]
-    for (const bush of bushes) {
-      const pt = this.project(bush)
-      this._drawForestBush(ctx, pt.x, pt.y, bush.s * u)
-    }
-
-    // 3. Rocks & Boulders
-    const rocks = [
-      { x: 0.22, y: 0.06, rx: 0.38, ry: 0.28 },
-      { x: 0.58, y: 0.08, rx: 0.42, ry: 0.30 },
-      { x: 0.07, y: 0.62, rx: 0.40, ry: 0.30 },
-      { x: 0.74, y: 0.92, rx: 0.45, ry: 0.32 },
-    ]
-    for (const rock of rocks) {
-      const pt = this.project(rock)
-      this._drawMossyRock(ctx, pt.x, pt.y, rock.rx * u, rock.ry * u)
-    }
-
-    // 4. Wild Mushrooms (Different themes: Tier 0 standard, Tier 1 toxic red/purple, Tier 2 glowing teal/poison, Tier 3 amber sacred)
-    const shroomColors = tier === 0
-      ? ['#ff6b6b', '#a29bfe', '#fdcb6e']
-      : tier === 1
-        ? ['#e84393', '#6c5ce7', '#d63031']
-        : tier === 2
-          ? ['#00cec9', '#55efc4', '#0984e3']
-          : ['#f9ca24', '#f0932b', '#ffbe76']
-
-    const mushrooms = [
-      { x: 0.18, y: 0.13, s: 0.26, color: shroomColors[0] },
-      { x: 0.42, y: 0.06, s: 0.22, color: shroomColors[1] },
-      { x: 0.84, y: 0.12, s: 0.28, color: shroomColors[2] },
-      { x: 0.06, y: 0.70, s: 0.25, color: shroomColors[0] },
-      { x: 0.32, y: 0.92, s: 0.24, color: shroomColors[1] },
-      { x: 0.78, y: 0.86, s: 0.28, color: shroomColors[2] },
-    ]
-    for (const m of mushrooms) {
-      const pt = this.project(m)
-      this._drawForestMushroom(ctx, pt.x, pt.y, m.s * u, m.color)
-    }
-
-    // 5. Special Tier 3 Boss Props (Ancient Colossal Roots & Burning Battle Torches)
-    if (tier === 3 || stageId === 20) {
-      // Draw 2 Ancient Ground Roots
-      const root1 = this.project({ x: 0.20, y: 0.52 })
-      const root2 = this.project({ x: 0.70, y: 0.52 })
-      ctx.save()
-      ctx.strokeStyle = '#3e2723'
-      ctx.lineWidth = u * 0.25
-      ctx.lineCap = 'round'
-      ctx.beginPath()
-      ctx.moveTo(root1.x - u * 0.5, root1.y + u * 0.4)
-      ctx.quadraticCurveTo(root1.x, root1.y - u * 0.2, root1.x + u * 0.6, root1.y + u * 0.3)
-      ctx.stroke()
-
-      ctx.beginPath()
-      ctx.moveTo(root2.x - u * 0.6, root2.y - u * 0.3)
-      ctx.quadraticCurveTo(root2.x, root2.y + u * 0.2, root2.x + u * 0.5, root2.y - u * 0.3)
-      ctx.stroke()
-
-      // Fiery Torches
-      const torchX = root1.x
-      const torchY = root1.y - u * 0.3
-      const flamePulse = Math.sin(elapsed * 8) * u * 0.04
-      ctx.fillStyle = '#f39c12'
-      ctx.beginPath()
-      ctx.arc(torchX, torchY, u * 0.12 + flamePulse, 0, TAU)
-      ctx.fill()
-      ctx.fillStyle = '#ff7675'
-      ctx.beginPath()
-      ctx.arc(torchX, torchY - u * 0.04, u * 0.08 + flamePulse * 0.5, 0, TAU)
-      ctx.fill()
-      ctx.restore()
-    }
-  }
-
-  _drawCanopyTree(ctx, x, y, radius, type = 'oak') {
-    ctx.save()
-    ctx.translate(x, y)
-
-    // Tree Ground Shadow
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.45)'
-    ctx.beginPath()
-    ctx.ellipse(0, radius * 0.4, radius * 0.9, radius * 0.45, 0, 0, TAU)
-    ctx.fill()
-
-    if (type === 'pine') {
-      // Conifer Pine Tree
-      const layers = [
-        { dy: radius * 0.2, r: radius * 0.85, c1: '#1b4332', c2: '#0d281e' },
-        { dy: -radius * 0.15, r: radius * 0.65, c1: '#2d6a4f', c2: '#1b4332' },
-        { dy: -radius * 0.50, r: radius * 0.45, c1: '#40916c', c2: '#2d6a4f' },
-      ]
-      for (const l of layers) {
-        ctx.fillStyle = l.c1
-        ctx.strokeStyle = l.c2
-        ctx.lineWidth = 2
-        ctx.beginPath()
-        ctx.moveTo(0, l.dy - l.r * 0.9)
-        ctx.lineTo(l.r * 0.85, l.dy + l.r * 0.5)
-        ctx.lineTo(-l.r * 0.85, l.dy + l.r * 0.5)
-        ctx.closePath()
-        ctx.fill()
-        ctx.stroke()
-      }
-    } else {
-      // Broadleaf Oak Tree (Multi-layered spherical lush canopy)
-      const orbs = [
-        { ox: -radius * 0.28, oy: radius * 0.1, r: radius * 0.52, col: '#1b4332' },
-        { ox: radius * 0.30, oy: radius * 0.12, r: radius * 0.50, col: '#1e4d39' },
-        { ox: 0, oy: radius * 0.2, r: radius * 0.58, col: '#2d6a4f' },
-        { ox: -radius * 0.18, oy: -radius * 0.18, r: radius * 0.46, col: '#40916c' },
-        { ox: radius * 0.18, oy: -radius * 0.15, r: radius * 0.44, col: '#52b788' },
-        { ox: 0, oy: -radius * 0.28, r: radius * 0.40, col: '#74c69d' },
-      ]
-      for (const orb of orbs) {
-        const g = ctx.createRadialGradient(
-          orb.ox - orb.r * 0.3,
-          orb.oy - orb.r * 0.3,
-          orb.r * 0.1,
-          orb.ox,
-          orb.oy,
-          orb.r
-        )
-        g.addColorStop(0, orb.col)
-        g.addColorStop(1, '#0d281e')
-        ctx.fillStyle = g
-        ctx.strokeStyle = '#081c14'
-        ctx.lineWidth = 1.6
-        ctx.beginPath()
-        ctx.arc(orb.ox, orb.oy, orb.r, 0, TAU)
-        ctx.fill()
-        ctx.stroke()
-      }
-    }
-
-    ctx.restore()
-  }
-
-  _drawForestBush(ctx, x, y, size) {
-    ctx.save()
-    ctx.translate(x, y)
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.35)'
-    ctx.beginPath()
-    ctx.ellipse(0, size * 0.3, size * 0.8, size * 0.35, 0, 0, TAU)
-    ctx.fill()
-
-    const lobes = [
-      { ox: -size * 0.3, oy: 0, r: size * 0.45, col: '#2d6a4f' },
-      { ox: size * 0.3, oy: 0, r: size * 0.42, col: '#40916c' },
-      { ox: 0, oy: -size * 0.2, r: size * 0.48, col: '#52b788' },
-    ]
-    for (const lobe of lobes) {
-      ctx.fillStyle = lobe.col
-      ctx.strokeStyle = '#183a2b'
-      ctx.lineWidth = 1.4
-      ctx.beginPath()
-      ctx.arc(lobe.ox, lobe.oy, lobe.r, 0, TAU)
-      ctx.fill()
-      ctx.stroke()
-    }
-    ctx.restore()
-  }
-
-  _drawMossyRock(ctx, x, y, rx, ry) {
-    ctx.save()
-    ctx.translate(x, y)
-
-    // Rock Shadow
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.4)'
-    ctx.beginPath()
-    ctx.ellipse(0, ry * 0.35, rx * 1.05, ry * 0.5, 0, 0, TAU)
-    ctx.fill()
-
-    // Stone Body (Deep River Slate)
-    const stoneGrad = ctx.createLinearGradient(0, -ry, 0, ry)
-    stoneGrad.addColorStop(0, '#576574')
-    stoneGrad.addColorStop(1, '#222f3e')
-    ctx.fillStyle = stoneGrad
-    ctx.strokeStyle = '#1e272e'
-    ctx.lineWidth = 1.6
-    ctx.beginPath()
-    ctx.ellipse(0, 0, rx, ry, 0, 0, TAU)
-    ctx.fill()
-    ctx.stroke()
-
-    // Green Moss Top Cap
-    ctx.fillStyle = '#2ecc71'
-    ctx.beginPath()
-    ctx.ellipse(0, -ry * 0.3, rx * 0.8, ry * 0.5, 0, 0, Math.PI)
-    ctx.fill()
-
-    ctx.restore()
-  }
-
-  _drawForestMushroom(ctx, x, y, size, color) {
-    ctx.save()
-    ctx.translate(x, y)
-
-    // Stem
-    ctx.fillStyle = '#ecf0f1'
-    ctx.strokeStyle = '#bdc3c7'
-    ctx.lineWidth = 1
-    ctx.beginPath()
-    ctx.roundRect(-size * 0.15, -size * 0.1, size * 0.3, size * 0.8, 3)
-    ctx.fill()
-    ctx.stroke()
-
-    // Cap
-    ctx.fillStyle = color || '#ff6b6b'
-    ctx.strokeStyle = '#b33939'
-    ctx.lineWidth = 1.2
-    ctx.beginPath()
-    ctx.arc(0, -size * 0.1, size * 0.55, Math.PI, 0)
-    ctx.closePath()
-    ctx.fill()
-    ctx.stroke()
-
-    // White Spots
-    ctx.fillStyle = '#ffffff'
-    ctx.beginPath()
-    ctx.arc(-size * 0.22, -size * 0.35, size * 0.08, 0, TAU)
-    ctx.arc(0, -size * 0.48, size * 0.1, 0, TAU)
-    ctx.arc(size * 0.22, -size * 0.35, size * 0.08, 0, TAU)
-    ctx.fill()
-
-    ctx.restore()
-  }
-
-  _drawGrassTuft(ctx, x, y, size) {
-    ctx.save()
-    ctx.translate(x, y)
-    ctx.strokeStyle = '#2ecc71'
-    ctx.lineWidth = 1.8
-    ctx.lineCap = 'round'
-
-    // Left blade
-    ctx.beginPath()
-    ctx.moveTo(0, 0)
-    ctx.quadraticCurveTo(-size * 0.4, -size * 0.6, -size * 0.6, -size)
-    ctx.stroke()
-
-    // Center blade
-    ctx.strokeStyle = '#55efc4'
-    ctx.beginPath()
-    ctx.moveTo(0, 0)
-    ctx.quadraticCurveTo(0, -size * 0.7, 0, -size * 1.15)
-    ctx.stroke()
-
-    // Right blade
-    ctx.strokeStyle = '#2ecc71'
-    ctx.beginPath()
-    ctx.moveTo(0, 0)
-    ctx.quadraticCurveTo(size * 0.4, -size * 0.6, size * 0.6, -size * 0.9)
-    ctx.stroke()
-
-    ctx.restore()
-  }
-
-  _drawGlacialElements(ctx) {
-    const u = this.unit
-    const rocks = [
-      { x: 0.08, y: 0.12, r: 0.9 },
-      { x: 0.92, y: 0.10, r: 1.1 },
-      { x: 0.06, y: 0.88, r: 1.0 },
-      { x: 0.90, y: 0.88, r: 1.15 },
-    ]
-    for (const rk of rocks) {
-      const pt = this.project(rk)
-      ctx.save()
-      ctx.translate(pt.x, pt.y)
-      ctx.fillStyle = '#1e374d'
-      ctx.strokeStyle = '#70a1ff'
-      ctx.lineWidth = 1.6
-      this._polygon(ctx, rk.r * u * 0.6, 6)
-      ctx.fill()
-      ctx.stroke()
-      // Ice highlight
-      ctx.fillStyle = '#ffffff'
-      ctx.beginPath()
-      ctx.arc(-rk.r * u * 0.15, -rk.r * u * 0.15, rk.r * u * 0.2, 0, TAU)
-      ctx.fill()
-      ctx.restore()
-    }
-  }
-
-  _drawVolcanicElements(ctx) {
-    const u = this.unit
-    const vents = [
-      { x: 0.1, y: 0.12, r: 0.8 },
-      { x: 0.88, y: 0.15, r: 0.9 },
-      { x: 0.12, y: 0.85, r: 0.95 },
-      { x: 0.86, y: 0.85, r: 1.05 },
-    ]
-    for (const v of vents) {
-      const pt = this.project(v)
-      ctx.save()
-      ctx.translate(pt.x, pt.y)
-      ctx.fillStyle = '#2d150f'
-      ctx.strokeStyle = '#ff6b6b'
-      ctx.lineWidth = 1.8
-      this._polygon(ctx, v.r * u * 0.55, 5)
-      ctx.fill()
-      ctx.stroke()
-      // Lava core
-      ctx.fillStyle = '#ff9f43'
-      ctx.beginPath()
-      ctx.arc(0, 0, v.r * u * 0.22, 0, TAU)
-      ctx.fill()
-      ctx.restore()
-    }
-  }
-
-  _drawSuperconductorElements(ctx) {
-    const u = this.unit
-    const crystals = [
-      { x: 0.08, y: 0.12, r: 0.75 },
-      { x: 0.92, y: 0.12, r: 0.85 },
-      { x: 0.08, y: 0.88, r: 0.8 },
-      { x: 0.92, y: 0.88, r: 0.9 },
-    ]
-    for (const c of crystals) {
-      const pt = this.project(c)
-      ctx.save()
-      ctx.translate(pt.x, pt.y)
-      ctx.fillStyle = '#341f97'
-      ctx.strokeStyle = '#a55eea'
-      ctx.lineWidth = 1.6
-      this._polygon(ctx, c.r * u * 0.5, 4, Math.PI / 4)
-      ctx.fill()
-      ctx.stroke()
-      ctx.restore()
-    }
-  }
-
-  _drawImperialElements(ctx) {
-    const u = this.unit
-    const pillars = [
-      { x: 0.08, y: 0.12, r: 0.7 },
-      { x: 0.92, y: 0.12, r: 0.7 },
-      { x: 0.08, y: 0.88, r: 0.7 },
-      { x: 0.92, y: 0.88, r: 0.7 },
-    ]
-    for (const p of pillars) {
-      const pt = this.project(p)
-      ctx.save()
-      ctx.translate(pt.x, pt.y)
-      ctx.fillStyle = '#3a3224'
-      ctx.strokeStyle = '#f1c40f'
-      ctx.lineWidth = 1.8
-      ctx.fillRect(-p.r * u * 0.35, -p.r * u * 0.35, p.r * u * 0.7, p.r * u * 0.7)
-      ctx.strokeRect(-p.r * u * 0.35, -p.r * u * 0.35, p.r * u * 0.7, p.r * u * 0.7)
-      ctx.restore()
-    }
-  }
-
-  _tracePath(ctx) {
-    const path = this.gameplay.stageConfig?.path || TOWER_DEFENSE_PATH
-    const start = this.project(path[0])
-    ctx.beginPath()
-    ctx.moveTo(start.x, start.y)
-    for (let index = 1; index < path.length; index++) {
-      const point = this.project(path[index])
-      ctx.lineTo(point.x, point.y)
-    }
-  }
-
-  _drawPath(ctx) {
-    const chapterId = this.gameplay.stageConfig?.chapterId || 1
-    const theme = this.gameplay.stageConfig?.theme || {}
-    const path = this.gameplay.stageConfig?.path || TOWER_DEFENSE_PATH
-    const u = this.unit
-
-    ctx.save()
-    ctx.lineCap = 'round'
-    ctx.lineJoin = 'round'
-
-    if (chapterId === 1) {
-      // 🌿 Chapter 1: Natural Forest Earthen Cobblestone Trail (林间幽径)
-      // 1. Dark Loam & Moss Turf Roadbed
-      this._tracePath(ctx)
-      ctx.strokeStyle = '#07150e'
-      ctx.lineWidth = u * 2.3
-      ctx.stroke()
-
-      this._tracePath(ctx)
-      ctx.strokeStyle = '#1e402e'
-      ctx.lineWidth = u * 1.95
-      ctx.stroke()
-
-      // 2. Rich Earthen Dirt Core
-      this._tracePath(ctx)
-      ctx.strokeStyle = '#3d2e20'
-      ctx.lineWidth = u * 1.5
-      ctx.stroke()
-
-      this._tracePath(ctx)
-      ctx.strokeStyle = '#54402e'
-      ctx.lineWidth = u * 1.15
-      ctx.stroke()
-
-      // 3. Natural Cobblestone Stepping Stones along the trail
-      this._drawCobblestonesAlongPath(ctx, path)
-
-    } else if (chapterId === 2) {
-      // ❄️ Glacial Frozen Ice Pack
-      this._tracePath(ctx)
-      ctx.strokeStyle = '#06131f'
-      ctx.lineWidth = u * 2.2
-      ctx.stroke()
-
-      this._tracePath(ctx)
-      ctx.strokeStyle = '#2980b9'
-      ctx.lineWidth = u * 1.8
-      ctx.stroke()
-
-      this._tracePath(ctx)
-      ctx.strokeStyle = '#74b9ff'
-      ctx.lineWidth = u * 1.35
-      ctx.stroke()
-
-      ctx.setLineDash([u * 0.4, u * 0.45])
-      this._tracePath(ctx)
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.65)'
-      ctx.lineWidth = 2.2
-      ctx.stroke()
-
-    } else if (chapterId === 3) {
-      // 🔥 Volcanic Magma Basalt Trail
-      this._tracePath(ctx)
-      ctx.strokeStyle = '#180703'
-      ctx.lineWidth = u * 2.2
-      ctx.stroke()
-
-      this._tracePath(ctx)
-      ctx.strokeStyle = '#d63031'
-      ctx.lineWidth = u * 1.8
-      ctx.stroke()
-
-      this._tracePath(ctx)
-      ctx.strokeStyle = '#2d140e'
-      ctx.lineWidth = u * 1.35
-      ctx.stroke()
-
-      ctx.setLineDash([u * 0.35, u * 0.35])
-      this._tracePath(ctx)
-      ctx.strokeStyle = '#ff9f43'
-      ctx.lineWidth = 2.4
-      ctx.stroke()
-
-    } else if (chapterId === 4) {
-      // ⚡ Superconductor Arcane Void Road
-      this._tracePath(ctx)
-      ctx.strokeStyle = '#0e0618'
-      ctx.lineWidth = u * 2.2
-      ctx.stroke()
-
-      this._tracePath(ctx)
-      ctx.strokeStyle = '#6c5ce7'
-      ctx.lineWidth = u * 1.8
-      ctx.stroke()
-
-      this._tracePath(ctx)
-      ctx.strokeStyle = '#241738'
-      ctx.lineWidth = u * 1.35
-      ctx.stroke()
-
-      ctx.setLineDash([u * 0.4, u * 0.4])
-      this._tracePath(ctx)
-      ctx.strokeStyle = '#ffeaa7'
-      ctx.lineWidth = 2.2
-      ctx.stroke()
-
-    } else {
-      // 👑 Imperial Golden Highway
-      this._tracePath(ctx)
-      ctx.strokeStyle = '#120e05'
-      ctx.lineWidth = u * 2.2
-      ctx.stroke()
-
-      this._tracePath(ctx)
-      ctx.strokeStyle = '#f1c40f'
-      ctx.lineWidth = u * 1.8
-      ctx.stroke()
-
-      this._tracePath(ctx)
-      ctx.strokeStyle = '#382e18'
-      ctx.lineWidth = u * 1.35
-      ctx.stroke()
-
-      ctx.setLineDash([u * 0.45, u * 0.45])
-      this._tracePath(ctx)
-      ctx.strokeStyle = '#ffd700'
-      ctx.lineWidth = 2.5
-      ctx.stroke()
-    }
-
-    ctx.restore()
-
-    const entrance = this.project(path[0])
-    const base = this.project(path.at(-1))
-    this._drawWarpPortal(ctx, entrance)
-    this._drawSlimeBase(ctx, base)
-  }
-
-  _drawCobblestonesAlongPath(ctx, path) {
-    const u = this.unit
-    // Draw 30 embedded rounded stones along the path coordinates
-    for (let i = 0; i <= 36; i++) {
-      const progress = i / 36
-      const pos = getTowerDefensePathPosition(progress, path)
-      const pt = this.project(pos)
-
-      // Alternating offset perpendicular to path
-      const angle = (pos.facing || 0) + Math.PI / 2
-      const offset = (Math.sin(i * 4.7) * 0.3) * u
-      const stoneX = pt.x + Math.cos(angle) * offset
-      const stoneY = pt.y + Math.sin(angle) * offset
-      const stoneR = (0.16 + (Math.sin(i * 3.1) + 1) * 0.08) * u
-
-      ctx.fillStyle = i % 2 === 0 ? '#635446' : '#7d6c5b'
-      ctx.strokeStyle = '#33271c'
-      ctx.lineWidth = 1.2
-      ctx.beginPath()
-      ctx.ellipse(stoneX, stoneY, stoneR, stoneR * 0.75, pos.facing || 0, 0, TAU)
-      ctx.fill()
-      ctx.stroke()
-    }
-  }
-
-  _drawAmbientParticles(ctx) {
-    const chapterId = this.gameplay.stageConfig?.chapterId || 1
-    const elapsed = this.gameplay.elapsedTime || 0
-    const u = this.unit
-    ctx.save()
-
-    if (chapterId === 1) {
-      // 🌿 Floating Glowing Golden-Green Forest Fireflies (微光萤火虫)
-      const fireflyCount = 20
-      for (let i = 0; i < fireflyCount; i++) {
-        const seedX = ((i * 137.5) % 100) / 100
-        const seedY = ((i * 269.3) % 100) / 100
-        const speedX = 0.03 + (i % 5) * 0.015
-        const speedY = 0.04 + (i % 4) * 0.012
-
-        const fx = (seedX + elapsed * speedX * 0.15) % 1.0
-        const fy = (seedY + Math.sin(elapsed * speedY + i) * 0.08 + elapsed * 0.01) % 1.0
-
-        const screenPos = {
-          x: this.left + fx * this.boardWidth,
-          y: this.top + fy * this.boardHeight,
-        }
-
-        const pulse = 0.4 + Math.sin(elapsed * 2.5 + i * 1.8) * 0.35
-        if (pulse <= 0.05) continue
-
-        const rad = (3 + (i % 3) * 1.5) * (u / 36)
-
-        // Firefly Glow Halo
-        const glow = ctx.createRadialGradient(screenPos.x, screenPos.y, 0, screenPos.x, screenPos.y, rad * 3)
-        glow.addColorStop(0, `rgba(186, 255, 107, ${pulse * 0.8})`)
-        glow.addColorStop(0.5, `rgba(78, 230, 133, ${pulse * 0.4})`)
-        glow.addColorStop(1, 'rgba(0, 0, 0, 0)')
-        ctx.fillStyle = glow
-        ctx.beginPath()
-        ctx.arc(screenPos.x, screenPos.y, rad * 3, 0, TAU)
-        ctx.fill()
-
-        // Firefly Center Spark
-        ctx.fillStyle = `rgba(255, 255, 230, ${pulse})`
-        ctx.beginPath()
-        ctx.arc(screenPos.x, screenPos.y, rad * 0.8, 0, TAU)
-        ctx.fill()
-      }
-    } else if (chapterId === 2) {
-      // ❄️ Falling Snowflakes
-      const snowCount = 24
-      for (let i = 0; i < snowCount; i++) {
-        const seedX = ((i * 153.2) % 100) / 100
-        const seedY = ((i * 211.7) % 100) / 100
-        const sx = (seedX + Math.sin(elapsed + i) * 0.05) % 1.0
-        const sy = (seedY + elapsed * (0.05 + (i % 4) * 0.02)) % 1.0
-        const pt = { x: this.left + sx * this.boardWidth, y: this.top + sy * this.boardHeight }
-        ctx.fillStyle = 'rgba(235, 245, 255, 0.75)'
-        ctx.beginPath()
-        ctx.arc(pt.x, pt.y, 2 + (i % 3), 0, TAU)
-        ctx.fill()
-      }
-    } else if (chapterId === 3) {
-      // 🔥 Rising Embers
-      const emberCount = 20
-      for (let i = 0; i < emberCount; i++) {
-        const seedX = ((i * 179.1) % 100) / 100
-        const seedY = ((i * 131.4) % 100) / 100
-        const ex = (seedX + Math.sin(elapsed * 2 + i) * 0.04) % 1.0
-        const ey = (seedY - elapsed * (0.06 + (i % 3) * 0.03)) % 1.0
-        const fixedEy = ey < 0 ? ey + 1.0 : ey
-        const pt = { x: this.left + ex * this.boardWidth, y: this.top + fixedEy * this.boardHeight }
-        ctx.fillStyle = i % 2 === 0 ? 'rgba(255, 107, 107, 0.8)' : 'rgba(255, 159, 67, 0.8)'
-        ctx.beginPath()
-        ctx.arc(pt.x, pt.y, 2.5, 0, TAU)
-        ctx.fill()
-      }
-    }
-
-    ctx.restore()
+  destroy() {
+    if (this._sceneryCanvas) { this._sceneryCanvas.width = 1; this._sceneryCanvas.height = 1 }
+    this._sceneryCanvas = null
+    this._scenery = null
+    this._sceneryConfig = this._scenerySlots = this._sceneryTraps = null
   }
 
   _drawWarpPortal(ctx, entrance) {
     const u = this.unit
-    const elapsed = this.gameplay.elapsed || 0
+    const elapsed = this.gameplay.elapsedTime || 0
 
     ctx.save()
     ctx.translate(entrance.x, entrance.y)
@@ -948,7 +193,7 @@ export class TowerDefenseRenderer {
 
   _drawSlimeBase(ctx, base) {
     const u = this.unit
-    const elapsed = this.gameplay.elapsed || 0
+    const elapsed = this.gameplay.elapsedTime || 0
     const hpRatio = clamp(this.gameplay.baseHp / this.gameplay.maxBaseHp, 0, 1)
     const bob = Math.sin(elapsed * 4) * u * 0.05
 
@@ -1209,7 +454,6 @@ export class TowerDefenseRenderer {
 
     const trapPoint = this.project(trap.pos)
     const targetPoint = this.project(trap.targetPos)
-    const targetRadius = trap.radius * this.boardWidth
 
     ctx.save()
     // Connecting dashed guidance arc
@@ -1227,7 +471,7 @@ export class TowerDefenseRenderer {
     ctx.lineWidth = 2.2
     ctx.setLineDash([5, 4])
     ctx.beginPath()
-    ctx.arc(targetPoint.x, targetPoint.y, targetRadius, 0, TAU)
+    ctx.ellipse(targetPoint.x, targetPoint.y, trap.radius * this.boardWidth, trap.radius * this.boardHeight, 0, 0, TAU)
     ctx.fill()
     ctx.stroke()
 
@@ -1523,18 +767,22 @@ export class TowerDefenseRenderer {
 
   _drawEnemies(ctx) {
     const elapsed = this.gameplay.elapsed || 0
+    const path = this.gameplay.stageConfig?.path || TOWER_DEFENSE_PATH
     for (const enemy of this.gameplay.enemies) {
       if (!enemy.active) continue
-      const pathPos = getTowerDefensePathPosition(enemy.progress)
-      const point = this.project(pathPos)
+      // 模拟层已按当前关卡拓扑写入 enemy.x/y，这里直接复用；
+      // 仅在坐标缺失时回退到路径换算，避免退回默认路径造成怪物脱轨
+      const hasPos = Number.isFinite(enemy.x) && Number.isFinite(enemy.y)
+      const pathPos = hasPos ? null : getTowerDefensePathPosition(enemy.progress || 0, path)
+      const point = this.project(hasPos ? enemy : pathPos)
       const radius = this.unit * 0.52 * (enemy.size || (enemy.boss ? 1.55 : 1))
 
       ctx.save()
       ctx.translate(point.x, point.y)
 
       // Direction flipping: enemies face towards walking direction
-      const facing = enemy.facing != null ? enemy.facing : pathPos.facing || 0
-      const facingRight = Math.cos(facing) >= 0
+      const facing = enemy.facing != null ? enemy.facing : (pathPos ? pathPos.facing : 0) || 0
+      const facingRight = (this.portrait ? -Math.sin(facing) : Math.cos(facing)) >= 0
       if (!facingRight) {
         ctx.scale(-1, 1)
       }
@@ -1552,7 +800,7 @@ export class TowerDefenseRenderer {
 
   /** 敌人悬停提示：名称 + 生命/护盾 + 机制特质说明 */
   _drawEnemyTooltip(ctx, enemy, point, radius) {
-    const tags = getEnemyTraitTags(enemy.typeId)
+    const tags = enemy.miniBoss ? [{ icon: '◆', label: enemy.miniBoss.mechanic }, { icon: '↳', label: enemy.miniBoss.counter }, { icon: '⚠', label: `漏过损失 ${enemy.damage} 点耐久` }] : getEnemyTraitTags(enemy.typeId)
     const lines = [
       enemy.name,
       `生命 ${Math.max(0, Math.ceil(enemy.hp))}/${enemy.maxHp}${enemy.shield > 0 ? ` · 护盾 ${Math.ceil(enemy.shield)}` : ''}`,
@@ -1588,6 +836,25 @@ export class TowerDefenseRenderer {
 
   _drawEnemyCharacter(ctx, enemy, radius, elapsed) {
     const role = ENEMY_ROLE_MAP[enemy.typeId] || 'knight'
+    if (enemy.miniBoss) {
+      ctx.save()
+      ctx.strokeStyle = enemy.color; ctx.lineWidth = 2.5
+      ctx.beginPath(); ctx.arc(0, 0, radius * 1.4, 0, TAU); ctx.stroke()
+      ctx.fillStyle = '#ffd28a'; ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'center'
+      ctx.fillText('◆', 0, -radius * 1.7)
+      ctx.restore()
+    }
+    if (enemy.cloaked && !(enemy.markTimer > 0)) ctx.globalAlpha *= .55
+    if (enemy.corrosionTimer > 0 || enemy.markTimer > 0 || enemy.wardRadius || enemy.regeneration || enemy.berserk) {
+      ctx.strokeStyle = enemy.markTimer > 0 ? '#82dbe4' : enemy.corrosionTimer > 0 ? '#a8ce58' : enemy.color
+      ctx.lineWidth = 2
+      ctx.beginPath(); ctx.arc(0, 0, radius * 1.3, 0, TAU); ctx.stroke()
+    }
+    const badge = { regenerator: '+', sprinter: '»', warder: '◇', berserker: '!', broodmother: '⁙', stalker: '◐', siege: '⚑' }[enemy.typeId]
+    if (badge) {
+      ctx.fillStyle = enemy.color; ctx.font = `bold ${Math.max(12, radius)}px sans-serif`; ctx.textAlign = 'center'
+      ctx.fillText(badge, 0, -radius * 1.5)
+    }
     const walkTime = enemy.walkTime != null ? enemy.walkTime : enemy.progress * 45
     const frame = Math.floor(walkTime) % 4
     const spriteKey = `char_${role}_${frame}`
@@ -1755,7 +1022,7 @@ export class TowerDefenseRenderer {
     const ratio = clamp(enemy.hp / enemy.maxHp, 0, 1)
     ctx.fillStyle = 'rgba(8, 12, 14, 0.82)'
     ctx.fillRect(point.x - width / 2, top, width, barH)
-    ctx.fillStyle = enemy.boss ? '#f2c660' : '#77d282'
+    ctx.fillStyle = enemy.boss ? '#f2c660' : enemy.miniBoss ? '#eeae72' : '#77d282'
     ctx.fillRect(point.x - width / 2, top, width * ratio, barH)
     if ((enemy.maxShield || 0) > 0 && enemy.shield > 0) {
       const shieldRatio = clamp(enemy.shield / enemy.maxShield, 0, 1)
@@ -1785,8 +1052,7 @@ export class TowerDefenseRenderer {
 
       const type = TOWER_DEFENSE_TOWER_TYPES[tower.typeId]
       const selected = tower.slotIndex === this.gameplay.selectedSlotIndex
-      const stats = getTowerStats(tower.typeId, tower.level, tower.branchId, tower.slotIndex)
-      if (selected) this._drawTowerRange(ctx, point, stats.range)
+      if (selected) this._drawTowerRange(ctx, point, this.gameplay.getTowerRange(tower.typeId, tower.level, tower.branchId, tower.slotIndex))
 
       // Base platform with level progression & elemental glow
       this._drawTowerPlatform(ctx, point, tower, type, selected)
@@ -1794,7 +1060,9 @@ export class TowerDefenseRenderer {
       // Slime Guardian: Stands naturally upright on the platform, facing towards target
       ctx.save()
       ctx.translate(point.x, point.y)
-      const aimAngle = tower.aimAngle != null ? tower.aimAngle : -Math.PI / 2
+      const logicalAim = tower.aimAngle != null ? tower.aimAngle : -Math.PI / 2
+      const aimAngle = Math.atan2((this.portrait ? Math.cos(logicalAim) : Math.sin(logicalAim)) * this.boardHeight,
+        (this.portrait ? -Math.sin(logicalAim) : Math.cos(logicalAim)) * this.boardWidth)
       const facingRight = Math.cos(aimAngle) >= 0
 
       // Flip body horizontally based on target direction
@@ -1806,32 +1074,11 @@ export class TowerDefenseRenderer {
       const lookX = facingRight ? Math.cos(aimAngle) : -Math.cos(aimAngle)
       const lookY = Math.sin(aimAngle)
 
-      if (tower.typeId === 'rapid') {
-        this._drawRapidSlime(ctx, tower, type, lookX, lookY)
-      } else if (tower.typeId === 'slow') {
-        this._drawFrostSlime(ctx, tower, type, lookX, lookY)
-      } else if (tower.typeId === 'blast') {
-        this._drawBlastSlime(ctx, tower, type, lookX, lookY)
-      } else if (tower.typeId === 'shock') {
-        this._drawShockSlime(ctx, tower, type, lookX, lookY)
-      } else if (tower.typeId === 'arcane') {
-        this._drawArcaneSlime(ctx, tower, type, lookX, lookY)
-      } else if (tower.typeId === 'radiant') {
-        this._drawRadiantSlime(ctx, tower, type, lookX, lookY)
-      }
+      this.drawGuardian(ctx, tower, lookX, lookY)
 
-      // Floating Hearts on Petting
-      if ((tower.heartAnim || 0) > 0) {
-        const hp = 1 - tower.heartAnim / 0.8
-        ctx.fillStyle = `rgba(255, 107, 129, ${1 - hp})`
-        ctx.font = `700 ${clamp(u * 0.45, 16, 24)}px system-ui, sans-serif`
-        ctx.textAlign = 'center'
-        ctx.fillText('❤️', 0, -u * (0.85 + hp * 0.6))
-      }
-
-      // Fever / Morale Boost Aura
-      if ((tower.feverTimer || 0) > 0 || (tower.moraleTimer || 0) > 0) {
-        ctx.strokeStyle = tower.feverTimer > 0 ? 'rgba(255, 234, 167, 0.85)' : 'rgba(255, 159, 243, 0.85)'
+      // Fever boost aura from tactical traps and leap talents.
+      if ((tower.feverTimer || 0) > 0) {
+        ctx.strokeStyle = 'rgba(255, 234, 167, 0.85)'
         ctx.lineWidth = 2.2
         ctx.setLineDash([4, 3])
         ctx.beginPath()
@@ -1876,10 +1123,67 @@ export class TowerDefenseRenderer {
     }
   }
 
-  _drawTowerRange(ctx, point, range) {
+  // Shared by the battlefield, placement ghost and static menu portraits.
+  drawGuardian(ctx, tower, lookX = 0, lookY = 0.15) {
+    const type = TOWER_DEFENSE_TOWER_TYPES[tower.typeId]
+    const draw = {
+      rapid: this._drawRapidSlime,
+      slow: this._drawFrostSlime,
+      blast: this._drawBlastSlime,
+      shock: this._drawShockSlime,
+      arcane: this._drawArcaneSlime,
+      radiant: this._drawRadiantSlime,
+    }[tower.typeId]
+    if (!type) return
+    if (!draw) { this._drawSpecialGuardian(ctx, tower, type); return }
     ctx.save()
-    ctx.strokeStyle = 'rgba(232, 213, 136, 0.45)'
-    ctx.fillStyle = 'rgba(232, 213, 136, 0.06)'
+    draw.call(this, ctx, tower, type, lookX, lookY)
+    ctx.restore()
+  }
+
+  _drawSpecialGuardian(ctx, tower, type) {
+    const r = this.unit * .42
+    ctx.save()
+    ctx.fillStyle = '#17251e'; ctx.strokeStyle = type.color; ctx.lineWidth = 2
+    ctx.beginPath(); ctx.ellipse(0, r * .6, r * 1.1, r * .42, 0, 0, TAU); ctx.fill(); ctx.stroke()
+    ctx.fillStyle = type.color
+    ctx.beginPath(); ctx.ellipse(0, 0, r * .8, r, 0, Math.PI, TAU); ctx.lineTo(r * .8, r * .4); ctx.quadraticCurveTo(0, r * .9, -r * .8, r * .4); ctx.closePath(); ctx.fill()
+    ctx.strokeStyle = '#f0f4d5'; ctx.lineWidth = 2.5
+    if (tower.typeId === 'spore') {
+      for (const x of [-.55, 0, .55]) { ctx.beginPath(); ctx.arc(r * x, -r * .65, r * .25, 0, TAU); ctx.fill(); ctx.stroke() }
+    } else if (tower.typeId === 'thorn') {
+      for (const x of [-1, 1]) { ctx.beginPath(); ctx.moveTo(x * r * .5, r * .3); ctx.lineTo(x * r, -r * .6); ctx.lineTo(x * r * .4, -r * .2); ctx.stroke() }
+    } else if (tower.typeId === 'ballista') {
+      ctx.beginPath(); ctx.moveTo(-r, -r * .2); ctx.lineTo(0, -r * .65); ctx.lineTo(r, -r * .2); ctx.moveTo(0, r * .2); ctx.lineTo(0, -r * 1.35); ctx.stroke()
+    } else {
+      ctx.beginPath(); ctx.arc(0, -r * .55, r * .45, 0, TAU); ctx.stroke()
+      ctx.fillStyle = '#eaffff'; ctx.beginPath(); ctx.arc(0, -r * .55, r * .18, 0, TAU); ctx.fill()
+    }
+    ctx.fillStyle = '#162925'
+    for (const x of [-.28, .28]) { ctx.beginPath(); ctx.arc(r * x, r * .12, r * .1, 0, TAU); ctx.fill() }
+    if (tower.level >= 3) { ctx.fillStyle = '#fff0b0'; ctx.beginPath(); ctx.arc(0, r * .45, r * .12, 0, TAU); ctx.fill() }
+    ctx.restore()
+  }
+
+  _drawBuildPreview(ctx) {
+    const { previewTowerTypeId, selectedSlotIndex } = this.gameplay
+    const type = TOWER_DEFENSE_TOWER_TYPES[previewTowerTypeId]
+    const slot = this.gameplay.buildSlots?.[selectedSlotIndex]
+    if (!type || !slot || !this.gameplay.unlockedSlots.has(selectedSlotIndex)
+      || this.gameplay.getTowerAtSlot(selectedSlotIndex)) return
+    const point = this.project(slot)
+    this._drawTowerRange(ctx, point, this.gameplay.getTowerRange(type.id), type.color)
+    ctx.save()
+    ctx.globalAlpha = 0.65
+    ctx.translate(point.x, point.y)
+    this.drawGuardian(ctx, { typeId: type.id, level: 1, pulseTime: 0 })
+    ctx.restore()
+  }
+
+  _drawTowerRange(ctx, point, range, color = '#e8d588') {
+    ctx.save()
+    ctx.strokeStyle = `${color}88`
+    ctx.fillStyle = `${color}12`
     ctx.lineWidth = 1.8
     ctx.setLineDash([5, 4])
     ctx.beginPath()
@@ -2443,14 +1747,17 @@ export class TowerDefenseRenderer {
   _drawShots(ctx) {
     const u = this.unit
     for (const shot of this.gameplay.shots) {
+      const elapsed = shot.maxLife - shot.life - (shot.delay || 0)
+      if (elapsed < 0) continue
       const from = this.project(shot.from)
       const to = this.project(shot.to)
       const alpha = clamp(shot.life / shot.maxLife, 0, 1)
-      const progress = clamp(1 - (shot.life / shot.maxLife), 0, 1)
+      const progress = shot.impacted ? 1 : clamp(elapsed / shot.travelDuration, 0, 1)
+      const impactProg = shot.impacted ? clamp(1 - shot.life / shot.impactDuration, 0, 1) : 0
 
       ctx.save()
 
-      if (shot.kind === 'chain') {
+      if (shot.kind === 'chain' || shot.kind === 'chain_shock') {
         // High-voltage cryo electric arc jumping between targets
         ctx.globalAlpha = alpha
         ctx.strokeStyle = '#a9e9ff'
@@ -2473,7 +1780,7 @@ export class TowerDefenseRenderer {
         const curX = from.x + (to.x - from.x) * progress
         const curY = from.y + (to.y - from.y) * progress - loft
 
-        if (progress < 0.9) {
+        if (!shot.impacted) {
           // Trailing fiery sparks & smoke
           for (let i = 1; i <= 3; i++) {
             const tp = Math.max(0, progress - i * 0.06)
@@ -2502,8 +1809,7 @@ export class TowerDefenseRenderer {
         }
 
         // Impact Explosion (when arriving at target)
-        if (progress >= 0.55) {
-          const impactProg = (progress - 0.55) / 0.45
+        if (shot.impacted) {
           const blastR = (shot.radius || 0.11) * this.boardWidth * (0.3 + impactProg * 0.7)
           const explGrad = ctx.createRadialGradient(to.x, to.y, 0, to.x, to.y, blastR)
           explGrad.addColorStop(0, `rgba(255, 245, 180, ${1 - impactProg * 0.8})`)
@@ -2523,7 +1829,7 @@ export class TowerDefenseRenderer {
         const curX = from.x + (to.x - from.x) * progress
         const curY = from.y + (to.y - from.y) * progress
 
-        if (progress < 0.92) {
+        if (!shot.impacted) {
           // Trailing frost mist
           for (let i = 1; i <= 3; i++) {
             const tp = Math.max(0, progress - i * 0.07)
@@ -2553,8 +1859,7 @@ export class TowerDefenseRenderer {
         }
 
         // Frost Burst at impact
-        if (progress >= 0.7) {
-          const impactProg = (progress - 0.7) / 0.3
+        if (shot.impacted) {
           ctx.strokeStyle = `rgba(180, 242, 255, ${1 - impactProg})`
           ctx.lineWidth = 1.8
           ctx.beginPath()
@@ -2567,7 +1872,7 @@ export class TowerDefenseRenderer {
         const isBurst = shot.kind === 'burst'
         const angle = Math.atan2(to.y - from.y, to.x - from.x)
 
-        if (isSniper) {
+        if (isSniper && !shot.impacted) {
           // High-Energy Cyan-Green Piercing Dart
           const curX = from.x + (to.x - from.x) * progress
           const curY = from.y + (to.y - from.y) * progress
@@ -2597,38 +1902,34 @@ export class TowerDefenseRenderer {
           ctx.fill()
           ctx.stroke()
           ctx.restore()
-        } else if (isBurst) {
-          // Stream of rapid mini-droplets
-          for (let b = 0; b < (shot.burstCount || 3); b++) {
-            const bProg = clamp(progress * 1.3 - b * 0.12, 0, 1)
-            if (bProg <= 0 || bProg >= 1) continue
-            const bx = from.x + (to.x - from.x) * bProg
-            const by = from.y + (to.y - from.y) * bProg
+        } else if (isBurst && !shot.impacted) {
+          // Each droplet has its own launch delay and impact time.
+          const bx = from.x + (to.x - from.x) * progress
+          const by = from.y + (to.y - from.y) * progress
 
-            ctx.save()
-            ctx.translate(bx, by)
-            ctx.rotate(angle)
-            // Droplet
-            ctx.fillStyle = '#2ecc71'
-            ctx.strokeStyle = '#a9dfbf'
-            ctx.lineWidth = 1.2
-            ctx.beginPath()
-            ctx.ellipse(0, 0, u * 0.12, u * 0.07, 0, 0, TAU)
-            ctx.fill()
-            ctx.stroke()
-            // White highlight
-            ctx.fillStyle = '#ffffff'
-            ctx.beginPath()
-            ctx.arc(u * 0.03, -u * 0.02, u * 0.03, 0, TAU)
-            ctx.fill()
-            ctx.restore()
-          }
+          ctx.save()
+          ctx.translate(bx, by)
+          ctx.rotate(angle)
+          // Droplet
+          ctx.fillStyle = '#2ecc71'
+          ctx.strokeStyle = '#a9dfbf'
+          ctx.lineWidth = 1.2
+          ctx.beginPath()
+          ctx.ellipse(0, 0, u * 0.12, u * 0.07, 0, 0, TAU)
+          ctx.fill()
+          ctx.stroke()
+          // White highlight
+          ctx.fillStyle = '#ffffff'
+          ctx.beginPath()
+          ctx.arc(u * 0.03, -u * 0.02, u * 0.03, 0, TAU)
+          ctx.fill()
+          ctx.restore()
         } else {
           // Standard Glossy Acid Slime Droplet
           const curX = from.x + (to.x - from.x) * progress
           const curY = from.y + (to.y - from.y) * progress
 
-          if (progress < 0.92) {
+          if (!shot.impacted) {
             // Trailing poison bubbles
             for (let i = 1; i <= 3; i++) {
               const tp = Math.max(0, progress - i * 0.08)
@@ -2671,15 +1972,15 @@ export class TowerDefenseRenderer {
             ctx.restore()
           }
 
-          // Acid Splat on impact
-          if (progress >= 0.75) {
-            const impactProg = (progress - 0.75) / 0.25
-            ctx.strokeStyle = `rgba(88, 255, 155, ${1 - impactProg})`
-            ctx.lineWidth = 1.6
-            ctx.beginPath()
-            ctx.arc(to.x, to.y, u * (0.15 + impactProg * 0.35), 0, TAU)
-            ctx.stroke()
-          }
+        }
+
+        // The hit ring starts on the same simulation step as damage, including lethal hits.
+        if (shot.impacted) {
+          ctx.strokeStyle = `rgba(88, 255, 155, ${1 - impactProg})`
+          ctx.lineWidth = 1.6
+          ctx.beginPath()
+          ctx.arc(to.x, to.y, u * (0.15 + impactProg * 0.35), 0, TAU)
+          ctx.stroke()
         }
       }
 
@@ -2701,7 +2002,7 @@ export class TowerDefenseRenderer {
   _drawShockSlime(ctx, tower, type, lookX, lookY) {
     const u = this.unit
     const recoil = tower.recoil || 0
-    const elapsed = this.gameplay.elapsed || 0
+    const elapsed = this.gameplay.elapsedTime || 0
     const rx = u * (0.46 - recoil * 0.08)
     const ry = u * (0.42 + recoil * 0.1)
 
@@ -2855,10 +2156,9 @@ export class TowerDefenseRenderer {
         ctx.fillText('👇', pt.x, pt.y - u * 0.95 + bounce)
       }
     } else if (tut.step === 2) {
-      // Guide to first trap (Spore Mushroom)
-      const trap = this.gameplay.traps?.[0]
-      if (trap) {
-        const pt = this.project(trap.pos)
+      const tower = this.gameplay.towers?.find(t => t.level === 1)
+      if (tower) {
+        const pt = this.project(this.gameplay.buildSlots[tower.slotIndex])
         // Pulsing orange beacon
         ctx.strokeStyle = `rgba(243, 156, 18, ${pulse})`
         ctx.lineWidth = 3.5
