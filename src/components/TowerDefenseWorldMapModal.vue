@@ -22,7 +22,7 @@ import {
 } from 'lucide-vue-next'
 import { CHAPTERS_META, getStageConfig } from '../game/gameplay/tower-defense/TowerDefenseCampaignRules.js'
 import { loadCampaignSave } from '../game/gameplay/tower-defense/TowerDefenseSave.js'
-import TowerDefenseGeneTreeModal from './TowerDefenseGeneTreeModal.vue'
+import { TOWER_DEFENSE_TOWER_TYPES, TOWER_UNLOCK_MAP } from '../game/gameplay/tower-defense/TowerDefenseRules.js'
 
 const emit = defineEmits(['start-stage', 'start-endless', 'close'])
 
@@ -30,7 +30,7 @@ const save = ref(loadCampaignSave())
 const activeChapterId = ref(1)
 const selectedStageId = ref(null)
 const showStageModal = ref(false)
-const showGeneTree = ref(false)
+
 
 onMounted(() => {
   save.value = loadCampaignSave()
@@ -63,16 +63,12 @@ const chapterStages = computed(() => {
     const isCurrent = maxUnlocked === sid
     const stars = save.value.stageStars[sid] || 0
     const isBoss = sid === activeChapter.value.bossStage || sid === 99
-    const isTreasure = sid % 5 === 0 && !isBoss
+    const isMiniBoss = sid % 5 === 0 && !isBoss
     const config = getStageConfig(sid)
 
-    let unlockReward = null
-    if (sid === 2) unlockReward = '🔥 熔岩史莱姆'
-    else if (sid === 5) unlockReward = '⚡ 雷鸣史莱姆'
-    else if (sid === 21) unlockReward = '🔮 虚空史莱姆'
-    else if (sid === 41) unlockReward = '☀️ 炽阳史莱姆'
-    else if (isTreasure) unlockReward = '🎁 丰饶养分箱'
-    else if (isBoss) unlockReward = '👑 章节霸主皇冠'
+    const unlocked = Object.entries(TOWER_UNLOCK_MAP).filter(([, stage]) => stage === sid)
+    const unlockReward = unlocked.length ? unlocked.map(([type]) => TOWER_DEFENSE_TOWER_TYPES[type].name).join(' / ') : (isBoss ? '章节首领挑战' : config.miniBoss ? `小首领 · ${config.miniBoss.name}` : config.assault.name)
+
 
     stages.push({
       id: sid,
@@ -83,7 +79,7 @@ const chapterStages = computed(() => {
       isCurrent,
       stars,
       isBoss,
-      isTreasure,
+      isMiniBoss,
       topologyId: config.topologyId,
       waveCount: config.waveCount,
       startingGold: config.startingGold,
@@ -164,11 +160,6 @@ function selectChapter(chapterId) {
           <span>无尽试炼</span>
           <b v-if="save.endlessBestWave" class="star-chip">第 {{ save.endlessBestWave }} 波</b>
         </button>
-        <button class="gene-tree-btn" type="button" @click="showGeneTree = true">
-          <span>🧬</span>
-          <span>母巢基因天赋库</span>
-          <b class="star-chip"><Star :size="13" class="star-gold" />{{ save.totalStarsEarned || 0 }}</b>
-        </button>
         <button class="close-map-btn" type="button" @click="emit('close')" aria-label="关闭大地图">
           <X :size="20" />
         </button>
@@ -231,9 +222,9 @@ function selectChapter(chapterId) {
               <div class="star-progress-fill" :style="{ width: `${chapterStarStats.percent}%`, background: activeChapter.theme.badgeColor }" />
             </div>
             <div class="star-milestones-row">
-              <span class="milestone-item" :class="{ completed: chapterStarStats.earned >= 15 }">🎁 15星宝箱</span>
-              <span class="milestone-item" :class="{ completed: chapterStarStats.earned >= 30 }">🎁 30星宝箱</span>
-              <span class="milestone-item" :class="{ completed: chapterStarStats.earned >= 45 }">🎁 45星宝箱</span>
+              <span class="milestone-item" :class="{ completed: chapterStarStats.earned >= 15 }">15星记录</span>
+              <span class="milestone-item" :class="{ completed: chapterStarStats.earned >= 30 }">30星记录</span>
+              <span class="milestone-item" :class="{ completed: chapterStarStats.earned >= 45 }">45星记录</span>
               <span class="milestone-item" :class="{ completed: chapterStarStats.earned >= 60 }">👑 60星通关</span>
             </div>
           </div>
@@ -256,7 +247,7 @@ function selectChapter(chapterId) {
                   selected: selectedStageId === stg.id,
                   current: stg.isCurrent,
                   boss: stg.isBoss,
-                  treasure: stg.isTreasure,
+                  treasure: stg.isMiniBoss,
                 }"
                 type="button"
                 @click="onSelectStage(stg)"
@@ -269,7 +260,7 @@ function selectChapter(chapterId) {
                 <!-- Main Portal / Landmark Shape -->
                 <div class="landmark-body">
                   <Crown v-if="stg.isBoss" :size="24" class="landmark-icon boss-crown" />
-                  <Gift v-else-if="stg.isTreasure" :size="20" class="landmark-icon treasure-gift" />
+                  <Crown v-else-if="stg.isMiniBoss" :size="20" class="landmark-icon treasure-gift" />
                   <Lock v-else-if="!stg.isUnlocked" :size="18" class="landmark-icon lock-icon" />
                   <span v-else class="stage-badge-number">{{ stg.stageNumber }}</span>
                 </div>
@@ -280,7 +271,7 @@ function selectChapter(chapterId) {
                     {{ activeChapter.id }}-{{ stg.stageNumber }} {{ stg.name }}
                   </strong>
                   <!-- Reward / Sneak Peek Chip -->
-                  <span v-if="stg.unlockReward" class="landmark-reward-chip" :class="{ boss: stg.isBoss, gift: stg.isTreasure }">
+                  <span v-if="stg.unlockReward" class="landmark-reward-chip" :class="{ boss: stg.isBoss, gift: stg.isMiniBoss }">
                     {{ stg.unlockReward }}
                   </span>
                 </div>
@@ -310,6 +301,7 @@ function selectChapter(chapterId) {
             <div class="modal-badge-row">
               <span class="chapter-tag">{{ selectedStageConfig.chapterName }}</span>
               <span v-if="selectedStageConfig.isBossStage" class="boss-tag">👑 章节霸主关</span>
+              <span v-else-if="selectedStageConfig.miniBoss" class="boss-tag">◆ 小首领挑战</span>
               <span v-else class="normal-tag">第 {{ activeChapter.id }}-{{ selectedStageConfig.stageInChapter }} 关</span>
             </div>
             <button class="modal-close-btn" type="button" @click="showStageModal = false" aria-label="关闭">
@@ -345,27 +337,37 @@ function selectChapter(chapterId) {
             </div>
             <div class="recon-cell">
               <span class="cell-label">🗺️ 地形拓扑</span>
-              <strong class="cell-value">{{ selectedStageConfig.topologyId }}</strong>
+              <strong class="cell-value">{{ selectedStageConfig.topologyName }}</strong>
             </div>
             <div class="recon-cell">
               <span class="cell-label">🌿 推荐阵容</span>
-              <strong class="cell-value">{{ activeChapter.recommendedTypes.join(' / ') }}</strong>
+              <strong class="cell-value">{{ activeChapter.recommendedTypes.filter(id => TOWER_UNLOCK_MAP[id] <= selectedStageId).map(id => TOWER_DEFENSE_TOWER_TYPES[id]?.name || id).join(' / ') }}</strong>
             </div>
           </div>
 
+          <div class="modal-rewards-card">
+            <strong>{{ selectedStageConfig.tactic.name }} · {{ selectedStageConfig.assault.name }}</strong>
+            <p>{{ selectedStageConfig.tactic.description }}</p>
+            <p>{{ selectedStageConfig.assault.hint }}</p>
+            <template v-if="selectedStageConfig.miniBoss">
+              <strong>小首领 · {{ selectedStageConfig.miniBoss.name }}</strong>
+              <p>{{ selectedStageConfig.miniBoss.mechanic }}</p>
+              <p>应对：{{ selectedStageConfig.miniBoss.counter }}</p>
+              <p>最终波登场；漏过损失 {{ selectedStageConfig.miniBoss.damage }} 点巢心耐久。</p>
+            </template>
+            <p v-if="selectedStageConfig.isBossStage">首领抵达母巢即失败，必须击杀；提前准备穿甲与控制火力。</p>
+            <span v-for="(stage, type) in TOWER_UNLOCK_MAP" :key="type">
+              <span v-if="stage === selectedStageId" class="reward-chip unlock-chip">本关可用：{{ TOWER_DEFENSE_TOWER_TYPES[type].name }}</span>
+            </span>
+          </div>
           <!-- Rewards & Special Unlocks -->
           <div class="modal-rewards-card">
             <div class="reward-title-row">
               <Sparkles :size="15" class="sparkle-icon" />
-              <span>通关丰厚奖励</span>
+              <span>通关评价</span>
             </div>
             <div class="rewards-list">
-              <span class="reward-chip gold-chip"><Coins :size="13" /> 首通 +{{ selectedStageConfig.rewards.firstClearGold }} 养分</span>
-              <span class="reward-chip star-chip"><Star :size="13" /> 最高 +3 颗基因星</span>
-              <span v-if="selectedStageId === 2" class="reward-chip unlock-chip">🔥 解锁【熔岩史莱姆】基因</span>
-              <span v-if="selectedStageId === 5" class="reward-chip unlock-chip">⚡ 解锁【雷鸣史莱姆】基因</span>
-              <span v-if="selectedStageId === 21" class="reward-chip unlock-chip">🔮 解锁【虚空史莱姆】基因</span>
-              <span v-if="selectedStageId === 41" class="reward-chip unlock-chip">☀️ 解锁【炽阳史莱姆】基因</span>
+              <span class="reward-chip star-chip"><Star :size="13" /> 最高 3 星通关评价</span>
             </div>
           </div>
 
@@ -412,14 +414,7 @@ function selectChapter(chapterId) {
       </div>
     </Transition>
 
-    <!-- Gene Tree Modal Dialog -->
-    <Transition name="modal-fade">
-      <TowerDefenseGeneTreeModal
-        v-if="showGeneTree"
-        @close="showGeneTree = false"
-        @updated="refreshSave"
-      />
-    </Transition>
+
   </div>
 </template>
 

@@ -1,3 +1,5 @@
+import { PetCombat } from './PetCombat.js'
+import { STRAINS } from './Strains.js'
 import { Entity } from './core/Entity.js'
 import { Projectile } from './entities/Projectile.js'
 import { Particle } from './effects/Particle.js'
@@ -7,14 +9,12 @@ import { CELL_SIZE, GRID_KEY_SCALE } from './EnemyManager.js' // 复用分离阶
 import { ENDLESS_FORMATION_BREAK_ATTACK_INTERVAL_MUL } from './EndlessMode.js'
 import {
   DEVOUR_SOURCE_GLUTTON,
-  GLUTTON_BOSS_ERUPTION_DAMAGE_MUL,
-  GLUTTON_BOSS_ERUPTION_MAX_SHOTS,
   GLUTTON_CHARGE_MAX,
-  getGluttonMawDamageMultiplier,
-  onGluttonBossBasicHit,
   onGluttonFDevoured,
   onNormalDevoured,
 } from './GluttonResource.js'
+import { GluttonCombat, GLUTTON_HEAL_COOLDOWN } from './GluttonCombat.js'
+import { ShadowCombat } from './ShadowCombat.js'
 import { resolveWeaponVisual, splitWeaponVisual, tintedWeaponVisual } from './WeaponVisuals.js'
 
 const TAU = Math.PI * 2
@@ -124,18 +124,23 @@ export class WeaponSystem extends Entity {
     this.digestCharge = 0 // 当前消化能量（0 ~ digestChargeMax）
     this.digestChargeMax = DIGEST_CHARGE_MAX
     this.digestBursts = 0 // 消化爆发次数（物种档案统计）
-    this.visualTiers = { gluttony: 0, gatling: 0, elemental: 0, assassin: 0 }
+    this.visualTiers = { gluttony: 0, gatling: 0, elemental: 0, assassin: 0, symbiosis: 0 }
     this._muzzleT = 0
     this._muzzleAngle = 0
     this._muzzleVisual = null
     this._weaponPulse = 0
 
+    this.gluttonCombat = new GluttonCombat(this)
+    this.shadowCombat = new ShadowCombat(this)
+    this.petCombat = new PetCombat(this)
     this._projectiles = []
     this._particles = []
     this._pools = [] // 酸液池（火+毒：区域污染 + 引爆）
     this._clouds = [] // 蒸汽云雾（火+水：区域减速）
     this._singularities = [] // 混沌原质：短时牵引场
     this._rings = [] // 死亡扩散环（阶段十五美化）
+    this.rapidVolley = null
+    this.barrierAttackCooldown = 0
     this.stats = { maxChain: 0, explosions: 0, slowClouds: 0, venomStorms: 0 } // 代表行为统计（物种档案）
     // 全屏麻痹（雷+水）计时器：周期触发
     this._stormTimer = 5
@@ -148,8 +153,15 @@ export class WeaponSystem extends Entity {
     this.berserkBuffTimer = Math.max(this.berserkBuffTimer, duration)
   }
 
+  get attackInterval() {
+    const formationMul = this.game?.endlessFormationBreakTimer > 0 ? ENDLESS_FORMATION_BREAK_ATTACK_INTERVAL_MUL : 1
+    return this.fireInterval * (this.berserkBuffTimer > 0 ? 0.6 : 1) * formationMul
+  }
+
   /** 重置武器属性与弹幕（游戏重开时由引擎调用） */
   reset() {
+    this._critSources = null
+    this._critBase = null
     this.fireInterval = 1.0
     this.cooldown = 0.5
     this.damage = 1
@@ -188,17 +200,22 @@ export class WeaponSystem extends Entity {
     this.digestCharge = 0
     this.digestChargeMax = DIGEST_CHARGE_MAX
     this.digestBursts = 0
-    this.visualTiers = { gluttony: 0, gatling: 0, elemental: 0, assassin: 0 }
+    this.visualTiers = { gluttony: 0, gatling: 0, elemental: 0, assassin: 0, symbiosis: 0 }
     this._muzzleT = 0
     this._muzzleAngle = 0
     this._muzzleVisual = null
     this._weaponPulse = 0
+    this.gluttonCombat.reset()
+    this.shadowCombat.reset()
+    this.petCombat.reset()
     this._projectiles.length = 0
     this._particles.length = 0
     this._pools.length = 0
     this._clouds.length = 0
     this._singularities.length = 0
     this._rings.length = 0
+    this.rapidVolley = null
+    this.barrierAttackCooldown = 0
     this.stats = { maxChain: 0, explosions: 0, slowClouds: 0, venomStorms: 0 }
     this._stormTimer = 5
     this._venomTimer = 6
@@ -305,11 +322,16 @@ export class WeaponSystem extends Entity {
       primarySpec: spec,
       tier: this.visualTiers[spec] || 0,
       chaos: this.isChaosOrigin,
+      // Lv.1~4 的 primarySpec 还是 null（角色 Lv.5 才觉醒），
+      // 只靠 spec 拿不到共生身份，弹体在前四级会退回默认绿。
+      strain: this.game?.startingStrain,
     })
   }
 
   /** 以玩家位置为原点，向目标发射飞弹（多弹时并排扇形齐射） */
   fire(target) {
+    if (this.gluttonCombat.enabled) return this.gluttonCombat.bite(target)
+    if (this.shadowCombat.enabled) return this.shadowCombat.stab(target)
     const px = this.player.x
     const py = this.player.y
     const n = this.projectileCount
@@ -336,7 +358,7 @@ export class WeaponSystem extends Entity {
           y: py + perpY * spread,
           target,
           // 实际伤害 = 基础（技能叠加）× 等级成长 × 捕食原核吞噬加成（读实时值，非快照）
-          damage: this.damage * this.levelMul * this.devourDamageMul,
+          damage: this.damage * this.levelMul * this.devourDamageMul * (STRAINS[this.game?.startingStrain]?.bodyProjectileDamageMul || 1),
           speed: this.projectileSpeed,
           vx: Math.cos(a) * this.projectileSpeed,
           vy: Math.sin(a) * this.projectileSpeed,
@@ -360,7 +382,7 @@ export class WeaponSystem extends Entity {
   update(dt) {
     // 玩家死亡（gameOver 已触发，仅本帧残差）：停止射击与结算，
     // 防止结算快照（击杀/掉落物）之后的数据继续变动
-    if (this.player.dead) return
+    if (this.player.dead || this.game.runFinished) { this.shadowCombat.reset(); this.petCombat.reset(); this.rapidVolley = null; return }
 
     // 连杀窗口倒计时：超时清零（仅游戏时间，暂停不消耗）
     if (this._comboTimer < 1.8) {
@@ -374,16 +396,42 @@ export class WeaponSystem extends Entity {
     if (this._weaponPulse > 0) this._weaponPulse -= dt
     this._updateDigestPulse(dt) // 消化能量过半时的心跳微粒（吞噬 → 元素联动的可见前兆）
 
-    // 1) 冷却计时 → 自动索敌 → 发射
+    if (this.rapidVolley) {
+      this.rapidVolley.timer -= dt
+      while (this.rapidVolley.remaining > 0 && this.rapidVolley.timer <= 0) {
+        const target = this._findNearest()
+        if (target) this.fire(target)
+        this.rapidVolley.remaining--
+        this.rapidVolley.timer += 0.12
+      }
+      if (!this.rapidVolley.remaining) this.rapidVolley = null
+    }
+    this.barrierAttackCooldown = Math.max(0, this.barrierAttackCooldown - dt)
+    // 普攻同时清理身边拒马，保证被阻挡时不依赖远处敌人的索敌。
+    if (this.barrierAttackCooldown <= 0 && this.game.mapFeatures?.attackBarricades(this.player.x, this.player.y, this.player.radius + 48)) {
+      this.barrierAttackCooldown = this.attackInterval
+    }
+    this.gluttonCombat.update(dt)
+    this.shadowCombat.update(dt)
+    this.petCombat.update(dt)
+    if (this.player.dead || this.game.runFinished) return
+
+    // 1) 冷却计时 → 自动索敌 → 发射 / 咬击
     this.cooldown -= dt
     if (this.cooldown <= 0) {
-      const formationMul = this.game.endlessFormationBreakTimer > 0
-        ? ENDLESS_FORMATION_BREAK_ATTACK_INTERVAL_MUL
-        : 1
-      const curInterval = this.fireInterval * (this.berserkBuffTimer > 0 ? 0.6 : 1) * formationMul
-      this.cooldown += curInterval
-      const target = this._findNearest()
-      if (target) this.fire(target)
+      const curInterval = this.attackInterval
+      if (this.gluttonCombat.enabled) {
+        // 没有近战目标时保留就绪；进入范围即起手，前摇内不重复攻击。
+        this.cooldown = 0
+        if (this.gluttonCombat.bite()) this.cooldown = curInterval
+      } else if (this.shadowCombat.enabled) {
+        this.cooldown = 0
+        if (this.shadowCombat.stab()) this.cooldown = curInterval
+      } else {
+        this.cooldown += curInterval
+        const target = this._findNearest()
+        if (target) this.fire(target)
+      }
     }
 
     // 2) 飞弹移动（追踪目标）
@@ -646,7 +694,8 @@ export class WeaponSystem extends Entity {
   _explode(x, y, splashDamage, effects = null, radius = 70) {
     const enemies = this.enemyManager.enemies
     const R2 = radius * radius
-    for (const e of enemies) {
+    for (const e of [...enemies]) {
+      if (this.player.dead || this.game.runFinished) break
       if (!e.active || e.devouring) continue
       const dx = e.x - x
       const dy = e.y - y
@@ -733,6 +782,13 @@ export class WeaponSystem extends Entity {
       if (!chapterGuardian && (!squadMember || squadLast)) {
         this.game.gemManager.spawn(e.x, e.y, 0, 'tome')
       }
+      // 职业秘典：章节守将必掉，普通首领与编队末王高概率掉落。
+      // 它与王级秘籍分开拾取，打开当前职业专属三选一，不占用等级升级。
+      const canDropMastery = !!(this.game.roleSpec || this.game.primarySpec)
+      const masteryChance = chapterGuardian ? 1 : squadMember ? (squadLast ? 0.85 : 0) : 0.65
+      if (canDropMastery && Math.random() < masteryChance) {
+        this.game.gemManager.spawn(e.x + 12, e.y - 8, 0, 'tome', { mastery: true })
+      }
       this.game.sound.bossDeath()
       this.game.shakeScreen(8, 0.45) // Boss 阵亡大震动（阶段十五美化）
     } else {
@@ -760,7 +816,7 @@ export class WeaponSystem extends Entity {
       // 自爆：死亡时炸伤附近玩家（90px 内 1 点，无敌帧兜底）
       const p = this.game.player
       const d2 = (p.x - e.x) ** 2 + (p.y - e.y) ** 2
-      if (d2 < 90 * 90) p.hit(1)
+      if (d2 < 90 * 90) p.hit(1, { enemyAttack: true })
       this._burst(e.x, e.y, 'mage', 14, true) // 金色爆屑
       this.game.sound.kill()
     }
@@ -831,8 +887,7 @@ export class WeaponSystem extends Entity {
 
             // —— 命中：飞弹销毁，敌人扣血 ——
             const critChance = p.critChance + burstBonus
-            // guaranteedCrit 有两个来源：刺客终极觉醒的冲刺隐匿、以及角色 F 技能「影袭」。
-            // 后者与觉醒无关，因此在觉醒前也必须生效——这里只消费、不判断来源。
+            // 原生黏液的刺客觉醒仍使用飞弹必暴；暗影在 ShadowCombat 内结算。
             const isCrit = (critChance > 0 && Math.random() < critChance) || this.player.guaranteedCrit
             if (this.player.guaranteedCrit) this.player.guaranteedCrit = false
 
@@ -840,11 +895,7 @@ export class WeaponSystem extends Entity {
             if (isCrit && this.executeCrit && e.hp <= e.maxHp * 0.5) {
               critMultiplier *= 2.0
             }
-            // M1（目标感知伤害补偿）：深渊胃囊（glut_maw）的降攻仅用于压低小怪/精英普攻以扩大留血吞噬窗口，
-            // 基础普攻命中 Boss 时按当前 glut_maw 倍率对冲还原，不污染全局 weaponSystem.damage。
-            const mawMul = p.isBasicAttack && e.isBoss ? getGluttonMawDamageMultiplier(this.player) : 1.0
-            const baseDamage = mawMul > 0 && mawMul < 1.0 ? p.damage / mawMul : p.damage
-            let damage = baseDamage * critMultiplier
+            let damage = p.damage * critMultiplier
 
             // 刺客：暗影无相主宰 暴击瞬发影分身斩
             if (isCrit && this.isShadowLord) {
@@ -900,17 +951,6 @@ export class WeaponSystem extends Entity {
             if (penetrates) p.pierces--
             else p.destroy()
             e.hit(damage, effects)
-            // H10（含 M2 胃囊加速与 C1 觉醒降阈）：仅基础普攻弹体命中 Boss 时计入 Boss 猎食进度
-            if (p.isBasicAttack && e.isBoss && onGluttonBossBasicHit(this.player, e)) {
-              this.game.enemyManager?.addText?.(
-                this.player.x,
-                this.player.y - 46,
-                `🍽️ 猎食点 +1（${this.player.gluttonCharge}/${GLUTTON_CHARGE_MAX}）`,
-                null,
-                '#8ae84a',
-                15
-              )
-            }
             this._burstColor(e.x, e.y, p.visual.impact, isCrit ? 14 : p.visual.impactCount, isCrit)
             this.game.sound.hit(p.visual.sound)
 
@@ -952,38 +992,6 @@ export class WeaponSystem extends Entity {
   }
 
   /**
-   * 暴食：胃酸迸发 / 腐殖喷吐（glut_eruption）弹幕生成。
-   *  - 普通吞噬（bossBite = false）：弹数 = player.devourAcidSpray（6 / 10），伤害 = damage * 1.5，poisonChance = 1.0；
-   *  - Boss 撕咬（bossBite = true，方案 E）：弹数上限 4，伤害 ×0.5，poisonChance = 0（不附带毒 DOT）；
-   *  - 所有喷吐弹体均标记 isEruption = true（isBasicAttack = false），命中 Boss 绝不计入普攻猎食进度。
-   */
-  spawnDevourEruption(x, y, { bossBite = false } = {}) {
-    const spray = this.player?.devourAcidSpray || 0
-    if (spray <= 0) return 0
-    const count = bossBite ? Math.min(GLUTTON_BOSS_ERUPTION_MAX_SHOTS, spray) : spray
-    const damageMul = bossBite ? GLUTTON_BOSS_ERUPTION_DAMAGE_MUL : 1
-    const poisonChance = bossBite ? 0 : 1.0
-    for (let i = 0; i < count; i++) {
-      const a = (i / count) * TAU
-      this._projectiles.push(
-        new Projectile({
-          x,
-          y,
-          damage: this.damage * 1.5 * damageMul,
-          speed: 420,
-          vx: Math.cos(a) * 420,
-          vy: Math.sin(a) * 420,
-          homing: 0.6,
-          poisonChance,
-          isEruption: true,
-          visual: tintedWeaponVisual('#7ce86a'),
-        })
-      )
-    }
-    return count
-  }
-
-  /**
    * 吞噬结算（评审核心爽点）：分层收益——普通怪经验×1.5 + 概率核心；精英经验×3 + 必掉核心。
    *
    * `ctx.source` = 本次吞噬的来源（'normal' 缺省 / 'gluttonF'）。这是「暴食 F 不返充
@@ -1015,12 +1023,16 @@ export class WeaponSystem extends Entity {
     this.game.worldEvents?.onEnemyDefeated(e)
     this.player.triggerKillRush?.(2)
     this.player.triggerDevourGuard?.(3)
-    this._ring(e.x, e.y, '#8ae84a', 30) // 吞噬绿环（阶段十五美化）
+    this.gluttonCombat.grantGuard()
+    if (this.gluttonCombat.enabled) this.gluttonCombat.onDevoured(e)
+    else this._ring(e.x, e.y, '#8ae84a', 30)
     this.game.sound.devour()
 
-    // 暴食共鸣：吞噬自愈
-    if (this.player.devourHeal || this.player.geneDevourHeal > 0) {
+    // 同一次吞噬的牧师/基因恢复合并，近战批量吞噬每 4 秒最多恢复一次。
+    if ((this.player.devourHeal || this.player.geneDevourHeal > 0 || e.type === 'priest') &&
+        this.player.hp < this.player.maxHp && (!this.gluttonCombat.enabled || this.player.gluttonHealCooldown <= 0)) {
       this.player.heal(Math.max(1, this.player.geneDevourHeal || 0))
+      if (this.gluttonCombat.enabled) this.player.gluttonHealCooldown = GLUTTON_HEAL_COOLDOWN
     }
 
     // 捕食原核（黑市终点）：每次吞噬攻击永久 +3%，封顶 +100%——
@@ -1032,10 +1044,7 @@ export class WeaponSystem extends Entity {
       )
     }
 
-    // 暴食：胃酸喷涌
-    if (this.player.devourAcidSpray > 0) {
-      this.spawnDevourEruption(e.x, e.y, { bossBite: false })
-    }
+    this.gluttonCombat.queueAcid(ctx?.source)
 
     // 经验宝石（分层倍率：普通怪 ×1.5、精英 ×3）
     const mul = e.isElite ? 3 : 1.5
@@ -1063,8 +1072,7 @@ export class WeaponSystem extends Entity {
     // 职业吞噬特有即时增益：
     if (e.type === 'assassin') {
       this.player.addSpeedBuff?.(2.5)
-    } else if (e.type === 'priest') {
-      this.player.heal?.(1)
+
     } else if (e.type === 'berserker') {
       this.addBerserkBuff?.(3)
     }
@@ -1281,41 +1289,6 @@ export class WeaponSystem extends Entity {
     }
   }
 
-  /**
-   * 暴食冲撞撞击结算（腐蚀重碾/荒古领主共用）：附带当前元素附魔
-   * （冲撞不再纯白字，与元素流协同），击杀走统一结算（掉宝石/战利品）。
-   */
-  dashImpact(e, damage) {
-    const corrodeR = this._getReaction('corrode')
-    const dotMul = corrodeR ? Math.min(4, 2 + 0.3 * (this._reactionPower(corrodeR) - 1)) : 1
-    const rMul = (this.reactionDmgMul || 1.0) * (this.geneReactionDmgMul || 1.0)
-    const tickDmg = Math.max(1, Math.round(damage * 0.4 * rMul))
-    const procs = this.player._procs
-    const effects = {}
-    if (this.freezeChance > 0 && Math.random() < this.freezeChance) effects.freeze = 1.5
-    if (this.burnChance > 0 && Math.random() < this.burnChance) {
-      effects.burn = 2 * dotMul
-      effects.burnDmg = tickDmg
-    }
-    if (this.poisonChance > 0 && Math.random() < this.poisonChance) {
-      effects.poison = 3 * dotMul
-      effects.poisonDmg = tickDmg
-    }
-    if (procs.burn?.chance && Math.random() < procs.burn.chance) {
-      effects.burn = Math.max(effects.burn || 0, procs.burn.duration * dotMul)
-      effects.burnDmg = Math.max(effects.burnDmg || 0, tickDmg)
-    }
-    if (procs.freeze?.chance && Math.random() < procs.freeze.chance) {
-      effects.freeze = Math.max(effects.freeze || 0, procs.freeze.duration)
-    }
-    if (procs.poison?.chance && Math.random() < procs.poison.chance) {
-      effects.poison = Math.max(effects.poison || 0, procs.poison.duration * dotMul)
-      effects.poisonDmg = Math.max(effects.poisonDmg || 0, tickDmg)
-    }
-    e.hit(damage, effects)
-    if (!e.active) this._onKill(e)
-  }
-
   _renderWeaponFeedback(ctx) {
     const visual = this._muzzleVisual
     if (this._weaponPulse > 0) {
@@ -1420,6 +1393,9 @@ export class WeaponSystem extends Entity {
     }
     ctx.globalAlpha = 1
     this._renderWeaponFeedback(ctx)
+    this.gluttonCombat.render(ctx)
+    this.shadowCombat.render(ctx)
+    this.petCombat.render(ctx)
     // 先粒子后飞弹：炸裂特效叠在飞弹之下，视觉更自然
     for (const pt of this._particles) pt.render(ctx)
     for (const p of this._projectiles) p.render(ctx)

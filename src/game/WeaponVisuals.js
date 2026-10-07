@@ -3,6 +3,11 @@ const TINT_CACHE = new Map()
 
 const MATERIALS = {
   base: { shape: 'orb', color: '#8cffc8', core: '#effff7', impact: '#8cffc8', radius: 6, sound: 'base' },
+  // 共生史莱姆的契约色：与本体金（SLIME_PALETTES.summoner.color）同源。
+  // 共生没有元素权限（canUseElements 恒 false），若不显式给材质，
+  // 它打出的弹体、出膛火花与命中音色会和所有非元素角色一样是薄荷绿——
+  // 玩家无法把这一发认成"我的"。这一条只改共生身份的观感，不动数值。
+  symbiote: { shape: 'orb', color: '#edc479', core: '#fff1cc', impact: '#f0cf8a', radius: 6, sound: 'base' },
   fire: { shape: 'ember', color: '#ffad66', core: '#fff1c7', impact: '#ff9854', radius: 6.2, sound: 'ember' },
   water: { shape: 'drop', color: '#80d8ed', core: '#eefcff', impact: '#71cce2', radius: 6.2, sound: 'fluid' },
   poison: { shape: 'glob', color: '#91dc6a', core: '#eaffc9', impact: '#83cf62', radius: 6.4, sound: 'fluid' },
@@ -22,6 +27,12 @@ const FORMS = {
   gatling: { scaleX: 1.35, scaleY: 0.78, trail: 4.2, radius: 0.88 },
   elemental: { scaleX: 1, scaleY: 1, trail: 3.4, radius: 1.04 },
   assassin: { scaleX: 1.28, scaleY: 0.68, trail: 4.5, radius: 0.92 },
+  // 共生：圆润饱满的"契约核心"，拖尾略长。
+  // 缺少这一条时 resolveWeaponVisual 会静默回退 base，
+  // 共生就成了唯一没有任何弹体形态进化的角色。
+  // radius 刻意保持 1：这个字段经 Projectile.radius 进入命中判定
+  // （WeaponSystem 的 `p.radius + e.radius`），"更饱满"只由 scaleX/scaleY 表达。
+  symbiosis: { scaleX: 1.06, scaleY: 1.06, trail: 3.5, radius: 1 },
 }
 
 const rgba = (hex, alpha) => {
@@ -35,6 +46,9 @@ function materialKey(state) {
   for (const id of state.elements || []) {
     if (MATERIALS[id]) return id
   }
+  // 共生契约色。刻意排在元素之后：元素联动是更强的视觉事件，
+  // 未来若给共生开放元素权限，这里也不会把元素色短路掉。
+  if (state.strain === 'summoner') return 'symbiote'
   return 'base'
 }
 
@@ -69,6 +83,9 @@ function buildProfile(materialId, spec, tier, split = false) {
     crescent: !split && spec === 'assassin' && level >= 2,
     lobes: !split && spec === 'gluttony' && level >= 2,
     spine: !split && spec === 'gatling' && level >= 2,
+    halo: !split && spec === 'symbiosis' && level >= 2,
+    // 虚线段长由 profile 预算：避免每发每帧在 render 里新建数组（本仓库热路径零分配口径）
+    haloDash: Object.freeze([radius * 0.55, radius * 0.4]),
   })
 }
 

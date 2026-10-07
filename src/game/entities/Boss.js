@@ -286,6 +286,7 @@ export class Boss extends Enemy {
   }
 
   _startSpecial() {
+    this._specialAttackEvent = { enemyAttack: true }
     const claimCast = this.game.enemyManager.claimBossCast
     if (claimCast && !claimCast.call(this.game.enemyManager, this)) {
       this.specialCd = 0.35
@@ -337,7 +338,7 @@ export class Boss extends Enemy {
 
     if (this.specialPattern === 'boss-mage') {
       const p = this.game.player
-      if ((p.x - this.targetX) ** 2 + (p.y - this.targetY) ** 2 <= 102 * 102) p.hit(2)
+      if ((p.x - this.targetX) ** 2 + (p.y - this.targetY) ** 2 <= 102 * 102) p.hit(2, this._specialAttackEvent ||= { enemyAttack: true })
       const count = (this.phase === 2 ? 16 : 12) + this.patternBonus * 2 + chain * 4
       for (let i = 0; i < count; i++) {
         this.game.enemyManager.spawnBullet(
@@ -382,7 +383,7 @@ export class Boss extends Enemy {
     const p = this.game.player
     const hitRadius = this.radius + p.radius + 12
     if (!this.dashHit && (p.x - this.x) ** 2 + (p.y - this.y) ** 2 <= hitRadius * hitRadius) {
-      p.hit(3 + Math.floor(this.patternBonus / 2) + chain)
+      p.hit(3 + Math.floor(this.patternBonus / 2) + chain, this._specialAttackEvent ||= { enemyAttack: true })
       this.dashHit = true
     }
     if (this.specialTimer <= 0) {
@@ -455,7 +456,7 @@ export class Boss extends Enemy {
         this.attackCd -= dt
         if (this.attackCd <= 0) {
           this.attackCd = this.attackInterval
-          player.hit(this.damage)
+          player.hit(this.damage, { enemyAttack: true })
         }
       }
       return
@@ -480,7 +481,7 @@ export class Boss extends Enemy {
         const step = this.type === 'boss-mage' ? 0.15 : 0.22
         for (let i = 0; i < count; i++) {
           const off = (i - (count - 1) / 2) * step
-          this.game.enemyManager.spawnBullet(this.x, this.y, this.facing + off, this.type === 'boss-mage' ? 'mage' : 'archer')
+          this.game.enemyManager.spawnBullet(this.x, this.y, this.facing + off, this.type === 'boss-mage' ? 'mage' : 'archer', { isBoss: true })
         }
         this.game.sound.enemyShoot()
       }

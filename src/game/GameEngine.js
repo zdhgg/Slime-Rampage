@@ -1,14 +1,18 @@
+import { setCritSource } from './CritSources.js'
+import { resolveShadowSkill } from './ShadowSkills.js'
 import { InputManager } from './InputManager.js'
 import { ELEMENTAL_SPEC_PROC_CAP, Player, STARTING_EXP_THRESHOLD } from './entities/Player.js'
 import { EnemyManager } from './EnemyManager.js'
 import { WeaponSystem } from './WeaponSystem.js'
 import { GemManager } from './GemManager.js'
 import { SoundManager } from './SoundManager.js'
-import { rollSkills, SPEC_INFO } from './SkillPool.js'
+import { rollSkills, rollBossSkills, getSpecInfo, SPEC_INFO } from './SkillPool.js'
 import { applyGenes } from './GenePool.js'
 import { buildSpecies } from './Species.js'
 import { REACTIONS, getElement, getActiveReactions } from './ElementSystem.js'
 import { generateDecor, drawBgItem, drawFgItem, getMapTheme } from './MapDecor.js'
+import { isFrontierScenery, paintFrontierGround, prepareFrontierSprites } from './FrontierScenery.js'
+import { paintChapterGround, prepareChapterSprites } from './ChapterScenery.js'
 import { WorldEventManager } from './WorldEventManager.js'
 import { MapFeatureManager } from './MapFeatureManager.js'
 import { DialogueManager } from './DialogueManager.js'
@@ -83,8 +87,6 @@ export function createDefaultStats() {
     maxExp: STARTING_EXP_THRESHOLD,
     hp: 5,
     maxHp: 5,
-    dashCd: 0,
-    dashMax: 1.2,
     devourThreshold: 0.25,
     strainDevourBonus: 0,
     boss: null,
@@ -254,6 +256,7 @@ export class GameEngine {
     // 升级桥接（事件驱动，非轮询）：升级时回调 Vue，传入 3 个技能选项
     this.onLevelUp = null // (options) => void
     this.skillLevels = {} // 技能已选次数（SkillPool 过滤满级用），普通对象不走响应式
+    this.bossSkillIds = new Set() // BOSS 职业秘典已获得的技能（每局最多一次）
     this.primarySpec = null // 主专精（'gluttony' | 'gatling' | 'elemental' | 'assassin'）
     this.secondarySpec = null // 副专精
     this.startingStrain = 'origin' // 开局血统预选（先天属性，reset 末尾叠加应用）
@@ -498,7 +501,7 @@ export class GameEngine {
     return canUseElements(this.startingStrain)
   }
 
-  /** 当前角色的 F 专属技能定义（origin / 未配置返回 null） */
+  /** 当前角色的空格技能定义，包含原生黏液。 */
   get strainSkill() {
     return getStrainSkill(this.startingStrain)
   }
@@ -528,13 +531,13 @@ export class GameEngine {
   }
 
   /**
-   * F 专属主动技能：边沿触发 + 自身冷却。
-   * Arena 使用与 Runner 暴走狂热相同的 F 通道（input.consumeFever()），
+   * 空格 专属主动技能：边沿触发 + 自身冷却。
+   * Arena 使用与 Runner 暴走狂热相同的 空格 通道（input.consumeFever()），
    * 因此不需要新增按键、不需要新增 input 槽位。
    *
    * 两条释放语义（互不干扰）：
-   *  - **资源型**（暴食）：没有主冷却，只受 0.3s 再次释放锁限制；点数不足或 320px
-   *    内没有合法猎物 = 空放，既不扣点也不进锁（skill.use 返回 false 即跳过锁定）。
+   *  - **资源型**（暴食）：没有主冷却，只受 0.3s 再次释放锁限制；点数不足或近战
+   *    范围内没有目标时不扣点、不进锁；起手后锁定咬击方向，敌人可以在前摇内躲开。
    *  - **冷却型**（弹射 / 元素 / 暗影）：语义与本轮之前完全一致（strainSkillCd 主冷却）。
    * 角色分流靠 `skill.getHud`（只有资源型技能提供）判断，不在引擎里比较角色 id。
    */
@@ -542,7 +545,7 @@ export class GameEngine {
     const p = this.player
     const skill = this.strainSkill
     if (!skill) {
-      p.strainSkillCd = 0 // 无角色身份（origin）：F 不响应，冷却恒为 0
+      p.strainSkillCd = 0 // 无角色身份（origin）：空格 不响应，冷却恒为 0
       p.strainSkillReadyPulse = 0
       return
     }
@@ -553,16 +556,16 @@ export class GameEngine {
       p.strainSkillMax = 0
       p.strainSkillCd = 0
     } else {
-      p.strainSkillMax = skill.cooldown
+      p.strainSkillMax = skill.cooldown * (p.activeSkillCdMultiplier || 1)
       p.strainSkillCd = Math.max(0, p.strainSkillCd - dt)
     }
     if (p.strainSkillReadyPulse > 0) p.strainSkillReadyPulse -= dt
     if (!this.running || this.runFinished) return
-    // 边沿消费 F：无论是否满足释放条件都必须取走，否则输入会在一帧后「幽灵释放」
+    // 边沿消费 空格：无论是否满足释放条件都必须取走，否则输入会在一帧后「幽灵释放」
     const pressed = this.input.consumeFever?.()
     if (!pressed || p.dead) return
     if (resourceSkill) {
-      if (!hasGluttonResource(p)) return // 非暴食角色不拥有猎食点：F 不响应
+      if (!hasGluttonResource(p)) return // 非暴食角色不拥有猎食点：空格 不响应
       if (p.gluttonRecastLock > 0) return // 锁内不消耗点数
       if (p.gluttonCharge <= 0) return // 没有猎食点：不释放、不扣点
       if (skill.use(this) !== true) return // 空放：不扣点、不进锁、不启动技能视觉
@@ -570,8 +573,8 @@ export class GameEngine {
       return
     }
     if (p.strainSkillCd > 0) return
-    skill.use(this)
-    p.strainSkillCd = skill.cooldown
+    if (skill.use(this) === false) return // 方向被障碍完全挡住或动作冲突时，不消耗冷却。
+    p.strainSkillCd = p.strainSkillMax
     p.strainSkillReadyPulse = 0.4
   }
 
@@ -656,13 +659,35 @@ export class GameEngine {
     this.onLevelUp?.(options)
   }
 
+  /** BOSS 职业秘典：免费三选一，不走普通升级池，也不增加等级。 */
+  openBossSkillPanel() {
+    this.pause()
+    this._ensureRoleAwakening()
+    const options = rollBossSkills(this, 3)
+    if (options.length === 0) {
+      this._pauseLock = Math.max(0, this._pauseLock - 1)
+      this.start()
+      this.enemyManager?.addText?.(this.player.x, this.player.y - 42, '📜 本职业秘典已收集完', null, '#ffd166', 16)
+      return
+    }
+    this.sound.wave()
+    this._pushStats()
+    this.onLevelUp?.(options)
+  }
+
   /** 应用技能（支持里程碑专精觉醒与常规技能） */
   applySkill(skill) {
     if (!skill) return
+    skill = resolveShadowSkill(skill, this)
 
-    // 1. 处理里程碑专精觉醒（Lv.5 主专精 / Lv.9 副专精）
-    if (skill.isMilestone) {
-      const info = SPEC_INFO[skill.spec]
+    // 1. BOSS 职业秘典：只记录一次，不能通过普通升级重复取得
+    if (skill.isBossSkill) {
+      this.bossSkillIds.add(skill.id)
+      skill.apply?.(this)
+      this.enemyManager?.addText?.(this.player.x, this.player.y - 20, `📜 BOSS秘典：${skill.name}`, null, skill.color || '#ffd166', 16)
+      this.sound.wave()
+    } else if (skill.isMilestone) {
+      const info = getSpecInfo(skill.spec, this)
       if (skill.milestoneType === 'primary') {
         this.primarySpec = skill.spec
         this._applyPrimarySpecBonus(skill.spec)
@@ -680,12 +705,12 @@ export class GameEngine {
 
     const weaponEvolved = this.weaponSystem.registerSkillEvolution(skill)
     if (weaponEvolved && skill.isCapstone) {
-      const info = SPEC_INFO[skill.spec]
+      const info = getSpecInfo(skill.spec, this)
       this.evolutionEvent(
         `武器进化：${info?.name || skill.spec}`,
         skill.name.replace(/^🌟\s*/, ''),
         skill.spec,
-        '弹体轮廓、出膛反馈与命中音色完成终极异化'
+        skill.spec === 'symbiosis' ? '双伙伴协作，存活时共同强化伤害' : skill.spec === 'gluttony' ? '咬击范围与伤害提升，重咬和冲撞可吞噬半血猎物' : this.startingStrain === 'shadow' ? '分身影刃贯穿敌群，影袭协同进化为十字夹击' : '弹体轮廓、出膛反馈与命中音色完成终极异化'
       )
     }
 
@@ -724,8 +749,7 @@ export class GameEngine {
       this.player.elementProcCap = ELEMENTAL_SPEC_PROC_CAP
       this.player._refreshElements() // 已有元素的附魔概率立即按新封顶重算
     } else if (spec === 'assassin') {
-      this.weaponSystem.critChance = Math.max(this.weaponSystem.critChance || 0, 0.25)
-      this.weaponSystem.critMul = Math.max(this.weaponSystem.critMul || 3.0, 3.5)
+      setCritSource(this, 'awakening', { chanceFloor: 0.25, multiplierFloor: 3.5 })
       // 能力闸门：只有能使用元素的角色才获得这条元素规则（暗影恒不获得）。
       // 显式比较 true，保证字段在任何上下文（含测试桩缺字段）下都是布尔值。
       this.weaponSystem.critGuaranteesElement = this.canUseElements === true
@@ -940,6 +964,8 @@ export class GameEngine {
   finishRun(result, defeatReason = null) {
     if (this.runFinished) return
     this.runFinished = true
+    this.weaponSystem.shadowCombat.reset()
+    this.weaponSystem.petCombat.reset()
     this.defeatReason = result === 'defeat' ? defeatReason || 'slime-defeated' : null
     this.runState = result === 'victory'
       ? 'victory'
@@ -1019,6 +1045,9 @@ export class GameEngine {
   }
 
   _enterExpeditionStage(stage, forceMap = false) {
+    this.weaponSystem.shadowCombat.reset()
+    this.weaponSystem.petCombat.reset()
+    this.player._dodgedAttacks = new WeakSet()
     const total = getExpeditionStages(this.runSelection.difficulty).length
     this.expeditionStage = Math.max(1, Math.min(total, stage))
     this.expeditionStageElapsed = 0
@@ -1055,7 +1084,6 @@ export class GameEngine {
     this.player.y = Math.max(this.player.radius, Math.min(this.worldHeight - this.player.radius, spawn.y * this.worldHeight))
     this.player._trail.length = 0
     this.player._decoys.length = 0
-    this.player._dashT = 0
     this._camInit = false
   }
 
@@ -1327,8 +1355,6 @@ export class GameEngine {
     p.elapsed = 0
     p._trailTimer = 0
     p._regenTimer = 10
-    p.dashCd = 0 // 冲刺冷却/状态清零（阶段十三）
-    p._dashT = 0
     p._blink = 0 // 视觉状态清零（阶段十五美化）
     p._blinkT = 2 + Math.random() * 2.5
     p._aura.length = 0
@@ -1337,13 +1363,14 @@ export class GameEngine {
     this.roleSpec = null // 角色身份归位（随后由 applyStrain 按血统重建）
     this.strainDevourBonus = 0
     this.devourThreshold = DEVOUR_THRESHOLD_BASE
-    p.strainSkillCd = 0 // F 角色技能冷却归位
+    p.strainSkillCd = 0 // 空格 角色技能冷却归位
     p.strainSkillMax = 0
     p.strainSkillReadyPulse = 0
     // 暴食猎食点归零（随后由 applyStrain 按血统重建归属：
     // 暴食从 0 点 / 0 进度起步，其它角色置 -1 关闭该资源）
     resetGluttonResource(p)
     this.skillLevels = {}
+    this.bossSkillIds = new Set()
     this.elapsed = 0
     this.runState = 'active'
     this.finaleTime = 0
@@ -1472,17 +1499,24 @@ export class GameEngine {
     this._gameplayHudAcc = 0
   }
 
-  /** 推送一次冷却数据（冲刺 / Boss 施法 / 破阵追击 / F 角色技能），约 10Hz */
+  /** 推送一次冷却数据（冲刺 / Boss 施法 / 破阵追击 / 空格 角色技能），约 10Hz */
   _pushCooldown() {
     this.onCooldown?.({
-      dashCd: this.player.dashCd,
-      dashMax: 1.2 * (this.player.dashCdMultiplier || 1) * (this.player.geneDashCdMultiplier || 1),
       cast: this.enemyManager.bossInfo?.castProgress || 0,
       formationBreak: this.endlessFormationBreakTimer,
       formationBreakMax: ENDLESS_FORMATION_BREAK_DURATION,
-      // F 角色技能：菜单/冷却条数据源（origin 无技能时 skillId 为 null，HUD 据此隐藏）；
+      // 空格角色技能：菜单/冷却条数据源。
       // 资源型技能（暴食）额外给出 charge 口径，HUD 改渲染猎食点而非冷却条——
       // 它的 skillMax 恒为 0，因此旧的冷却分支天然不会被点亮。
+      pets: this.startingStrain === 'summoner' ? this.weaponSystem.petCombat.hud() : null,
+      shadow: this.startingStrain === 'shadow' ? {
+        evasion: this.player.evasionChance, crit: this.weaponSystem.critChance,
+        count: this.weaponSystem.shadowCombat.clones.items.length,
+        cap: this.weaponSystem.shadowCombat.clones.cap,
+        chance: this.weaponSystem.shadowCombat.clones.chance,
+        power: this.weaponSystem.shadowCombat.clones.power,
+        duration: this.weaponSystem.shadowCombat.clones.duration,
+      } : null,
       skillId: this.strainSkill?.id || null,
       skillName: this.strainSkill?.name || '',
       skillCd: this.player.strainSkillCd,
@@ -1511,8 +1545,6 @@ export class GameEngine {
       maxExp: this.player.maxExp,
       hp: this.player.hp,
       maxHp: this.player.maxHp,
-      dashCd: this.player.dashCd,
-      dashMax: 1.2 * (this.player.dashCdMultiplier || 1) * (this.player.geneDashCdMultiplier || 1),
       devourThreshold: this.devourThreshold,
       // 血统对吞噬线的加宽（pct）：HUD 需要它才能显示「真实」的普通/精英门槛，
       // 否则会把暴食角色的白旗线显示得比实际更窄
@@ -1623,7 +1655,7 @@ export class GameEngine {
    */
   _updateArenaFrame(dt) {
     if (this._shakeT > 0) this._shakeT -= dt // 屏幕震动计时衰减
-    this._updateStrainSkill(dt) // F 角色技能：边沿触发 + 自身冷却（origin 短路）
+    this._updateStrainSkill(dt) // 空格 角色技能：边沿触发 + 自身冷却（origin 短路）
     this._updateRunState(dt)
     if (this.runState !== 'stage-reward' && this.runState !== 'expedition-intro') {
       for (const e of this.entities) {
@@ -1708,9 +1740,9 @@ export class GameEngine {
     const t = this.elapsed
     for (const item of this._fgDecor) {
       // 视口剔除：前景装饰在可见范围外直接跳过
-      if (item.x < this.camera.x - 80 || item.x > this.camera.x + this.width + 80) continue
-      if (item.y < this.camera.y - 80 || item.y > this.camera.y + this.height + 80) continue
-      drawFgItem(ctx, item, t, this._mapThemeId)
+      if (item.x < this.camera.x - 180 || item.x > this.camera.x + this.width + 180) continue
+      if (item.y < this.camera.y - 180 || item.y > this.camera.y + this.height + 180) continue
+      drawFgItem(ctx, item, t, this._mapThemeId, this.player, this.enemyManager.enemies)
     }
     // 对白保留世界坐标跟随，但置于前景装饰之上，避免树冠或旗帜遮住台词。
     if (this.dialogue.active) this.dialogue.render(ctx)
@@ -1718,7 +1750,9 @@ export class GameEngine {
 
     // 暗角（屏幕坐标系，视线始终聚焦屏幕中心）
     ctx.fillStyle = this._vignette
+    ctx.globalAlpha = 0.5
     ctx.fillRect(0, 0, width, height)
+    ctx.globalAlpha = 1
   }
 
   // ------------------------------------------------------------
@@ -1730,7 +1764,7 @@ export class GameEngine {
     const cam = this.camera
     const player = this.player
     // 运动方向预判（阶段十三）：朝移动/冲刺方向提前 70px，走位时前方信息量更大
-    const mv = player._dashT > 0 ? player._dashDir : player.input.getMoveVector()
+    const mv = player.input.getMoveVector()
     const lead = 70
     // 目标：玩家居中（+ 方向预判偏移）
     const tx = player.x + mv.x * lead - this.width / 2
@@ -1828,9 +1862,9 @@ export class GameEngine {
   }
 
   /**
-   * 世界背景：一次性渲染到离屏画布（渐变 + 网格 + 随机装饰点）。
+   * 世界背景：固定种子的主题地面、主地标与成组装饰一次性烘焙。
    * 相机滚动时每帧只 drawImage 一次，零逐帧绘制成本；
-   * 只在世界尺寸变化（resize）时重建。
+   * 仅在换章、重开或世界尺寸变化（resize）时重建。
    */
   _buildWorldBg() {
     const w = this.worldWidth
@@ -1846,35 +1880,12 @@ export class GameEngine {
     c.height = h
     const ctx = c.getContext('2d')
 
-    const theme = getMapTheme(this._mapThemeId)
+    const woodland = isFrontierScenery(this._mapThemeId, this._mapVariant)
 
-    // 主题底色只在离屏背景创建时解析，战斗热路径不分支。
-    const g = ctx.createLinearGradient(0, 0, 0, h)
-    g.addColorStop(0, theme.ground[0])
-    g.addColorStop(1, theme.ground[1])
-    ctx.fillStyle = g
-    ctx.fillRect(0, 0, w, h)
-
-    // 极微弱网格（64px，辅助空间感知，低对比度不抢视线）
-    ctx.strokeStyle = theme.grid
-    ctx.lineWidth = 1
-    ctx.beginPath()
-    for (let x = 64; x < w; x += 64) {
-      ctx.moveTo(x, 0)
-      ctx.lineTo(x, h)
-    }
-    for (let y = 64; y < h; y += 64) {
-      ctx.moveTo(0, y)
-      ctx.lineTo(w, y)
-    }
-    ctx.stroke()
-
-    // 极淡土壤微粒（降低数量与透明度，减少视觉噪点）
-    for (let i = 0; i < 100; i++) {
-      ctx.fillStyle = theme.speck
-      ctx.beginPath()
-      ctx.arc(Math.random() * w, Math.random() * h, 1 + Math.random() * 1.5, 0, Math.PI * 2)
-      ctx.fill()
+    if (woodland) {
+      paintFrontierGround(ctx, w, h, this._mapSeed)
+    } else {
+      paintChapterGround(ctx, w, h, this._mapSeed, this._mapThemeId, this._mapVariant)
     }
 
     // 地图装饰：背景层（草丛/花/石/菇/水洼/树干）直接烙进离屏画布；
@@ -1886,6 +1897,9 @@ export class GameEngine {
       spawn: this._mapSpawn,
     })
     this._fgDecor = fg
+    prepareFrontierSprites(fg, this.dpr)
+    prepareChapterSprites(fg, this.dpr)
+    this._ambient?.setHabitats(woodland ? bg : [])
     for (const item of bg) drawBgItem(ctx, item, this._mapThemeId)
 
     this._worldBg = c

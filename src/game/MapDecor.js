@@ -1,3 +1,6 @@
+import { isFrontierScenery, generateFrontierScenery, drawWoodlandRoad, drawWoodlandNest, drawWoodlandItem, drawWoodlandForeground } from './FrontierScenery.js'
+import { enrichChapterDecor, drawChapterItem, drawChapterForeground } from './ChapterScenery.js'
+
 const TAU = Math.PI * 2
 
 export const MAP_THEMES = {
@@ -79,10 +82,11 @@ function scatter(bg, rng, type, count, w, h, margin, scale = [0.7, 1.35]) {
   }
 }
 
-/** 主题与变体驱动的地图清单；同一局 seed 下 resize 前后保持稳定。 */
+/** 主题与变体驱动的地图清单；相同 seed 与世界尺寸恢复同一场景。 */
 export function generateDecor(w, h, options = {}) {
   const themeId = options.themeId || 'frontier'
   const variant = options.variant || 'marsh-edge'
+  if (isFrontierScenery(themeId, variant)) return generateFrontierScenery(w, h, options)
   const rng = seededRandom(hashSeed(options.seed, `${themeId}:${variant}`))
   const bg = []
   const fg = []
@@ -197,8 +201,10 @@ export function generateDecor(w, h, options = {}) {
     scatter(fg, rng, 'torn-banner', 6, w, h, 120, [0.8, 1.15])
   }
 
+  enrichChapterDecor(bg, fg, w, h, { ...options, themeId, variant })
+
   // 出生点是战斗可读性的空白区：保留主地标与道路，其余随机装饰推离中心。
-  // 只调整坐标不删项，确保同一 seed 在不同尺寸下的装饰拓扑稳定。
+  // 保留原有主地标类型；外围植被密度随世界面积变化，相同尺寸可完整恢复。
   const spawnX = (options.spawn?.x ?? 0.5) * w
   const spawnY = (options.spawn?.y ?? 0.5) * h
   const safeRadius = 150
@@ -232,6 +238,24 @@ export function drawBgItem(ctx, item, themeId = 'frontier') {
   ctx.save()
   ctx.translate(item.x, item.y)
   ctx.scale(item.s || 1, item.s || 1)
+
+  if (item.type.startsWith('woodland-') || item.woodland) {
+    if (item.type === 'road') drawWoodlandRoad(ctx, item)
+    else if (item.type === 'nest') drawWoodlandNest(ctx)
+    else drawWoodlandItem(ctx, item)
+    ctx.restore()
+    return
+  }
+
+  if (item.chapter && item.type === 'road' && theme.id === 'frontier') {
+    drawWoodlandRoad(ctx, item)
+    ctx.restore()
+    return
+  }
+  if (item.chapter && drawChapterItem(ctx, item)) {
+    ctx.restore()
+    return
+  }
 
   switch (item.type) {
     case 'patch':
@@ -572,12 +596,26 @@ export function drawBgItem(ctx, item, themeId = 'frontier') {
 }
 
 /** 少量前景遮挡；透明度受控，避免掩盖敌人、弹幕和对白。 */
-export function drawFgItem(ctx, item, t, themeId = 'frontier') {
+export function drawFgItem(ctx, item, t, themeId = 'frontier', player = null, enemies = []) {
   const theme = getMapTheme(typeof themeId === 'string' ? themeId : themeId?.id)
   const sway = Math.sin(t + item.phase) * 1.5
   ctx.save()
   ctx.translate(item.x + sway, item.y)
   ctx.scale(item.s, item.s)
+
+  if (item.type.startsWith('woodland-')) {
+    drawWoodlandForeground(ctx, item, t, player, enemies)
+    ctx.restore()
+    return
+  }
+
+  if (item.type.startsWith('chapter-')) {
+    // Architecture stays fixed; only water and embers animate within their footprint.
+    ctx.translate(-sway / item.s, 0)
+    drawChapterForeground(ctx, item, t, player, enemies)
+    ctx.restore()
+    return
+  }
 
   if (item.type === 'canopy') {
     ctx.globalAlpha = 0.32

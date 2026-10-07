@@ -12,6 +12,10 @@ export default defineConfig({
   server: {
     host: true, // 监听所有网卡，允许局域网设备访问（等价于 0.0.0.0）
     port: devPort,
+    watch: {
+      // 验收浏览器的缓存和扩展文件不参与应用热更新。
+      ignored: ['**/.workbuddy/background-review/browser-profile*/**'],
+    },
     proxy: {
       '/api': `http://127.0.0.1:${apiPort}`,
     },

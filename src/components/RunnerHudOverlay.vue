@@ -1,1058 +1,272 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { Pause, Play, Volume2, VolumeX } from 'lucide-vue-next'
+import { createRunnerTouchGesture } from './runnerTouchGesture.js'
 
-const props = defineProps({
-  hud: { type: Object, required: true },
+const props = defineProps({ hud: { type: Object, required: true }, muted: Boolean, paused: Boolean, controlsDisabled: Boolean })
+const emit = defineEmits(['activate-fever', 'toggle-mute', 'toggle-pause', 'toggle-resume', 'change-lane', 'layout-change'])
+const hudRoot = ref(null)
+const hudTop = ref(null)
+const skillDock = ref(null)
+const touchControls = ref(false)
+const insets = ref({ top: 160, bottom: 100 })
+const percent = value => `${Math.max(0, Math.min(100, value * 100))}%`
+const feverPercent = computed(() => {
+  const fever = props.hud.fever
+  if (!fever) return '0%'
+  if (fever.active) return percent(fever.timer / fever.duration)
+  return fever.charges >= fever.maxCharges ? '100%' : percent(fever.shards / (fever.shardsPerCharge || 3))
 })
-const emit = defineEmits(['activate-fever'])
-
-const SECTION_MARKERS = [20, 53.33, 83.33, 100]
-
-const progressPercent = computed(() => `${Math.max(0, Math.min(100, (props.hud.progress || 0) * 100))}%`)
-const rapidPercent = computed(() => {
-  const max = props.hud.rapidMax || 1
-  return `${Math.max(0, Math.min(100, ((props.hud.rapid || 0) / max) * 100))}%`
+const canPlay = computed(() => props.hud.state === 'active' && !props.paused && !props.controlsDisabled)
+const canFever = computed(() => canPlay.value && props.hud.fever?.charges > 0 && !props.hud.fever.active)
+const gesture = createRunnerTouchGesture(direction => {
+  if (canPlay.value) emit('change-lane', direction)
 })
-const dashPercent = computed(() => {
-  const max = props.hud.dash?.maxCooldown || 1
-  const cooldown = props.hud.dash?.cooldown || 0
-  return `${Math.max(0, Math.min(100, (1 - cooldown / max) * 100))}%`
+watch(canPlay, () => gesture.reset())
+function beginSwipe(event) {
+  if (canPlay.value && gesture.begin(event)) event.currentTarget.setPointerCapture(event.pointerId)
+}
+let resizeObserver
+let touchMedia
+function updateTouchControls() {
+  touchControls.value = touchMedia.matches
+  gesture.reset()
+}
+function measureHud() {
+  if (!hudRoot.value || !hudTop.value || !skillDock.value) return
+  const root = hudRoot.value.getBoundingClientRect()
+  const top = Math.ceil(hudTop.value.getBoundingClientRect().bottom - root.top)
+  const bottom = Math.ceil(root.bottom - skillDock.value.getBoundingClientRect().top)
+  if (top === insets.value.top && bottom === insets.value.bottom) return
+  insets.value = { top, bottom }
+  emit('layout-change', insets.value)
+}
+onMounted(() => {
+  touchMedia = window.matchMedia('(any-pointer: coarse)')
+  updateTouchControls()
+  touchMedia.addEventListener('change', updateTouchControls)
+  window.addEventListener('blur', gesture.reset)
+  resizeObserver = new ResizeObserver(measureHud)
+  for (const element of [hudRoot.value, hudTop.value, skillDock.value]) resizeObserver.observe(element)
+  measureHud()
 })
-const laneTelemetry = computed(() => props.hud.lanes || [])
-const feverActivePercent = computed(() => {
-  if (!props.hud.fever?.active) return '0%'
-  return `${Math.max(0, Math.min(100, (props.hud.fever.timer / props.hud.fever.duration) * 100))}%`
+onUnmounted(() => {
+  resizeObserver?.disconnect()
+  touchMedia?.removeEventListener('change', updateTouchControls)
+  window.removeEventListener('blur', gesture.reset)
 })
-const countdownLabel = computed(() => {
-  if (props.hud.state !== 'countdown') return ''
-  const value = Math.ceil(props.hud.countdown || 0)
-  return value > 0 ? value : '突破'
+const countdownLabel = computed(() => props.hud.state === 'countdown' ? Math.ceil(props.hud.countdown || 0) || '突破' : '')
+const choiceHint = computed(() => props.hud.weaponChoicePending ? '主核心三选一 · 换道选择' : props.hud.secondaryChoicePending ? '元素三选一 · 穿门融合' : props.hud.moduleChoicePending ? '模组三选一 · 换道搭载' : '')
+const laneNames = ['左', '中', '右']
+const buffs = computed(() => [
+  { name: '时空力场', time: props.hud.buffs?.bulletTime },
+  { name: '超频冲刺', time: props.hud.buffs?.booster },
+  { name: '浮游史莱姆', time: props.hud.buffs?.drone },
+].filter(buff => buff.time > 0))
+const scoreGain = ref(0)
+const scoreReceipt = ref(0)
+watch(() => props.hud.score, (next, previous) => {
+  if (previous != null && next > previous) { scoreGain.value = next - previous; scoreReceipt.value += 1 }
+  else if (next < previous) scoreGain.value = 0
 })
-
-function onFeverClick() {
-  if (props.hud.fever?.charges > 0) {
-    emit('activate-fever')
-  }
+// Native Enter/Space activation is preserved; a mouse click returns focus to
+// the game so the next Space activates fever. Keyboard users retain visible focus.
+function activate(event, action, allowed = true) {
+  if (allowed) emit(action)
+  if (event.detail > 0) event.currentTarget.blur()
 }
 </script>
 
 <template>
-  <div class="runner-hud">
-    <section class="vitals" aria-label="突围状态">
-      <div class="mode-label">{{ hud.submodeName || '极速突围' }}</div>
-      <div v-if="hud.route" class="route-label" :style="{ '--route-color': hud.route.color }">
-        路线 <b>{{ hud.route.label }}</b>
-        <i>{{ hud.route.riskLabel }} · {{ hud.route.rewardLabel }}</i>
-      </div>
-      <div class="hp-row" :aria-label="`生命 ${hud.hp} / ${hud.maxHp}`">
-        <span
-          v-for="index in hud.maxHp"
-          :key="index"
-          class="hp-cell"
-          :class="{ lost: index > hud.hp }"
-        />
-      </div>
-      <div class="shield-row" :aria-label="`防护凝胶 ${hud.shield || 0} / ${hud.maxShield || 3}`">
-        <span>防护</span>
-        <i
-          v-for="index in (hud.maxShield || 3)"
-          :key="index"
-          :class="{ empty: index > (hud.shield || 0) }"
-        />
-      </div>
-      <div class="boost-row">
-        <span>攻击 <b>{{ hud.attack }}</b></span>
-        <span v-if="hud.rapid > 0" class="rapid-label">急速 {{ Math.ceil(hud.rapid) }}s</span>
-      </div>
-      <div v-if="hud.rapid > 0" class="rapid-track" aria-hidden="true">
-        <i :style="{ width: rapidPercent }" />
-      </div>
-      <div class="dash-row" :class="{ ready: !hud.dash?.cooldown, active: hud.dash?.active }">
-        <span>急闪</span>
-        <div class="dash-track" aria-hidden="true"><i :style="{ width: dashPercent }" /></div>
-        <b>{{ hud.dash?.active ? '跃迁' : hud.dash?.cooldown ? `${hud.dash.cooldown.toFixed(1)}s` : '就绪' }}</b>
-      </div>
-      <!-- 狂热暴走水晶与手动充能池 -->
-      <div
-        v-if="hud.fever"
-        class="fever-module"
-        :class="{ active: hud.fever.active, ready: hud.fever.charges > 0 }"
-        role="button"
-        tabindex="0"
-        :aria-label="`暴走能量 ${hud.fever.charges}点`"
-        @click="onFeverClick"
-      >
-        <div class="fever-head">
-          <span>狂热暴走</span>
-          <b v-if="hud.fever.active" class="fever-active-tag">暴走 {{ Math.ceil(hud.fever.timer) }}s</b>
-          <b v-else-if="hud.fever.charges > 0" class="fever-ready-tag">[F] 释放 ({{ hud.fever.charges }}/2)</b>
-          <b v-else class="fever-idle-tag">印记 {{ hud.fever.shards }}/3</b>
+  <div ref="hudRoot" class="runner-hud" :class="{ 'reduced-motion': hud.reducedMotion, 'touch-controls': touchControls }" :style="{ '--hud-top': `${insets.top}px`, '--hud-bottom': `${insets.bottom}px` }">
+    <div v-if="touchControls && canPlay" class="swipe-region" aria-hidden="true"
+      @pointerdown="beginSwipe" @pointermove="gesture.move" @pointerup="gesture.end"
+      @pointercancel="gesture.reset" @lostpointercapture="gesture.reset" />
+    <div ref="hudTop" class="hud-top">
+      <section class="vitals hud-surface" aria-label="生命与装备">
+        <div class="mode-label">{{ hud.submodeName || '极速突围' }}</div>
+        <div class="vital-row"><span>生命</span><div class="hp-cells" aria-hidden="true"><i v-for="index in hud.maxHp" :key="index" :class="{ lost: index > hud.hp }" /></div><b>{{ hud.hp }}<small> / {{ hud.maxHp }}</small></b></div>
+        <div class="vital-row shield-row"><span>护盾</span><div class="shield-cells" aria-hidden="true"><i v-for="index in (hud.maxShield || 3)" :key="index" :class="{ lost: index > (hud.shield || 0) }" /></div><b>{{ hud.shield || 0 }}<small> / {{ hud.maxShield || 3 }}</small></b></div>
+        <div class="equipment">
+          <span v-if="hud.weapon" class="weapon-core" :style="{ '--weapon-color': hud.weapon.color }">{{ hud.weapon.name }} <b>Lv.{{ hud.weapon.level }}</b></span><span v-else>凝胶弹</span>
+          <span>攻击 <b>{{ hud.attack }}</b></span><span v-if="hud.rapid > 0" class="rapid-label">急速 {{ Math.ceil(hud.rapid) }}s</span>
         </div>
-        <div class="fever-crystals">
-          <div
-            v-for="cIndex in (hud.fever.maxCharges || 2)"
-            :key="cIndex"
-            class="fever-crystal"
-            :class="{
-              charged: cIndex <= hud.fever.charges,
-              charging: cIndex === hud.fever.charges + 1 && hud.fever.shards > 0
-            }"
-          >
-            <div class="crystal-segments">
-              <i
-                v-for="sIndex in (hud.fever.shardsPerCharge || 3)"
-                :key="sIndex"
-                :class="{
-                  filled: cIndex <= hud.fever.charges || (cIndex === hud.fever.charges + 1 && sIndex <= hud.fever.shards)
-                }"
-              />
-            </div>
-            <span class="crystal-icon">⚡</span>
+        <div v-if="buffs.length" class="tactical-buffs" aria-label="临时增益"><span v-for="buff in buffs" :key="buff.name">{{ buff.name }} <b>{{ Math.ceil(buff.time) }}s</b></span></div>
+      </section>
+      <section class="route hud-surface" aria-label="突围进度与车道">
+        <div class="route-head"><span>{{ hud.section }}</span><strong>{{ hud.timeLabel }}</strong><span>{{ hud.isEndless ? '已行驶' : '剩余' }} {{ hud.distance }}m</span></div>
+        <div v-if="!hud.isEndless" class="track route-track" aria-hidden="true"><i :style="{ width: percent(hud.progress || 0) }" /></div>
+        <div class="lane-cells" aria-label="左中右车道状态">
+          <div v-for="lane in (hud.lanes || [])" :key="lane.lane" class="lane-cell" :class="[lane.status, { current: lane.lane === hud.lane }]" :aria-label="`${laneNames[lane.lane]}道：${lane.intent}${lane.lane === hud.lane ? '，当前所在' : ''}`">
+            <i aria-hidden="true" /><span>{{ laneNames[lane.lane] }}<b v-if="lane.lane === hud.lane"> · 当前</b></span>
+            <em v-if="lane.status === 'danger' || ['冲锋', '瞄准', '封锁'].includes(lane.intent)">{{ lane.intent }}</em>
           </div>
         </div>
-        <div v-if="hud.fever.active" class="fever-timer-bar">
-          <i :style="{ width: feverActivePercent }" />
+        <div v-if="choiceHint" class="choice-guide" role="status">{{ choiceHint }}</div>
+        <div v-else-if="hud.weaponNotice && !hud.fusion" class="combat-receipt" role="status">{{ hud.weaponNotice }}</div>
+        <div v-if="hud.route" class="route-label"><b :style="{ color: hud.route.color }">{{ hud.route.label }}</b><span>{{ hud.route.riskLabel }} · {{ hud.route.rewardLabel }}</span></div>
+      </section>
+      <section class="score hud-surface" aria-label="得分与游戏控制">
+        <div class="game-controls">
+          <button type="button" :aria-label="muted ? '取消静音' : '静音'" :aria-pressed="muted" @click="activate($event, 'toggle-mute')"><VolumeX v-if="muted" :size="18" aria-hidden="true" /><Volume2 v-else :size="18" aria-hidden="true" /></button>
+          <button type="button" :disabled="controlsDisabled" :aria-label="paused ? '继续游戏' : '暂停'" @click="activate($event, paused ? 'toggle-resume' : 'toggle-pause')"><Play v-if="paused" :size="18" aria-hidden="true" /><Pause v-else :size="18" aria-hidden="true" /></button>
         </div>
-      </div>
-      <!-- 战术即时增益指示器 -->
-      <div v-if="hud.buffs && (hud.buffs.bulletTime > 0 || hud.buffs.booster > 0 || hud.buffs.drone > 0)" class="tactical-buffs">
-        <div v-if="hud.buffs.bulletTime > 0" class="tactical-chip bullet-time">
-          <span>⏳ 时空力场</span>
-          <b>{{ hud.buffs.bulletTime.toFixed(1) }}s</b>
-        </div>
-        <div v-if="hud.buffs.booster > 0" class="tactical-chip booster">
-          <span>🚀 超频冲刺</span>
-          <b>{{ hud.buffs.booster.toFixed(1) }}s</b>
-        </div>
-        <div v-if="hud.buffs.drone > 0" class="tactical-chip drone">
-          <span>🤖 浮游史莱姆</span>
-          <b>{{ Math.ceil(hud.buffs.drone) }}s</b>
-        </div>
-      </div>
-      <div v-if="hud.weapon" class="weapon-core" :style="{ '--weapon-color': hud.weapon.color }">
-        <i class="core-mark" aria-hidden="true" />
-        <span>{{ hud.weapon.name }}</span>
-        <span class="core-level" :aria-label="`流派等级 ${hud.weapon.level} / 3`">
-          <i v-for="level in 3" :key="level" :class="{ active: level <= hud.weapon.level }" />
+        <div class="score-value"><span>得分</span><strong>{{ (hud.score || 0).toLocaleString('en-US') }}</strong></div>
+        <div class="score-feedback"><em v-if="hud.combo > 1">连破 ×{{ hud.combo }}</em><span v-if="scoreGain" :key="scoreReceipt" class="score-gain">+{{ scoreGain }}</span></div>
+      </section>
+    </div>
+    <div ref="skillDock" class="skill-dock">
+      <span v-if="touchControls" class="touch-hint">左右滑动换道 · 自动射击</span>
+      <button v-if="hud.fever" type="button" class="skill-module fever-module" :class="{ ready: canFever, active: hud.fever.active }" :disabled="!canFever" @click="activate($event, 'activate-fever', canFever)" :aria-label="hud.fever.active ? `暴走中，剩余 ${Math.ceil(hud.fever.timer)}秒` : `空格 暴走，可用 ${hud.fever.charges} 次`">
+        <span class="skill-head"><kbd v-if="!touchControls">Space</kbd><span>暴走</span><b>{{ hud.fever.active ? `${Math.ceil(hud.fever.timer)}s` : `可用 ${hud.fever.charges} 次` }}</b></span>
+        <span class="track" aria-hidden="true"><i :style="{ width: feverPercent }" /></span>
+        <span class="skill-detail">
+          <template v-if="hud.fever.active">暴走中 · 得分 ×2<span>储备 {{ hud.fever.charges }} 次</span></template>
+          <template v-else-if="hud.fever.charges >= hud.fever.maxCharges">充能已满<span>{{ touchControls ? '轻触释放' : '按空格释放' }}</span></template>
+          <template v-else>下次充能 {{ hud.fever.shards }}/{{ hud.fever.shardsPerCharge || 3 }}<span>{{ canFever ? touchControls ? '轻触释放' : '按空格释放' : '收集印记' }}</span></template>
         </span>
-      </div>
-    </section>
-
-    <section v-if="laneTelemetry.length" class="lane-readout" aria-label="车道风险">
-      <div class="lane-readout-head"><span>路线态势</span><em>当前 {{ (hud.lane || 0) + 1 }} 线</em></div>
-      <div class="lane-cells">
-        <div
-          v-for="lane in laneTelemetry"
-          :key="lane.lane"
-          class="lane-cell"
-          :class="[lane.status, { current: lane.lane === hud.lane }]"
-        >
-          <span>线{{ lane.lane + 1 }}</span>
-          <i><b :style="{ width: `${Math.round(lane.risk * 100)}%` }" /></i>
-          <em>{{ lane.intent }}</em>
-        </div>
-      </div>
-    </section>
-
-    <section class="route" aria-label="突围进度">
-      <div class="route-head">
-        <span>{{ hud.section }}</span>
-        <strong>{{ hud.timeLabel }}</strong>
-        <span>{{ hud.isEndless ? `已行驶 ${hud.distance}m` : `剩余 ${hud.distance}m` }}</span>
-      </div>
-      <div class="route-track" :class="{ endless: hud.isEndless }">
-        <i v-if="!hud.isEndless" :style="{ width: progressPercent }" />
-        <i v-else class="endless-bar" />
-        <template v-if="!hud.isEndless">
-          <span v-for="marker in SECTION_MARKERS" :key="marker" :style="{ left: `${marker}%` }" />
-        </template>
-      </div>
-    </section>
-
-    <section class="score" aria-label="本局得分">
-      <span>得分</span>
-      <strong>{{ (hud.score || 0).toLocaleString('en-US') }}</strong>
-      <em v-if="hud.combo > 1">连破 ×{{ hud.combo }}</em>
-      <div v-if="hud.fever?.active" class="fever-badge">⚡ 暴走狂热 ×2 ⚡</div>
-    </section>
-
-    <Transition name="countdown">
-      <div v-if="countdownLabel" :key="countdownLabel" class="countdown-mark" role="status" aria-live="assertive">
-        {{ countdownLabel }}
-      </div>
-    </Transition>
-
-    <Transition name="fusion">
-      <div
-        v-if="hud.fusion"
-        :key="`${hud.fusion.id}-${hud.fusion.level}`"
-        class="fusion-banner"
-        :style="{ '--fusion-color': hud.fusion.color }"
-        role="status"
-        aria-live="assertive"
-      >
-        <span>{{ hud.fusion.kicker }}</span>
-        <strong>{{ hud.fusion.title }}</strong>
-        <em>{{ hud.fusion.description }}</em>
-        <div aria-hidden="true">
-          <i v-for="level in 3" :key="level" :class="{ active: level <= hud.fusion.level }" />
-        </div>
-      </div>
-    </Transition>
-
-    <Transition name="section">
-      <div v-if="hud.state === 'active' && hud.sectionNotice > 0 && !hud.weaponNotice && !hud.weaponChoicePending && !hud.fusion" :key="hud.section" class="section-notice" role="status" aria-live="polite">
-        <span>阶段 {{ (hud.sectionIndex || 0) + 1 }}</span>
-        <strong>{{ hud.section }}</strong>
-      </div>
-    </Transition>
-
-    <Transition name="section">
-      <div v-if="hud.weaponChoicePending" class="weapon-notice choice" role="status" aria-live="assertive">
-        <span>主核心变异待融合</span>
-        <strong>贯穿 / 爆裂 / 腐蚀 · 三选一</strong>
-      </div>
-      <div v-else-if="hud.secondaryChoicePending" class="weapon-notice choice secondary" role="status" aria-live="assertive">
-        <span>双核流派二次变异</span>
-        <strong>雷电 ⚡ / 烈焰 🔥 / 极寒 ❄️ · 穿门融合</strong>
-      </div>
-      <div v-else-if="hud.weaponNotice && !hud.fusion" :key="hud.weaponNotice" class="weapon-notice" role="status" aria-live="polite">
-        <span>武器状态</span>
-        <strong>{{ hud.weaponNotice }}</strong>
-      </div>
+      </button>
+    </div>
+    <Transition name="notice"><div v-if="countdownLabel" :key="countdownLabel" class="countdown-mark" role="status">{{ countdownLabel }}</div></Transition>
+    <Transition name="notice">
+      <div v-if="hud.fusion" :key="`${hud.fusion.id}-${hud.fusion.level}`" class="event-notice fusion-banner" :style="{ '--notice-color': hud.fusion.color }" role="status"><span>{{ hud.fusion.kicker }}</span><strong>{{ hud.fusion.title }}</strong><em>{{ hud.fusion.description }}</em></div>
+      <div v-else-if="hud.state === 'active' && hud.sectionNotice > 0 && !choiceHint && !hud.weaponNotice" :key="hud.section" class="event-notice" role="status"><span>阶段 {{ (hud.sectionIndex || 0) + 1 }}</span><strong>{{ hud.section }}</strong></div>
     </Transition>
   </div>
 </template>
 
 <style scoped>
-.runner-hud {
-  position: absolute;
-  inset: 0;
-  z-index: 6;
-  overflow: hidden;
-  color: #eef5f2;
-  font-family: "Segoe UI", "PingFang SC", sans-serif;
-  letter-spacing: 0;
-  pointer-events: none;
-}
-
-.vitals,
-.route,
-.score {
-  position: absolute;
-  top: 20px;
-  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.7);
-}
-
-.vitals {
-  left: 24px;
-  width: 210px;
-}
-
-.mode-label {
-  margin-bottom: 8px;
-  color: rgba(235, 244, 242, 0.72);
-  font-size: 12px;
-  font-weight: 800;
-}
-
-/* Phase B：当前已锁定的路线，随路线取色。 */
-.route-label {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  margin: -4px 0 8px;
-  padding: 2px 7px;
-  width: fit-content;
-  border: 1px solid color-mix(in srgb, var(--route-color, #79d5e6) 45%, transparent);
-  border-radius: 3px;
-  background: color-mix(in srgb, var(--route-color, #79d5e6) 12%, transparent);
-  color: rgba(235, 244, 242, 0.7);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-}
-
-.route-label b {
-  color: var(--route-color, #79d5e6);
-  font-size: 11px;
-  font-weight: 900;
-}
-
-/* Phase C：当前路线的风险—收益提示。 */
-.route-label i {
-  color: rgba(235, 244, 242, 0.52);
-  font-size: 9px;
-  font-style: normal;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-}
-
-.hp-row {
-  display: flex;
-  gap: 5px;
-  height: 12px;
-}
-
-.hp-cell {
-  width: 28px;
-  height: 8px;
-  border: 1px solid rgba(203, 255, 166, 0.7);
-  border-radius: 2px;
-  background: #83df51;
-  box-shadow: 0 0 10px rgba(131, 223, 81, 0.25);
-}
-
-.hp-cell.lost {
-  border-color: rgba(255, 255, 255, 0.18);
-  background: rgba(255, 255, 255, 0.08);
-  box-shadow: none;
-}
-
-.shield-row {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  height: 11px;
-  margin-top: 6px;
-  color: rgba(211, 243, 242, 0.58);
-  font-size: 9px;
-  font-weight: 800;
-}
-
-.shield-row i {
-  width: 18px;
-  height: 4px;
-  border: 1px solid rgba(129, 229, 224, 0.72);
-  border-radius: 1px;
-  background: #70d8d3;
-  box-shadow: 0 0 8px rgba(112, 216, 211, 0.3);
-}
-
-.shield-row i.empty {
-  border-color: rgba(255, 255, 255, 0.15);
-  background: rgba(255, 255, 255, 0.06);
-  box-shadow: none;
-}
-
-.boost-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-top: 9px;
-  color: rgba(235, 244, 242, 0.66);
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.boost-row b {
-  color: #f4d87c;
-  font-size: 13px;
-}
-
-.dash-row {
-  display: grid;
-  grid-template-columns: 24px 1fr 32px;
-  align-items: center;
-  gap: 6px;
-  margin-top: 8px;
-  color: rgba(235, 244, 242, 0.52);
-  font-size: 9px;
-  font-weight: 800;
-}
-
-.dash-row b {
-  color: rgba(235, 244, 242, 0.45);
-  font-size: 9px;
-  font-variant-numeric: tabular-nums;
-  text-align: right;
-}
-
-.dash-row.ready b {
-  color: #8de3d7;
-}
-
-.dash-row.active b {
-  color: #ffffff;
-}
-
-.dash-track {
-  height: 3px;
-  overflow: hidden;
-  background: rgba(255, 255, 255, 0.1);
-}
-
-.dash-track i {
-  display: block;
-  height: 100%;
-  background: #8de3d7;
-  transition: width 0.12s linear;
-}
-
-.fever-module {
-  margin-top: 9px;
-  padding: 6px 8px;
-  border-radius: 5px;
-  background: rgba(14, 23, 31, 0.72);
-  border: 1px solid rgba(255, 209, 102, 0.22);
-  cursor: pointer;
-  user-select: none;
-  transition: all 0.2s ease;
-}
-
-.fever-module:hover {
-  background: rgba(18, 30, 42, 0.85);
-}
-
-.fever-module.ready {
-  border-color: rgba(255, 209, 102, 0.85);
-  box-shadow: 0 0 10px rgba(255, 209, 102, 0.25);
-}
-
-.fever-module.active {
-  border-color: #ff5500;
-  box-shadow: 0 0 14px rgba(255, 85, 0, 0.4);
-  animation: fever-module-pulse 0.4s infinite alternate;
-}
-
-@keyframes fever-module-pulse {
-  from { border-color: #ff5500; }
-  to { border-color: #ffd166; }
-}
-
-.fever-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 9px;
-  font-weight: 800;
-  color: rgba(255, 230, 140, 0.75);
-}
-
-.fever-idle-tag {
-  color: rgba(255, 230, 140, 0.5);
-  font-size: 9px;
-  font-variant-numeric: tabular-nums;
-}
-
-.fever-ready-tag {
-  color: #ffd166;
-  font-size: 9px;
-  font-weight: 900;
-  text-shadow: 0 0 8px rgba(255, 209, 102, 0.8);
-  animation: fever-tag-pulse 0.6s infinite alternate;
-}
-
-@keyframes fever-tag-pulse {
-  from { opacity: 0.8; transform: scale(0.98); }
-  to { opacity: 1; transform: scale(1.02); }
-}
-
-.fever-active-tag {
-  color: #ff6b4a;
-  font-size: 9px;
-  font-weight: 900;
-  text-shadow: 0 0 8px rgba(255, 107, 74, 0.8);
-}
-
-.fever-crystals {
-  display: flex;
-  gap: 6px;
-  margin-top: 5px;
-}
-
-.fever-crystal {
-  flex: 1;
-  height: 22px;
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  position: relative;
-  overflow: hidden;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.2s;
-}
-
-.fever-crystal.charged {
-  border-color: #ffd166;
-  box-shadow: inset 0 0 8px rgba(255, 209, 102, 0.45);
-}
-
-.crystal-segments {
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 100%;
-  height: 100%;
-  display: flex;
-  gap: 2px;
-  padding: 2px;
-}
-
-.crystal-segments i {
-  flex: 1;
-  height: 100%;
-  border-radius: 2px;
-  background: rgba(255, 255, 255, 0.06);
-  transition: background 0.15s;
-}
-
-.crystal-segments i.filled {
-  background: linear-gradient(180deg, #ffd166, #f77f00);
-  box-shadow: 0 0 4px rgba(255, 209, 102, 0.6);
-}
-
-.crystal-icon {
-  position: relative;
-  z-index: 2;
-  font-size: 11px;
-  color: rgba(255, 255, 255, 0.3);
-}
-
-.fever-crystal.charged .crystal-icon {
-  color: #ffffff;
-  text-shadow: 0 0 6px #ffd166;
-}
-
-.fever-timer-bar {
-  height: 3px;
-  margin-top: 5px;
-  border-radius: 2px;
-  background: rgba(255, 255, 255, 0.1);
-  overflow: hidden;
-}
-
-.fever-timer-bar i {
-  display: block;
-  height: 100%;
-  background: linear-gradient(90deg, #ff0055, #ffd166);
-  transition: width 0.1s linear;
-}
-
-.rapid-label {
-  color: #cbb3f0;
-}
-
-.rapid-track {
-  width: 144px;
-  height: 3px;
-  margin-top: 5px;
-  overflow: hidden;
-  border-radius: 2px;
-  background: rgba(255, 255, 255, 0.1);
-}
-
-.rapid-track i {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: #b99ae8;
-  transition: width 0.1s linear;
-}
-
-.tactical-buffs {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-top: 6px;
-}
-
-.tactical-chip {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 3px 8px;
-  border-radius: 4px;
-  font-size: 10px;
-  font-weight: 800;
-  backdrop-filter: blur(4px);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-}
-
-.tactical-chip.bullet-time {
-  background: rgba(16, 185, 129, 0.25);
-  border-color: rgba(110, 231, 183, 0.7);
-  color: #a7f3d0;
-}
-
-.tactical-chip.booster {
-  background: rgba(245, 158, 11, 0.25);
-  border-color: rgba(251, 191, 36, 0.7);
-  color: #fde68a;
-}
-
-.tactical-chip.drone {
-  background: rgba(236, 72, 153, 0.25);
-  border-color: rgba(244, 114, 182, 0.7);
-  color: #fbcfe8;
-}
-
-.weapon-core {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 8px;
-  color: rgba(235, 244, 242, 0.7);
-  font-size: 10px;
-  font-weight: 800;
-}
-
-.weapon-core > .core-mark {
-  width: 3px;
-  height: 13px;
-  border-radius: 1px;
-  background: var(--weapon-color);
-}
-
-.core-level {
-  display: flex;
-  gap: 3px;
-}
-
-.core-level i {
-  width: 13px;
-  height: 3px;
-  background: rgba(255, 255, 255, 0.15);
-}
-
-.core-level i.active {
-  background: var(--weapon-color);
-  box-shadow: 0 0 7px color-mix(in srgb, var(--weapon-color) 50%, transparent);
-}
-
-.route {
-  left: 50%;
-  width: min(520px, 42vw);
-  transform: translateX(-50%);
-}
-
-.route-head {
-  display: grid;
-  grid-template-columns: 1fr 70px 1fr;
-  align-items: end;
-  margin-bottom: 8px;
-  color: rgba(235, 244, 242, 0.62);
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.route-head strong {
-  color: #fff4c4;
-  font-size: 18px;
-  font-variant-numeric: tabular-nums;
-  text-align: center;
-}
-
-.route-head span:last-child {
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
-
-.route-track {
-  position: relative;
-  height: 4px;
-  border-radius: 2px;
-  background: rgba(255, 255, 255, 0.13);
-}
-
-.route-track i {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: #83df51;
-  box-shadow: 0 0 12px rgba(131, 223, 81, 0.32);
-  transition: width 0.1s linear;
-}
-
-.route-track.endless .endless-bar {
-  width: 100%;
-  background: linear-gradient(90deg, #83df51, #79d5e6, #ffd166, #83df51);
-  background-size: 200% 100%;
-  animation: endless-flow 2.5s linear infinite;
-  box-shadow: 0 0 14px rgba(121, 213, 230, 0.5);
-}
-
-@keyframes endless-flow {
-  0% { background-position: 0% 0%; }
-  100% { background-position: 200% 0%; }
-}
-
-.route-track span {
-  position: absolute;
-  top: 50%;
-  width: 7px;
-  height: 7px;
-  border: 1px solid rgba(226, 237, 236, 0.54);
-  border-radius: 50%;
-  background: #111b24;
-  transform: translate(-50%, -50%);
-}
-
-.lane-readout {
-  position: absolute;
-  top: 66px;
-  left: 50%;
-  width: min(390px, 42vw);
-  transform: translateX(-50%);
-  color: rgba(235, 244, 242, 0.64);
-  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.7);
-}
-
-.lane-readout-head {
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: 5px;
-  font-size: 9px;
-  font-weight: 800;
-}
-
-.lane-readout-head em {
-  color: rgba(235, 244, 242, 0.42);
-  font-style: normal;
-}
-
-.lane-cells {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 5px;
-}
-
-.lane-cell {
-  display: grid;
-  grid-template-columns: 22px 1fr 25px;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-  height: 18px;
-  padding: 0 5px;
-  border-left: 2px solid rgba(255, 255, 255, 0.16);
-  background: rgba(7, 15, 22, 0.36);
-  font-size: 9px;
-  font-weight: 800;
-}
-
-.lane-cell.current {
-  background: rgba(131, 223, 81, 0.1);
-}
-
-.lane-cell.open { border-left-color: #8de3d7; }
-.lane-cell.warning { border-left-color: #f0b35f; }
-.lane-cell.danger { border-left-color: #df765f; }
-
-.lane-cell > span,
-.lane-cell > em {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.lane-cell > em {
-  color: rgba(235, 244, 242, 0.45);
-  font-size: 8px;
-  font-style: normal;
-  text-align: right;
-}
-
-.lane-cell.open > em { color: #8de3d7; }
-.lane-cell.warning > em { color: #f0b35f; }
-.lane-cell.danger > em { color: #df765f; }
-
-.lane-cell > i {
-  height: 3px;
-  overflow: hidden;
-  background: rgba(255, 255, 255, 0.1);
-}
-
-.lane-cell > i b {
-  display: block;
-  height: 100%;
-  background: currentColor;
-}
-
-.lane-cell.open > i b { color: #8de3d7; }
-.lane-cell.warning > i b { color: #f0b35f; }
-.lane-cell.danger > i b { color: #df765f; }
-
-.score {
-  top: 78px;
-  right: 24px;
-  min-width: 150px;
-  text-align: right;
-}
-
-.score span {
-  display: block;
-  color: rgba(235, 244, 242, 0.52);
-  font-size: 10px;
-  font-weight: 700;
-}
-
-.score strong {
-  display: block;
-  color: #f4d87c;
-  font-size: 22px;
-  font-variant-numeric: tabular-nums;
-}
-
-.score em {
-  display: block;
-  margin-top: 2px;
-  color: #86d8ed;
-  font-size: 11px;
-  font-style: normal;
-  font-weight: 800;
-}
-
-.fever-badge {
-  margin-top: 5px;
-  padding: 3px 7px;
-  border-radius: 4px;
-  background: linear-gradient(90deg, #ff4500, #ffb703);
-  box-shadow: 0 0 12px rgba(255, 120, 0, 0.6);
-  color: #ffffff;
-  font-size: 10px;
-  font-weight: 900;
-  letter-spacing: 0.5px;
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
-  animation: fever-badge-pulse 0.5s ease-in-out infinite alternate;
-}
-
-@keyframes fever-badge-pulse {
-  from { transform: scale(0.96); }
-  to { transform: scale(1.05); }
-}
-
-.countdown-mark {
-  position: absolute;
-  left: 50%;
-  top: 36%;
-  min-width: 160px;
-  transform: translate(-50%, -50%);
-  color: #fff0aa;
-  font-size: clamp(48px, 7.5vh, 72px);
-  font-weight: 900;
-  line-height: 1;
-  text-align: center;
-  text-shadow: 0 0 24px rgba(248, 211, 101, 0.35), 0 3px 12px rgba(0, 0, 0, 0.85);
-  opacity: 0.92;
-}
-
-.fusion-banner {
-  position: absolute;
-  left: 50%;
-  top: 31%;
-  display: grid;
-  min-width: 280px;
-  transform: translate(-50%, -50%);
-  color: #eef5f2;
-  text-align: center;
-  text-shadow: 0 2px 14px rgba(0, 0, 0, 0.9);
-}
-
-.fusion-banner::before,
-.fusion-banner::after {
-  content: '';
-  position: absolute;
-  top: 31px;
-  width: 72px;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, var(--fusion-color));
-}
-
-.fusion-banner::before {
-  right: calc(100% + 14px);
-}
-
-.fusion-banner::after {
-  left: calc(100% + 14px);
-  transform: scaleX(-1);
-}
-
-.fusion-banner > span {
-  color: var(--fusion-color);
-  font-size: 10px;
-  font-weight: 900;
-}
-
-.fusion-banner > strong {
-  margin-top: 2px;
-  color: #f6faf7;
-  font-size: 25px;
-  line-height: 1.2;
-}
-
-.fusion-banner > em {
-  margin-top: 3px;
-  color: rgba(238, 245, 242, 0.68);
-  font-size: 11px;
-  font-style: normal;
-  font-weight: 700;
-}
-
-.fusion-banner > div {
-  display: flex;
-  justify-content: center;
-  gap: 5px;
-  margin-top: 9px;
-}
-
-.fusion-banner > div i {
-  width: 30px;
-  height: 3px;
-  background: rgba(255, 255, 255, 0.16);
-}
-
-.fusion-banner > div i.active {
-  background: var(--fusion-color);
-  box-shadow: 0 0 10px color-mix(in srgb, var(--fusion-color) 50%, transparent);
-}
-
-.section-notice {
-  position: absolute;
-  left: 50%;
-  top: 18%;
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  transform: translateX(-50%);
-  padding: 9px 14px;
-  border-left: 2px solid #82dff0;
-  border-radius: 2px;
-  background: rgba(7, 15, 22, 0.72);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.24);
-}
-
-.weapon-notice {
-  position: absolute;
-  left: 50%;
-  top: 18%;
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  transform: translateX(-50%);
-  padding: 9px 14px;
-  border-left: 2px solid #83df51;
-  border-radius: 2px;
-  color: #eef5f2;
-  background: rgba(7, 15, 22, 0.76);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.24);
-}
-
-.weapon-notice.choice {
-  border-left-color: #f0b35f;
-}
-
-.weapon-notice span {
-  color: rgba(238, 245, 242, 0.56);
-  font-size: 10px;
-  font-weight: 800;
-}
-
-.weapon-notice strong {
-  font-size: 15px;
-}
-
-.section-notice span {
-  color: #82dff0;
-  font-size: 10px;
-  font-weight: 800;
-}
-
-.section-notice strong {
-  font-size: 16px;
-}
-
-.countdown-enter-active,
-.countdown-leave-active,
-.fusion-enter-active,
-.fusion-leave-active,
-.section-enter-active,
-.section-leave-active {
-  transition: opacity 0.18s ease, transform 0.18s ease;
-}
-
-.countdown-enter-from,
-.countdown-leave-to {
-  opacity: 0;
-  transform: translate(-50%, -50%) scale(1.12);
-}
-
-.section-enter-from,
-.section-leave-to {
-  opacity: 0;
-  transform: translate(-50%, -8px);
-}
-
-.fusion-enter-from,
-.fusion-leave-to {
-  opacity: 0;
-  transform: translate(-50%, -50%) scale(1.08);
-}
-
-@media (max-width: 1050px) {
-  .route {
-    top: 86px;
-    width: min(500px, 56vw);
-  }
-
-  .lane-readout {
-    top: 132px;
-    width: min(390px, 56vw);
-  }
-}
-
-@media (max-width: 620px) {
-  .vitals {
-    left: 14px;
-    width: 170px;
-  }
-
-  .hp-cell {
-    width: 22px;
-  }
-
-  .score {
-    top: 20px;
-    right: 14px;
-    min-width: 105px;
-  }
-
-  .score strong {
-    font-size: 18px;
-  }
-
-  .route {
-    top: 89px;
-    width: calc(100vw - 28px);
-  }
-
-  .lane-readout {
-    top: 135px;
-    width: calc(100vw - 28px);
-  }
-
-  .lane-cell {
-    grid-template-columns: 20px 1fr;
-    height: 20px;
-  }
-
-  .lane-cell > em {
-    display: none;
-  }
-}
-
+.runner-hud { --surface: rgba(8,17,25,.91); --muted: #b1c3cd; position: absolute; inset: 0; z-index: 6; overflow: hidden; color: #eff6f5; font: 14px/1.35 "Segoe UI","PingFang SC",sans-serif; font-variant-numeric: tabular-nums; pointer-events: none; }
+.runner-hud * { box-sizing: border-box; }
+.swipe-region { position: absolute; left: 0; right: 0; top: var(--hud-top); bottom: var(--hud-bottom); pointer-events: auto; touch-action: none; user-select: none; }
+.hud-top, .skill-dock { z-index: 1; }
+.hud-top { position: relative; }
+.touch-hint { grid-column: 1 / -1; justify-self: center; color: #bfd0d6; font-size: 12px; text-shadow: 0 1px 4px #071019; }
+.touch-controls .game-controls button { min-width: 44px; min-height: 44px; }
+.hud-top { display: grid; grid-template-columns: minmax(210px,250px) minmax(260px,480px) minmax(160px,190px); justify-content: space-between; align-items: start; gap: 20px; padding: 18px 22px; }
+.hud-surface { min-width: 0; padding: 12px 14px; border-radius: 8px; background: var(--surface); border-top: 1px solid #33444c; }
+.mode-label { margin-bottom: 8px; color: var(--muted); font-size: 12px; }
+.vital-row { display: flex; align-items: center; gap: 8px; margin-top: 5px; }
+.vital-row > span { flex-shrink: 0; white-space: nowrap; font-size: 14px; }
+.vital-row > b { margin-left: auto; white-space: nowrap; }
+small { color: var(--muted); font-size: 12px; font-weight: 400; }
+.hp-cells,.shield-cells { display: flex; gap: 4px; flex: 1; min-width: 0; }
+.hp-cells i { flex: 1; max-width: 23px; height: 8px; border-radius: 2px; background: #91e866; }
+.shield-cells i { flex: 1; max-width: 21px; height: 5px; border-radius: 1px; background: #7cddd7; }
+.hp-cells .lost,.shield-cells .lost { background: #304049; }
+.shield-row { color: #a4dfdc; }
+.equipment { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 10px; padding-top: 8px; border-top: 1px solid #293a43; color: var(--muted); font-size: 12px; }
+.equipment b { color: #eff6f5; font-weight: 600; }
+.weapon-core { width: 100%; border-left: 2px solid var(--weapon-color); padding-left: 6px; }
+.weapon-core b { float: right; }
+.rapid-label { color: #d2b5f4; }
+.route-head { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px; }
+.route-head > span { color: var(--muted); font-size: 12px; }
+.route-head > span:last-child { text-align: right; }
+.route-head strong { font-size: 22px; font-weight: 700; }
+.track { display: block; overflow: hidden; height: 4px; border-radius: 2px; background: #2a3a43; }
+.track i { display: block; height: 100%; background: var(--skill-color,#91e866); transition: width .12s linear; }
+.route-track { margin-top: 8px; height: 3px; }
+.lane-cells { display: grid; grid-template-columns: repeat(3,1fr); gap: 10px; margin-top: 12px; }
+.lane-cell { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.lane-cell > i { width: 5px; height: 5px; border-radius: 50%; background: #6d838f; flex-shrink: 0; }
+.lane-cell.current { color: #eef6f5; }
+.lane-cell.current > i { background: #99e4d7; }
+.lane-cell b { font-weight: 500; }
+.lane-cell.warning > i { background: #e6b766; border-radius: 1px; }
+.lane-cell.danger > i { background: #ff7a70; border-radius: 0; transform: rotate(45deg); }
+.lane-cell em { margin-left: auto; color: #ff9a87; font-size: 12px; font-style: normal; }
+.route-label { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px; margin-top: 8px; color: var(--muted); font-size: 12px; }
+.route-label b { font-weight: 500; }
+.choice-guide, .combat-receipt { margin-top: 8px; padding-top: 6px; border-top: 1px solid #31464e; color: #d2e8de; font-size: 12px; text-align: center; overflow-wrap: anywhere; }
+.combat-receipt { color: #e9d79c; }
+.score { text-align: right; }
+.game-controls { display: flex; justify-content: flex-end; gap: 6px; margin-bottom: 6px; }
+button { font: inherit; color: inherit; pointer-events: auto; cursor: pointer; touch-action: manipulation; }
+.game-controls button { display: grid; place-items: center; width: 36px; height: 32px; border: 1px solid #41535f; border-radius: 5px; background: #172832; }
+button:focus-visible { outline: 2px solid #e7fff9; outline-offset: 3px; }
+button:disabled { cursor: default; }
+.game-controls button:hover:not(:disabled) { background: #2c414d; }
+.score-value > span { color: var(--muted); font-size: 12px; margin-right: 8px; }
+.score-value strong { font-size: 24px; font-weight: 750; }
+.score-feedback { display: flex; justify-content: flex-end; gap: 8px; min-height: 18px; font-size: 12px; }
+.score-feedback em { font-style: normal; color: #8cddeb; }
+.score-gain { color: #f2d586; animation: receipt 1.1s ease forwards; }
+@keyframes receipt { 0%,65% { opacity: 1; } 100% { opacity: 0; } }
+.skill-dock { position: absolute; left: 50%; bottom: max(14px,env(safe-area-inset-bottom)); transform: translateX(-50%); display: grid; grid-template-columns: 1fr 1.18fr; gap: 10px; width: min(520px,calc(100% - 28px)); }
+.skill-module { --skill-color: #91ded5; display: grid; gap: 9px; padding: 10px 14px; min-width: 0; border: 1px solid #3d505b; border-radius: 8px; background: var(--surface); text-align: left; }
+.skill-module.ready { border-color: #80c4ba; }
+.skill-module:hover:not(:disabled) { background: #1b303b; }
+.skill-module:active:not(:disabled) { background: #243e48; }
+.skill-head { display: flex; align-items: center; gap: 8px; font-size: 15px; white-space: nowrap; }
+.skill-head b { margin-left: auto; color: var(--skill-color); font-size: 15px; font-weight: 700; }
+kbd { min-width: 24px; padding: 1px 5px; border: 1px solid #596a73; border-bottom-width: 2px; border-radius: 4px; color: #edf5f5; font: 12px/1.4 "Segoe UI",sans-serif; text-align: center; }
+.skill-detail { display: flex; justify-content: space-between; gap: 6px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.fever-module { --skill-color: #f2cd79; }
+.fever-module.ready { border-color: #c4a260; }
+.fever-module.active { border-color: #eb9d65; --skill-color: #ffc083; }
+.tactical-buffs { display: flex; flex-wrap: wrap; gap: 4px 8px; margin-top: 6px; }
+.tactical-buffs > span { color: #c8e7e0; font-size: 12px; }
+.tactical-buffs b { color: #fff; }
+.countdown-mark { position: absolute; left: 50%; top: 36%; transform: translate(-50%,-50%); color: #ffeba5; font-size: clamp(48px,8vh,72px); font-weight: 850; text-shadow: 0 3px 12px #061018; }
+.event-notice { position: absolute; top: calc(var(--hud-top) + 8px); left: 50%; transform: translateX(-50%); display: grid; gap: 3px; max-width: calc(100% - 32px); padding: 10px 18px; border-left: 2px solid var(--notice-color,#91e866); border-radius: 4px; background: var(--surface); text-align: center; }
+.event-notice span,.event-notice em { color: var(--muted); font-size: 12px; font-style: normal; }
+.event-notice strong { font-size: 18px; }
+.fusion-banner strong { color: var(--notice-color); font-size: 24px; }
+.notice-enter-active,.notice-leave-active { transition: opacity .16s ease; }
+.notice-enter-from,.notice-leave-to { opacity: 0; }
+@media (max-width: 960px) {
+  .hud-top { grid-template-columns: 210px minmax(230px,1fr) 160px; padding: 12px; gap: 10px; }
+  .hud-surface { padding: 10px; }
+  .lane-cells { gap: 6px; }
+  .lane-cell { flex-wrap: wrap; row-gap: 2px; }
+  .lane-cell em { width: 100%; margin-left: 10px; }
+}
+@media (max-width: 700px) {
+  .hud-top { grid-template-columns: minmax(0,1fr) 132px; gap: 8px; padding: 10px; }
+  .vitals { grid-column: 1; grid-row: 1; }
+  .score { grid-column: 2; grid-row: 1; align-self: stretch; }
+  .route { grid-column: 1 / -1; grid-row: 2; }
+  .mode-label { display: none; }
+  .equipment { margin-top: 6px; padding-top: 5px; }
+  .route-head strong { font-size: 18px; }
+  .route-label { display: none; }
+  .lane-cells { margin-top: 7px; }
+  .lane-cell { flex-wrap: nowrap; }
+  .lane-cell em { width: auto; margin-left: auto; }
+  .score-value strong { font-size: 20px; }
+  .score-value > span { display: block; margin-right: 0; }
+  .skill-dock { gap: 8px; width: calc(100% - 20px); bottom: max(10px,env(safe-area-inset-bottom)); }
+  .skill-module { padding: 10px; gap: 8px; }
+  .skill-head { flex-wrap: wrap; gap: 5px; }
+  .skill-head b { font-size: 14px; }
+  .skill-detail { flex-wrap: wrap; }
+  .skill-detail > span { display: none; }
+  .event-notice { width: max-content; }
+}
+@media (max-height: 520px) and (min-aspect-ratio: 4/3) {
+  .hud-top { padding: 8px 12px; grid-template-columns: minmax(152px, 190px) minmax(190px, 1fr) 124px; gap: 8px; }
+  .vitals, .route, .score { grid-row: 1; align-self: start; }
+  .vitals { grid-column: 1; }
+  .route { grid-column: 2; }
+  .score { grid-column: 3; }
+  .hud-surface { padding: 8px 10px; }
+  .mode-label,.route-label { display: none; }
+  .equipment { margin-top: 5px; padding-top: 4px; }
+  .weapon-core { width: auto; }
+  .weapon-core b { margin-left: 6px; float: none; }
+  .skill-module { gap: 6px; padding: 8px 12px; }
+  .skill-dock { bottom: 8px; }
+  .score-value > span { display: none; }
+  .score-value strong { font-size: 20px; }
+  .skill-detail { display: none; }
+  .touch-controls .game-controls button { min-width: 44px; min-height: 44px; }
+  .event-notice { padding: 6px 12px; }
+}
+.reduced-motion *,.reduced-motion *::before,.reduced-motion *::after { animation: none !important; transition: none !important; }
+.reduced-motion .score-gain { display: none; }
 @media (prefers-reduced-motion: reduce) {
-  .countdown-enter-active,
-  .countdown-leave-active,
-  .fusion-enter-active,
-  .fusion-leave-active,
-  .section-enter-active,
-  .section-leave-active,
-  .route-track i,
-  .rapid-track i {
-    transition: none;
-  }
+  .runner-hud *,.runner-hud *::before,.runner-hud *::after { animation: none !important; transition: none !important; }
+  .score-gain { display: none; }
 }
 </style>

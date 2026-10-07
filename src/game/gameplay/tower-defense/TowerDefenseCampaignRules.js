@@ -1,7 +1,13 @@
+import { getStageMiniBoss } from './TowerDefenseMiniBosses.js';
+import { getCampaignProgression } from './TowerDefenseProgression.js';
+import { CHAPTER_TACTICS, ASSAULT_PATTERNS, ENEMY_UNLOCKS } from './TowerDefenseContent.js';
 /**
  * TowerDefenseCampaignRules.js
  * 5 Thematic Biomes & 99 Stages Campaign Progression Configuration
  */
+
+import { fitTowerDefenseSlots } from './TowerDefenseLayout.js';
+import { getCampaignWaveCount, shapeCampaignWaves, describeTeachingWaves } from './TowerDefensePacing.js';
 
 export const CHAPTERS_META = Object.freeze([
   {
@@ -41,7 +47,7 @@ export const CHAPTERS_META = Object.freeze([
     stageRange: [21, 40],
     bossStage: 40,
     bossName: '凛冬裁决官',
-    recommendedTypes: ['slow', 'pierce'],
+    recommendedTypes: ['slow', 'thorn', 'shock'],
     icon: '❄️',
   },
   {
@@ -81,7 +87,7 @@ export const CHAPTERS_META = Object.freeze([
     stageRange: [61, 80],
     bossStage: 80,
     bossName: '虚空大魔导师',
-    recommendedTypes: ['pierce', 'slow'],
+    recommendedTypes: ['beacon', 'shock'],
     icon: '⚡',
   },
   {
@@ -101,7 +107,7 @@ export const CHAPTERS_META = Object.freeze([
     stageRange: [81, 99],
     bossStage: 99,
     bossName: '帝国双子元帅 & 灭绝机甲',
-    recommendedTypes: ['rapid', 'blast', 'slow', 'pierce'],
+    recommendedTypes: ['rapid', 'blast', 'slow', 'ballista'],
     icon: '👑',
   },
 ]);
@@ -405,209 +411,6 @@ export const TOPOLOGY_PRESETS = Object.freeze({
   },
 });
 
-export const GENE_TREE_NODES = Object.freeze([
-  {
-    id: 'talent_gold',
-    name: '丰饶原浆',
-    icon: '🌾',
-    maxLevel: 3,
-    costs: [3, 6, 12],
-    descriptions: [
-      '开局初始养分 +30',
-      '开局初始养分 +60',
-      '开局初始养分 +100',
-    ],
-    effect: (level) => ({ startingGoldBonus: [0, 30, 60, 100][level] || 0 }),
-  },
-  {
-    id: 'talent_leyline',
-    name: '地脉共鸣过载',
-    icon: '⚡',
-    maxLevel: 3,
-    costs: [5, 10, 18],
-    descriptions: [
-      '所有槽位地脉增益效果提升 +15%',
-      '所有槽位地脉增益效果提升 +30%',
-      '所有槽位地脉增益效果提升 +50%',
-    ],
-    effect: (level) => ({ leylineBoostMultiplier: [1, 1.15, 1.30, 1.50][level] || 1 }),
-  },
-  {
-    id: 'talent_trap_cd',
-    name: '母巢神经突触',
-    icon: '⏱️',
-    maxLevel: 3,
-    costs: [4, 8, 15],
-    descriptions: [
-      '所有战术生物机关冷却时间缩短 -10%',
-      '所有战术生物机关冷却时间缩短 -20%',
-      '所有战术生物机关冷却时间缩短 -30%',
-    ],
-    effect: (level) => ({ trapCooldownMultiplier: [1, 0.90, 0.80, 0.70][level] || 1 }),
-  },
-  {
-    id: 'talent_pet_morale',
-    name: '灵性羁绊',
-    icon: '💖',
-    maxLevel: 3,
-    costs: [3, 7, 14],
-    descriptions: [
-      '抚摸鼓舞持续时间提升至 6 秒',
-      '抚摸鼓舞持续时间提升至 8 秒',
-      '抚摸鼓舞持续时间提升至 10 秒且攻速提升 +25%',
-    ],
-    effect: (level) => ({
-      moraleDuration: [4, 6, 8, 10][level] || 4,
-      moraleSpeedBoost: [0.15, 0.15, 0.20, 0.25][level] || 0.15,
-    }),
-  },
-  {
-    id: 'talent_leap_shield',
-    name: '弹跳生肌',
-    icon: '🦘',
-    maxLevel: 3,
-    costs: [6, 12, 22],
-    descriptions: [
-      '战术换位冷却缩短至 6 秒',
-      '换位冷却缩短至 4 秒，且落地获得 3 秒强化光环',
-      '换位冷却缩短至 3 秒，落地全图史莱姆获得 3 秒小狂热',
-    ],
-    effect: (level) => ({
-      relocateCooldown: [8, 6, 4, 3][level] || 8,
-      leapBuff: level >= 2,
-    }),
-  },
-  {
-    id: 'talent_dmg',
-    name: '强酸消化腺',
-    icon: '🧪',
-    maxLevel: 3,
-    costs: [5, 10, 18],
-    descriptions: [
-      '全体守卫攻击力 +4%',
-      '全体守卫攻击力 +8%',
-      '全体守卫攻击力 +12%',
-    ],
-    effect: (level) => ({ towerDamageMultiplier: [1, 1.04, 1.08, 1.12][level] || 1 }),
-  },
-  {
-    id: 'talent_rate',
-    name: '代谢亢进',
-    icon: '🔥',
-    maxLevel: 3,
-    costs: [5, 10, 18],
-    descriptions: [
-      '全体守卫攻击速度 +3%',
-      '全体守卫攻击速度 +6%',
-      '全体守卫攻击速度 +10%',
-    ],
-    effect: (level) => ({ towerSpeedMultiplier: [1, 1.03, 1.06, 1.10][level] || 1 }),
-  },
-  {
-    id: 'talent_range',
-    name: '蛛网感知',
-    icon: '🕸️',
-    maxLevel: 3,
-    costs: [4, 8, 14],
-    descriptions: [
-      '全体守卫感知范围 +3%',
-      '全体守卫感知范围 +6%',
-      '全体守卫感知范围 +10%',
-    ],
-    effect: (level) => ({ towerRangeMultiplier: [1, 1.03, 1.06, 1.10][level] || 1 }),
-  },
-  {
-    id: 'talent_basehp',
-    name: '巢心韧壳',
-    icon: '🏰',
-    maxLevel: 3,
-    costs: [4, 9, 16],
-    descriptions: [
-      '母巢核心生命上限 +2',
-      '母巢核心生命上限 +4',
-      '母巢核心生命上限 +6',
-    ],
-    effect: (level) => ({ baseHpBonus: [0, 2, 4, 6][level] || 0 }),
-  },
-  {
-    id: 'talent_sell',
-    name: '循环回收',
-    icon: '♻️',
-    maxLevel: 3,
-    costs: [3, 6, 10],
-    descriptions: [
-      '放生返还提升 +10%',
-      '放生返还提升 +20%',
-      '放生返还提升 +35%',
-    ],
-    effect: (level) => ({ sellBonusMultiplier: [1, 1.10, 1.20, 1.35][level] || 1 }),
-  },
-  {
-    id: 'talent_interest',
-    name: '复利发酵',
-    icon: '🏦',
-    maxLevel: 3,
-    costs: [4, 9, 16],
-    descriptions: [
-      '波次结算利息 +2%（上限提升）',
-      '波次结算利息 +4%（上限提升）',
-      '波次结算利息 +6%（上限提升）',
-    ],
-    effect: (level) => ({ interestRate: [0.05, 0.07, 0.09, 0.11][level] || 0.05 }),
-  },
-  {
-    id: 'talent_early',
-    name: '先手突袭',
-    icon: '⚔️',
-    maxLevel: 3,
-    costs: [3, 7, 12],
-    descriptions: [
-      '提前召唤下一波的养分奖励 +25%',
-      '提前召唤下一波的养分奖励 +50%',
-      '提前召唤下一波的养分奖励 +80%',
-    ],
-    effect: (level) => ({ earlyCallMultiplier: [1, 1.25, 1.50, 1.80][level] || 1 }),
-  },
-  {
-    id: 'talent_boss',
-    name: '攻城破甲',
-    icon: '🔨',
-    maxLevel: 3,
-    costs: [5, 11, 20],
-    descriptions: [
-      '对首领伤害 +8%',
-      '对首领伤害 +16%',
-      '对首领伤害 +25%',
-    ],
-    effect: (level) => ({ bossDamageMultiplier: [1, 1.08, 1.16, 1.25][level] || 1 }),
-  },
-  {
-    id: 'talent_shiny',
-    name: '闪光血统',
-    icon: '✨',
-    maxLevel: 3,
-    costs: [4, 8, 15],
-    descriptions: [
-      '闪光特质触发率 +5%',
-      '闪光特质触发率 +10%',
-      '闪光特质触发率 +15%',
-    ],
-    effect: (level) => ({ shinyChanceBonus: [0, 0.05, 0.10, 0.15][level] || 0 }),
-  },
-  {
-    id: 'talent_mskip',
-    name: '突变精华',
-    icon: '🧬',
-    maxLevel: 3,
-    costs: [3, 6, 10],
-    descriptions: [
-      '跳过突变的养分补偿 +10',
-      '跳过突变的养分补偿 +20',
-      '跳过突变的养分补偿 +35',
-    ],
-    effect: (level) => ({ mutationSkipBonus: [0, 10, 20, 35][level] || 0 }),
-  },
-]);
 
 /** 无尽模式：确定性无限波次生成（波次血量持续爬升，每 10 波一个首领） */
 export const TOWER_DEFENSE_ENDLESS_WAVE_COUNT = 60;
@@ -670,7 +473,6 @@ function getStageSpecificSlots(baseSlots, stageId, stageInChapter, chapterId) {
     // Determine locked slots: alternate which slots are locked per stage
     let isLocked = false;
     let cost = 40 + subIndex * 5;
-    let reward = 60 + subIndex * 10;
 
     if (subIndex === 0) {
       isLocked = idx === 8 || idx === 9;
@@ -696,15 +498,17 @@ function getStageSpecificSlots(baseSlots, stageId, stageInChapter, chapterId) {
     // Micro position shift (±0.015) based on stage seed
     const microX = ((Math.sin(stageId * 7.1 + idx * 3.3) * 100) % 15) * 0.001;
     const microY = ((Math.cos(stageId * 5.3 + idx * 4.7) * 100) % 15) * 0.001;
+    const x = Math.max(0.06, Math.min(0.94, Number((slot.x + microX).toFixed(3))));
+    const y = Math.max(0.08, Math.min(0.92, Number((slot.y + microY).toFixed(3))));
 
     return {
       slotIndex: idx,
-      x: Math.max(0.06, Math.min(0.94, Number((slot.x + microX).toFixed(3)))),
-      y: Math.max(0.08, Math.min(0.92, Number((slot.y + microY).toFixed(3)))),
+      x,
+      y,
       leyline,
       locked: isLocked,
       cost: isLocked ? cost : 0,
-      reward: isLocked ? reward : 0,
+      reward: 0,
     };
   });
 }
@@ -749,7 +553,7 @@ function getStageSpecificTraps(baseTraps, stageId, stageInChapter, path) {
   ];
 }
 
-export function getStageConfig(stageId) {
+export function getStageConfig(stageId, { endless = false } = {}) {
   const clampedStage = Math.max(1, Math.min(99, Math.floor(stageId || 1)));
   const chapter = CHAPTERS_META.find((c) => clampedStage >= c.stageRange[0] && clampedStage <= c.stageRange[1]) || CHAPTERS_META[0];
   const stageInChapter = clampedStage - chapter.stageRange[0] + 1;
@@ -778,22 +582,36 @@ export function getStageConfig(stageId) {
   }
 
   const topology = TOPOLOGY_PRESETS[topologyId] || TOPOLOGY_PRESETS.classic_s;
-  let waveCount = 6;
-  if (clampedStage === 1) {
-    waveCount = 4;
-  } else if (clampedStage <= 5) {
-    waveCount = 5;
-  } else if (isBossStage) {
-    waveCount = clampedStage === 99 ? 12 : 8 + Math.floor(chapter.id * 0.6);
-  } else {
-    waveCount = Math.min(12, 6 + Math.floor((clampedStage - 1) / 10));
-  }
+  const waveCount = getCampaignWaveCount(clampedStage);
 
-  const startingGold = clampedStage === 1 ? 240 : 240 + (chapter.id - 1) * 25;
+  const startingGold = clampedStage <= 5 ? 240 : 230 + (chapter.id - 1) * 65;
   const waves = generateStageWaves(clampedStage, chapter.id, waveCount, isBossStage);
+  const introductory = clampedStage === 1 && !endless;
+  const progression = getCampaignProgression(clampedStage, { endless });
+  const trapFeatures = { spore_shroom: 'sporeTrap', slime_geyser: 'geyserTrap', hive_crystal: 'crystalTrap' };
+  const traps = getStageSpecificTraps(topology.traps, clampedStage, stageInChapter, topology.path)
+    .filter(trap => progression[trapFeatures[trap.id]]);
+  let slotSeeds = clampedStage <= 5 && !endless
+    ? [{ x: 0.20, y: 0.33 }, { x: 0.38, y: 0.31 }, { x: 0.53, y: 0.62 }, { x: 0.76, y: 0.61 }, { x: 0.85, y: 0.34 }, { x: 0.12, y: 0.60 }]
+      .slice(0, clampedStage === 1 ? 4 : clampedStage <= 3 ? 5 : 6)
+      .map((slot, slotIndex) => ({ ...slot, slotIndex, leyline: 'none', locked: false, cost: 0, reward: 0 }))
+    : getStageSpecificSlots(topology.buildSlots, clampedStage, stageInChapter, chapter.id);
+  if (!endless && clampedStage >= 6 && clampedStage <= 12) {
+    slotSeeds = topology.buildSlots.slice(0, clampedStage <= 7 ? 7 : 8)
+      .map((slot, slotIndex) => ({ ...slot, slotIndex, locked: false, cost: 0, reward: 0,
+        leyline: progression.leylines && slotIndex < 2 ? ['acid', 'frost'][slotIndex] : 'none' }));
+  }
+  // Delaying the clearing lesson must not remove established combat positions.
+  if (!endless && clampedStage >= 13 && !progression.clearing) {
+    slotSeeds = slotSeeds.map(slot => ({ ...slot, locked: false, cost: 0, reward: 0 }));
+  }
 
   return {
     stageId: clampedStage,
+    tactic: progression.lesson ? { name: progression.lesson.name, description: progression.lesson.hint } : CHAPTER_TACTICS[chapter.id - 1],
+    assault: progression.lesson || ASSAULT_PATTERNS[(clampedStage - 1) % 5],
+    progression,
+    topologyName: topology.name,
     chapterId: chapter.id,
     chapterKey: chapter.key,
     chapterName: chapter.name,
@@ -802,11 +620,13 @@ export function getStageConfig(stageId) {
     theme: chapter.theme,
     isMilestone,
     isBossStage,
+    miniBoss: getStageMiniBoss(clampedStage),
     bossName: isBossStage ? chapter.bossName : null,
     topologyId,
+    introductory,
     path: topology.path,
-    buildSlots: getStageSpecificSlots(topology.buildSlots, clampedStage, stageInChapter, chapter.id),
-    traps: getStageSpecificTraps(topology.traps, clampedStage, stageInChapter, topology.path),
+    buildSlots: fitTowerDefenseSlots(slotSeeds, topology.path, traps),
+    traps,
     subStageIndex: (stageInChapter - 1) % 5,
     timeOfDay: ['dawn', 'noon', 'amber_dusk', 'twilight', 'midnight'][(stageInChapter - 1) % 5],
     waveCount,
@@ -862,111 +682,109 @@ function tuneEnemyGroup(type, count, interval) {
 }
 
 function generateStageWaves(stageId, chapterId, waveCount, isBossStage) {
-  // Stage 1 Tutorial Wave Pacing（教学关保持温和，但疾行者用正确的真实类型）
+  // One gentle wave, then compact squads that require a second line of fire.
   if (stageId === 1) {
-    return [
+    return describeTeachingWaves([
       {
         wave: 1,
+        intermission: 8,
         preview: { title: '第 1 波 · 巡逻斥候', count: 4 },
         groups: [{ type: 'grunt', count: 4, interval: 1.8, scale: 0.85 }],
       },
       {
         wave: 2,
-        preview: { title: '第 2 波 · 探路小队', count: 6 },
-        groups: [{ type: 'grunt', count: 6, interval: 1.6, scale: 0.9 }],
+        intermission: 8,
+        preview: { title: '第 2 波 · 小队集结', count: 10 },
+        groups: [{ type: 'grunt', count: 10, interval: 0.5, scale: 0.9, rewardScale: 0.6 }],
       },
       {
         wave: 3,
-        preview: { title: '第 3 波 · 疾行斥候', count: 7 },
-        groups: [
-          { type: 'grunt', count: 4, interval: 1.5, scale: 0.95 },
-          { type: 'runner', count: 3, interval: 1.4, gap: 1.0, scale: 0.9 },
-        ],
+        intermission: 6,
+        preview: { title: '第 3 波 · 前后段协防', count: 24 },
+        groups: Array.from({ length: 24 }, (_, index) => ({
+          type: index % 3 === 2 ? 'runner' : 'grunt', count: 1, interval: 0.18, gap: 0, scale: 0.95, rewardScale: 0.6,
+        })),
       },
       {
         wave: 4,
-        preview: { title: '第 4 波 · 先遣决胜', count: 9 },
-        groups: [
-          { type: 'grunt', count: 5, interval: 1.4, scale: 1.0 },
-          { type: 'runner', count: 4, interval: 1.2, gap: 1.0, scale: 0.95 },
-        ],
+        preview: { title: '第 4 波 · 防线检验', count: 32 },
+        groups: Array.from({ length: 32 }, (_, index) => ({
+          type: index % 3 === 2 ? 'runner' : 'grunt', count: 1, interval: 0.14, gap: 0, scale: 1.0, rewardScale: 0.6,
+        })),
       },
-    ];
+    ]);
+  }
+
+  // The first five stages are lessons, with time to observe each new counter.
+  if (stageId <= 5) {
+    const counts = { 2: [6, 12, 24, 32], 3: [8, 14, 24, 34], 4: [8, 12, 16, 22, 28], 5: [8, 12, 18, 24, 32] }[stageId];
+    const miniBoss = getStageMiniBoss(stageId);
+    return describeTeachingWaves(counts.map((count, index) => {
+      const wave = index + 1;
+      const scale = .88 + (stageId - 2) * .045 + index * .055;
+      const interval = (counts.length === 4 ? [.9, .5, .18, .14] : [.9, .5, .3, .18, .14])[index];
+      const groups = Array.from({ length: count }, (_, n) => ({
+        type: stageId >= 3 && wave >= 3 && n >= count - (wave === 3 ? 2 : 4)
+          ? 'swarm' : n % 4 === 3 ? 'runner' : 'grunt',
+        count: 1, interval, gap: 0, scale, rewardScale: 0.6,
+      }));
+      const final = wave === counts.length;
+      if (final && miniBoss) groups.splice(Math.floor(count / 3), 7,
+        { type: miniBoss.baseType, miniBoss, count: 1, interval: 1.5, scale },
+        ...miniBoss.escorts.map(type => ({ type, count: 1, interval: 1.2, scale })));
+      const title = final && miniBoss ? `小首领 · ${miniBoss.name}`
+        : stageId === 3 && wave >= 3 ? '群袭小队 · 练习范围清场'
+        : `第 ${wave} 波 · ${final ? '防线检验' : '巡逻小队'}`;
+      return { wave, reward: 22 + wave * 3, preview: { title, count: groups.length }, groups };
+    }));
   }
 
   const waves = [];
-  // 敌种池随关卡进度解锁：runner 全程参战，重装第 8 关起逼穿透选择，群袭第 14 关起施压数量，电磁傀儡第 22 关起瘫痪守卫
-  const basePool = ['grunt', 'runner', 'shield', 'support', 'splitter'];
-  const elitePool = [];
-  if (stageId >= 8) elitePool.push('tank');
-  if (stageId >= 14) elitePool.push('swarm');
-  if (stageId >= 22) elitePool.push('emp');
-  // 精英兵种只在第 3 波及以后进场（开局经济挡不住满编制重装），并按类型修正编制/间隔：
-  // 重装少而慢、群袭多而密、支援（治疗光环叠加）必须零散、裂殖者死亡会翻倍需限量
-  const pickType = (offset, waveNumber) => {
-    const pool = waveNumber >= 3 ? basePool.concat(elitePool) : basePool;
-    return pool[offset % pool.length];
-  };
-  const tuneGroup = tuneEnemyGroup;
-
+  const chapter = CHAPTER_TACTICS[chapterId - 1];
+  const pool = chapter.pool.filter(type => (ENEMY_UNLOCKS[type] || 1) <= stageId);
+  const available = types => types.filter(type => (ENEMY_UNLOCKS[type] || 1) <= stageId);
+  const recipes = [available(['runner', 'sprinter', 'stalker', 'grunt']), available(['shield', 'warder', 'support', 'tank']), available(['swarm', 'splitter', 'broodmother', 'grunt']), available(['tank', 'regenerator', 'berserker', 'siege']), pool];
+  const stagePattern = (stageId - 1) % 5;
+  const miniBoss = getStageMiniBoss(stageId);
   for (let w = 1; w <= waveCount; w++) {
-    const isFinalWave = w === waveCount;
+    const pattern = (stagePattern + w - 1) % 5;
+    const recipe = recipes[pattern].length ? recipes[pattern] : ['grunt', 'runner'];
+    const final = w === waveCount;
+    // Early waves leave room to deploy; pressure grows within the match, not exponentially across 99 stages.
+    const ramp = Math.min((w - 1) / 4, 1);
+    const onboarding = Math.max(0, (10 - stageId) / 5);
+    const scale = (.90 + Math.min(stageId - 1, 19) * .018 + (chapterId - 1) * .025 + (w - 1) * .14 + ramp * Math.min(stageId / 15, 1) * .45) * (1 - onboarding * .16);
+    const count = Math.round((7 + w * 2 + Math.floor(Math.min(stageId, 30) / 12) + Math.floor((chapterId - 1) * ramp)) * (1 - onboarding * .35));
+    const interval = Math.max(.25, .88 - Math.min(stageId, 20) * .014 - (w - 1) * .028) * (1 + onboarding * .70) * (stageId >= 13 && w >= 4 ? .80 : 1) * (chapterId === 5 ? 1.12 : 1);
     const groups = [];
-    // 成长曲线对齐玩家每波一张突变卡的乘法成长（原 0.038/0.030 过平）。
-    // 关卡系数分两段释放：基底让开局波始终可防守，关卡爬坡在前 5 波内逐步吃满，压力滚向阶段后段
-    const scale = 1.05
-      + (stageId - 1) * 0.04
-      + (stageId - 1) * 0.045 * Math.min((w - 1) / 4, 1)
-      + (w - 1) * 0.06;
-
-    if (isFinalWave && isBossStage) {
-      groups.push({
-        type: 'boss',
-        count: stageId === 99 ? 2 : 1,
-        interval: 3.5,
-        gap: 2.0,
-        scale: scale * 1.25,
-      });
-      groups.push({
-        type: chapterId >= 3 ? 'shield' : 'runner',
-        count: 4 + Math.floor(stageId / 15),
-        interval: 0.9,
-        scale,
-      });
-    } else {
-      const mainType = pickType(w + stageId, w);
-      const count = 6 + Math.floor(w * 1.4) + Math.floor(stageId * 0.06 * w * Math.min((w - 1) / 3, 1));
-      const mainInterval = Math.max(0.70, 1.45 - w * 0.04);
-      const mainTuned = tuneGroup(mainType, count, mainInterval);
-      groups.push({
-        type: mainType,
-        count: mainTuned.count,
-        interval: mainTuned.interval,
-        scale,
-      });
-
-      if (w >= 3) {
-        const subType = pickType(w + stageId + 2, w);
-        const subTuned = tuneGroup(subType, 3 + Math.floor(w * 0.7), 1.15);
-        groups.push({
-          type: subType,
-          count: subTuned.count,
-          interval: subTuned.interval,
-          gap: 1.2,
-          scale,
-        });
+    const newTypes = pool.filter(type => ENEMY_UNLOCKS[type] === stageId);
+    const introducedCounts = {};
+    for (let n = 0; n < count; n++) {
+      // Alternate chapter specialists with each wave's tactical formation.
+      let type = n % 3 === 1 ? pool[(stageId + w + Math.floor(n / 3)) % pool.length] : recipe[(Math.floor(n / 3) + w) % recipe.length];
+      if (w <= 2 && ['tank', 'siege', 'broodmother'].includes(type)) type = chapterId === 1 ? 'grunt' : 'shield';
+      // Auxiliary units must not outnumber the line they support.
+      if (['support', 'warder', 'emp', 'siege'].includes(type) && n % 4 !== 1) type = pool.find(t => !['support', 'warder', 'emp', 'siege'].includes(t)) || 'grunt';
+      // Preview a new enemy in a small group after two familiar warm-up waves.
+      if (w >= 3 && n === Math.floor(count / 2) && newTypes.length) type = newTypes[0];
+      if (ENEMY_UNLOCKS[type] === stageId) {
+        const limit = w === 3 ? 1 : 2;
+        if (w <= 2 || (introducedCounts[type] || 0) >= limit) type = 'grunt';
+        else introducedCounts[type] = (introducedCounts[type] || 0) + 1;
+      }
+      groups.push({ type, count: 1, interval: interval * (['tank', 'siege', 'broodmother'].includes(type) ? 1.5 : 1), gap: 0, scale, rewardScale: .80 });
+    }
+    if (final && (isBossStage || stageId % 5 === 0)) {
+      if (isBossStage) groups.splice(Math.floor(count / 2), 0, { type: 'boss', count: stageId === 99 ? 2 : 1, interval: 1.8, scale: scale * .40, rewardScale: .5, bossChapter: chapterId, bossName: CHAPTERS_META[chapterId - 1].bossName, coreDamage: 20 });
+      else if (miniBoss) {
+        // Replace part of the ordinary final wave; do not append a full boss encounter on top.
+        const cutAt = Math.floor(count / 3);
+        groups.splice(cutAt, 7,
+          { type: miniBoss.baseType, miniBoss, count: 1, interval: .25, gap: 0, scale },
+          ...miniBoss.escorts.map(type => ({ type, count: 1, interval: .25, gap: 0, scale, rewardScale: .8 })));
       }
     }
-
-    waves.push({
-      wave: w,
-      preview: {
-        title: isFinalWave ? (isBossStage ? '首领终局' : '决胜波次') : `第 ${w} 波次`,
-        count: groups.reduce((acc, g) => acc + g.count, 0),
-      },
-      groups,
-    });
+    waves.push({ wave: w, reward: 22 + w * 3, preview: { title: final ? (isBossStage ? '章节首领' : miniBoss ? `小首领 · ${miniBoss.name}` : '决胜波次') : ASSAULT_PATTERNS[pattern].name, count: groups.reduce((sum, g) => sum + g.count, 0) }, groups });
   }
-
-  return waves;
+  return shapeCampaignWaves(stageId, chapterId, waves);
 }

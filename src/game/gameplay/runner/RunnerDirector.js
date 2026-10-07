@@ -94,6 +94,8 @@ export class RunnerDirector {
     const pool = selectRoutePatternPool(section.patterns, route)
     const source = pool[Math.floor(this.random() * pool.length)]
     const pattern = this._shuffle(source)
+    // 每排保留一条无伤通路，普通换道即可通过，不依赖已移除的急闪。
+    if (pattern.every(id => id && RUNNER_ENTITY_TYPES[id]?.damage > 0)) pattern[1] = null
     const rowId = this._nextRowId++
     const hpScale = section.hpMultiplier * (route?.hpMultiplier || 1)
     const entities = []

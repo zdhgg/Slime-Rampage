@@ -73,18 +73,19 @@ let lastCd = null
 engine.onCooldown = (c) => {
   lastCd = c
 }
-engine.player.dashCdMultiplier = 0.5
-engine.player.dashCd = 0.3
+engine.player.activeSkillCdMultiplier = 0.5
+engine._updateStrainSkill(0)
+engine.player.strainSkillCd = 0.3
 engine._pushCooldown()
-assert.ok(lastCd && typeof lastCd.dashCd === 'number' && typeof lastCd.cast === 'number')
-assert.ok(Math.abs(lastCd.dashMax - 0.6) < 1e-9, 'dashMax = 1.2 × 冷却缩减 × 基因缩减')
+assert.ok(lastCd && typeof lastCd.skillCd === 'number' && typeof lastCd.cast === 'number')
+assert.equal(lastCd.skillMax, 4, '原生技能 8 秒 × 冷却倍率')
 assert.equal(lastCd.formationBreak, 0)
 assert.equal(lastCd.formationBreakMax, 8)
 // _tick 累积到 0.1s 触发推送
 engine._cdAcc = 0.1
 engine._tick(performance.now ? 0 : 0) // rAF 桩返回 0；dt 首帧为 0，靠 _cdAcc 门槛
 engine.onCooldown = null
-engine.player.dashCdMultiplier = 1
+engine.player.activeSkillCdMultiplier = 1
 ok('冷却通道：冲刺、施法与破阵追击进度独立于 2Hz 快照')
 
 // —— 3. 经验曲线：Lv.5 前放慢选择密度，Lv.10 收敛回原中期曲线 ——

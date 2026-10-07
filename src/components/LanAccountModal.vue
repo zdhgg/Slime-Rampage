@@ -20,7 +20,13 @@ const closeButton = ref(null)
 const isOnline = computed(() => !!props.status?.online)
 const canRegister = computed(() => isOnline.value && props.status?.registrationEnabled !== false)
 const canSubmit = computed(() => isOnline.value && username.value.trim().length >= 3 && password.value.length >= 6 && !props.busy)
-const hostAddress = computed(() => window.location.origin)
+/* 优先用主机上报的局域网 IP + 端口；localhost 对其他设备无意义 */
+const hostAddress = computed(() => {
+  const ips = props.status?.lanIps
+  const port = props.status?.lanPort
+  if (Array.isArray(ips) && ips.length && port) return `http://${ips[0]}:${port}`
+  return window.location.origin
+})
 const copied = ref(false)
 let copiedTimer = 0
 const localSummary = computed(() => {

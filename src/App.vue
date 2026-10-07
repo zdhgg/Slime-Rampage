@@ -93,12 +93,10 @@ const levelUpOptions = ref(null) // 升级面板的 3 个技能选项（null = �
 // 高频冷却数据（引擎 onCooldown ~10Hz 推送）：冲刺 CD / Boss 施法条是连续递变量，
 // 走 2Hz 大快照会肉眼跳变，单独小通道进响应式（仅少量数字，HUD 重渲染开销可忽略）
 const cooldown = ref({
-  dashCd: 0,
-  dashMax: 1.2,
   cast: 0,
   formationBreak: 0,
   formationBreakMax: 8,
-  // F 角色专属技能（阶段十九）：skillId 为空表示 origin 无技能，HUD 据此隐藏整条
+  // 所有角色共享空格主动技能入口；暴食显示猎食点，其余显示冷却。
   skillId: null,
   skillName: '',
   skillCd: 0,
@@ -434,6 +432,8 @@ async function refreshLanSession() {
       online: true,
       registrationEnabled: status.registrationEnabled !== false,
       serverTime: status.serverTime,
+      lanIps: Array.isArray(status.lanIps) ? status.lanIps : [],
+      lanPort: status.lanPort || null,
     }
     const payload = await lanApi.me()
     if (payload.account) applyLanPayload(payload)
@@ -668,12 +668,12 @@ function onSelectTower(typeId) {
   engine.value?.gameplay?.selectTowerType?.(typeId)
 }
 
-function onSetTowerStrategy(strategyId) {
-  engine.value?.gameplay?.setSelectedTowerStrategy?.(strategyId)
-}
-
 function onSelectTowerBranch(branchId) {
   engine.value?.gameplay?.selectTowerBranch?.(branchId)
+}
+
+function onSelectTowerStrategy(strategyId) {
+  engine.value?.gameplay?.setSelectedTowerStrategy?.(strategyId)
 }
 
 function onUpgradeTower() {
@@ -694,10 +694,6 @@ function onTriggerTrap(trapId) {
 
 function onRelocateTower(payload) {
   engine.value?.gameplay?.relocateTower?.(payload?.from, payload?.to)
-}
-
-function onPetTower(slotIndex) {
-  engine.value?.gameplay?.petTower?.(slotIndex)
 }
 
 /** 启动无尽试炼：使用玩家最新解锁章节（上限第 20 关）的地图与机关 */
@@ -726,16 +722,12 @@ function onStartTowerDefenseEndless() {
   showTowerDefenseMap.value = false
 }
 
-function onSelectTowerDefenseMutation(mutationId) {
-  engine.value?.gameplay?.selectMutation?.(mutationId)
-  snd()?.levelUp?.()
-}
 
 function onBackFromIntro() {
   pendingRun.value = null
 }
 
-/** 打开黑市（开始界面 / 结算面板入口；引擎保持暂停） */
+/** 打开黑市（主战场选择 / 备战 / 结算入口；引擎保持暂停） */
 function onOpenMarket() {
   snd()?.uiClick()
   gameOverInfo.value = null
@@ -747,7 +739,7 @@ function onOpenMarket() {
   showMarket.value = true
 }
 
-/** 关闭黑市：回到开场界面 */
+/** 关闭黑市：恢复进入前的主战场页面，结算入口返回战斗类型选择。 */
 function onCloseMarket() {
   snd()?.uiClick()
   showMarket.value = false
@@ -992,7 +984,7 @@ function onToggleMute() {
   saveSaveCatalog(offlineCatalog.value)
 }
 
-/** Esc 键：黑市 → 返回开场；游戏中 → 切换暂停（模态面板打开时不响应） */
+/** Esc 键：黑市 → 返回主战场菜单；游戏中 → 切换暂停（模态面板打开时不响应） */
 function onKeydown(e) {
   if (e.code !== 'Escape') return
   if (!started.value && showSaveSlots.value) return // 档案面板自行处理 Esc 与删除确认
@@ -1023,7 +1015,8 @@ onUnmounted(() => {
 
     <!-- HUD 覆盖层：stats/cooldown 快照驱动的纯展示组件（前端 P2 拆分） -->
     <HudOverlay
-      v-if="started && !towerDefenseActive"
+      @activate-skill="!paused && engine?.running && engine?.input?.queueFever?.()"
+      v-if="started && !towerDefenseActive && !runnerActive"
       :stats="stats"
       :cooldown="cooldown"
       :variant="activeGameplay === 'arena' ? 'arena' : 'runner'"
@@ -1041,7 +1034,15 @@ onUnmounted(() => {
     <RunnerHudOverlay
       v-if="started && runnerActive && gameplayHud"
       :hud="gameplayHud"
+      :muted="muted"
+      :paused="paused"
+      :controls-disabled="!!gameplayResult || !!levelUpOptions || !!gameOverInfo || !!expeditionReward || !!endlessDecision"
       @activate-fever="engine?.gameplay?.activateFever?.()"
+      @change-lane="engine?.gameplay?.changeLane?.($event)"
+      @layout-change="engine?.gameplay?.renderer?.setHudInsets?.($event)"
+      @toggle-mute="onToggleMute"
+      @toggle-pause="onPause"
+      @toggle-resume="onResume"
     />
 
     <TowerDefenseHudOverlay
@@ -1050,14 +1051,14 @@ onUnmounted(() => {
       :muted="muted"
       :paused="paused"
       @select-tower="onSelectTower"
-      @set-tower-strategy="onSetTowerStrategy"
+      @preview-tower="engine?.gameplay?.previewTowerType?.($event)"
       @select-tower-branch="onSelectTowerBranch"
+      @select-tower-strategy="onSelectTowerStrategy"
       @upgrade="onUpgradeTower"
       @sell="onSellTower"
       @clear-obstacle="onClearObstacle"
       @trigger-trap="onTriggerTrap"
       @relocate-tower="onRelocateTower"
-      @pet-tower="onPetTower"
       @deselect="engine?.gameplay?.selectSlot?.(-1)"
       @toggle-mute="onToggleMute"
       @toggle-pause="onPause"
@@ -1067,8 +1068,6 @@ onUnmounted(() => {
       @restart-stage="onRestartTowerDefense"
       @advance-tutorial="engine?.gameplay?.advanceTutorial?.()"
       @skip-tutorial="engine?.gameplay?.skipTutorial?.()"
-      @select-mutation="onSelectTowerDefenseMutation"
-      @skip-mutation="engine?.gameplay?.skipMutationOffer?.()"
       @cycle-speed="engine?.gameplay?.cycleGameSpeed?.()"
       @call-early="engine?.gameplay?.callNextWaveEarly?.()"
     />
@@ -1150,7 +1149,7 @@ onUnmounted(() => {
       />
     </Transition>
 
-    <!-- 地下城黑市：局外成长（掉落物 → 永久基因） -->
+    <!-- 地下城黑市：主战场局外成长（掉落物 → 永久基因） -->
     <Transition name="modal-fade">
       <BlackMarket
         v-if="showMarket"
@@ -1161,10 +1160,12 @@ onUnmounted(() => {
       />
     </Transition>
 
-    <!-- 模式选择与本局配置 -->
+    <!-- 黑市打开时保留菜单与备战选择；从结算新建菜单时进入主战场。 -->
     <StartScreen
-      v-if="!started && !showMarket"
+      v-if="!started"
+      v-show="!showMarket"
       :key="saveCatalog.activeSlotId"
+      :initial-view="showMarket ? 'arena-types' : 'playstyles'"
       :records="save.records"
       :progression="save.progression"
       :preferences="save.preferences"

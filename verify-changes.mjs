@@ -46,16 +46,16 @@ const ok = (msg) => console.log(`  ✓ ${++n}. ${msg}`)
 assert.equal(engine.input.suspended, true, '构造后（未开局）应处于挂起态')
 const evSpace = { code: 'Space', repeat: false, preventDefault() { this.prevented = true } }
 engine.input._onKeyDown(evSpace)
-assert.equal(engine.input._dashQueued, false, '挂态按下 Space 不应入队')
+assert.equal(engine.input._feverQueued, false, '挂态按下 Space 不应入队')
 assert.equal(evSpace.prevented, undefined, '挂态不应 preventDefault（放行给 UI 按钮）')
 engine.reset()
 engine.start()
 assert.equal(engine.input.suspended, false, 'start 后应接管键盘')
 engine.input._onKeyDown(evSpace)
-assert.equal(engine.input._dashQueued, true)
+assert.equal(engine.input._feverQueued, true)
 engine.pause()
 assert.equal(engine.input.suspended, true, '暂停后应挂起')
-assert.equal(engine.input._dashQueued, false, '暂停应清空队列（无幽灵冲刺）')
+assert.equal(engine.input._feverQueued, false, '暂停应清空队列（无幽灵冲刺）')
 engine.resume()
 ok('输入挂起：UI 期间不劫持 Space、恢复后无幽灵操作')
 
@@ -77,7 +77,7 @@ assert.equal(engine.weaponSystem.projectileCount, 2, '机枪觉醒只应用专�
 assert.ok(Math.abs(engine.weaponSystem.fireInterval - 0.85) < 1e-9)
 assert.equal(engine.skillLevels['gat_multishot'] || 0, 0, '局内觉醒不白送 T1')
 
-// 暴食的核心技能主动压低攻击，逐级扩大留血窗口；重开后不残留。
+// 暴食的核心技能保留攻击成长，逐级强化吞噬与充能；重开后不残留。
 // 第四批：暴食主树归暴食角色，改用 glutton 角色走 Lv.5 自动觉醒路径。
 engine.applyStartingStrain('glutton')
 engine.reset()
@@ -88,17 +88,17 @@ assert.equal(engine.weaponSystem.damage, 1, '暴食觉醒本身不附赠深渊�
 assert.equal(engine.weaponSystem.projectileCount, 1, '暴食觉醒不附赠飞弹')
 const maw = SKILL_DATABASE.gluttony.primary.find((skill) => skill.id === 'glut_maw')
 maw.apply(engine, 1)
-assert.ok(Math.abs(engine.weaponSystem.damage - 0.9) < 1e-9, '深渊胃囊 Lv.1：攻击降至 90%')
+assert.equal(engine.weaponSystem.damage, 1, '深渊胃囊 Lv.1 保留攻击成长')
 maw.apply(engine, 2)
 maw.apply(engine, 3)
-assert.ok(Math.abs(engine.weaponSystem.damage - 0.7) < 1e-9, '深渊胃囊 Lv.3：攻击降至 70%')
+assert.equal(engine.weaponSystem.damage, 1, '深渊胃囊 Lv.3 保留攻击成长')
 assert.equal(engine.devourThreshold, 0.36)
 assert.equal(engine.player.devourRadiusBonus, 1.6)
 
 // 重开回到无专精基线，再由 Lv.5 选择另一条路线（第四批：origin 视角，暴食已排除）
 engine.applyStartingStrain('origin')
 engine.reset()
-assert.equal(engine.weaponSystem.damage, 1, '重开后暴食攻击抑制完全复位')
+assert.equal(engine.weaponSystem.damage, 1, '重开后暴食攻击回到基础值')
 assert.equal(engine.primarySpec, null)
 assert.equal(engine.roleSpec, null)
 engine.player.level = 5
@@ -223,7 +223,8 @@ engine.input.queueFever()
 engine._updateStrainSkill(0.016)
 assert.equal(engine.player.strainSkillCd, shadowSkill.cooldown, 'F 触发后进入冷却')
 assert.equal(engine.player.strainSkillMax, shadowSkill.cooldown)
-assert.equal(engine.player.guaranteedCrit, true, '影袭：下一次命中必定暴击')
+assert.equal(engine.weaponSystem.shadowCombat.assault?.phase, 'windup', '影袭：进入定向穿行前摇')
+assert.equal(engine.player.guaranteedCrit, false, '影袭不把必暴状态留给之后的普通攻击')
 engine.input.queueFever()
 engine._updateStrainSkill(0.016)
 assert.ok(
@@ -238,10 +239,10 @@ engine.running = wasRunning
 // origin 没有 F 技能：F 通道对它无效，冷却恒为 0
 engine.applyStartingStrain('origin')
 engine.reset()
-assert.equal(engine.strainSkill, null, 'origin 没有角色技能')
+assert.equal(engine.strainSkill.id, 'slime_shock', '原生拥有黏液震荡')
 engine.input.queueFever()
 engine._updateStrainSkill(0.016)
-assert.equal(engine.player.strainSkillCd, 0, 'origin 按 F 无副作用')
+assert.equal(engine.player.strainSkillCd, 8, '原生空格释放黏液震荡')
 
 // 冷却不得跨局残留
 engine.applyStartingStrain('elemental')
@@ -515,6 +516,7 @@ ok('重置归位：元素权限、元素等级、反应与附魔缓存在换角�
   for (const strainId of STRAIN_IDS) {
     const devour = canDevour(strainId)
     const elements = canUseElements(strainId)
+    const elementalStrain = strainId === 'elemental'
     engine.applyStartingStrain(strainId)
     engine.reset()
     engine.primarySpec = 'gatling' // 任意主系，避开 Lv.9 里程碑分支
@@ -531,10 +533,11 @@ ok('重置归位：元素权限、元素等级、反应与附魔缓存在换角�
     const elePool = rollSkills(engine, 30).map((o) => o.id)
     assert.equal(
       elePool.includes('ele_sub_boost'),
-      elements,
-      `${strainId}(canUseElements=${elements})：ele_sub_boost 仅在 canUseElements 时进池`
+      elementalStrain,
+      `${strainId}(元素血统=${elementalStrain})：元素共鸣体仅在元素血统时进池`
     )
-    assert.ok(elePool.includes('ele_sub_aura'), `${strainId}：ele_sub_aura 不依赖权限，必须保留`)
+    assert.equal(elePool.includes('ele_sub_aura'), elementalStrain,
+      `${strainId}：元素共鸣光环仅在元素血统时进池`)
 
     // 本角色自己的 secondary 系不受影响
     if (engine.roleSpec) {
@@ -544,55 +547,28 @@ ok('重置归位：元素权限、元素等级、反应与附魔缓存在换角�
     }
   }
 
-  // ⑤ Lv.9 里程碑文案：不得承诺本角色拿不到的共鸣技能
-  // 注意：某个系只要还有 ≥1 条可用共鸣，就仍然作为候选出现（否则等于悄悄砍掉一条流派），
-  // 只是面板文案必须收窄到实际拿得到的那几条。
+  // ⑤ 角色血统在 Lv.9 不再开启副专精；只有原生黏液保留组合构筑。
   engine.applyStartingStrain('glutton')
   engine.reset()
   engine.primarySpec = 'gluttony'
   engine.secondarySpec = null
   engine.player.level = 9
   const gluttonSec = rollSkills(engine, 10)
-  assert.ok(!gluttonSec.some((o) => o.spec === 'elemental' && o.stats.includes('元素共鸣体')),
-    '暴食 Lv.9：元素系文案不得再承诺【元素共鸣体】')
-  assert.ok(gluttonSec.some((o) => o.spec === 'elemental' && o.stats.includes('霜火护体')),
-    '暴食 Lv.9：元素系仍保留实际可用的【霜火护体】')
-  for (const o of gluttonSec) {
-    assert.ok(!String(o.stats || '').includes('元素共鸣体'),
-      `暴食 Lv.9 文案不得承诺元素共鸣体（实际：${o.stats}）`)
-  }
-  // 元素角色从暴食系选时，同样不得承诺「消化代谢（吞噬必回血）」
-  engine.applyStartingStrain('elemental')
-  engine.reset()
-  engine.primarySpec = 'elemental'
-  engine.secondarySpec = null
-  engine.player.level = 9
-  const eleSec = rollSkills(engine, 10)
-  assert.ok(eleSec.some((o) => o.spec === 'gluttony' && o.stats.includes('坚韧肉壁')),
-    '元素 Lv.9：暴食系仍保留实际可用的【坚韧肉壁】')
-  for (const o of eleSec) {
-    assert.ok(!String(o.stats || '').includes('消化代谢'), `元素角色文案不得承诺消化代谢（实际：${o.stats}）`)
-  }
-  // 有权限的一侧不受影响：暴食仍可选暴食共鸣、元素角色仍可选元素共鸣
-  engine.applyStartingStrain('glutton')
-  engine.reset()
-  engine.primarySpec = 'gatling'
-  engine.secondarySpec = null
-  engine.player.level = 9
-  const gatSec = rollSkills(engine, 10)
-  assert.ok(gatSec.some((o) => o.spec === 'gluttony'), '暴食 Lv.9 仍可选暴食共鸣')
-  assert.ok(gatSec.some((o) => o.spec === 'elemental'), '暴食 Lv.9 元素系仍有可用共鸣（霜火护体）')
+  assert.ok(!gluttonSec.some((o) => o.isMilestone && o.milestoneType === 'secondary'),
+    '暴食 Lv.9 不得开启副专精里程碑')
+  assert.ok(!gluttonSec.some((o) => o.role === 'secondary'),
+    '暴食 Lv.9 不得出现副专精技能')
 
-  engine.applyStartingStrain('elemental')
+  engine.applyStartingStrain('origin')
   engine.reset()
   engine.primarySpec = 'gatling'
   engine.secondarySpec = null
   engine.player.level = 9
-  const eleSec2 = rollSkills(engine, 10)
-  assert.ok(eleSec2.some((o) => o.spec === 'elemental'), '元素角色 Lv.9 仍可选元素共鸣')
-  assert.ok(eleSec2.some((o) => o.spec === 'gluttony'), '元素角色 Lv.9 暴食系仍有可用共鸣（坚韧肉壁）')
+  const originSec = rollSkills(engine, 10)
+  assert.ok(originSec.some((o) => o.isMilestone && o.milestoneType === 'secondary'),
+    '原生黏液 Lv.9 保留副专精组合构筑')
 }
-ok('技能池权限过滤：origin 排除暴食主树、Lv.9 共鸣候选与权限一致且文案不承诺拿不到的效果')
+ok('技能池权限过滤：职业血统单一专精，原生黏液保留组合构筑')
 
 // —— 2h. Lv.4 / Lv.8 槽位里程碑提示只对有元素权限的角色显示 ——
 {
@@ -914,21 +890,17 @@ assert.ok(splits.every((s) => Math.abs(s.critChance - 0.2) < 1e-9), '分裂弹�
 assert.equal(splits[0].damage, 5, '分裂弹伤害仍为母弹 50%')
 ok('分裂弹：按 50% 继承母弹暴击/元素附魔概率（机枪×元素协同打通）')
 
-// —— 4. 冲撞附带元素 + 统一击杀结算 ——
-ws._projectiles.length = 0
-const gemsBefore = engine.gemManager.count
-const killsBefore = ws.kills
-ws.damage = 10
-ws.levelMul = 1
-engine.player.dashImpactDmg = 4 // ×4 冲撞
-const victim = new Enemy({ x: 600, y: 400, speed: 80, hp: 10, type: 'knight' }) // ×1.6 职业系数 = 16 血
-victim.attach(engine)
-em._enemies.push(victim)
-ws.dashImpact(victim, ws.damage * ws.levelMul * 4)
-assert.equal(victim.active, false, '40 伤害击杀 30 血敌人')
-assert.equal(ws.kills, killsBefore + 1, '冲撞击杀进入统一击杀结算')
-assert.ok(engine.gemManager.count > gemsBefore, '冲撞击杀掉落经验宝石')
-ok('冲撞：附带元素概率结算 + 击杀统一结算（不再漏掉宝石/计数）')
+// —— 4. 主动震荡击杀走统一结算 ——
+engine.applyStartingStrain('origin'); engine.reset(); engine.running = true
+ws.damage = 40
+const killsBefore = ws.kills, gemsBefore = engine.gemManager.count
+const victim = new Enemy({ x: engine.player.x + 60, y: engine.player.y, speed: 80, hp: 10, type: 'knight' })
+victim.attach(engine); em._enemies.push(victim)
+engine.input.queueFever(); engine._updateStrainSkill(0)
+assert.equal(victim.active, false)
+assert.equal(ws.kills, killsBefore + 1)
+assert.ok(engine.gemManager.count > gemsBefore)
+ok('主动震荡击杀进入统一计数与掉落')
 
 // —— 5. 重开统一回到 Lv.1 自由探索期 ——
 engine.reset()

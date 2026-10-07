@@ -89,9 +89,12 @@ ok('远征命名沿讨伐令、反猎、守巢、破城与封印真相形成完�
 const stage = EXPEDITION_STAGES[3]
 const compact = generateDecor(1600, 1200, { seed: 42, themeId: stage.theme, variant: stage.variant })
 const expanded = generateDecor(2400, 1800, { seed: 42, themeId: stage.theme, variant: stage.variant })
-assert.deepEqual(compact.bg.map((item) => item.type), expanded.bg.map((item) => item.type))
-assert.deepEqual(compact.fg.map((item) => item.type), expanded.fg.map((item) => item.type))
-ok('同一局地图缩放时装饰拓扑稳定，不随机换景')
+// 主地标拓扑不变；新场景的植被密度随世界面积变化，并保持出生点留白。
+const landmarkTypes = decor => decor.bg.filter(item => !item.type.startsWith('chapter-')).map(item => item.type)
+assert.deepEqual(landmarkTypes(compact), landmarkTypes(expanded))
+assert.deepEqual(compact, generateDecor(1600, 1200, { seed: 42, themeId: stage.theme, variant: stage.variant }))
+assert.deepEqual(expanded, generateDecor(2400, 1800, { seed: 42, themeId: stage.theme, variant: stage.variant }))
+ok('地图缩放保持主地标，返回相同尺寸完整恢复固定种子场景')
 
 const dialogue = new DialogueManager()
 const dialogueGame = {

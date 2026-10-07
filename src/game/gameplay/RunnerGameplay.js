@@ -9,9 +9,6 @@ import {
   RUNNER_COUNTDOWN,
   RUNNER_DURATION,
   RUNNER_DAMAGE_AGGREGATE_WINDOW,
-  RUNNER_DASH_COOLDOWN,
-  RUNNER_DASH_DURATION,
-  RUNNER_DASH_IMPACT_DAMAGE,
   RUNNER_DODGE_WINDOW,
   RUNNER_ENEMY_ATTACK_GAP,
   RUNNER_ENTITY_TYPES,
@@ -65,6 +62,30 @@ const CORE_RING_COLORS = {
   burst: 'rgba(240, 179, 95, ALPHA)',
   corrosion: 'rgba(155, 223, 106, ALPHA)',
 }
+/**
+ * 攻击来源（attack provenance）—— D1.3 单一来源规则，整个 Module 触发资格只有一个判据。
+ *
+ * 为什么不能再靠 procDepth：procDepth 是写在 source 上的一个数字，它只能挡住
+ * 「同一个 source 对象直接递归」。一旦攻击跨过一层 fusion，效果层会构造一个**新的**
+ * source（过载放电、爆炸 AoE、雷弧、火花、弹片、殉爆都是如此），新对象上没有那个数字，
+ * 于是二级攻击重新获得 Module 触发资格：split 弹片 → 腐蚀过载 → 又一次 split。
+ * 实测（修复前）C+L+S 单发就可以产生 4 次 split / 8 片弹片，而 maxProcDepth 全程 = 1。
+ *
+ * 规则（全部集中在本文件，调用点不需要各自记得传 flag）：
+ *  1. 只有 `_createBullet` 会把 provenance 标成 PRIMARY —— 玩家弹体自身的直接命中
+ *     是唯一允许触发 Module 的攻击，这是 primary 的唯一来源。
+ *  2. 一切「生成型」攻击必须用 `_secondaryAttack()` 构造 source：它无条件盖 SECONDARY
+ *     章，不读父攻击的资格，因此二级攻击的后代永远是二级，不存在「升格」路径。
+ *  3. 弹体自身的二级化（回弹）只需要把弹体标成 SECONDARY，之后的每次命中都随之降级。
+ *  4. `_applyModuleProc` 只认 PRIMARY，且**缺省按 SECONDARY 处理**：新写的调用点若忘记
+ *     标记，只会少触发一次 Module，绝不可能造成无界正反馈（fail-safe 方向）。
+ */
+const ATTACK_PRIMARY = 'primary'
+const ATTACK_SECONDARY = 'secondary'
+
+/** 唯一判据：这次攻击是否有资格触发 Weapon Module。未标记一律视为二级攻击。 */
+const canProcModule = (source) => source?.provenance === ATTACK_PRIMARY
+
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value))
 
 const formatTime = (seconds) => {
@@ -105,6 +126,10 @@ export class RunnerGameplay extends GameplayController {
     this.countdown = RUNNER_COUNTDOWN
     this.elapsedTime = 0
     this.visualTime = 0
+    // Shared world scroll used by the renderer and moving entities. Keeping one
+    // accumulator prevents the road, roadside props, and threats from drifting
+    // at visibly different speeds (especially during bullet time).
+    this.scrollDistance = 0
     this.currentLane = 1
     this.targetLane = 1
     this.lanePosition = 1
@@ -149,9 +174,6 @@ export class RunnerGameplay extends GameplayController {
     this._resolvedForkIds = new Set()
     this.damageFlash = 0
     this.shieldFlash = 0
-    this.dashTimer = 0
-    this.dashCooldown = 0
-    this.dashKills = 0
     this.feverShards = 0
     this.feverCharges = 0
     this.feverTimer = 0
@@ -287,6 +309,7 @@ export class RunnerGameplay extends GameplayController {
     this.countdown = RUNNER_COUNTDOWN
     this.elapsedTime = 0
     this.visualTime = 0
+    this.scrollDistance = 0
     this.currentLane = 1
     this.targetLane = 1
     this.lanePosition = 1
@@ -330,9 +353,6 @@ export class RunnerGameplay extends GameplayController {
     this._resolvedForkIds = new Set()
     this.damageFlash = 0
     this.shieldFlash = 0
-    this.dashTimer = 0
-    this.dashCooldown = 0
-    this.dashKills = 0
     this.feverShards = 0
     this.feverCharges = 0
     this.feverTimer = 0
@@ -375,11 +395,8 @@ export class RunnerGameplay extends GameplayController {
     this.visualTime += dt
     this._updateEffects(dt)
     this._updateLaneInput(dt)
-    this.dashTimer = Math.max(0, this.dashTimer - dt)
-    this.dashCooldown = Math.max(0, this.dashCooldown - dt)
 
     if (this.state === 'countdown') {
-      this.game.input.consumeDash?.()
       this.countdown = Math.max(0, this.countdown - dt)
       if (this.countdown <= 0) {
         this.state = 'active'
@@ -426,6 +443,7 @@ export class RunnerGameplay extends GameplayController {
     this._updateDirector(dt)
     // 世界推进按子弹时间 dilation 缩放；刷怪节奏保持真实 dt，避免改变刷怪数量。
     const worldDt = dt * this.worldTimeScale
+    this.scrollDistance += (this.section?.advanceSpeed || 0.17) * worldDt
     this._updateEntities(worldDt)
     this._updateEnemyProjectiles(worldDt)
     if (this.state !== 'active') return
@@ -437,6 +455,14 @@ export class RunnerGameplay extends GameplayController {
     }
   }
 
+  changeLane(direction) {
+    if (this.state !== 'active' || this.game?.input?.suspended || (direction !== -1 && direction !== 1)) return false
+    const nextLane = clamp(this.targetLane + direction, 0, RUNNER_LANE_COUNT - 1)
+    if (nextLane === this.targetLane) return false
+    this.targetLane = nextLane
+    return true
+  }
+
   _updateLaneInput(dt) {
     const input = this.game.input.state
     const left = !!input.left
@@ -446,23 +472,6 @@ export class RunnerGameplay extends GameplayController {
     this._prevLeft = left
     this._prevRight = right
 
-    if (this.state === 'active' && this.game.input.consumeDash?.() && this.dashCooldown <= 0) {
-      const direction = right && !left ? 1 : left && !right ? -1 : this._safestDashDirection()
-      const nextLane = clamp(this.currentLane + direction, 0, RUNNER_LANE_COUNT - 1)
-      if (nextLane !== this.currentLane) {
-        this.targetLane = nextLane
-        this.lanePosition = nextLane
-        this.currentLane = nextLane
-        this.dashTimer = RUNNER_DASH_DURATION
-        this.dashCooldown = RUNNER_DASH_COOLDOWN
-        this._lastLaneSwitchAt = this.visualTime
-        this._shake(2.5, 0.12)
-        const point = this.renderer.project(nextLane, RUNNER_PLAYER_DEPTH)
-        this._burst(point.x, point.y, '#d8f7eb', 5, true)
-        this.game.sound.dash?.()
-        this._applyDashImpact(nextLane)
-      }
-    }
 
     const k = this.reducedMotion ? 1 : 1 - Math.pow(1 - RUNNER_LANE_LERP_PER_FRAME, dt * 60)
     this.lanePosition += (this.targetLane - this.lanePosition) * k
@@ -473,33 +482,8 @@ export class RunnerGameplay extends GameplayController {
     }
   }
 
-  _applyDashImpact(lane) {
-    let impacted = 0
-    for (const entity of this.entities) {
-      if (!entity.active || entity.lane !== lane || entity.kind !== 'enemy') continue
-      if (entity.depth >= 0.70 && entity.depth <= 1.05) {
-        entity.hp -= RUNNER_DASH_IMPACT_DAMAGE
-        entity.hitFlash = 0.25
-        const point = this.renderer.project(entity.lane, entity.depth)
-        this._showDamageNumber(`dash-${entity.id}`, point.x, point.y, RUNNER_DASH_IMPACT_DAMAGE, 'burst')
-        this._burst(point.x, point.y, '#ffd166', 8, true)
-        impacted++
-        if (entity.hp <= 0) {
-          this.dashKills = (this.dashKills || 0) + 1
-          this._defeatEntity(entity)
-          this.floatingTexts.push(new FloatingText(point.x, point.y - 20, '冲撞击破!', '', '#ffe066', 15))
-          this._collectFeverShard(point)
-        }
-      }
-    }
-    if (impacted > 0) {
-      this._shake(4.5, 0.18)
-      this.game.sound.hit?.('spark')
-    }
-  }
-
   activateFever() {
-    if (this.feverCharges <= 0) return false
+    if (this.state !== 'active' || this.isFeverActive || this.feverCharges <= 0) return false
     this.feverCharges -= 1
     this.feverTimer = RUNNER_FEVER_DURATION
     this.feverCount = (this.feverCount || 0) + 1
@@ -508,10 +492,10 @@ export class RunnerGameplay extends GameplayController {
       new FloatingText(
         this.renderer.lanePositionX(this.lanePosition),
         this.renderer.playerY - 45,
-        '狂热暴走 FEVER!!',
+        '暴走启动',
         '',
         '#ffd166',
-        22
+        18
       )
     )
     this._shake(6.5, 0.35)
@@ -527,50 +511,29 @@ export class RunnerGameplay extends GameplayController {
         this.feverShards = 0
         this.feverCharges = Math.min(RUNNER_FEVER_MAX_CHARGES, this.feverCharges + 1)
         this.floatingTexts.push(
-          new FloatingText(point.x, point.y - 26, '暴走就绪 +1 [按F释放]', '', '#ffd166', 18)
+          new FloatingText(point.x, point.y - 26, '暴走就绪 +1 [按空格释放]', '', '#ffd166', 18)
         )
         this.game.sound.levelUp?.()
         this._burst(point.x, point.y, '#ffd166', 12, true)
       } else {
-        this.floatingTexts.push(
-          new FloatingText(
-            point.x,
-            point.y - 26,
-            `暴走印记 ${this.feverShards}/${RUNNER_FEVER_SHARDS_PER_CHARGE}`,
-            '',
-            '#ffe066',
-            16
-          )
-        )
         this.game.sound.pickup?.()
       }
     } else {
       this.score += 150
-      this.floatingTexts.push(
-        new FloatingText(point.x, point.y - 26, '暴走充盈 · 分数 +150', '', '#ffd166', 16)
-      )
       this.game.sound.pickup?.()
     }
-  }
-
-  _safestDashDirection() {
-    const risks = this._getLaneRisks()
-    const left = this.currentLane > 0 ? risks[this.currentLane - 1] : Infinity
-    const right = this.currentLane < RUNNER_LANE_COUNT - 1 ? risks[this.currentLane + 1] : Infinity
-    if (left === Infinity && right === Infinity) return 0
-    return left <= right ? -1 : 1
   }
 
   _getLaneRisks() {
     const risks = [0, 0, 0]
     for (const entity of this.entities) {
       // 路线牌不是威胁：排除后车道风险读数才反映真实危险，岔口可读性不被污染。
-      if (!entity.active || entity.kind === 'mutation' || entity.kind === 'gate' || entity.kind === 'fork') continue
+      if (!entity.active || this._isChoiceGate(entity) || entity.kind === 'gate' || entity.kind === 'fork') continue
       const urgency = clamp((entity.depth - 0.34) / 0.66, 0, 1)
       let weight = urgency * (1 + Math.max(0, entity.damage || 0) * 0.42)
       if (entity.charging) weight += 0.9
       if (entity.attacking) {
-        if (entity.behavior === 'archer') weight += 1.45
+        if (entity.behavior === 'archer') risks[entity.attackLane] += 1.45
         if (entity.behavior === 'mage' && entity.attackLanes) {
           for (const lane of entity.attackLanes) risks[lane] += 1.65
         }
@@ -595,13 +558,19 @@ export class RunnerGameplay extends GameplayController {
         (entity) => entity.active && entity.behavior === 'archer' && entity.attacking && entity.attackLane === lane
       )
       const hasBarrier = this.entities.some(
-        (entity) => entity.active && entity.kind === 'hazard' && entity.lane === lane && entity.depth > 0.15
+        (entity) => entity.active && (entity.kind === 'hazard' || entity.kind === 'obstacle') && entity.lane === lane && entity.depth > 0.15
       )
       const isCharging = this.entities.some(
         (entity) => entity.active && entity.lane === lane && (entity.charging || entity.chargeTelegraph > 0)
       )
-      const status = risk >= 2.6 || isCharging ? 'danger' : risk >= 0.85 || hasBarrier ? 'warning' : 'open'
-      const intent = isCharging ? '冲锋' : activeMage ? '封锁' : activeArcher ? '瞄准' : hasBarrier ? '路障' : status === 'danger' ? '逼近' : status === 'warning' ? '注意' : '开放'
+      const imminent = this.entities.some(entity => entity.active && entity.lane === lane &&
+        !this._isChoiceGate(entity) && entity.kind !== 'gate' && entity.kind !== 'fork' &&
+        this._effectiveSpeed(entity) > 0 &&
+        (RUNNER_COLLISION_DEPTH - entity.depth) / this._effectiveSpeed(entity) < 0.85)
+      const incoming = this.enemyProjectiles.some(projectile => projectile.active && projectile.lane === lane &&
+        (RUNNER_COLLISION_DEPTH - projectile.depth) / projectile.speed < 0.85)
+      const status = imminent || incoming || activeMage || isCharging ? 'danger' : activeArcher || risk >= 0.85 || hasBarrier ? 'warning' : 'open'
+      const intent = isCharging ? '冲锋' : activeMage ? '封锁' : activeArcher ? '瞄准' : incoming ? '飞弹' : imminent ? '逼近' : hasBarrier ? '路障' : status === 'warning' ? '注意' : '开放'
       return { lane, risk: Math.min(1, risk / 4.8), status, intent }
     })
   }
@@ -612,7 +581,6 @@ export class RunnerGameplay extends GameplayController {
     this._lastDodgeAt = this.visualTime
     this.perfectDodges += 1
     this.score += 20
-    this.dashCooldown = Math.max(0, this.dashCooldown - RUNNER_DASH_COOLDOWN * 0.35)
     const safeDepth = Math.min(RUNNER_COLLISION_DEPTH, depth || RUNNER_COLLISION_DEPTH)
     const point = this.renderer.project(lane, safeDepth)
     this._collectFeverShard(point)
@@ -926,6 +894,18 @@ export class RunnerGameplay extends GameplayController {
   }
 
   /**
+   * 构造一次「生成型」攻击的 source —— 全文件唯一入口，provenance 规则的落地点。
+   *
+   * 无论父攻击是 primary 还是 secondary，这里都无条件盖 SECONDARY 章：
+   * 二级攻击可以继续触发既有允许的 fusion 行为（雷弧、火花、殉爆、弹片、地火、
+   * 过载放电都照旧结算），但它的后代永远还是二级，不可能因为「换了一层效果」
+   * 就重新拿到 Module 触发资格。因此调用点不需要各自记得传 skipModuleProc。
+   */
+  _secondaryAttack(fields = {}) {
+    return { ...fields, provenance: ATTACK_SECONDARY }
+  }
+
+  /**
    * 一次命中的融合结算：减速、过载电击。
    * 增伤（vulnerability）不进这里——它要在算伤害之前生效，由 _calculateDamage 读取。
    */
@@ -940,7 +920,11 @@ export class RunnerGameplay extends GameplayController {
 
   /**
    * 腐蚀叠满阈值：清空叠层、造成硬直，并按 shockDamage 追加一次过载伤害。
-   * 叠层清零后不会立刻再次触发（1 < threshold），因此不会递归爆栈。
+   *
+   * 过载放电是 fusion 生成的**二级攻击**：它必须走 _secondaryAttack，否则它会以
+   * 「没有 provenance 的新 source」重新获得 Module 触发资格——这正是 C+L+S 的
+   * Module → Fusion → Module 回路的起点。叠层清零后不会立刻再次触发
+   * （1 < threshold），因此单层内也不会递归。
    */
   _triggerCorrosionShock(target, effect) {
     target.corrosionStacks = 0
@@ -950,7 +934,12 @@ export class RunnerGameplay extends GameplayController {
       target,
       // discharge：过载放电本身不是一次新的腐蚀命中，不能顺手再叠一层，
       // 否则「叠满即清空」会立刻被自己重新填回 1 层。
-      { core: this.weaponCore, coreLevel: this.weaponLevel, damageMultiplier: effect.damage, discharge: true },
+      this._secondaryAttack({
+        core: this.weaponCore,
+        coreLevel: this.weaponLevel,
+        damageMultiplier: effect.damage,
+        discharge: true,
+      }),
       { silent: true, splash: true, skipFusionOnHit: true }
     )
   }
@@ -975,7 +964,7 @@ export class RunnerGameplay extends GameplayController {
       const target = this._nearestTargetInLane(lane, primary.depth, 0.14, primary.id)
       if (!target) continue
       this.rings.push({ lane, depth: target.depth, life: 0.2, maxLife: 0.2, color: '#7be8ff' })
-      this._hitEntity(target, { core: this.weaponCore, coreLevel: this.weaponLevel, damageMultiplier: effect.damageRatio, procDepth: 1 }, { silent: true, splash: true, skipModuleProc: true })
+      this._hitEntity(target, this._secondaryAttack({ core: this.weaponCore, coreLevel: this.weaponLevel, damageMultiplier: effect.damageRatio }), { silent: true, splash: true })
     }
   }
 
@@ -997,7 +986,7 @@ export class RunnerGameplay extends GameplayController {
     candidates.sort((a, b) => a.lane - b.lane || b.depth - a.depth || a.id - b.id)
     for (const entity of candidates.slice(0, effect.count)) {
       this.rings.push({ lane: entity.lane, depth: entity.depth, life: 0.2, maxLife: 0.2, color: '#ffd859' })
-      this._hitEntity(entity, { core: this.weaponCore, coreLevel: this.weaponLevel, damageMultiplier: effect.damage, procDepth: 1 }, { silent: true, splash: true, skipModuleProc: true })
+      this._hitEntity(entity, this._secondaryAttack({ core: this.weaponCore, coreLevel: this.weaponLevel, damageMultiplier: effect.damage }), { silent: true, splash: true })
     }
   }
 
@@ -1028,31 +1017,34 @@ export class RunnerGameplay extends GameplayController {
     return best
   }
 
-  /** 被腐蚀目标阵亡时的殉爆，范围与伤害取自 Rules。 */
+  /** 被腐蚀目标阵亡时的殉爆，范围与伤害取自 Rules。殉爆是二级攻击。 */
   _deathBlast(dead, effect) {
     this.rings.push({ lane: dead.lane, depth: dead.depth, life: 0.3, maxLife: 0.3, color: '#ff9a42', radiusScale: 2.2 })
     const targets = this.entities.filter(
       (other) => other.active && other.hp > 0 && !this._isChoiceGate(other) && other.lane === dead.lane && Math.abs(other.depth - dead.depth) <= effect.radius
     )
     for (const target of targets) {
-      this._hitEntity(target, { core: this.weaponCore, coreLevel: this.weaponLevel, damageMultiplier: effect.damage, procDepth: 1 }, { silent: true, splash: true, skipModuleProc: true })
+      this._hitEntity(target, this._secondaryAttack({ core: this.weaponCore, coreLevel: this.weaponLevel, damageMultiplier: effect.damage }), { silent: true, splash: true })
     }
   }
 
   /**
    * 分裂弹片：一次真实命中扩散到附近其它目标。
    *
-   * 递归防护是结构性的，不是「碰巧没发生」：
-   *   1. procDepth —— effect pipeline 生成的二级攻击带 procDepth=1，模块不再触发；
+   * 触发资格是**单一来源**的，不再是「每个调用点记得传 skipModuleProc」：
+   *   1. canProcModule(source) —— 只有玩家弹体自身的直接命中（provenance=primary）
+   *      才有资格。过载放电 / 爆炸 AoE / 雷弧 / 火花 / 殉爆 / 弹片本身都是 secondary，
+   *      缺省（没有 provenance）同样按 secondary 处理，因此不会出现「新写的效果路径
+   *      忘记了标记，于是二级攻击重新拿到触发资格」这种跨层泄漏。
    *   2. 每颗弹丸只 proc 一次 —— pierce 后续穿透与 ricochet 回弹都不再 proc。
    * 两者叠加后，单发子弹能产生的二级效果数量有确定上限 = splitCount。
    * 目标按 (lane, depth, id) 确定性挑选，不使用任何随机。
    */
   _applyModuleProc(primary, source) {
-    if ((source?.procDepth || 0) !== 0 || source?.moduleProcUsed) return
+    if (!canProcModule(source) || source.moduleProcUsed) return
     const split = findRunnerEffect(planRunnerEffects(this.buildProfile, 'onHit'), 'split')
     if (!split) return
-    if (source) source.moduleProcUsed = true
+    source.moduleProcUsed = true
     const candidates = []
     for (const entity of this.entities) {
       if (!entity.active || entity.hp <= 0 || entity.id === primary.id) continue
@@ -1071,14 +1063,14 @@ export class RunnerGameplay extends GameplayController {
       this.weaponStats.maxProcDepth = Math.max(this.weaponStats.maxProcDepth, 1)
       this._hitEntity(
         entity,
-        {
+        // 弹片是 effect pipeline 生成的二级攻击：它照旧按腐蚀/减速等既有规则结算，
+        // 但不可能再触发 Module——provenance 随 _secondaryAttack 一路向后传播。
+        this._secondaryAttack({
           core: this.weaponCore,
           coreLevel: this.weaponLevel,
           damageMultiplier: split.damage,
-          // provenance：这是 effect pipeline 生成的二级攻击，不再触发任何模块
-          procDepth: 1,
-        },
-        { silent: true, splash: true, skipModuleProc: true }
+        }),
+        { silent: true, splash: true }
       )
     }
   }
@@ -1109,7 +1101,9 @@ export class RunnerGameplay extends GameplayController {
     bullet.damageMultiplier *= bullet.ricochetDecay
     bullet.lane = next.lane
     bullet.ricochetHitIds.push(next.id)
-    bullet.procDepth = 1
+    // 回弹后的弹体自身降级为二级攻击：它转向后的每一次命中都不再有 Module 触发资格，
+    // 与雷弧/火花/弹片走同一条 provenance 规则（而不是另写一个 procDepth 数字）。
+    bullet.provenance = ATTACK_SECONDARY
     this.weaponStats.ricochets += 1
     const point = this.renderer.project(next.lane, next.depth)
     this._burst(point.x, point.y, '#c9a6ff', 3, true)
@@ -1290,7 +1284,7 @@ export class RunnerGameplay extends GameplayController {
   }
 
   _takeDamage(entity) {
-    if (this.dashTimer > 0 || this.hyperBoostTimer > 0) {
+    if (this.hyperBoostTimer > 0) {
       this._registerPerfectDodge(entity.lane ?? this.occupiedLane, RUNNER_COLLISION_DEPTH)
       return
     }
@@ -1446,6 +1440,9 @@ export class RunnerGameplay extends GameplayController {
       ricochetDecay: bulletProfile ? bulletProfile.ricochetDecay : 1,
       ricochetHitIds: [],
       moduleProcUsed: false,
+      // provenance：玩家弹体自身的直接命中是 primary —— 全文件唯一写入 PRIMARY 的地方。
+      // 回弹会把同一颗弹体降级为 SECONDARY（见 _tryRicochet）。
+      provenance: ATTACK_PRIMARY,
     }
   }
 
@@ -1475,7 +1472,10 @@ export class RunnerGameplay extends GameplayController {
     )
     if (entity.hp > 0) {
       if (!options.skipFusionOnHit) this._applyFusionOnHit(entity)
-      if (!options.skipModuleProc) this._applyModuleProc(entity, source)
+      // Module 触发资格只由 source 的 provenance 决定（唯一判据，见文件顶部说明）。
+      // 这里不再读取任何 per-call-site 的 skipModuleProc 开关：调用点没有「记得」的义务，
+      // 二级攻击也就没有重新获得触发资格的可能。
+      this._applyModuleProc(entity, source)
       // 融合效果（过载电击）可能把目标打死：若它还没被结算过就补一次，
       // 已经由效果本身结算过（active=false）则绝不能重复计入击杀。
       if (entity.hp > 0 || !entity.active) return { killed: false, damage }
@@ -1527,6 +1527,7 @@ export class RunnerGameplay extends GameplayController {
   }
 
   _showDamageNumber(key, x, y, value, style = 'normal', stacks = 0) {
+    const aggregateWindow = style === 'corrosion' || style === 'burn' ? 0.48 : RUNNER_DAMAGE_AGGREGATE_WINDOW
     const existing = this.damageNumbers.find(
       (number) => number.key === key && number.aggregateTimer > 0 && number.active
     )
@@ -1535,21 +1536,27 @@ export class RunnerGameplay extends GameplayController {
       existing.stacks = Math.max(existing.stacks, stacks)
       existing.style = style === 'normal' ? existing.style : style
       existing.life = existing.maxLife
-      existing.aggregateTimer = RUNNER_DAMAGE_AGGREGATE_WINDOW
+      existing.aggregateTimer = aggregateWindow
       existing.pulse = 1
       return existing
     }
 
+    // Move new receipts sideways, keeping the target's overhead health bar
+    // and status dots clear. Existing aggregate receipts keep their position.
+    let offset = 0
+    while (this.damageNumbers.some(number => number.active && Math.abs(number.x - (x + offset)) < 32 && Math.abs(number.y - y) < 26)) {
+      offset = offset <= 0 ? -offset + 36 : -offset
+    }
     const number = {
       key,
-      x,
+      x: clamp(x + offset, 24, this.renderer.width - 24),
       y,
       value,
       style,
       stacks,
       life: 0.72,
       maxLife: 0.72,
-      aggregateTimer: RUNNER_DAMAGE_AGGREGATE_WINDOW,
+      aggregateTimer: aggregateWindow,
       pulse: 1,
       active: true,
     }
@@ -1671,9 +1678,11 @@ export class RunnerGameplay extends GameplayController {
       if (freeze) this._applyFreeze(entity, freeze.duration)
     }
     for (const entity of damageTargets) {
+      // AoE 伤害是 effect 生成的二级攻击：主目标在直接命中里已经用过 primary 资格，
+      // 这一轮范围伤害不可能再触发 Module（修复前每个被炸到的目标都会各 proc 一次 split）。
       this._hitEntity(
         entity,
-        { core: 'burst', coreLevel: bullet.coreLevel, damageMultiplier: config.damage },
+        this._secondaryAttack({ core: 'burst', coreLevel: bullet.coreLevel, damageMultiplier: config.damage }),
         { silent: true, splash: true }
       )
     }
@@ -1688,7 +1697,7 @@ export class RunnerGameplay extends GameplayController {
     for (const projectile of arrows) {
       this._hitEnemyProjectile(
         projectile,
-        { core: 'burst', coreLevel: bullet.coreLevel, damageMultiplier: config.damage },
+        this._secondaryAttack({ core: 'burst', coreLevel: bullet.coreLevel, damageMultiplier: config.damage }),
         { silent: true, splash: true }
       )
     }
@@ -1747,7 +1756,6 @@ export class RunnerGameplay extends GameplayController {
     )
     this.score += gained
     this.game.sound.kill?.(this.combo)
-    this.floatingTexts.push(new FloatingText(point.x, point.y - 18, `+${gained}`, '', '#f5d778', 18))
     if (entity.behavior === 'split') {
       const fragments = this.director.createFragments(entity, this.elapsedTime, this.entities.length)
       this.entities.push(...fragments)
@@ -1813,6 +1821,10 @@ export class RunnerGameplay extends GameplayController {
     this.floatingTexts.push(new FloatingText(point.x, point.y - 26, label, '', entity.color, 17))
   }
 
+  /**
+   * 炸药桶殉爆：固定 12 点范围伤害，同样不走 _hitEntity（与地火同类的非攻击通道），
+   * 因此不会触发 Module；其击杀引发的融合效果仍走 _deathBlast（二级攻击）。
+   */
   _triggerBarrelExplosion(entity) {
     this.tacticalStats.barrels++
     const point = this.renderer.project(entity.lane, entity.depth)
@@ -1894,13 +1906,19 @@ export class RunnerGameplay extends GameplayController {
     this.game.sound.powerUp?.()
   }
 
-  _showNotice(text, color = '#ffd166') {
+  _showNotice(text) {
     this.weaponNotice = text
     this.weaponNoticeTimer = 2.4
-    const point = this.renderer.project(this.currentLane, RUNNER_PLAYER_DEPTH)
-    this.floatingTexts.push(new FloatingText(point.x, point.y - 35, text, '', color, 19))
   }
 
+  /**
+   * 地火：effect 生成的持续伤害通道。
+   *
+   * 这里刻意不走 _hitEntity（燃烧 DPS 不是一次「攻击」，既不叠腐蚀也不吃易伤/增幅），
+   * 因此它天然没有 Module 触发资格——provenance 规则在这里不需要再加一道锁。
+   * 它唯一的跨层出口是击杀：击杀引发的融合效果（酸焰殉爆）走 _deathBlast →
+   * _secondaryAttack，仍然是二级攻击。
+   */
   _updateGroundFires(dt) {
     const advance = (this.section?.advanceSpeed || 0.17) * dt
     for (let i = this.groundFires.length - 1; i >= 0; i--) {
@@ -1925,7 +1943,7 @@ export class RunnerGameplay extends GameplayController {
           entity.hp -= dmg
           entity.hitFlash = 0.08
           const point = this.renderer.project(entity.lane, entity.depth)
-          this._showDamageNumber(`burn-${entity.id}`, point.x, point.y - 12, applied, 'burst')
+          this._showDamageNumber(`burn-${entity.id}`, point.x, point.y - 12, applied, 'burn')
           if (Math.random() < 0.25) {
             this._burst(point.x, point.y, '#ff6b35', 1, true)
           }
@@ -2059,6 +2077,7 @@ export class RunnerGameplay extends GameplayController {
       rapid: this.rapidFireTimer,
       rapidMax: RUNNER_RAPID_DURATION,
       score: this.score,
+      reducedMotion: this.reducedMotion,
       combo: this.combo,
       section: this.section.name,
       sectionIndex: this.section.index,
@@ -2092,11 +2111,6 @@ export class RunnerGameplay extends GameplayController {
       targetLane: this.targetLane,
       switching: this.isSwitching,
       lanes: this._getLaneTelemetry(),
-      dash: {
-        active: this.dashTimer > 0,
-        cooldown: this.dashCooldown,
-        maxCooldown: RUNNER_DASH_COOLDOWN,
-      },
       fever: {
         active: this.isFeverActive,
         charges: this.feverCharges,
@@ -2161,7 +2175,6 @@ export class RunnerGameplay extends GameplayController {
       shieldAbsorbed: this.shieldAbsorbed,
       shield: this.shield,
       perfectDodges: this.perfectDodges,
-      dashKills: this.dashKills || 0,
       feverCount: this.feverCount || 0,
       attack: this.attackDamage,
       weapon: weapon

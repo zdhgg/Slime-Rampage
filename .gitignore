@@ -17,3 +17,12 @@ data/
 
 # 门户系统（Multi-App Portal）自动生成的代理配置，见 README「门户系统集成」
 frontend/vite.config.proxy.ts
+
+# 本地验收工作区（WorkBuddy 浏览器 profile、日志与报告产物，仅本机使用）
+.workbuddy/
+
+# 本地改动备份，仅本机保留
+backups/
+
+# 外部绘图工具的调用参数，含一次性签名 URL
+concept_args.json

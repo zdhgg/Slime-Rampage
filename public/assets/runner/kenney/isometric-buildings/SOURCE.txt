@@ -1,0 +1,7 @@
+Runner environment decorations
+Pack: Isometric Buildings
+Author: Kenney (kenney.nl)
+Source: https://github.com/ETdoFresh/kenney.nl/tree/master/isometric-buildings
+License: CC0 1.0 Universal
+
+Selected transparent PNG building tiles are used as distant city billboards.

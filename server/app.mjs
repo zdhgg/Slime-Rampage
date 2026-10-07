@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
+import { networkInterfaces } from 'node:os'
 import { join } from 'node:path'
 import express from 'express'
 import { getGene, getGenePurchaseState } from '../src/game/GenePool.js'
@@ -164,6 +165,18 @@ function registrationEnabled(db, forcedValue) {
   return db.prepare("SELECT value FROM server_settings WHERE key = 'registration_enabled'").get()?.value !== '0'
 }
 
+/** 本机局域网 IPv4 列表：给前端展示「其他设备加入地址」，避免 localhost 误导。 */
+function lanIPv4Addresses() {
+  const addresses = []
+  for (const entries of Object.values(networkInterfaces())) {
+    for (const entry of entries || []) {
+      if (entry.family === 'IPv4' && !entry.internal) addresses.push(entry.address)
+    }
+  }
+  // 家庭路由器网段优先：172.x 常为 WSL/Hyper-V/VMware 虚拟网卡，别的设备连不上
+  return addresses.sort((a, b) => Number(!a.startsWith('192.168.')) - Number(!b.startsWith('192.168.')))
+}
+
 export function createLanApp({ db, distDir = null, registration = null }) {
   const app = express()
   app.disable('x-powered-by')
@@ -176,12 +189,14 @@ export function createLanApp({ db, distDir = null, registration = null }) {
   })
   app.use(express.json({ limit: '64kb' }))
 
-  app.get('/api/status', (_req, res) => {
+  app.get('/api/status', (req, res) => {
     res.json({
       service: 'slime-rampage-lan',
       version: 1,
       registrationEnabled: registrationEnabled(db, registration),
       serverTime: new Date().toISOString(),
+      lanIps: lanIPv4Addresses(),
+      lanPort: req.socket.localPort || null,
     })
   })
 

@@ -8,7 +8,7 @@
  */
 import { computed } from 'vue'
 import { Pause, Play, Volume2, VolumeX } from 'lucide-vue-next'
-import { SPEC_INFO } from '../game/SkillPool.js'
+import { SPEC_INFO, getSpecInfo } from '../game/SkillPool.js'
 import { formatRunClock } from '../game/RunRules.js'
 import { DIGEST_EFFECTS } from '../game/ElementSystem.js'
 import { REACTION_SLOT_LEVELS } from '../game/entities/Player.js'
@@ -25,7 +25,7 @@ const props = defineProps({
   // arena = 完整战斗 HUD；runner = 仅保留右上角暂停/静音（其余信息由 Runner HUD 提供）
   variant: { type: String, default: 'arena' },
 })
-const emit = defineEmits(['toggle-mute', 'toggle-pause', 'toggle-resume'])
+const emit = defineEmits(['toggle-mute', 'toggle-pause', 'toggle-resume', 'activate-skill'])
 const WEAPON_MUTATIONS = new Set(['gluttony', 'gatling', 'elemental', 'assassin'])
 const isWeaponEvolution = computed(() => WEAPON_MUTATIONS.has(props.evolution?.mutation))
 
@@ -80,11 +80,6 @@ const defensePercent = computed(() => {
 const expPercent = computed(() =>
   props.stats.maxExp > 0 ? Math.min(100, (props.stats.exp / props.stats.maxExp) * 100) : 0
 )
-const dashPercent = computed(() =>
-  props.cooldown.dashMax > 0
-    ? Math.max(0, 100 - (props.cooldown.dashCd / props.cooldown.dashMax) * 100)
-    : 100
-)
 const bossPercent = computed(() =>
   props.stats.boss?.maxHp > 0 ? Math.max(0, (props.stats.boss.hp / props.stats.boss.maxHp) * 100) : 0
 )
@@ -105,7 +100,7 @@ const formationBreakPercent = computed(() => {
   return max > 0 ? Math.max(0, Math.min(100, (props.cooldown.formationBreak / max) * 100)) : 0
 })
 
-/** F 角色主动技能：冷却条进度（origin 无技能时 skillMax 为 0，整条不渲染） */
+/** 空格 角色主动技能：冷却条进度（所有角色均有主动技能） */
 const skillPercent = computed(() => {
   const max = props.cooldown.skillMax || 0
   return max > 0 ? Math.max(0, 100 - (props.cooldown.skillCd / max) * 100) : 0
@@ -113,7 +108,7 @@ const skillPercent = computed(() => {
 const hasStrainSkill = computed(() => !!props.cooldown.skillId && (props.cooldown.skillMax || 0) > 0)
 
 /**
- * 猎食点（暴食专有）：资源型 F —— 没有主冷却，只有「点数 + 吞噬进度」。
+ * 猎食点（暴食专有）：资源型 空格 —— 没有主冷却，只有「点数 + 吞噬进度」。
  * 只在 cooldown.charge 存在时成立（其它三角色与 origin 恒为 null，整条不渲染）。
  */
 const gluttonCharge = computed(() =>
@@ -128,18 +123,19 @@ const gluttonDots = computed(() => {
 const gluttonProgressRatio = computed(() => {
   const c = gluttonCharge.value
   if (!c || !c.progressPer) return 0
-  return Math.max(0, Math.min(1, c.progress / c.progressPer))
+  if (c.charge >= c.max) return 1
+  return Math.max(0, Math.min(1, props.stats.boss ? c.bossProgress / c.bossProgressPer : c.progress / c.progressPer))
 })
 const gluttonTitle = computed(() => {
   const c = gluttonCharge.value
   if (!c) return ''
   if (c.charge >= c.max) {
-    return `猎食点已满（${c.max}/${c.max}）· 满仓时不再累计进度（不存第三点）· 按 F 主动捕食濒临吞噬线的猎物，或撕咬首领造成 5% 最大生命伤害`
+    return `猎食点已满（${c.max}/${c.max}）· 按空格发动近身重咬 · 满仓时暂停充能`
   }
   if (c.charge <= 0) {
-    return `积累猎食点：每 ${c.progressPer} 次普通吞噬或 10 次普攻命中首领 +1 点（当前吞噬进度 ${c.progress}/${c.progressPer}）`
+    return `吞噬充能 ${c.progress}/${c.progressPer}（每次 +${c.devourGain}）· 首领咬击充能 ${c.bossProgress}/${c.bossProgressPer}（每次 +${c.bossGain}）`
   }
-  return `猎食点 ${c.charge}/${c.max} · 按 F 消耗 1 点主动捕食濒临吞噬线的猎物，或撕咬首领（吞噬进度 ${c.progress}/${c.progressPer}）`
+  return `猎食点 ${c.charge}/${c.max} · 空格 消耗 1 点近身重咬，满血敌人也会受伤；残血血肉目标直接吞噬 · 重咬不返充`
 })
 const objectiveArrow = computed(() => {
   const objective = props.stats.objective
@@ -210,6 +206,7 @@ const digestTitle = computed(() => {
       'has-boss': stats.boss,
       'has-boss-formation': stats.boss?.formation,
       'has-bounty': stats.run?.bounty,
+      'has-shadow': !!cooldown.shadow,
       'hud--runner': variant === 'runner',
     }"
   >
@@ -278,8 +275,8 @@ const digestTitle = computed(() => {
         </div>
         <!-- 流派专精指示（阶段十八） -->
         <div v-if="stats.primarySpec || stats.secondarySpec" class="hud-specs">
-          <span v-if="stats.primarySpec" class="spec-chip primary" :title="'主专精：' + SPEC_INFO[stats.primarySpec]?.desc">
-            👑 主: {{ SPEC_INFO[stats.primarySpec]?.icon }} {{ SPEC_INFO[stats.primarySpec]?.name }}
+          <span v-if="stats.primarySpec" class="spec-chip primary" :title="'主专精：' + getSpecInfo(stats.primarySpec, stats)?.desc">
+            👑 主: {{ SPEC_INFO[stats.primarySpec]?.icon }} {{ getSpecInfo(stats.primarySpec, stats)?.name }}
           </span>
           <span v-if="stats.secondarySpec" class="spec-chip secondary" :title="'副专精：' + SPEC_INFO[stats.secondarySpec]?.desc">
             🥈 副: {{ SPEC_INFO[stats.secondarySpec]?.icon }} {{ SPEC_INFO[stats.secondarySpec]?.name }}
@@ -305,7 +302,7 @@ const digestTitle = computed(() => {
       </div>
     </div>
     <div class="hud-hint">
-      WASD / 方向键移动 · Space 冲刺<template v-if="stats.canUseElements"> · E 吸收元素核心</template><template v-if="hasStrainSkill"> · F {{ cooldown.skillName }}</template><template v-else-if="gluttonCharge"> · F 贪食脉冲（消耗猎食点）</template> · Esc 暂停
+      WASD / 方向键移动<template v-if="stats.canUseElements"> · E 吸收元素核心</template><template v-if="hasStrainSkill"> · 空格 {{ cooldown.skillName }}<template v-if="cooldown.skillName === '影袭'">（沿移动方向）</template></template><template v-else-if="gluttonCharge"> · 空格 暴食重咬（消耗猎食点）</template> · Esc 暂停
     </div>
     <div class="hud-stats">
       <span>攻击 <b>{{ stats.dmg }}</b></span>
@@ -329,34 +326,39 @@ const digestTitle = computed(() => {
       <i><em :style="{ width: formationBreakPercent + '%' }"></em></i>
       <small>攻速 +25% · 移速 +15%</small>
     </div>
-    <div class="hud-action" :class="{ ready: cooldown.dashCd <= 0.02 }">
+    <div v-if="cooldown.pets?.length" class="pet-status" aria-label="共生伙伴状态">
+      <div v-for="pet in cooldown.pets" :key="pet.id" :class="{ resting: pet.down > 0 }">
+        <span>{{ pet.name }}</span><b>{{ pet.down > 0 ? Math.ceil(pet.down) + 's 恢复' : pet.hp + '/' + pet.maxHp }}</b>
+        <i><em :style="{ width: (pet.hp / pet.maxHp * 100) + '%' }"></em></i>
+      </div>
+    </div>
+    <div v-if="cooldown.shadow" class="shadow-status" :title="`暴击率 ${Math.round(cooldown.shadow.crit * 100)}% · 暴击后分身概率 ${Math.round(cooldown.shadow.chance * 100)}% · 分身攻击 ${Math.round(cooldown.shadow.power * 100)}% · 持续 ${cooldown.shadow.duration} 秒`">
+      <span>闪避 <b>{{ Math.round(cooldown.shadow.evasion * 100) }}%</b></span>
+      <span>分身 <b>{{ cooldown.shadow.count }}/{{ cooldown.shadow.cap }}</b></span>
+      <small>暴击后生影 {{ Math.round(cooldown.shadow.chance * 100) }}%</small>
+    </div>
+    <!-- 空格 角色专属主动技能：仅角色血统渲染（包含原生黏液） -->
+    <div v-if="hasStrainSkill" role="button" tabindex="0" @click="emit('activate-skill')" @keydown.enter.prevent="emit('activate-skill')" @keydown.space.prevent="!$event.repeat && emit('activate-skill')" :aria-label="cooldown.skillName" class="hud-action hud-action--skill" :class="{ ready: cooldown.skillCd <= 0.02 }">
       <div class="hud-action-label">
         <span>SPACE</span>
-        <b>{{ cooldown.dashCd <= 0.02 ? '冲刺就绪' : `${cooldown.dashCd.toFixed(1)}s` }}</b>
-      </div>
-      <i><em :style="{ width: dashPercent + '%' }"></em></i>
-    </div>
-    <!-- F 角色专属主动技能：仅角色血统渲染（origin 无技能 → skillId 为空 → 整条隐藏） -->
-    <div v-if="hasStrainSkill" class="hud-action hud-action--skill" :class="{ ready: cooldown.skillCd <= 0.02 }">
-      <div class="hud-action-label">
-        <span>F</span>
         <b>{{ cooldown.skillCd <= 0.02 ? cooldown.skillName : `${cooldown.skillCd.toFixed(1)}s` }}</b>
       </div>
       <i><em :style="{ width: skillPercent + '%' }"></em></i>
     </div>
-    <!-- 暴食 · 猎食点（资源型 F）：没有冷却条，改为「点数 + 吞噬进度」 -->
+    <!-- 暴食 · 猎食点（资源型 空格）：没有冷却条，改为「点数 + 吞噬进度」 -->
     <div
       v-else-if="gluttonCharge"
+      role="button" tabindex="0" aria-label="暴食重咬" @click="emit('activate-skill')" @keydown.enter.prevent="emit('activate-skill')" @keydown.space.prevent="!$event.repeat && emit('activate-skill')"
       class="hud-action hud-action--skill hud-action--charge"
       :class="{ ready: gluttonCharge.ready }"
       :title="gluttonTitle"
     >
       <div class="hud-action-label">
-        <span>F 猎食</span>
-        <b>{{ gluttonDots }} {{ gluttonCharge.progress }}/{{ gluttonCharge.progressPer }}</b>
+        <span>SPACE 重咬</span>
+        <b>{{ gluttonDots }} {{ stats.boss ? gluttonCharge.bossProgress : gluttonCharge.progress }}/{{ stats.boss ? gluttonCharge.bossProgressPer : gluttonCharge.progressPer }}</b>
       </div>
       <i><em :style="{ width: Math.round(gluttonProgressRatio * 100) + '%' }"></em></i>
-      <small>消耗 1 点 · 主动捕食濒死猎物或撕咬首领</small>
+      <small>消耗 1 点 · 近身重咬 · 捕食获得短时护甲</small>
     </div>
     <div
       v-if="stats.boss"
@@ -486,6 +488,10 @@ const digestTitle = computed(() => {
 </template>
 
 <style scoped>
+.shadow-status { position: absolute; left: 24px; bottom: 78px; width: 168px; box-sizing: border-box; display: flex; flex-wrap: wrap; align-items: center; gap: 5px 12px; padding: 7px 10px; border: 1px solid #bea0ce38; border-radius: 8px; background: #211b29e8; color: #dcc9e7; font-size: 12px; }
+.shadow-status b { color: #f3e6fa; font-variant-numeric: tabular-nums; }
+.shadow-status small { width: 100%; color: #bba9c5; font-size: 10px; }
+.hud.has-shadow .formation-break-hud { bottom: 138px; }
 .hud {
   position: absolute;
   inset: 0;
@@ -1185,7 +1191,17 @@ const digestTitle = computed(() => {
   font-variant-numeric: tabular-nums;
 }
 
+.pet-status { position: absolute; bottom: 80px; left: 24px; width: 172px; padding: 8px 10px; border: 1px solid #edc47940; border-radius: 7px; background: #101912df; color: #edc479; font-size: 11px; }
+.pet-status > div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px; }
+.pet-status > div + div { margin-top: 8px; }
+.pet-status b { font-size: 10px; font-weight: 500; }
+.pet-status i { display: block; width: 100%; height: 3px; background: #ffffff15; }
+.pet-status em { display: block; height: 100%; background: #edc479; }
+.pet-status .resting { color: #aaa; }
 .hud-action {
+  pointer-events: auto;
+  cursor: pointer;
+  touch-action: manipulation;
   position: absolute;
   bottom: 22px;
   left: 24px;
@@ -1243,6 +1259,8 @@ const digestTitle = computed(() => {
   font-size: 8px;
 }
 
+.hud-action:focus-visible { outline: 2px solid #8ae8f7; outline-offset: 3px; }
+
 .hud-action-label {
   display: flex;
   align-items: center;
@@ -1291,7 +1309,7 @@ const digestTitle = computed(() => {
   color: #d2ff8a;
 }
 
-/* F 角色技能条（阶段十九）：与冲刺条同构，用青色区分「角色身份 vs 通用机动」 */
+/* 角色主动技能条 */
 .hud-action--skill > i em {
   background: linear-gradient(90deg, #4fc3d9, #a29bfe);
 }
@@ -1304,7 +1322,7 @@ const digestTitle = computed(() => {
   color: #c9c2ff;
 }
 
-/* 暴食猎食点（资源型 F）：与技能条同构，「●○ 3/5」= 点数 + 吞噬进度 */
+/* 暴食猎食点（资源型 空格）：与技能条同构，「●○ 3/5」= 点数 + 吞噬进度 */
 .hud-action--charge .hud-action-label b {
   letter-spacing: 1px;
 }
@@ -1866,6 +1884,7 @@ const digestTitle = computed(() => {
 }
 
 @media (max-width: 900px) {
+  .shadow-status { left: 14px; bottom: 70px; width: 148px; }
   .combo-toast {
     top: auto;
     bottom: 90px;

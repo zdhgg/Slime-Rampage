@@ -35,16 +35,17 @@ const ELEMENTS = {
  *    拾取后进入玩家元素集合参与流派融合。
  */
 export class Gem {
-  constructor(x, y, value, type = 'exp') {
+  constructor(x, y, value, type = 'exp', meta = null) {
     this.x = x
     this.y = y
     this.value = value // 经验值（元素核心时无意义，取 0）
     this.type = type // 'exp' | 'fire' | 'water' | 'poison' | 'lightning'
+    this.mastery = !!meta?.mastery // type='tome' 时区分普通王级秘籍与职业秘典
     this.state = 'idle' // 'idle' | 'magnet'
     this.vx = 0 // 吸附速度（magnet 状态使用）
     this.vy = 0
-    this.size = type === 'exp' ? gemSize(value) : type === 'tome' ? 9 : 7
-    this.color = type === 'exp' ? gemColor(value) : type === 'tome' ? '#ffd166' : ELEMENTS[type].color
+    this.size = type === 'exp' ? gemSize(value) : type === 'tome' ? (this.mastery ? 10 : 9) : 7
+    this.color = type === 'exp' ? gemColor(value) : type === 'tome' ? (this.mastery ? '#ff8bd1' : '#ffd166') : ELEMENTS[type].color
     this.icon = type === 'exp' || type === 'tome' ? null : ELEMENTS[type].icon
     this.phase = Math.random() * TAU // 闪烁相位（每颗错开，避免同步闪烁）
     this.merged = false // 被同位置大宝石吸收标记（GemManager 合并轮回收用）
@@ -138,13 +139,14 @@ export class Gem {
       ctx.fillRect(-s * 0.7, -s * 0.7, s * 0.9, s * 0.9)
     } else if (this.type === 'tome') {
       // 王级秘籍：金色书卷（竖放 + 书脊 + 书页线 + 发光）
-      ctx.fillStyle = 'rgba(255, 209, 102, 0.22)'
+      const mastery = this.mastery
+      ctx.fillStyle = mastery ? 'rgba(255, 139, 209, 0.28)' : 'rgba(255, 209, 102, 0.22)'
       ctx.beginPath()
       ctx.arc(0, 0, s * 2, 0, TAU)
       ctx.fill()
       ctx.fillStyle = this.color
       ctx.fillRect(-s * 0.55, -s * 0.75, s * 1.1, s * 1.5)
-      ctx.fillStyle = 'rgba(90, 60, 10, 0.9)' // 书脊
+      ctx.fillStyle = mastery ? 'rgba(80, 20, 70, 0.9)' : 'rgba(90, 60, 10, 0.9)' // 书脊
       ctx.fillRect(-s * 0.1, -s * 0.75, s * 0.2, s * 1.5)
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.55)' // 书页线
       ctx.lineWidth = 1
