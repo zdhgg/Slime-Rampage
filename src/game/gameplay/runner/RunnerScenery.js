@@ -1,3 +1,6 @@
+import { RUNNER_SCENE_PROFILES } from './RunnerSceneProfiles.js'
+import { paintSceneSkyline, paintSceneCluster, paintSceneDestination, paintSceneGate, paintCyberTower } from './RunnerSceneArt.js'
+
 // Runner scenery: baked parallax backdrops and roadside glow props for the
 // expedition (runner) mode. Static detail is baked once per canvas size (the
 // FrontierScenery pattern); the frame loop only blits sprites plus a bounded
@@ -66,23 +69,34 @@ export class RunnerScenery {
     this.horizonY = 0
     this.roadTopWidth = 0
     this.sprites = null
+    this.previousSprites = null
+    this.transition = 1
+    this.profile = RUNNER_SCENE_PROFILES.outer
     this._fogCache = new Map() // `sky|band` -> gradient, rebuilt on prepare
     this._motes = []
   }
 
   /** (Re)bake for a canvas size. No-op when nothing changed; safe in node. */
-  prepare(width, height, dpr = 1, geometry = {}) {
+  prepare(width, height, dpr = 1, geometry = {}, profile = this.profile) {
     const sameSize = this._w === width && this._h === height && this._dpr === dpr
-    if (sameSize && (this.sprites || !this._canBake())) return
+    const horizonY = geometry.horizonY || Math.max(88, height * 0.155)
+    const roadTopWidth = geometry.roadTopWidth || 320
+    if (this.horizonY !== horizonY || this.roadTopWidth !== roadTopWidth) this._fogCache.clear()
+    this.horizonY = horizonY
+    this.roadTopWidth = roadTopWidth
+    this.playerY = geometry.playerY || height * 0.82
+    this.roadBottomWidth = geometry.roadBottomWidth || width * 0.8
+    const sameTheme = this.profile.theme === profile.theme
+    if (sameSize && sameTheme && (this.sprites || !this._canBake())) return
+    this.previousSprites = sameSize && !sameTheme ? this.sprites : null
+    this.profile = profile
     this._w = width
     this._h = height
     this._dpr = dpr
     this.width = width
     this.height = height
-    this.horizonY = geometry.horizonY || Math.max(88, height * 0.155)
-    this.roadTopWidth = geometry.roadTopWidth || 320
     this._fogCache.clear()
-    this._initMotes()
+    if (!sameSize) this._initMotes()
     if (!this._canBake()) return
     this.sprites = this._bake()
   }
@@ -92,14 +106,17 @@ export class RunnerScenery {
   }
 
   _bake() {
-    const scale = this.dpr > 1 ? 2 : 1
+    const scale = this._dpr > 1 ? 2 : 1
     const stripW = Math.max(640, Math.ceil(this.width * 2))
     const clusterW = this._clusterWidth()
-    const skyline = this._bakeStrip(stripW, SCENERY_CONFIG.skylineHeight, scale, ctx => this._paintSkyline(ctx, stripW))
-    const cluster = this._bakeStrip(clusterW, SCENERY_CONFIG.clusterHeight, scale, ctx => this._paintCluster(ctx, clusterW))
-    const gate = this._bakeStrip(256, 112, scale, ctx => this._paintGate(ctx))
-    const glow = this._bakeStrip(128, 128, scale, ctx => this._paintGlow(ctx))
-    return { scale, stripW, skyline, clusterW, cluster, gate, glow }
+    const skyline = this._bakeStrip(stripW, SCENERY_CONFIG.skylineHeight, scale, ctx => paintSceneSkyline(ctx, stripW, this.profile, sceneryRandom(this.profile.seed)))
+    const cluster = this._bakeStrip(clusterW, SCENERY_CONFIG.clusterHeight, scale, ctx => paintSceneCluster(ctx, clusterW, this.profile, sceneryRandom(this.profile.seed + 71)))
+    const gate = this._bakeStrip(256, 112, scale, ctx => paintSceneGate(ctx, this.profile))
+    const destination = this._bakeStrip(400, 180, scale, ctx => paintSceneDestination(ctx, this.profile))
+    const towers = Array.from({ length: 8 }, (_, i) => this._bakeStrip(180, 360, scale,
+      ctx => paintCyberTower(ctx, this.profile, sceneryRandom(this.profile.seed + i * 93), i % 4, i < 4 ? -1 : 1)))
+    const glow = this.previousSprites?.glow || this._bakeStrip(128, 128, scale, ctx => this._paintGlow(ctx))
+    return { scale, stripW, skyline, clusterW, cluster, gate, destination, glow, towers }
   }
 
   _bakeStrip(w, h, scale, paint) {
@@ -118,100 +135,6 @@ export class RunnerScenery {
 
   // ---- baked strips (drawn once, never in the frame loop) ----
 
-  _paintSkyline(ctx, w) {
-    const rng = sceneryRandom(0x5191ce)
-    // Two silhouette bands for aerial depth; transparent background lets the
-    // sky gradient show through.
-    for (const [alpha, maxH, minW, maxW] of [[0.55, 66, 16, 34], [1, 108, 20, 48]]) {
-      ctx.fillStyle = `rgba(10, 22, 31, ${alpha})`
-      let x = -20
-      while (x < w + 20) {
-        const bw = minW + rng() * (maxW - minW)
-        const bh = 14 + rng() * (maxH - 14)
-        ctx.fillRect(x, SCENERY_CONFIG.skylineHeight - bh, bw, bh)
-        if (rng() > 0.72) {
-          // Antenna mast + tip light keeps the far skyline from reading as flat.
-          const ax = x + bw * (0.3 + rng() * 0.4)
-          const ah = 8 + rng() * 22
-          ctx.fillRect(ax - 1, SCENERY_CONFIG.skylineHeight - bh - ah, 2, ah)
-          ctx.fillStyle = 'rgba(150, 220, 235, 0.5)'
-          ctx.fillRect(ax - 1.5, SCENERY_CONFIG.skylineHeight - bh - ah - 2, 3, 3)
-          ctx.fillStyle = `rgba(10, 22, 31, ${alpha})`
-        }
-        x += bw + 2 + rng() * 14
-      }
-    }
-  }
-
-  _paintCluster(ctx, w) {
-    const rng = sceneryRandom(0xc1ade)
-    const h = SCENERY_CONFIG.clusterHeight
-    // Silhouette blocks with lit windows sit closest to the road: they set the
-    // mid-ground scale between the skyline and the asphalt.
-    let x = -6
-    while (x < w + 6) {
-      const bw = 42 + rng() * 52
-      const bh = 96 + rng() * 116
-      const top = h - bh
-      ctx.fillStyle = rng() > 0.5 ? '#0d1a24' : '#11202c'
-      ctx.fillRect(x, top, bw, bh)
-      ctx.fillStyle = 'rgba(140, 220, 240, 0.16)'
-      ctx.fillRect(x, top, bw, 2)
-
-      const cols = Math.max(2, Math.floor(bw / 14))
-      const rows = Math.max(3, Math.floor(bh / 22))
-      for (let c = 0; c < cols; c++) {
-        for (let r = 0; r < rows; r++) {
-          if (rng() > 0.3) continue
-          ctx.fillStyle = `rgba(232, 176, 106, ${(0.28 + rng() * 0.5).toFixed(3)})`
-          ctx.fillRect(x + 5 + c * 14, top + 8 + r * 22, 4, 6)
-        }
-      }
-
-      if (rng() > 0.55) {
-        // Neon sign bar: warm lamp or cool accent, echoing the section profile.
-        const sw = 8 + rng() * (bw - 20)
-        const sy = top + 12 + rng() * (bh - 40)
-        ctx.fillStyle = rng() > 0.5 ? 'rgba(240, 168, 96, 0.6)' : 'rgba(96, 200, 220, 0.55)'
-        ctx.fillRect(x + 6, sy, sw, 3)
-      }
-      if (rng() > 0.7) {
-        const ax = x + bw * (0.25 + rng() * 0.5)
-        const ah = 10 + rng() * 20
-        ctx.fillStyle = '#0d1a24'
-        ctx.fillRect(ax - 1, top - ah, 2, ah)
-        ctx.fillStyle = 'rgba(150, 220, 235, 0.55)'
-        ctx.fillRect(ax - 1.5, top - ah - 2, 3, 3)
-      }
-      x += bw + 1 + rng() * 10
-    }
-  }
-
-  _paintGate(ctx) {
-    // Arch gate spanning the road. Neutral baking: the renderer adds the
-    // per-section accent bar at draw time, so one sprite serves all profiles.
-    const w = 256
-    const h = 112
-    ctx.fillStyle = '#101f2a'
-    ctx.fillRect(26, 30, 28, h - 30) // left leg
-    ctx.fillRect(w - 54, 30, 28, h - 30) // right leg
-    ctx.fillRect(14, 16, w - 28, 26) // beam
-    ctx.fillStyle = 'rgba(140, 220, 240, 0.28)'
-    ctx.fillRect(14, 14, w - 28, 3) // top edge highlight
-    ctx.fillStyle = '#8fe3f2'
-    ctx.fillRect(30, 44, w - 60, 3) // inner light strip
-    ctx.fillStyle = 'rgba(120, 200, 225, 0.35)'
-    ctx.fillRect(38, 52, w - 76, 1)
-    // Hazard ticks on the legs.
-    ctx.fillStyle = 'rgba(240, 168, 96, 0.75)'
-    for (const lx of [34, w - 46]) {
-      for (let i = 0; i < 3; i++) ctx.fillRect(lx, 60 + i * 16, 12, 4)
-    }
-    ctx.fillStyle = '#0a151d'
-    ctx.fillRect(20, h - 8, 40, 8)
-    ctx.fillRect(w - 60, h - 8, 40, 8)
-  }
-
   _paintGlow(ctx) {
     // Warm radial glow sprite: blitted for lamp halos so the frame loop never
     // pays for shadowBlur or gradient construction.
@@ -225,31 +148,81 @@ export class RunnerScenery {
 
   // ---- frame-loop draws (blits only) ----
 
-  drawSkyline(ctx, scroll) {
+  // Keep only the old/new bakes during a transition. No growing cache in endless.
+  finishTransition() {
+    this.transition = 1
+    this.previousSprites = null
+  }
+
+  _drawLayers(ctx, draw) {
     if (!this.sprites) return
-    const { skyline, stripW } = this.sprites
-    const h = SCENERY_CONFIG.skylineHeight
-    const top = this.horizonY + 4 - h
-    const offset = ((scroll * SCENERY_CONFIG.parallaxSkyline) % stripW + stripW) % stripW
-    ctx.drawImage(skyline, -offset, top, stripW, h)
-    ctx.drawImage(skyline, -offset + stripW, top, stripW, h)
+    const alpha = ctx.globalAlpha
+    if (this.previousSprites && this.transition < 1) {
+      ctx.globalAlpha = alpha * (1 - this.transition)
+      draw(this.previousSprites)
+    }
+    ctx.globalAlpha = alpha * (this.previousSprites ? this.transition : 1)
+    draw(this.sprites)
+    ctx.globalAlpha = alpha
+  }
+
+  drawSkyline(ctx, scroll) {
+    this._drawLayers(ctx, ({ skyline, stripW }) => {
+      const h = SCENERY_CONFIG.skylineHeight
+      const top = this.horizonY + 4 - h
+      const offset = ((scroll * SCENERY_CONFIG.parallaxSkyline) % stripW + stripW) % stripW
+      ctx.drawImage(skyline, -offset, top, stripW, h)
+      ctx.drawImage(skyline, -offset + stripW, top, stripW, h)
+    })
   }
 
   drawClusters(ctx, scroll) {
-    if (!this.sprites) return
-    const { cluster, clusterW } = this.sprites
-    const h = SCENERY_CONFIG.clusterHeight
-    const top = this.horizonY + SCENERY_CONFIG.clusterBaseOffset - h
-    const offset = ((scroll * SCENERY_CONFIG.parallaxMidground) % clusterW + clusterW) % clusterW
-    for (let k = 0; k < 2; k++) {
-      ctx.drawImage(cluster, k * clusterW - offset, top, clusterW, h) // left of road
-      ctx.drawImage(cluster, this.width - (k + 1) * clusterW + offset, top, clusterW, h) // right of road
-    }
+    this._drawLayers(ctx, ({ cluster, clusterW, towers }) => {
+      const alpha = ctx.globalAlpha
+      // Lower city fades below the bridge; its footprint fills the former void.
+      ctx.globalAlpha = alpha * 0.7
+      const lowerH = Math.max(240, this.height * 0.5)
+      for (let x = -clusterW; x < this.width; x += clusterW) {
+        ctx.drawImage(cluster, x, this.horizonY + 20, clusterW, lowerH)
+      }
+      // A bounded, seeded stream of freestanding towers, painted far to near.
+      // The offset is depth, never horizontal wallpaper motion. No allocation
+      // or random generation occurs in the animation loop.
+      // Continue past the player until each tower leaves the viewport. Recycling
+      // at depth 1 would pop a still-visible facade off the edge of the screen.
+      for (let row = 0; row < 12; row++) {
+        for (const side of [-1, 1]) {
+          const clock = scroll * 0.17 + (side === 1 ? 0.061 : 0)
+          const phase = ((clock % (1 / 7)) + 1 / 7) % (1 / 7)
+          const depth = row / 7 + phase
+          const slot = ((row - Math.floor(clock * 7) + (side === 1 ? 2 : 0)) % 4 + 4) % 4
+          const factor = 0.28 + Math.pow(depth, 1.15) * 1.35
+          const w = 180 * factor * Math.min(1.25, this.width / 1000)
+          const h = w * (1.65 + slot * 0.16)
+          const roadY = this.horizonY + (this.playerY - this.horizonY) * Math.pow(depth, 1.48)
+          const half = (this.roadTopWidth + (this.roadBottomWidth - this.roadTopWidth) * Math.pow(depth, 0.92)) / 2
+          const x = this.width / 2 + side * (half + 30 + depth * 55 + w * 0.52)
+          const base = roadY + 48 + depth * this.height * 0.25
+          if (x + w / 2 < 0 || x - w / 2 > this.width || base - h > this.height) continue
+          // Solid silhouettes occlude the buildings behind them. Fading every
+          // layer independently made nearby architecture look transparent.
+          ctx.globalAlpha = alpha * Math.min(1, depth * 12)
+          ctx.drawImage(towers[(side === -1 ? 0 : 4) + slot], x - w / 2, base - h, w, h)
+        }
+      }
+      ctx.globalAlpha = alpha
+    })
+  }
+
+  drawDestination(ctx) {
+    const w = Math.min(this.width * 0.48, this.roadTopWidth * 1.05)
+    const h = w * 0.45
+    this._drawLayers(ctx, ({ destination }) => ctx.drawImage(destination, (this.width - w) / 2, this.horizonY + 38 - h, w, h))
   }
 
   /** Cached per-profile fog gradient; blends each baked layer into the next. */
   _fogGradient(ctx, band, profile) {
-    const key = `${profile.sky}|${band}`
+    const key = `${profile.horizon}|${band}`
     let grad = this._fogCache.get(key)
     if (!grad) {
       const y0 = band === 'A' ? this.horizonY - 18 : this.horizonY + SCENERY_CONFIG.clusterBaseOffset - SCENERY_CONFIG.clusterHeight * 0.4
@@ -257,6 +230,7 @@ export class RunnerScenery {
       grad = ctx.createLinearGradient(0, y0, 0, y1)
       grad.addColorStop(0, `${profile.horizon}00`)
       grad.addColorStop(1, `${profile.horizon}${band === 'A' ? '8c' : 'b8'}`)
+      if (this._fogCache.size >= 4) this._fogCache.clear()
       this._fogCache.set(key, grad)
     }
     return grad
@@ -273,8 +247,7 @@ export class RunnerScenery {
 
   /** Arch gate sprite; base sits on the road plane at baseY. */
   drawGate(ctx, cx, baseY, w, h) {
-    if (!this.sprites) return
-    ctx.drawImage(this.sprites.gate, cx - w / 2, baseY - h, w, h)
+    this._drawLayers(ctx, ({ gate }) => ctx.drawImage(gate, cx - w / 2, baseY - h, w, h))
   }
 
   /** Baked warm halo; alpha is premultiplied by the caller's fade/breath. */

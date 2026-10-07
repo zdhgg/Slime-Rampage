@@ -1,4 +1,5 @@
 import { AssetManager } from '../../AssetManager.js'
+import { renderSlimeBody, renderSlimeFace, paintSlimeSilhouette } from '../../SlimeRenderer.js'
 import {
   RUNNER_COLLISION_DEPTH,
   RUNNER_DURATION,
@@ -6,6 +7,8 @@ import {
   RUNNER_RAPID_DURATION,
   getRunnerRouteByLane,
 } from './RunnerRules.js'
+import { RunnerScenery, SCROLL_DEPTH_RATE } from './RunnerScenery.js'
+import { runnerSceneProfile, blendRunnerScene } from './RunnerSceneProfiles.js'
 
 const TAU = Math.PI * 2
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value))
@@ -23,27 +26,68 @@ export class RunnerRenderer {
     this.baseUnit = 0
     this._roadGradient = null
     this._skyGradient = null
+    // Baked scenery service (strips, gate/glow sprites, fog gradients, motes).
+    this.scenery = new RunnerScenery()
+    this._roadWidthAt = this.roadWidthAt.bind(this)
+    this._vignette = null
+    this._lastScroll = 0
+    this._hudInsets = null
+    this._layoutDirty = false
+    this._sceneProfile = null
+    this._sceneFrom = null
+    this._sceneClock = -1
+    this._sceneStartedAt = 0
+    this._sceneProgress = 1
+    this._scenePaintKey = null
+  }
+
+  get motionTime() {
+    return this.gameplay.reducedMotion ? 0 : this.gameplay.visualTime
+  }
+
+  setHudInsets(insets) {
+    if (!Number.isFinite(insets?.top) || !Number.isFinite(insets?.bottom)) return
+    const top = Math.max(0, Math.ceil(insets.top))
+    const bottom = Math.max(0, Math.ceil(insets.bottom))
+    if (this._hudInsets?.top === top && this._hudInsets?.bottom === bottom) return
+    this._hudInsets = { top, bottom }
+    this._layoutDirty = true
+    this.ensureLayout()
   }
 
   ensureLayout() {
     const game = this.gameplay.game
-    if (!game || (game.width === this.width && game.height === this.height)) return
+    if (!game || (!this._layoutDirty && game.width === this.width && game.height === this.height)) return
+    this._layoutDirty = false
     this.width = game.width
     this.height = game.height
-    this.horizonY = Math.max(88, this.height * 0.155)
-    this.playerY = this.height * 0.84
     this.roadBottomWidth = Math.min(this.width * 0.8, this.height * 1.36)
     this.roadTopWidth = Math.max(180, this.roadBottomWidth * 0.31)
     this.baseUnit = clamp(Math.min(this.width, this.height) * 0.055, 34, 58)
+    const landscape = this.width / this.height >= 4 / 3 && this.height <= 520
+    const hudTop = this._hudInsets?.top ?? (this.width <= 700 && !landscape ? 218 : 112)
+    const hudBottom = this._hudInsets?.bottom ?? 96
+    this.playerY = Math.min(this.height * 0.84, this.height - hudBottom - 14 - this.baseUnit)
+    this.horizonY = Math.min(this.playerY - 72, Math.max(hudTop + 8, this.height * 0.155))
 
     const ctx = game.ctx
-    this._skyGradient = ctx.createLinearGradient(0, 0, 0, this.height)
-    this._skyGradient.addColorStop(0, '#071019')
-    this._skyGradient.addColorStop(0.55, '#0b151f')
-    this._skyGradient.addColorStop(1, '#101923')
-    this._roadGradient = ctx.createLinearGradient(0, this.horizonY, 0, this.height)
-    this._roadGradient.addColorStop(0, '#111b25')
-    this._roadGradient.addColorStop(1, '#1a2a36')
+    this._scenePaintKey = null
+
+    // (Re)bake the backdrop layers for this canvas size, then cache the static
+    // vignette: both are size-dependent and must never be rebuilt per frame.
+    this.scenery.prepare(this.width, this.height, this.gameplay.game?.dpr || 1, {
+      horizonY: this.horizonY,
+      roadTopWidth: this.roadTopWidth,
+      playerY: this.playerY, roadBottomWidth: this.roadBottomWidth,
+    }, runnerSceneProfile(this.gameplay))
+    const vignette = ctx.createRadialGradient(
+      this.width / 2, this.height / 2, Math.min(this.width, this.height) * 0.34,
+      this.width / 2, this.height / 2, Math.max(this.width, this.height) * 0.72
+    )
+    vignette.addColorStop(0, 'rgba(3, 8, 14, 0)')
+    vignette.addColorStop(0.7, 'rgba(3, 8, 14, 0.08)')
+    vignette.addColorStop(1, 'rgba(3, 8, 14, 0.42)')
+    this._vignette = vignette
   }
 
   depthToY(depth) {
@@ -55,6 +99,25 @@ export class RunnerRenderer {
   roadWidthAt(depth) {
     const d = clamp(depth, 0, 1.08)
     return this.roadTopWidth + (this.roadBottomWidth - this.roadTopWidth) * Math.pow(d, 0.92)
+  }
+
+  // Continue the same projection below the player plane, so the asphalt,
+  // shoulders, lane markers and collision positions share a single road.
+  roadHalfAtY(y) {
+    const depth = Math.pow(Math.max(0, (y - this.horizonY) / Math.max(1, this.playerY - this.horizonY)), 1 / 1.48)
+    return (this.roadTopWidth + (this.roadBottomWidth - this.roadTopWidth) * Math.pow(depth, 0.92)) / 2
+  }
+
+  _roadOutline(ctx) {
+    ctx.beginPath()
+    for (const side of [-1, 1]) for (let n = 0; n <= 24; n++) {
+      const t = side === -1 ? n / 24 : 1 - n / 24
+      const y = this.horizonY + t * (this.height + 28 - this.horizonY)
+      const x = this.width / 2 + side * this.roadHalfAtY(y)
+      if (side === -1 && n === 0) ctx.moveTo(x, y)
+      else ctx.lineTo(x, y)
+    }
+    ctx.closePath()
   }
 
   laneBoundaryX(boundary, depth) {
@@ -73,15 +136,55 @@ export class RunnerRenderer {
     }
   }
 
+  _syncScene(ctx) {
+    const gameplay = this.gameplay
+    const target = runnerSceneProfile(gameplay)
+    const clock = gameplay.visualTime || 0
+    const reset = !this._sceneProfile || clock < this._sceneClock || clock === 0 || this._sceneMode !== gameplay.submode
+    if (reset || target !== this._sceneProfile) {
+      this._sceneFrom = reset ? null : this._sceneProfile
+      this._sceneProfile = target
+      this._sceneStartedAt = clock
+      this._sceneMode = gameplay.submode
+    }
+    this._sceneClock = clock
+    this._sceneProgress = !this._sceneFrom || gameplay.reducedMotion ? 1 : clamp((clock - this._sceneStartedAt) / 1.2, 0, 1)
+    this.scenery.prepare(this.width, this.height, gameplay.game?.dpr || 1, {
+      horizonY: this.horizonY, roadTopWidth: this.roadTopWidth,
+      playerY: this.playerY, roadBottomWidth: this.roadBottomWidth,
+    }, target)
+    this.scenery.transition = this._sceneProgress
+    if (this._sceneProgress >= 1) {
+      this._sceneFrom = null
+      this.scenery.finishTransition()
+    }
+    const profile = blendRunnerScene(this._sceneFrom, target, this._sceneProgress)
+    const key = `${this.width}|${this.height}|${this.horizonY}|${profile.sky}|${profile.horizon}|${profile.road}`
+    if (this._scenePaintKey !== key) {
+      this._scenePaintKey = key
+      this._skyGradient = ctx.createLinearGradient(0, 0, 0, this.height)
+      this._skyGradient.addColorStop(0, profile.sky)
+      this._skyGradient.addColorStop(1, '#0b121b')
+      this._roadGradient = ctx.createLinearGradient(0, this.horizonY, 0, this.height)
+      this._roadGradient.addColorStop(0, profile.landmark)
+      this._roadGradient.addColorStop(1, profile.road)
+      this._atmosphere = ctx.createLinearGradient(0, this.horizonY * 0.35, 0, this.horizonY + 120)
+      this._atmosphere.addColorStop(0, `${profile.sky}00`)
+      this._atmosphere.addColorStop(1, `${profile.horizon}b0`)
+    }
+    return profile
+  }
+
   render(ctx) {
     this.ensureLayout()
     const gameplay = this.gameplay
-    this._drawBackdrop(ctx)
+    const profile = this._syncScene(ctx)
+    this._drawBackdrop(ctx, profile)
 
     const shake = gameplay.reducedMotion ? 0 : gameplay.shakeOffset()
     ctx.save()
     if (shake) ctx.translate(shake * 0.7, -shake * 0.35)
-    this._drawRoad(ctx)
+    this._drawRoad(ctx, profile)
     this._drawFinishLine(ctx)
     this._drawEnemyThreats(ctx)
     this._drawEntities(ctx)
@@ -91,6 +194,13 @@ export class RunnerRenderer {
     this._drawFusionWave(ctx)
     this._drawPlayer(ctx)
     ctx.restore()
+
+    // Persistent vignette focuses the eye on the play lanes; subtle enough to
+    // coexist with the damage flash below.
+    if (this._vignette) {
+      ctx.fillStyle = this._vignette
+      ctx.fillRect(0, 0, this.width, this.height)
+    }
 
     if (gameplay.damageFlash > 0) {
       const alpha = clamp(gameplay.damageFlash * 0.2, 0, 0.2)
@@ -109,116 +219,159 @@ export class RunnerRenderer {
     }
   }
 
-  _drawBackdrop(ctx) {
+  _drawBackdrop(ctx, profile) {
     ctx.fillStyle = this._skyGradient
     ctx.fillRect(0, 0, this.width, this.height)
 
-    const time = this.gameplay.visualTime
-    const cx = this.width / 2
+    const time = this.motionTime
+    ctx.fillStyle = this._atmosphere
+    ctx.fillRect(0, 0, this.width, this.horizonY + 125)
 
-    // 1. Dynamic sweeping searchlights in night sky
-    ctx.save()
-    for (let s = 0; s < 2; s++) {
-      const angle = s === 0 ? Math.sin(time * 0.65) * 0.48 - 0.22 : Math.cos(time * 0.52) * 0.48 + 0.22
-      const beamBaseX = cx + (s === 0 ? -1 : 1) * (this.roadTopWidth * 1.8)
-      const beamLen = this.height * 0.85
-      const beamEndX = beamBaseX + Math.sin(angle) * beamLen
-      const beamEndY = this.horizonY - Math.cos(angle) * beamLen
+    // Far skyline: baked strip on slow parallax (no per-frame path work),
+    // then fog band A blends its base into the mid-ground below.
+    this.scenery.drawSkyline(ctx, this.gameplay.scrollDistance || 0)
+    this.scenery.drawFogBand(ctx, 'A', profile)
 
-      const beamGrad = ctx.createLinearGradient(beamBaseX, this.horizonY, beamEndX, beamEndY)
-      beamGrad.addColorStop(0, 'rgba(120, 215, 255, 0.12)')
-      beamGrad.addColorStop(0.65, 'rgba(80, 180, 240, 0.04)')
-      beamGrad.addColorStop(1, 'rgba(80, 180, 240, 0)')
-
-      ctx.fillStyle = beamGrad
-      ctx.beginPath()
-      ctx.moveTo(beamBaseX - 16, this.horizonY + 10)
-      ctx.lineTo(beamEndX - 65, beamEndY)
-      ctx.lineTo(beamEndX + 65, beamEndY)
-      ctx.lineTo(beamBaseX + 16, this.horizonY + 10)
-      ctx.closePath()
-      ctx.fill()
-    }
-    ctx.restore()
-
-    // 2. Distant fortress spires & horizon skyline
-    ctx.fillStyle = '#08131d'
+    // Mid-ground towers travel in depth; lower roofs establish the bridge height.
+    this.scenery.drawClusters(ctx, this.gameplay.scrollDistance || 0)
+    this.scenery.drawDestination(ctx)
+    // Connect the playable deck to its distant approach without changing lanes.
+    ctx.fillStyle = profile.landmark
     ctx.beginPath()
-    ctx.moveTo(0, this.horizonY + 28)
-    for (let x = 0; x <= this.width; x += 48) {
-      const isTower = (x / 48) % 4 === 0
-      const towerHeight = isTower ? 42 : 16 + ((x / 48) % 3) * 12
-      ctx.lineTo(x, this.horizonY - towerHeight)
-      if (isTower) {
-        ctx.lineTo(x + 14, this.horizonY - towerHeight)
-        ctx.lineTo(x + 14, this.horizonY - 14)
-      }
-    }
-    ctx.lineTo(this.width, this.horizonY + 50)
-    ctx.closePath()
-    ctx.fill()
+    ctx.moveTo(this.width / 2 - 24, this.horizonY - 38)
+    ctx.lineTo(this.width / 2 + 24, this.horizonY - 38)
+    ctx.lineTo(this.width / 2 + this.roadTopWidth / 2, this.horizonY)
+    ctx.lineTo(this.width / 2 - this.roadTopWidth / 2, this.horizonY)
+    ctx.closePath(); ctx.fill()
+    this._drawRoadBanks(ctx, profile)
 
-    // 3. Midground jagged mountain ramparts
-    ctx.fillStyle = '#101c27'
-    ctx.beginPath()
-    ctx.moveTo(0, this.horizonY + 28)
-    for (let x = 0; x <= this.width; x += 72) {
-      const ridge = 18 + ((x / 72) % 3) * 11
-      ctx.lineTo(x, this.horizonY - ridge)
-    }
-    ctx.lineTo(this.width, this.horizonY + 50)
-    ctx.closePath()
-    ctx.fill()
+    // Side landmarks provide scale and parallax. Their depth is driven by
+    // the same scroll accumulator as the road markings and enemy entities.
+    this._drawRoadsideLandmarks(ctx, profile)
 
-    // 4. Side speed lines & particle tracks
-    const speedRatio = (this.gameplay.section?.advanceSpeed || 0.17) / 0.17
-    for (let i = 0; i < 16; i++) {
-      const side = i % 2 === 0 ? -1 : 1
-      const track = (i * 0.125 + time * 0.08 * speedRatio) % 1
-      const y = this.horizonY + Math.pow(track, 1.7) * (this.height - this.horizonY)
-      const edge = this.width / 2 + side * (this.roadWidthAt(track) / 2 + 18 + track * 95)
-      ctx.strokeStyle = `rgba(110, 185, 225, ${(0.06 + track * 0.18).toFixed(3)})`
-      ctx.lineWidth = 1 + track * 2.5
-      ctx.beginPath()
-      ctx.moveTo(edge, y)
-      ctx.lineTo(edge + side * (20 + track * 55), y + 30 + track * 90)
-      ctx.stroke()
-    }
+    // Ambient motes: pooled, drift on the same scroll clock as everything
+    // else, kept low-alpha and outside the road so they never mask threats.
+    const scrollNow = this.gameplay.scrollDistance || 0
+    this.scenery.updateMotes(scrollNow - this._lastScroll)
+    this._lastScroll = scrollNow
+    if (!this.gameplay.reducedMotion && profile.theme === 'rift') this.scenery.drawMotes(ctx, time, profile, this._roadWidthAt)
   }
 
-  _drawRoad(ctx) {
+  _drawRoadBanks(ctx, profile) {
     const cx = this.width / 2
-    const bottomY = this.height + 28
-    const time = this.gameplay.visualTime
+    ctx.save()
+    for (const side of [-1, 1]) {
+      const bank = 12
+      // Outer concrete/steel fascia continues below the deck, visibly supporting it.
+      ctx.fillStyle = '#0c1729'
+      ctx.beginPath()
+      for (const lower of [false, true]) for (let n = 0; n <= 24; n++) {
+        const t = lower ? 1 - n / 24 : n / 24
+        const y = this.horizonY + t * (this.height + 28 - this.horizonY)
+        const x = cx + side * (this.roadHalfAtY(y) + 18 + t * 43)
+        const sy = y + (lower ? 12 + t * 70 : 0)
+        if (!lower && n === 0) ctx.moveTo(x, sy)
+        else ctx.lineTo(x, sy)
+      }
+      ctx.closePath(); ctx.fill()
+      ctx.fillStyle = '#25354a'
+      ctx.beginPath()
+      for (const outer of [false, true]) for (let n = 0; n <= 24; n++) {
+        const t = outer ? 1 - n / 24 : n / 24
+        const y = this.horizonY + t * (this.height + 28 - this.horizonY)
+        const offset = 4 + t * bank + (outer ? 14 + t * 30 : 0)
+        const x = cx + side * (this.roadHalfAtY(y) + offset)
+        if (!outer && n === 0) ctx.moveTo(x, y)
+        else ctx.lineTo(x, y)
+      }
+      ctx.closePath(); ctx.fill()
+      ctx.strokeStyle = profile.accent + '75'; ctx.lineWidth = 2
+      ctx.beginPath()
+      for (let n = 0; n <= 24; n++) {
+        const t = n / 24, y = this.horizonY + t * (this.height + 28 - this.horizonY)
+        const x = cx + side * (this.roadHalfAtY(y) + 10 + t * bank)
+        if (n === 0) ctx.moveTo(x, y)
+        else ctx.lineTo(x, y)
+      }
+      ctx.stroke()
+    }
+    ctx.restore()
+  }
 
+  _drawRoadsideLandmarks(ctx, profile) {
+    if (this._sceneFrom && this._sceneProgress < 1) {
+      this._drawThemeProps(ctx, this._sceneFrom, 1 - this._sceneProgress)
+      this._drawThemeProps(ctx, this._sceneProfile, this._sceneProgress)
+    } else this._drawThemeProps(ctx, profile, 1)
+  }
+
+  _drawThemeProps(ctx, profile, opacity) {
+    if (opacity <= 0) return
+    const scroll = this.gameplay.scrollDistance || 0
+    for (let i = 0; i < 16; i++) {
+      const side = i % 2 === 0 ? -1 : 1
+      const kind = Math.floor(i / 2) % 4
+      const depth = (i * 0.137 + scroll * SCROLL_DEPTH_RATE) % 1
+      const y = this.depthToY(depth)
+      const x = this.width / 2 + side * (this.roadWidthAt(depth) / 2 + 10 + depth * 24)
+      const unit = this.baseUnit * (0.16 + depth * 0.62)
+      ctx.save(); ctx.translate(x, y); ctx.scale(unit, unit)
+      ctx.globalAlpha = opacity * Math.min(1, depth * 12) * (0.35 + depth * 0.6)
+      ctx.lineWidth = 0.055; ctx.lineCap = 'butt'
+      ctx.fillStyle = '#152237'; ctx.strokeStyle = profile.prop
+      if (kind === 0) {
+        // Slim, outward-facing lamps keep their arms outside the playfield.
+        ctx.fillRect(-0.055, -1.75, 0.11, 1.9)
+        ctx.fillStyle = profile.prop
+        ctx.fillRect(-0.055, -1.75, 0.035, 1.9)
+        ctx.fillRect(Math.min(0, side * 0.55), -1.75, 0.55, 0.12)
+        ctx.fillStyle = profile.accent
+        ctx.fillRect(Math.min(0, side * 0.5), -1.64, 0.48, 0.055)
+      } else if (kind === 1) {
+        // Segmented parapet reflectors, visually attached to the bridge.
+        ctx.fillRect(-0.08, -0.44, 0.16, 0.57)
+        ctx.fillStyle = profile.prop; ctx.fillRect(-0.08, -0.44, 0.16, 0.05)
+        ctx.fillStyle = profile.accent; ctx.fillRect(-0.05, -0.37, 0.1, 0.16)
+      } else if (kind === 2) {
+        ctx.fillRect(-0.18, -0.5, 0.36, 0.63)
+        ctx.fillStyle = profile.prop; ctx.fillRect(-0.18, -0.5, 0.36, 0.04)
+        for (let n = 0; n < 3; n++) ctx.fillRect(-0.1, -0.28 + n * 0.09, 0.2, 0.02)
+        ctx.fillStyle = profile.lamp; ctx.fillRect(0.07, -0.41, 0.05, 0.05)
+      } else {
+        ctx.fillRect(-0.04, -0.95, 0.08, 1.08)
+        ctx.fillStyle = '#19293e'; ctx.fillRect(-0.24, -0.97, 0.48, 0.34)
+        ctx.fillStyle = profile.sign + '95'; ctx.fillRect(-0.17, -0.9, 0.34, 0.035)
+        ctx.fillRect(-0.17, -0.8, 0.2, 0.025)
+      }
+      ctx.restore()
+    }
+  }
+  _drawRoad(ctx, profile) {
     // 1. Road base
     ctx.fillStyle = this._roadGradient
-    ctx.beginPath()
-    ctx.moveTo(cx - this.roadTopWidth / 2, this.horizonY)
-    ctx.lineTo(cx + this.roadTopWidth / 2, this.horizonY)
-    ctx.lineTo(cx + this.roadBottomWidth / 2, bottomY)
-    ctx.lineTo(cx - this.roadBottomWidth / 2, bottomY)
-    ctx.closePath()
+    this._roadOutline(ctx)
     ctx.fill()
 
-    // 2. In-world holographic lane telemetry (hazard chevron strips & energy corridors)
+    if (this._sceneFrom && this._sceneProgress < 1) {
+      this._drawRoadMaterial(ctx, this._sceneFrom, 1 - this._sceneProgress)
+      this._drawRoadMaterial(ctx, this._sceneProfile, this._sceneProgress)
+    } else this._drawRoadMaterial(ctx, profile, 1)
+
+    // 2. Object-local threat markers and the player's location ring.
     this._drawInWorldTelemetry(ctx)
 
     // 3. Glowing neon outer guardrails
-    const railPulse = 0.35 + Math.sin(time * 6) * 0.15
-    ctx.strokeStyle = `rgba(80, 210, 245, ${railPulse.toFixed(3)})`
-    ctx.lineWidth = 3
-    ctx.beginPath()
-    ctx.moveTo(cx - this.roadTopWidth / 2, this.horizonY)
-    ctx.lineTo(cx - this.roadBottomWidth / 2, bottomY)
-    ctx.moveTo(cx + this.roadTopWidth / 2, this.horizonY)
-    ctx.lineTo(cx + this.roadBottomWidth / 2, bottomY)
+    const railPulse = 0.24 + (this.gameplay.isFeverActive ? 0.12 : 0)
+    ctx.strokeStyle = profile.accent
+    ctx.globalAlpha = clamp(railPulse, 0.1, 0.42)
+    ctx.lineWidth = 2
+    this._roadOutline(ctx)
     ctx.stroke()
+    ctx.globalAlpha = 1
 
     // 4. Moving lane dashed dividers
-    const speedRatio = (this.gameplay.section?.advanceSpeed || 0.17) / 0.17
-    const speedMult = (this.gameplay.isFeverActive ? 1.6 : 1) * speedRatio
-    const offset = (time * 0.28 * speedMult) % 0.14
+    const speedMult = this.gameplay.isFeverActive ? 1.6 : 1
+    const offset = ((this.gameplay.scrollDistance || 0) * 1.55 * speedMult) % 0.14
     for (let boundary = 1; boundary <= 2; boundary++) {
       for (let depth = -0.14 + offset; depth < 1.06; depth += 0.14) {
         const a = clamp(depth, 0, 1.06)
@@ -235,108 +388,91 @@ export class RunnerRenderer {
       }
     }
 
-    // 5. Horizontal grid speed lines
-    for (let depth = offset; depth < 1.05; depth += 0.14) {
-      const y = this.depthToY(depth)
-      const half = this.roadWidthAt(depth) * 0.48
-      ctx.strokeStyle = `rgba(114, 175, 215, ${(0.03 + depth * 0.06).toFixed(3)})`
-      ctx.lineWidth = 1
-      ctx.beginPath()
-      ctx.moveTo(cx - half, y)
-      ctx.lineTo(cx + half, y)
-      ctx.stroke()
-    }
   }
 
-  _drawInWorldTelemetry(ctx) {
-    const time = this.gameplay.visualTime
-    const telemetry = this.gameplay._getLaneTelemetry()
-    const targetLane = this.gameplay.targetLane
-    const currentLane = this.gameplay.currentLane
-
-    for (let lane = 0; lane < 3; lane++) {
-      const info = telemetry[lane]
-      if (!info) continue
-
-      // Danger / Warning Hazard Floor Projections
-      if (info.status === 'danger' || info.status === 'warning') {
-        const isDanger = info.status === 'danger'
-        const baseColor = isDanger ? 'rgba(240, 70, 70,' : 'rgba(245, 170, 50,'
-        const pulse = 0.15 + Math.sin(time * 10 + lane) * 0.08
-
-        // Draw glowing danger corridor
-        const d0 = 0.32
-        const d1 = 0.94
-        ctx.fillStyle = `${baseColor} ${pulse.toFixed(3)})`
-        ctx.beginPath()
-        ctx.moveTo(this.laneBoundaryX(lane, d0), this.depthToY(d0))
-        ctx.lineTo(this.laneBoundaryX(lane + 1, d0), this.depthToY(d0))
-        ctx.lineTo(this.laneBoundaryX(lane + 1, d1), this.depthToY(d1))
-        ctx.lineTo(this.laneBoundaryX(lane, d1), this.depthToY(d1))
-        ctx.closePath()
-        ctx.fill()
-
-        // Draw animated hazard chevrons pointing downward (towards player)
-        const chevOffset = (time * 0.4) % 0.2
-        for (let cd = 0.4 + chevOffset; cd < 0.9; cd += 0.18) {
-          const cy = this.depthToY(cd)
-          const cxLane = this.lanePositionX(lane, cd)
-          const span = (this.roadWidthAt(cd) / 3) * 0.36
-          ctx.strokeStyle = `${baseColor} ${(0.35 + cd * 0.45).toFixed(3)})`
-          ctx.lineWidth = 1.8 + cd * 2.5
-          ctx.beginPath()
-          ctx.moveTo(cxLane - span, cy - 8 * cd)
-          ctx.lineTo(cxLane, cy + 6 * cd)
-          ctx.lineTo(cxLane + span, cy - 8 * cd)
-          ctx.stroke()
+  _drawRoadMaterial(ctx, profile, opacity) {
+    const scroll = this.gameplay.scrollDistance || 0
+    const cx = this.width / 2
+    ctx.save()
+    ctx.globalAlpha = opacity * 0.18
+    ctx.strokeStyle = profile.prop
+    ctx.lineWidth = 1
+    for (let n = 0; n < 9; n++) {
+      const depth = ((n / 9 + scroll * SCROLL_DEPTH_RATE) % 1)
+      const next = Math.min(1.04, depth + 0.075)
+      const y = this.depthToY(depth), half = this.roadWidthAt(depth) / 2
+      if (profile.material === 'paving' || profile.material === 'metal') {
+        ctx.beginPath(); ctx.moveTo(cx - half * 0.96, y); ctx.lineTo(cx + half * 0.96, y); ctx.stroke()
+        if (profile.material === 'paving') for (let tile = 0; tile < 6; tile++) {
+          const lateral = (tile + (n % 2) * 0.5) / 3 - 1
+          ctx.beginPath(); ctx.moveTo(cx + lateral * half, y); ctx.lineTo(cx + lateral * this.roadWidthAt(next) / 2, this.depthToY(next)); ctx.stroke()
         }
-      } else if (lane !== currentLane && lane !== targetLane) {
-        // Subtle forward green arrows for open safe lanes
-        const arrowOffset = (-time * 0.3) % 0.25
-        for (let cd = 0.45 + arrowOffset; cd < 0.85; cd += 0.22) {
-          if (cd < 0.35 || cd > 0.9) continue
-          const cy = this.depthToY(cd)
-          const cxLane = this.lanePositionX(lane, cd)
-          const span = (this.roadWidthAt(cd) / 3) * 0.24
-          ctx.strokeStyle = `rgba(110, 235, 160, ${(0.08 + cd * 0.14).toFixed(3)})`
-          ctx.lineWidth = 1.2 + cd * 1.5
-          ctx.beginPath()
-          ctx.moveTo(cxLane - span, cy + 6 * cd)
-          ctx.lineTo(cxLane, cy - 6 * cd)
-          ctx.lineTo(cxLane + span, cy + 6 * cd)
-          ctx.stroke()
+        else {
+          ctx.beginPath(); ctx.moveTo(cx - half * 0.96, y + 3); ctx.lineTo(cx + half * 0.96, y + 3); ctx.stroke()
+        }
+      } else for (const side of [-1, 1]) {
+        if (profile.material === 'asphalt') {
+          ctx.lineWidth = 1 + depth * 2
+          ctx.beginPath(); ctx.moveTo(cx + side * half * 0.94, y); ctx.lineTo(cx + side * this.roadWidthAt(next) * 0.47, this.depthToY(next)); ctx.stroke()
+        } else {
+          ctx.beginPath(); ctx.moveTo(cx + side * half * 0.98, y); ctx.lineTo(cx + side * half * 0.85, y + 4 + depth * 9); ctx.lineTo(cx + side * half * 0.9, y + 8 + depth * 15); ctx.lineTo(cx + side * half * 0.77, y + 12 + depth * 20); ctx.stroke()
         }
       }
     }
+    ctx.restore()
+  }
 
-    // Player Lane Energy Chassis Aura
-    const selected = targetLane
-    const d0 = 0.72
-    const d1 = 1.05
-    const fever = this.gameplay.isFeverActive
-    const chassisColor = fever ? 'rgba(255, 215, 80,' : 'rgba(115, 230, 110,'
-    const pulse = 0.12 + Math.sin(time * 8) * 0.05
-
-    ctx.fillStyle = `${chassisColor} ${pulse.toFixed(3)})`
+  _drawInWorldTelemetry(ctx) {
+    const gameplay = this.gameplay
+    for (const entity of gameplay.entities) {
+      if (!entity.active || !['enemy', 'hazard', 'obstacle'].includes(entity.kind) || entity.depth < 0.2) continue
+      const speed = gameplay._effectiveSpeed?.(entity) ?? entity.speed ?? 0.17
+      const remaining = speed > 0 ? (RUNNER_COLLISION_DEPTH - entity.depth) / speed : Infinity
+      const urgency = clamp(1 - remaining / 2.4, 0, 1)
+      const imminent = remaining < 0.85
+      if (imminent) this._drawDangerZone(ctx, entity.lane, entity.depth - 0.025, Math.min(1.03, entity.depth + 0.075), urgency)
+      // A small bracket belongs to the object, never to the entire lane.
+      const point = this.project(entity.lane, entity.depth)
+      const size = this.baseUnit * point.scale * (entity.renderScale || 1)
+      ctx.save()
+      ctx.strokeStyle = imminent ? '#ff8174' : '#d2ad73'
+      ctx.globalAlpha = 0.24 + urgency * 0.6
+      ctx.lineWidth = imminent ? 2.5 : 1.5
+      ctx.beginPath()
+      ctx.moveTo(point.x - size * 0.65, point.y + size * 0.25)
+      ctx.lineTo(point.x - size * 0.65, point.y + size * 0.53)
+      ctx.lineTo(point.x + size * 0.65, point.y + size * 0.53)
+      ctx.lineTo(point.x + size * 0.65, point.y + size * 0.25)
+      ctx.stroke()
+      ctx.restore()
+    }
+    this._drawGroundFires(ctx)
+    // The location ring follows the actual player during a lane change.
+    const px = this.lanePositionX(gameplay.lanePosition)
+    ctx.save()
+    ctx.strokeStyle = gameplay.isFeverActive ? '#ffdc83' : '#96dfd6'
+    ctx.globalAlpha = 0.7
+    ctx.lineWidth = 2
     ctx.beginPath()
-    ctx.moveTo(this.laneBoundaryX(selected, d0), this.depthToY(d0))
-    ctx.lineTo(this.laneBoundaryX(selected + 1, d0), this.depthToY(d0))
-    ctx.lineTo(this.laneBoundaryX(selected + 1, d1), this.depthToY(d1))
-    ctx.lineTo(this.laneBoundaryX(selected, d1), this.depthToY(d1))
+    ctx.ellipse(px, this.playerY + 8, this.baseUnit * 1.08, this.baseUnit * 0.38, 0, 0, TAU)
+    ctx.stroke()
+    ctx.restore()
+  }
+
+  _drawDangerZone(ctx, lane, farDepth, nearDepth, urgency) {
+    const far = clamp(farDepth, 0, 1.05)
+    const near = clamp(nearDepth, far, 1.05)
+    ctx.save()
+    ctx.fillStyle = 'rgba(235, 72, 65, ' + (0.08 + urgency * 0.14).toFixed(3) + ')'
+    ctx.strokeStyle = 'rgba(255, 127, 111, ' + (0.4 + urgency * 0.5).toFixed(3) + ')'
+    ctx.lineWidth = 1.5 + urgency
+    ctx.beginPath()
+    ctx.moveTo(this.laneBoundaryX(lane, far) + 5, this.depthToY(far))
+    ctx.lineTo(this.laneBoundaryX(lane + 1, far) - 5, this.depthToY(far))
+    ctx.lineTo(this.laneBoundaryX(lane + 1, near) - 5, this.depthToY(near))
+    ctx.lineTo(this.laneBoundaryX(lane, near) + 5, this.depthToY(near))
     ctx.closePath()
     ctx.fill()
-
-    this._drawGroundFires(ctx)
-
-    // Energy Chassis Ring under the player
-    const px = this.lanePositionX(this.gameplay.lanePosition, RUNNER_PLAYER_DEPTH)
-    const py = this.playerY
-    const pr = this.baseUnit * (fever ? 1.25 : 1.05)
-    ctx.save()
-    ctx.strokeStyle = fever ? 'rgba(255, 220, 90, 0.75)' : 'rgba(125, 240, 140, 0.55)'
-    ctx.lineWidth = fever ? 3 : 2
-    ctx.beginPath()
-    ctx.ellipse(px, py + 8, pr * 1.15, pr * 0.42, 0, 0, TAU)
     ctx.stroke()
     ctx.restore()
   }
@@ -346,7 +482,7 @@ export class RunnerRenderer {
       const point = this.project(fire.lane, fire.depth)
       const size = this.baseUnit * point.scale * 1.15
       const alpha = Math.min(0.5, fire.duration / 1.0)
-      const pulse = 1 + Math.sin(this.gameplay.visualTime * 8 + fire.id) * 0.12
+      const pulse = 1 + Math.sin(this.motionTime * 8 + fire.id) * 0.12
       ctx.save()
       ctx.translate(point.x, point.y)
       const grad = ctx.createRadialGradient(0, 0, 2, 0, 0, size * 0.75)
@@ -389,13 +525,12 @@ export class RunnerRenderer {
       const point = this.project(entity.lane, entity.depth)
       const size = this.baseUnit * point.scale
       const selected = entity.lane === gameplay.targetLane
-      const faded = clamp(0.4 + point.scale * 0.55, 0, 1)
 
       ctx.save()
       ctx.translate(point.x, point.y)
 
       // 立杆
-      ctx.strokeStyle = `rgba(16, 24, 32, ${0.85 * faded})`
+      ctx.strokeStyle = '#708894'
       ctx.lineWidth = Math.max(2, size * 0.08)
       ctx.beginPath()
       ctx.moveTo(0, size * 0.55)
@@ -403,13 +538,14 @@ export class RunnerRenderer {
       ctx.stroke()
 
       // 牌面
-      const w = size * (selected ? 1.3 : 1.05)
-      const h = size * 0.62
-      const top = -size * 1.28
-      ctx.fillStyle = `rgba(8, 14, 20, ${0.84 * faded})`
+      const w = Math.min(148, this.roadWidthAt(entity.depth) / 3 - 12)
+      const stacked = w < 128
+      const h = stacked ? 66 : 48
+      const top = -h - size * 0.15
+      ctx.fillStyle = '#0c1b26'
       ctx.fillRect(-w / 2, top, w, h)
       ctx.strokeStyle = route.color
-      ctx.lineWidth = selected ? 3.5 : 2
+      ctx.lineWidth = selected ? 2 : 1
       ctx.strokeRect(-w / 2, top, w, h)
       if (selected) {
         ctx.fillStyle = route.color
@@ -419,12 +555,15 @@ export class RunnerRenderer {
       // 主标题 + 最短风险—收益副标签：以真实机制为准，不做营销措辞
       ctx.textAlign = 'center'
       ctx.textBaseline = 'middle'
-      ctx.fillStyle = selected ? '#f4fcff' : `rgba(226, 238, 244, ${0.84 * faded})`
-      ctx.font = `800 ${Math.max(9, Math.min(15, size * 0.24))}px "Segoe UI", "PingFang SC", sans-serif`
-      ctx.fillText(route.label, 0, top + h * 0.32)
-      ctx.fillStyle = route.color
-      ctx.font = `700 ${Math.max(7, Math.min(11, size * 0.17))}px "Segoe UI", "PingFang SC", sans-serif`
-      ctx.fillText(`${route.riskLabel} · ${route.rewardLabel}`, 0, top + h * 0.72)
+      ctx.fillStyle = selected ? '#f4fcff' : '#c5d5df'
+      ctx.font = '700 14px "Segoe UI", "PingFang SC", sans-serif'
+      ctx.fillText(w < 76 ? route.shortLabel : route.label, 0, top + 16)
+      ctx.fillStyle = '#b5cbd4'
+      ctx.font = '500 12px "Segoe UI", "PingFang SC", sans-serif'
+      if (stacked) {
+        ctx.fillText(route.riskLabel, 0, top + 35)
+        ctx.fillText(route.rewardLabel, 0, top + 52)
+      } else ctx.fillText(`${route.riskLabel} · ${route.rewardLabel}`, 0, top + 34)
       ctx.restore()
     }
   }
@@ -432,51 +571,41 @@ export class RunnerRenderer {
   _drawEnemyThreats(ctx) {
     const gameplay = this.gameplay
     for (const entity of gameplay.entities) {
-      if (!entity.active || !entity.attacking) continue
-      const progress = entity.attackDelay > 0 ? 1 - entity.attackTimer / entity.attackDelay : 1
+      if (!entity.active) continue
+      if (entity.charging || entity.chargeTelegraph > 0) {
+        const urgency = entity.charging ? 1 : clamp(1 - entity.chargeTelegraph / entity.chargeDelay, 0, 1)
+        this._drawDangerZone(ctx, entity.lane, entity.depth, RUNNER_COLLISION_DEPTH + 0.04, urgency)
+      }
+      if (!entity.attacking) continue
+      const progress = entity.attackDelay > 0 ? clamp(1 - entity.attackTimer / entity.attackDelay, 0, 1) : 1
       if (entity.behavior === 'archer') {
         const from = this.project(entity.lane, entity.depth)
-        const targetX = this.lanePositionX(entity.attackLane, RUNNER_COLLISION_DEPTH)
-        const targetY = this.depthToY(RUNNER_COLLISION_DEPTH)
+        const target = this.project(entity.attackLane, RUNNER_COLLISION_DEPTH)
         ctx.save()
-        ctx.strokeStyle = `rgba(143, 215, 172, ${(0.22 + progress * 0.5).toFixed(3)})`
-        ctx.lineWidth = 1.5 + progress * 1.5
-        ctx.setLineDash([7, 6])
+        ctx.strokeStyle = 'rgba(255, 138, 117, ' + (0.35 + progress * 0.5).toFixed(3) + ')'
+        ctx.lineWidth = 1.5
+        ctx.setLineDash([5, 7])
         ctx.beginPath()
         ctx.moveTo(from.x, from.y)
-        ctx.lineTo(targetX, targetY)
+        ctx.lineTo(target.x, target.y)
         ctx.stroke()
         ctx.setLineDash([])
-        ctx.strokeStyle = `rgba(214, 245, 226, ${(0.4 + progress * 0.5).toFixed(3)})`
         ctx.beginPath()
-        ctx.arc(targetX, targetY, 8 + progress * 8, 0, TAU)
+        ctx.ellipse(target.x, target.y + 6, 18 + progress * 10, 8 + progress * 5, 0, 0, TAU)
         ctx.stroke()
         ctx.restore()
       } else if (entity.behavior === 'mage') {
+        // The cast hits the player plane, not the full road between caster
+        // and player. Each marked lane matches _detonateMageCast exactly.
         for (const lane of entity.attackLanes || []) {
-          const nearDepth = RUNNER_COLLISION_DEPTH + 0.04
-          const farDepth = Math.min(0.92, entity.depth + 0.08)
-          ctx.fillStyle = `rgba(193, 105, 224, ${(0.08 + progress * 0.13).toFixed(3)})`
-          ctx.beginPath()
-          ctx.moveTo(this.laneBoundaryX(lane, farDepth), this.depthToY(farDepth))
-          ctx.lineTo(this.laneBoundaryX(lane + 1, farDepth), this.depthToY(farDepth))
-          ctx.lineTo(this.laneBoundaryX(lane + 1, nearDepth), this.depthToY(nearDepth))
-          ctx.lineTo(this.laneBoundaryX(lane, nearDepth), this.depthToY(nearDepth))
-          ctx.closePath()
-          ctx.fill()
-
-          const center = this.project(lane, RUNNER_COLLISION_DEPTH - 0.045)
-          ctx.strokeStyle = `rgba(229, 163, 248, ${(0.34 + progress * 0.55).toFixed(3)})`
-          ctx.lineWidth = 1.5 + progress * 2
-          ctx.beginPath()
-          ctx.arc(center.x, center.y, 13 + progress * 16, 0, TAU)
-          ctx.stroke()
-          ctx.beginPath()
-          ctx.moveTo(center.x - 10, center.y - 10)
-          ctx.lineTo(center.x + 10, center.y + 10)
-          ctx.moveTo(center.x + 10, center.y - 10)
-          ctx.lineTo(center.x - 10, center.y + 10)
-          ctx.stroke()
+          this._drawDangerZone(ctx, lane, RUNNER_COLLISION_DEPTH - 0.09, RUNNER_COLLISION_DEPTH + 0.045, progress)
+          const target = this.project(lane, RUNNER_COLLISION_DEPTH)
+          ctx.save()
+          ctx.fillStyle = '#ffb4a5'
+          ctx.font = '700 16px "Segoe UI", sans-serif'
+          ctx.textAlign = 'center'
+          ctx.fillText('!', target.x, target.y + 6)
+          ctx.restore()
         }
       }
     }
@@ -507,17 +636,22 @@ export class RunnerRenderer {
 
   _drawEntities(ctx) {
     const list = this.gameplay.entities
+    let priorityTarget = null
+    for (const entity of list) {
+      if (entity.active && entity.kind === 'enemy' && (entity.elite || entity.boss) && (!priorityTarget || entity.depth > priorityTarget.depth)) priorityTarget = entity
+    }
     this._drawSupportLinks(ctx, list)
     for (let i = list.length - 1; i >= 0; i--) {
       const entity = list[i]
-      if (!entity.active) continue
+      if (!entity.active || entity.kind === 'fork') continue
       const point = this.project(entity.lane, entity.depth)
       const size = this.baseUnit * point.scale * (entity.renderScale || 1)
-      if (entity.behavior === 'charge' && entity.chargeTelegraph > 0) {
-        this._drawChargeWarning(ctx, entity, point, size)
-      }
       ctx.save()
       ctx.translate(point.x, point.y)
+      ctx.fillStyle = 'rgba(1, 7, 13, 0.42)'
+      ctx.beginPath()
+      ctx.ellipse(0, size * 0.43, size * 0.58, size * 0.17, 0, 0, TAU)
+      ctx.fill()
       if (entity.hitFlash > 0) {
         ctx.fillStyle = `rgba(255, 255, 255, ${Math.min(0.38, entity.hitFlash * 3).toFixed(3)})`
         ctx.beginPath()
@@ -532,14 +666,27 @@ export class RunnerRenderer {
       else if (entity.kind === 'gate') this._drawGate(ctx, entity, size)
       else if (entity.behavior === 'barrel') this._drawBarrel(ctx, entity, size)
       else if (entity.behavior === 'laser_gate') this._drawLaserGate(ctx, entity, size)
-      else if (entity.kind === 'hazard') this._drawBarrier(ctx, entity, size)
+      else if (entity.kind === 'hazard' || entity.kind === 'obstacle') this._drawBarrier(ctx, entity, size)
       else this._drawEnemy(ctx, entity, size)
 
       const activeTarget = entity.lane === this.gameplay.occupiedLane && !this.gameplay.isSwitching
       const mutationArmed =
         (entity.kind !== 'mutation' && entity.kind !== 'secondary_mutation') ||
         entity.depth >= entity.armedDepth
-      if (mutationArmed && (entity.hp < entity.maxHp || activeTarget)) this._drawHealth(ctx, entity, size)
+      const priority = entity === priorityTarget && entity.depth > 0.28
+      if (mutationArmed && (entity.hp < entity.maxHp || activeTarget || priority)) this._drawHealth(ctx, entity, size)
+      if (priority && !entity.boss) {
+        const label = entity.behavior === 'convoy' ? '运宝车 · 击破奖励' : entity.name
+        const labelY = -size * 0.78 - 14
+        ctx.font = '700 12px "Segoe UI", "PingFang SC", sans-serif'
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        const labelWidth = ctx.measureText(label).width + 14
+        ctx.fillStyle = 'rgba(8, 17, 25, 0.94)'
+        ctx.fillRect(-labelWidth / 2, labelY - 10, labelWidth, 20)
+        ctx.fillStyle = '#f4d79c'
+        ctx.fillText(label, 0, labelY)
+      }
       if (activeTarget && entity.depth > 0.28) this._drawTarget(ctx, entity, size)
       if (entity.corrosionStacks > 0) this._drawCorrosionStacks(ctx, entity, size)
       ctx.restore()
@@ -567,37 +714,47 @@ export class RunnerRenderer {
     ctx.restore()
   }
 
-  _drawChargeWarning(ctx, entity, point, size) {
-    const ratio = entity.chargeDelay > 0 ? entity.chargeTelegraph / entity.chargeDelay : 0
-    const pulse = 0.18 + (1 - ratio) * 0.28
-    ctx.save()
-    ctx.strokeStyle = `rgba(232, 101, 77, ${pulse.toFixed(3)})`
-    ctx.lineWidth = 2 + (1 - ratio) * 2
-    ctx.setLineDash([10, 10])
-    ctx.beginPath()
-    ctx.moveTo(point.x, point.y + size * 0.45)
-    ctx.lineTo(this.lanePositionX(entity.lane), this.playerY - this.baseUnit * 0.7)
-    ctx.stroke()
-    ctx.setLineDash([])
-    ctx.restore()
-  }
-
   _drawEnemy(ctx, entity, size) {
-    const bob = Math.sin(this.gameplay.visualTime * 8 + entity.id) * size * 0.035
-    ctx.translate(0, bob)
-    if (entity.elite) {
-      ctx.strokeStyle = entity.type === 'gold_convoy' ? '#ffd700' : 'rgba(242, 170, 100, 0.75)'
-      ctx.lineWidth = Math.max(1.5, size * 0.035)
-      ctx.beginPath()
-      ctx.arc(0, 0, size * 0.7, 0, TAU)
-      ctx.stroke()
+    if (entity.behavior === 'convoy') {
+      this._drawConvoy(ctx, size)
+      return
     }
-    const walkFrame = entity.hitFlash > 0 ? 4 : Math.floor(this.gameplay.visualTime * 8 + entity.id) % 4
-    const sprite = entity.sprite ? `${entity.sprite.slice(0, -1)}${walkFrame}` : null
-    if (!sprite || !this.assets.draw(ctx, sprite, 0, 0, size * 1.25, size * 1.25)) {
-      ctx.fillStyle = entity.color
+    const bob = this.gameplay.reducedMotion ? 0 : Math.sin(this.gameplay.visualTime * 8 + entity.id) * size * 0.035
+    ctx.translate(0, bob)
+    const walkFrame = entity.hitFlash > 0 ? 4 : Math.floor(this.motionTime * 8 + entity.id) % 4
+    const role = entity.type === 'carrier_boss' ? 'boss_knight'
+      : entity.sprite?.replace(/^char_/, '').replace(/_\d+$/, '').replace(/^ranger$/, 'archer')
+    const sprite = role ? `cyber_${role}_${walkFrame}` : null
+    if (!sprite || !this.assets.draw(ctx, sprite, 0, 0, size * 1.55, size * 1.55)) {
+      // Fallback enemies retain a head, torso, feet and eyes, never a coin.
+      ctx.fillStyle = entity.color || '#b67e92'
+      ctx.strokeStyle = '#17202d'
+      ctx.lineWidth = Math.max(2, size * 0.055)
       ctx.beginPath()
-      ctx.arc(0, 0, size * 0.48, 0, TAU)
+      ctx.moveTo(-size * 0.3, -size * 0.22)
+      ctx.lineTo(0, -size * 0.51)
+      ctx.lineTo(size * 0.3, -size * 0.22)
+      ctx.lineTo(size * 0.42, size * 0.25)
+      ctx.lineTo(size * 0.15, size * 0.46)
+      ctx.lineTo(0, size * 0.28)
+      ctx.lineTo(-size * 0.15, size * 0.46)
+      ctx.lineTo(-size * 0.42, size * 0.25)
+      ctx.closePath()
+      ctx.fill()
+      ctx.stroke()
+      ctx.fillStyle = '#faf2e1'
+      ctx.fillRect(-size * 0.19, -size * 0.16, size * 0.38, size * 0.1)
+      ctx.fillStyle = '#182330'
+      ctx.fillRect(-size * 0.11, -size * 0.16, size * 0.06, size * 0.1)
+      ctx.fillRect(size * 0.07, -size * 0.16, size * 0.06, size * 0.1)
+    }
+    if (entity.elite) {
+      ctx.fillStyle = '#efc584'
+      ctx.beginPath()
+      ctx.moveTo(-size * 0.15, -size * 0.6)
+      ctx.lineTo(0, -size * 0.76)
+      ctx.lineTo(size * 0.15, -size * 0.6)
+      ctx.closePath()
       ctx.fill()
     }
     if (entity.behavior === 'shield') this._drawShield(ctx, size)
@@ -607,8 +764,51 @@ export class RunnerRenderer {
     if (entity.boss) this._drawBossAura(ctx, size)
   }
 
+  _drawConvoy(ctx, size) {
+    ctx.save()
+    ctx.scale(size, size)
+    ctx.lineJoin = 'round'
+    ctx.lineWidth = 0.055
+    ctx.strokeStyle = '#17202b'
+    // Four rubber wheels flank a cool steel chassis.
+    for (const x of [-0.48, 0.48]) {
+      for (const y of [-0.12, 0.39]) {
+        ctx.fillStyle = '#17202b'
+        ctx.fillRect(x - 0.105, y - 0.14, 0.21, 0.29)
+        ctx.fillStyle = '#8493a2'
+        ctx.fillRect(x - 0.045, y - 0.08, 0.09, 0.16)
+      }
+    }
+    ctx.fillStyle = '#52687b'
+    ctx.fillRect(-0.45, -0.23, 0.9, 0.78)
+    ctx.strokeRect(-0.45, -0.23, 0.9, 0.78)
+    ctx.fillStyle = '#91a8b9'
+    ctx.fillRect(-0.45, 0.42, 0.9, 0.1)
+    // A raised chest, bevelled lid, straps and central lock.
+    ctx.fillStyle = '#b77730'
+    ctx.fillRect(-0.34, -0.4, 0.68, 0.55)
+    ctx.strokeRect(-0.34, -0.4, 0.68, 0.55)
+    ctx.fillStyle = '#edc66c'
+    ctx.beginPath()
+    ctx.moveTo(-0.34, -0.4)
+    ctx.lineTo(-0.23, -0.59)
+    ctx.lineTo(0.23, -0.59)
+    ctx.lineTo(0.34, -0.4)
+    ctx.closePath()
+    ctx.fill()
+    ctx.stroke()
+    ctx.fillStyle = '#ffe5a1'
+    for (const x of [-0.23, 0.17]) ctx.fillRect(x, -0.48, 0.06, 0.59)
+    ctx.fillRect(-0.065, -0.2, 0.13, 0.16)
+    ctx.fillStyle = '#5b3c24'
+    ctx.fillRect(-0.018, -0.16, 0.036, 0.075)
+    ctx.fillStyle = '#e9f5f7'
+    for (const x of [-0.33, 0.2]) ctx.fillRect(x, 0.28, 0.13, 0.085)
+    ctx.restore()
+  }
+
   _drawBossAura(ctx, size) {
-    const pulse = 1 + Math.sin(this.gameplay.visualTime * 6) * 0.08
+    const pulse = this.gameplay.reducedMotion ? 1 : 1 + Math.sin(this.gameplay.visualTime * 6) * 0.04
     ctx.strokeStyle = 'rgba(235, 75, 55, 0.85)'
     ctx.lineWidth = Math.max(2, size * 0.05)
     ctx.strokeRect(-size * 0.75 * pulse, -size * 0.75 * pulse, size * 1.5 * pulse, size * 1.5 * pulse)
@@ -629,7 +829,7 @@ export class RunnerRenderer {
   }
 
   _drawSupportAura(ctx, size) {
-    const pulse = 0.7 + Math.sin(this.gameplay.visualTime * 5) * 0.12
+    const pulse = 0.7 + Math.sin(this.motionTime * 5) * 0.12
     ctx.strokeStyle = `rgba(224, 200, 126, ${pulse.toFixed(3)})`
     ctx.lineWidth = Math.max(1.5, size * 0.035)
     ctx.beginPath()
@@ -667,7 +867,7 @@ export class RunnerRenderer {
   _drawBarrier(ctx, entity, size) {
     const w = size * 1.15
     const h = size * 0.68
-    ctx.fillStyle = '#4b3030'
+    ctx.fillStyle = '#513d3f'
     ctx.fillRect(-w / 2, -h / 2, w, h)
     ctx.strokeStyle = entity.color
     ctx.lineWidth = Math.max(1.5, size * 0.045)
@@ -681,17 +881,34 @@ export class RunnerRenderer {
   }
 
   _drawBarrel(ctx, entity, size) {
-    const w = size * 0.72
-    const h = size * 0.95
-    ctx.fillStyle = '#c2410c'
+    const w = size * 0.76
+    const h = size * 0.96
+    const body = ctx.createLinearGradient(-w / 2, 0, w / 2, 0)
+    body.addColorStop(0, '#7c3029')
+    body.addColorStop(0.4, '#d5744b')
+    body.addColorStop(1, '#8e362b')
+    ctx.fillStyle = body
+    ctx.strokeStyle = '#f1a477'
+    ctx.lineWidth = Math.max(2, size * 0.045)
     ctx.fillRect(-w / 2, -h / 2, w, h)
-    ctx.strokeStyle = '#f97316'
-    ctx.lineWidth = Math.max(1.5, size * 0.045)
     ctx.strokeRect(-w / 2, -h / 2, w, h)
-    ctx.fillStyle = '#fef08a'
-    ctx.fillRect(-w / 2, -h * 0.15, w, h * 0.3)
-    ctx.fillStyle = '#000'
-    ctx.font = `900 ${Math.max(8, size * 0.22)}px sans-serif`
+    ctx.fillStyle = '#9b7a6e'
+    ctx.fillRect(-w / 2, -h / 2, w, size * 0.09)
+    ctx.fillStyle = '#24313c'
+    ctx.fillRect(-w * 0.43, h / 2, w * 0.2, size * 0.13)
+    ctx.fillRect(w * 0.23, h / 2, w * 0.2, size * 0.13)
+    ctx.fillStyle = '#a85139'
+    ctx.beginPath()
+    ctx.ellipse(0, -h / 2, w / 2, h * 0.1, 0, 0, TAU)
+    ctx.fill()
+    ctx.stroke()
+    ctx.fillStyle = '#382e30'
+    ctx.fillRect(-w / 2, -h * 0.32, w, h * 0.07)
+    ctx.fillRect(-w / 2, h * 0.26, w, h * 0.07)
+    ctx.fillStyle = '#f9dfa2'
+    ctx.fillRect(-w * 0.41, -h * 0.15, w * 0.82, h * 0.3)
+    ctx.fillStyle = '#472a27'
+    ctx.font = '900 ' + Math.max(12, size * 0.22) + 'px sans-serif'
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
     ctx.fillText('TNT', 0, 0)
@@ -699,18 +916,25 @@ export class RunnerRenderer {
 
   _drawLaserGate(ctx, entity, size) {
     const w = size * 1.3
-    const h = size * 0.25
-    ctx.fillStyle = 'rgba(239, 68, 68, 0.45)'
-    ctx.fillRect(-w / 2, -h / 2, w, h)
-    ctx.strokeStyle = '#ef4444'
-    ctx.lineWidth = 3
-    ctx.strokeRect(-w / 2, -h / 2, w, h)
+    ctx.fillStyle = '#ed6d66'
+    ctx.fillRect(-w / 2, -size * 0.1, w, size * 0.2)
+    ctx.fillStyle = '#ffd9c4'
+    ctx.fillRect(-w / 2, -size * 0.025, w, size * 0.05)
+    for (const x of [-w / 2, w / 2]) {
+      ctx.fillStyle = '#384c5e'
+      ctx.strokeStyle = '#acbac9'
+      ctx.lineWidth = Math.max(2, size * 0.045)
+      ctx.fillRect(x - size * 0.1, -size * 0.4, size * 0.2, size * 0.72)
+      ctx.strokeRect(x - size * 0.1, -size * 0.4, size * 0.2, size * 0.72)
+      ctx.fillStyle = '#ffe3a9'
+      ctx.fillRect(x - size * 0.06, -size * 0.32, size * 0.12, size * 0.07)
+    }
   }
 
   _drawGate(ctx, entity, size) {
-    const pulse = 1 + Math.sin(this.gameplay.visualTime * 5 + entity.id) * 0.025
+    const pulse = 1
     const r = size * 0.53 * pulse
-    ctx.fillStyle = `${entity.color}24`
+    ctx.fillStyle = '#182e3b'
     ctx.strokeStyle = entity.color
     ctx.lineWidth = Math.max(1.5, size * 0.04)
     ctx.beginPath()
@@ -745,7 +969,7 @@ export class RunnerRenderer {
       ctx.fillRect(-r * 0.08, -r * 0.34, r * 0.16, r * 0.68)
       ctx.fillRect(-r * 0.34, -r * 0.08, r * 0.68, r * 0.16)
     } else if (entity.reward === 'fever_shard') {
-      const boltPulse = 1 + Math.sin(this.gameplay.visualTime * 10) * 0.1
+      const boltPulse = 1
       ctx.strokeStyle = '#fff07a'
       ctx.fillStyle = '#ffd166'
       ctx.beginPath()
@@ -810,7 +1034,7 @@ export class RunnerRenderer {
 
   _drawSecondaryMutationGate(ctx, entity, size) {
     const armed = entity.depth >= entity.armedDepth
-    const pulse = 1 + Math.sin(this.gameplay.visualTime * 6 + entity.id) * 0.05
+    const pulse = 1 + Math.sin(this.motionTime * 6 + entity.id) * 0.05
     const r = size * 0.68 * pulse
     ctx.globalAlpha = armed ? 1 : 0.46
     ctx.fillStyle = 'rgba(12, 16, 28, 0.88)'
@@ -850,17 +1074,12 @@ export class RunnerRenderer {
       }
     }
 
-    ctx.font = `800 ${Math.max(9, Math.min(13, size * 0.24))}px "Segoe UI", "PingFang SC", sans-serif`
-    ctx.textAlign = 'center'
-    ctx.textBaseline = 'top'
-    ctx.fillStyle = armed ? '#eef5f2' : 'rgba(238, 245, 242, 0.55)'
-    ctx.fillText(entity.name, 0, r + 7)
-    ctx.globalAlpha = 1
+    this._drawChoiceCaption(ctx, entity, r + 7)
   }
 
   _drawMutationGate(ctx, entity, size) {
     const armed = entity.depth >= entity.armedDepth
-    const pulse = 1 + Math.sin(this.gameplay.visualTime * 5 + entity.id) * 0.04
+    const pulse = 1 + Math.sin(this.motionTime * 5 + entity.id) * 0.04
     const r = size * 0.67 * pulse
     ctx.globalAlpha = armed ? 1 : 0.46
     ctx.fillStyle = 'rgba(9, 18, 24, 0.82)'
@@ -904,12 +1123,7 @@ export class RunnerRenderer {
       ctx.fill()
     }
 
-    ctx.font = `800 ${Math.max(9, Math.min(13, size * 0.24))}px "Segoe UI", "PingFang SC", sans-serif`
-    ctx.textAlign = 'center'
-    ctx.textBaseline = 'top'
-    ctx.fillStyle = armed ? '#eef5f2' : 'rgba(238, 245, 242, 0.55)'
-    ctx.fillText(entity.name, 0, r + 7)
-    ctx.globalAlpha = 1
+    this._drawChoiceCaption(ctx, entity, r + 7)
   }
 
   /**
@@ -919,7 +1133,7 @@ export class RunnerRenderer {
    */
   _drawModuleMutationGate(ctx, entity, size) {
     const armed = entity.depth >= entity.armedDepth
-    const pulse = 1 + Math.sin(this.gameplay.visualTime * 4.4 + entity.id) * 0.05
+    const pulse = 1 + Math.sin(this.motionTime * 4.4 + entity.id) * 0.05
     const r = size * 0.67 * pulse
     ctx.globalAlpha = armed ? 1 : 0.46
     ctx.fillStyle = 'rgba(9, 18, 24, 0.82)'
@@ -962,12 +1176,27 @@ export class RunnerRenderer {
       ctx.fill()
     }
 
-    ctx.font = `800 ${Math.max(9, Math.min(13, size * 0.24))}px "Segoe UI", "PingFang SC", sans-serif`
+    this._drawChoiceCaption(ctx, entity, r + 7)
+  }
+
+  _drawChoiceCaption(ctx, entity, y) {
+    const laneWidth = this.roadWidthAt(entity.depth) / 3 - 12
+    ctx.globalAlpha = 1
+    ctx.font = '700 12px "Segoe UI", "PingFang SC", sans-serif'
+    const width = Math.min(laneWidth, ctx.measureText(entity.name).width + 14)
+    const lines = []
+    let line = ''
+    for (const character of entity.name) {
+      if (line && ctx.measureText(line + character).width > width - 12) { lines.push(line); line = '' }
+      line += character
+    }
+    if (line) lines.push(line)
+    ctx.fillStyle = '#0b1a24'
+    ctx.fillRect(-width / 2, y - 3, width, lines.length * 16 + 6)
+    ctx.fillStyle = entity.lane === this.gameplay.targetLane ? '#f2faf7' : '#c3d4de'
     ctx.textAlign = 'center'
     ctx.textBaseline = 'top'
-    ctx.fillStyle = armed ? '#eef5f2' : 'rgba(238, 245, 242, 0.55)'
-    ctx.fillText(entity.name, 0, r + 7)
-    ctx.globalAlpha = 1
+    lines.forEach((text, index) => ctx.fillText(text, 0, y + index * 16))
   }
 
   _drawHealth(ctx, entity, size) {
@@ -986,14 +1215,14 @@ export class RunnerRenderer {
     ctx.fillRect(-width / 2, y, width * ratio, Math.max(2, size * (entity.boss ? 0.08 : 0.055)))
     if (entity.boss) {
       ctx.fillStyle = '#ff8877'
-      ctx.font = `900 ${Math.max(10, size * 0.16)}px "Segoe UI", "PingFang SC", sans-serif`
+      ctx.font = `800 ${Math.max(12, size * 0.16)}px "Segoe UI", "PingFang SC", sans-serif`
       ctx.textAlign = 'center'
       ctx.fillText(`${entity.name} [BOSS]`, 0, y - 10)
     }
   }
 
   _drawTarget(ctx, entity, size) {
-    const alpha = 0.32 + Math.sin(this.gameplay.visualTime * 7) * 0.08
+    const alpha = 0.32 + Math.sin(this.motionTime * 7) * 0.08
     ctx.strokeStyle = entity.kind === 'gate'
       ? `rgba(210, 240, 247, ${alpha.toFixed(3)})`
       : `rgba(239, 151, 123, ${alpha.toFixed(3)})`
@@ -1081,10 +1310,11 @@ export class RunnerRenderer {
 
   _drawDamageNumbers(ctx) {
     const styles = {
-      normal: { color: '#f5f2df', size: 19 },
-      pierce: { color: '#79d9ee', size: 20 },
-      burst: { color: '#f0b35f', size: 25 },
-      corrosion: { color: '#9bdf6a', size: 20 },
+      normal: { color: '#f5f2df', size: 16 },
+      pierce: { color: '#79d9ee', size: 17 },
+      burst: { color: '#f0b35f', size: 21 },
+      corrosion: { color: '#9bdf6a', size: 16 },
+      burn: { color: '#f0b35f', size: 16 },
       armor: { color: '#9eb5c1', size: 18 },
       shield: { color: '#70d8d3', size: 18 },
       player: { color: '#ff8877', size: 24 },
@@ -1093,7 +1323,7 @@ export class RunnerRenderer {
       const style = styles[number.style] || styles.normal
       const progress = 1 - number.life / number.maxLife
       const alpha = clamp(number.life / 0.24, 0, 1)
-      const scale = 1 + number.pulse * 0.12
+      const scale = this.gameplay.reducedMotion ? 1 : 1 + number.pulse * 0.06
       const rounded = Math.round(number.value * 10) / 10
       const value = Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1)
       const label = number.style === 'player'
@@ -1102,7 +1332,7 @@ export class RunnerRenderer {
         ? `吸收 ${value}`
         : value
       ctx.save()
-      ctx.translate(number.x, number.y - progress * 30)
+      ctx.translate(number.x, number.y - (this.gameplay.reducedMotion ? 0 : progress * 22))
       ctx.scale(scale, scale)
       ctx.globalAlpha = alpha
       ctx.textAlign = 'center'
@@ -1113,11 +1343,8 @@ export class RunnerRenderer {
       ctx.strokeText(label, 0, 0)
       ctx.fillStyle = style.color
       ctx.fillText(label, 0, 0)
-      if (number.style === 'corrosion' && number.stacks > 0) {
-        ctx.font = '800 10px "Segoe UI", "PingFang SC", sans-serif'
-        ctx.fillText(`腐蚀 ×${number.stacks}`, 0, 17)
-      } else if (number.style === 'armor') {
-        ctx.font = '800 9px "Segoe UI", "PingFang SC", sans-serif'
+      if (number.style === 'armor') {
+        ctx.font = '700 12px "Segoe UI", "PingFang SC", sans-serif'
         ctx.fillText('装甲减伤', 0, 15)
       }
       ctx.restore()
@@ -1156,7 +1383,7 @@ export class RunnerRenderer {
     const r = this.baseUnit * 0.78
     const switching = gameplay.isSwitching
     const lean = switching ? clamp(gameplay.targetLane - gameplay.lanePosition, -1, 1) * 0.13 : 0
-    const bob = Math.sin(gameplay.visualTime * 6) * 2
+    const bob = gameplay.reducedMotion ? 0 : Math.sin(gameplay.visualTime * 6) * 2
 
     ctx.save()
     ctx.translate(x, y + bob)
@@ -1164,7 +1391,7 @@ export class RunnerRenderer {
 
     if (gameplay.isFeverActive) {
       ctx.scale(1.22, 1.22)
-      const feverPulse = 1 + Math.sin(gameplay.visualTime * 12) * 0.08
+      const feverPulse = gameplay.reducedMotion ? 1 : 1 + Math.sin(gameplay.visualTime * 6) * 0.04
       ctx.save()
       ctx.strokeStyle = 'rgba(255, 215, 0, 0.75)'
       ctx.lineWidth = 3.5
@@ -1174,7 +1401,7 @@ export class RunnerRenderer {
       ctx.restore()
     }
 
-    if (gameplay.dashTimer > 0) {
+    if (gameplay.hyperBoostTimer > 0) {
       ctx.globalAlpha = 0.28
       ctx.fillStyle = gameplay.isFeverActive ? '#fff275' : '#d8f7eb'
       for (const offset of [-0.42, -0.22]) {
@@ -1189,32 +1416,16 @@ export class RunnerRenderer {
     ctx.ellipse(0, r * 0.58, r * 0.88, r * 0.28, 0, 0, TAU)
     ctx.fill()
 
-    const body = ctx.createLinearGradient(0, -r, 0, r)
+    const strainId = gameplay.game?.player?.strainId || gameplay.strainId || 'origin'
+    // Share the selection portrait and arena actor, including glutton's face.
+    const actorRadius = r * 0.8
+    renderSlimeBody(ctx, strainId, actorRadius)
     if (gameplay.isFeverActive) {
-      body.addColorStop(0, '#fff475')
-      body.addColorStop(0.5, '#ffb703')
-      body.addColorStop(1, '#fb8500')
-    } else {
-      body.addColorStop(0, '#a4f267')
-      body.addColorStop(1, '#57ba42')
+      paintSlimeSilhouette(ctx, strainId, actorRadius, { fill: 'rgba(255, 183, 3, 0.35)', stroke: '#ffe066', width: 2 })
+    } else if (gameplay.weaponDefinition?.color) {
+      paintSlimeSilhouette(ctx, strainId, actorRadius, { stroke: gameplay.weaponDefinition.color, width: 1.4 })
     }
-    ctx.fillStyle = body
-    ctx.strokeStyle = gameplay.isFeverActive
-      ? '#ffe066'
-      : gameplay.weaponDefinition?.color || '#2e8738'
-    ctx.lineWidth = gameplay.isFeverActive ? 4 : gameplay.weaponDefinition ? 3 : 2
-    ctx.beginPath()
-    ctx.moveTo(-r * 0.84, r * 0.34)
-    ctx.quadraticCurveTo(-r * 0.76, -r * 0.65, 0, -r * 0.72)
-    ctx.quadraticCurveTo(r * 0.76, -r * 0.65, r * 0.84, r * 0.34)
-    ctx.quadraticCurveTo(r * 0.4, r * 0.78, 0, r * 0.68)
-    ctx.quadraticCurveTo(-r * 0.4, r * 0.78, -r * 0.84, r * 0.34)
-    ctx.closePath()
-    ctx.fill()
-    ctx.stroke()
-
-    const face = gameplay.damageFlash > 0.4 ? 'hurt' : 'idle'
-    this.assets.draw(ctx, `slime_face_${face}`, 0, -r * 0.08, r * 1.42, r * 1.42)
+    renderSlimeFace(ctx, strainId, actorRadius, { hurt: gameplay.damageFlash > 0.4 })
 
     if (gameplay.shield > 0 || gameplay.shieldFlash > 0) {
       const alpha = gameplay.shield > 0 ? 0.52 + gameplay.shield * 0.08 : gameplay.shieldFlash * 0.5
@@ -1234,8 +1445,8 @@ export class RunnerRenderer {
       }
     }
 
-    if (gameplay.hyperBoostTimer > 0) {
-      const boostPulse = 1 + Math.sin(gameplay.visualTime * 16) * 0.12
+    if (gameplay.hyperBoostTimer > 0 && !gameplay.isFeverActive) {
+      const boostPulse = gameplay.reducedMotion ? 1 : 1 + Math.sin(gameplay.visualTime * 6) * 0.04
       ctx.save()
       ctx.strokeStyle = 'rgba(245, 158, 11, 0.95)'
       ctx.lineWidth = 4
@@ -1246,7 +1457,7 @@ export class RunnerRenderer {
     }
 
     if (gameplay.bulletTimeTimer > 0) {
-      const btPulse = 1 + Math.sin(gameplay.visualTime * 8) * 0.06
+      const btPulse = 1
       ctx.save()
       ctx.strokeStyle = 'rgba(110, 231, 183, 0.85)'
       ctx.lineWidth = 2.5
@@ -1259,7 +1470,7 @@ export class RunnerRenderer {
 
     if (gameplay.droneTimer > 0) {
       const droneX = this.lanePositionX(gameplay.droneLane) - x
-      const droneY = -r * 0.4 + Math.sin(gameplay.visualTime * 10) * 6
+      const droneY = -r * 0.4 + (gameplay.reducedMotion ? 0 : Math.sin(gameplay.visualTime * 10) * 6)
       ctx.save()
       ctx.translate(droneX, droneY)
       ctx.fillStyle = '#ec4899'

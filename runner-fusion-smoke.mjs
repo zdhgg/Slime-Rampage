@@ -451,6 +451,28 @@ check('D1.2 burst_frost：爆炸半径之外的目标不得被冻结（空间边
   assert.equal(outside.hp, 200, '范围外目标也不应受到爆炸伤害')
 })
 
+check('D1.3 burst_frost：相邻车道的目标不得被爆炸冻结（合同只覆盖同车道）', () => {
+  // D1.3 把「主目标冻结」这件事从统计比率收口成空间合同：合同原话是「爆炸范围内
+  // 其它合法目标」继续按既有范围规则被冻结，而既有范围规则的第一条就是同车道。
+  // 这里刻意让相邻车道目标深度完全相同——depth 条件满足，只有车道条件能挡住它，
+  // 因此这条用例失败必然是车道语义被改动，而不是任何数值波动。
+  const runner = makeRunner()
+  const fusion = loadout(runner, 'burst', 'frost')
+  runner.weaponLevel = 1
+  const primary = makeEntity('brute', 1, 0.5, 200)
+  const otherLane = makeEntity('brute', 0, 0.5, 200)
+  runner.entities.push(primary, otherLane)
+
+  fireExplosiveShot(runner, 1, primary)
+
+  assert.equal(primary.freezeTimer, fusion.freezeDuration, '主目标应被冻结')
+  assert.ok(
+    (otherLane.freezeTimer || 0) === 0,
+    `相邻车道目标不得被冻结（合同范围是同车道），实测 freezeTimer=${otherLane.freezeTimer}`
+  )
+  assert.equal(otherLane.hp, 200, '相邻车道目标也不应吃到同车道爆炸伤害')
+})
+
 check('D1.2 freeze 生命周期：按世界时间递减，子弹时间下拉长但绝不永久', () => {
   // D1.2 之后主目标几乎每次爆裂都会被冻住，生命周期从「偶尔发生」变成「常态」，
   // 所以必须单独锁死：到期归零 + 速度复原 + 子弹时间语义正确。
@@ -890,6 +912,11 @@ check('pierce × ricochet：仍有贯穿次数时击破也必须回弹（贯穿�
     `pierce 击破后必须回弹，实测 ricochets=${runner.weaponStats.ricochets}（remainingHits=${bullet.remainingHits}）`
   )
   assert.ok(second.hp < 40, '回弹必须真的转向并命中前方的下一个目标')
+  assert.equal(
+    bullet.provenance,
+    'secondary',
+    '回弹后的弹体必须降级为二级攻击（provenance 向后传播），否则它后续命中会重新获得 Module 触发资格'
+  )
   assert.ok(
     (runner.weaponStats.ricochets || 0) <= mod.ricochetCount,
     `回弹次数不得超过 ricochetCount=${mod.ricochetCount}，实测 ${runner.weaponStats.ricochets}`
@@ -1132,6 +1159,215 @@ check('选择门免疫：任何范围效果都不得替玩家做掉构筑选择'
 })
 
 // ---------------------------------------------------------------------------
+// Phase D1.3 · 攻击 provenance（二级攻击不得重新获得 Module 触发资格）
+//
+// 为什么不能只断言 maxProcDepth <= 1：procDepth 只挂在「同一个 source 对象」上。
+// 一旦攻击跨过一层 fusion，效果层会构造一个**新的** source，那个数字就不见了，
+// 二级攻击于是重新拿到 Module 触发资格。修复前的实测状态（就是本区用例转红的那个状态）：
+//   C+L+S       ：单发子弹 → 主目标过载放电 → 放电以全新 source 触发 split → 4 次 split / 8 片弹片，
+//                 而 maxProcDepth 全程 = 1；
+//   burst+light ：爆炸 AoE 每炸到一个目标就各触发一次 split → 4 次 split / 8 片弹片。
+// 因此这里的判据是**直接审计 _applyModuleProc 的触发资格**，而不是任何代理数字。
+// ---------------------------------------------------------------------------
+console.log('\n=== Phase D1.3 · 攻击 provenance ===')
+
+/**
+ * 审计每一次 _applyModuleProc：记录 source 的 provenance，以及它是否真的产生了弹片。
+ * 「是否真的产生」用 weaponStats.splits 的增量判定，与被测实现内部怎么判资格无关。
+ */
+const auditModuleProcs = (runner) => {
+  const log = []
+  const original = runner._applyModuleProc.bind(runner)
+  runner._applyModuleProc = (primary, source) => {
+    const splitsBefore = runner.weaponStats.splits
+    const result = original(primary, source)
+    log.push({ provenance: source?.provenance ?? null, procced: runner.weaponStats.splits > splitsBefore })
+    return result
+  }
+  return log
+}
+
+/** 核心不变式：真正产生的弹片只能来自 primary 攻击，且本次必须至少有一次 proc（防空转）。 */
+const assertOnlyPrimaryProcs = (log, label) => {
+  const procced = log.filter((row) => row.procced)
+  assert.ok(procced.length > 0, `${label}：前置失败——本次没有任何 Module proc，断言会空转`)
+  const leaked = procced.filter((row) => row.provenance !== 'primary')
+  assert.equal(
+    leaked.length,
+    0,
+    `${label}：有 ${leaked.length}/${procced.length} 次 Module proc 来自非 primary 来源`
+      + `（provenance=${[...new Set(leaked.map((row) => row.provenance ?? 'unmarked'))].join('|')}）`
+  )
+}
+
+/** 包一层过载放电计数，返回读取器。 */
+const countShocks = (runner) => {
+  let shocks = 0
+  const original = runner._triggerCorrosionShock.bind(runner)
+  runner._triggerCorrosionShock = (...args) => {
+    shocks += 1
+    return original(...args)
+  }
+  return () => shocks
+}
+
+check('D1.3 provenance：玩家直接命中仍然触发 Module（正向对照，合法模块行为不被误杀）', () => {
+  const runner = makeRunner()
+  const mod = getRunnerWeaponModule('split')
+  loadout(runner, 'pierce', 'lightning')
+  runner.weaponModule = 'split'
+  const primary = makeEntity('brute', 1, 0.5, 5000)
+  const left = makeEntity('brute', 0, 0.5, 5000)
+  const right = makeEntity('brute', 2, 0.5, 5000)
+  runner.entities.push(primary, left, right)
+  const log = auditModuleProcs(runner)
+
+  fireOneShot(runner, 1, [primary])
+
+  assertOnlyPrimaryProcs(log, '玩家直接命中')
+  assert.equal(runner.weaponStats.splits, 1, `一次直接命中只应产生 1 次分裂，实测 ${runner.weaponStats.splits}`)
+  assert.equal(
+    runner.weaponStats.splinterCount,
+    mod.splitCount,
+    `一次 proc 只应产生 splitCount=${mod.splitCount} 片弹片，实测 ${runner.weaponStats.splinterCount}`
+  )
+  // 合法 fusion 行为必须仍然活着：相邻车道照旧吃折射雷弧
+  assert.ok(left.hp < 5000 && right.hp < 5000, '相邻车道的折射雷弧不得因为 provenance 收敛而失效')
+})
+
+check('D1.3 provenance：过载放电（fusion 二级）不得重新触发 split —— C+L+S 回路', () => {
+  const runner = makeRunner()
+  const fusion = loadout(runner, 'corrosion', 'lightning')
+  const mod = getRunnerWeaponModule('split')
+  runner.weaponModule = 'split'
+  const threshold = fusion.shockThreshold
+  // 主目标与邻道目标都停在「再挨一发腐蚀就叠满」：弹片命中邻道目标时同样会触发过载放电，
+  // 于是这条用例给出的触发机会与真实 C+L+S 对局完全一致，回路不可能因为构造不足而空转。
+  const victim = makeEntity('brute', 1, 0.5, 5000)
+  const near = [makeEntity('brute', 0, 0.5, 5000), makeEntity('brute', 2, 0.5, 5000)]
+  victim.corrosionStacks = threshold - 1
+  for (const entity of near) entity.corrosionStacks = threshold - 1
+  runner.entities.push(victim, ...near)
+  const shockCount = countShocks(runner)
+  const log = auditModuleProcs(runner)
+
+  fireOneShot(runner, 1, [victim])
+
+  assert.ok(shockCount() >= 1, '前置：主目标必须真的触发了过载放电')
+  assert.equal(victim.corrosionStacks, 0, '前置：放电后叠层应被清空')
+  assert.ok(near.every((entity) => entity.hp < 5000), '弹片必须真的打到邻道目标（否则回路没有触发机会）')
+  assertOnlyPrimaryProcs(log, 'C+L+S 回路')
+  assert.equal(runner.weaponStats.splits, 1, `单发子弹只允许 1 次分裂，实测 ${runner.weaponStats.splits}`)
+  assert.equal(
+    runner.weaponStats.splinterCount,
+    mod.splitCount,
+    `弹片数量应为 splitCount=${mod.splitCount}，实测 ${runner.weaponStats.splinterCount}`
+  )
+  assert.ok(
+    (runner.weaponStats.maxProcDepth || 0) <= 1,
+    'proc 深度仍应封顶（但这条不足以发现跨层回路，所以不作为唯一判据）'
+  )
+})
+
+check('D1.3 provenance：爆炸 AoE 与火花（effect 二级）不得触发 split', () => {
+  const runner = makeRunner()
+  loadout(runner, 'burst', 'lightning')
+  const mod = getRunnerWeaponModule('split')
+  runner.weaponModule = 'split'
+  runner.weaponLevel = 1
+  const primary = makeEntity('brute', 1, 0.5, 5000)
+  const inRadius = [
+    makeEntity('brute', 1, 0.52, 5000),
+    makeEntity('brute', 1, 0.48, 5000),
+    makeEntity('brute', 1, 0.54, 5000),
+  ]
+  runner.entities.push(primary, ...inRadius)
+  const log = auditModuleProcs(runner)
+
+  fireExplosiveShot(runner, 1, primary)
+
+  assert.ok((runner.weaponStats.explosions || 0) >= 1, '前置：必须真的发生了一次爆裂')
+  assert.ok(inRadius.every((entity) => entity.hp < 5000), '前置：范围内目标必须真的吃到了 AoE / 火花伤害')
+  assertOnlyPrimaryProcs(log, '爆炸 AoE')
+  assert.equal(runner.weaponStats.splits, 1, `只有直接命中允许 proc：应为 1 次，实测 ${runner.weaponStats.splits}`)
+  assert.equal(
+    runner.weaponStats.splinterCount,
+    mod.splitCount,
+    `弹片数量应为 splitCount=${mod.splitCount}，实测 ${runner.weaponStats.splinterCount}`
+  )
+})
+
+check('D1.3 provenance：殉爆（由二级弹片击杀触发的 onKill）不得触发 split，且范围合同不变', () => {
+  const runner = makeRunner()
+  loadout(runner, 'corrosion', 'flame')
+  const mod = getRunnerWeaponModule('split')
+  runner.weaponModule = 'split'
+  runner.weaponLevel = 1
+  // P 是玩家弹体真正直接命中的目标：存活，因此唯一一次 primary 资格在此用掉（proc 出弹片）。
+  const primary = makeEntity('brute', 1, 0.6, 5000)
+  // D 带腐蚀叠层、血量刚好被弹片打死 —— 殉爆因此由**二级弹片**的击杀触发。
+  // 这正是「二级攻击可以继续触发现有允许的融合行为」的那条路径。
+  const doomed = makeEntity('brute', 1, 0.58, 4)
+  doomed.corrosionStacks = 2
+  // X 在同车道殉爆半径内：证明殉爆真的结算了（而且它又是弹片目标，会再走一次资格判定）。
+  const closeVictim = makeEntity('brute', 1, 0.53, 500)
+  // Y 同时在 splitRange 与殉爆半径之外：证明两条范围规则都没有被放宽。
+  const farVictim = makeEntity('brute', 1, 0.3, 500)
+  runner.entities.push(primary, doomed, closeVictim, farVictim)
+  const log = auditModuleProcs(runner)
+
+  fireOneShot(runner, 1, [primary, doomed, closeVictim, farVictim])
+
+  assert.ok(primary.hp < 5000 && primary.active, '前置：弹体必须真的直接命中 P（否则没有 primary 资格可用）')
+  assert.ok(doomed.hp <= 0, '前置：带腐蚀叠层的目标必须真的被弹片击破（否则不会走 onKill 殉爆）')
+  assert.ok(closeVictim.hp < 500, '前置：同车道近距离目标必须被殉爆波及')
+  assert.equal(farVictim.hp, 500, 'splitRange 与殉爆半径之外的目标不得被波及')
+  assert.equal(runner.weaponStats.splits, 1, `只允许直接命中产生 1 次分裂，实测 ${runner.weaponStats.splits}`)
+  assert.equal(
+    runner.weaponStats.splinterCount,
+    mod.splitCount,
+    `弹片数量应为 splitCount=${mod.splitCount}，实测 ${runner.weaponStats.splinterCount}`
+  )
+  assertOnlyPrimaryProcs(log, '殉爆（二级弹片击杀触发）')
+})
+
+check('D1.3 provenance：C+L+S 最密集场地下二级效果数量仍有确定上限', () => {
+  // 与既有「递归压力」同形，但换成真正的跨层回路构筑（腐蚀过载 + 分裂），
+  // 并且让全部目标都停在阈值前一层的状态，把回路的触发机会开到最大。
+  const runner = makeRunner(909)
+  const fusion = loadout(runner, 'corrosion', 'lightning')
+  const mod = getRunnerWeaponModule('split')
+  runner.weaponModule = 'split'
+  for (let lane = 0; lane < 3; lane++) {
+    for (let n = 0; n < 6; n++) {
+      const entity = makeEntity(n % 2 ? 'brute' : 'hound', lane, 0.15 + n * 0.12, 5000)
+      entity.corrosionStacks = fusion.shockThreshold - 1
+      runner.entities.push(entity)
+    }
+  }
+  const shockCount = countShocks(runner)
+  const log = auditModuleProcs(runner)
+  const bullet = runner._createBullet(1)
+  bullet.previousDepth = 0.95
+  bullet.depth = 0.95
+  runner.bullets = [bullet]
+  runner._fireCooldown = 999
+  for (let step = 0; step < 30; step++) runner._updateShooting(0.05)
+
+  assert.ok(shockCount() >= 1, '前置：本场必须真的触发过载放电')
+  assertOnlyPrimaryProcs(log, 'C+L+S 密集场地')
+  assert.equal(runner.weaponStats.splits, 1, `单发子弹最多 1 次分裂，实测 ${runner.weaponStats.splits}`)
+  assert.ok(
+    runner.weaponStats.splinterCount <= mod.splitCount,
+    `单发子弹的弹片数量不得超过 splitCount=${mod.splitCount}，实测 ${runner.weaponStats.splinterCount}`
+  )
+  assert.ok((runner.weaponStats.maxProcDepth || 0) <= 1, 'proc 深度不得增长')
+  assert.ok(runner.bullets.length <= 48, '弹体不得无界增长')
+  assert.ok(runner.entities.length <= 24, '实体不得无界增长')
+  runner.destroy()
+})
+
+// ---------------------------------------------------------------------------
 // 27 组合 soak：Core × Element × Module 全跑一局完整 blitz 60s。
 // 60s 是必需的——blitz 的 module 门 34s 生成、约 41.7s 结算，只有跑满 60s
 // 才真的「拿到 module 并用它打完最后 18 秒」。
@@ -1240,8 +1476,11 @@ const RICOCHET_SEEDS = 20
 const recAt = (r) => r.weaponStats.ricochets
 
 // --- 1. pierce × ricochet：修复前三个 element 全部恒为 0 ---
-// 实测（修复后，20 seeds，module 生效后窗口）：lightning 84 次/19 seed、flame 125 次/20 seed、
+// 实测（D1.1 修复后，20 seeds，module 生效后窗口）：lightning 84 次/19 seed、flame 125 次/20 seed、
 // frost 205 次/20 seed。下界取「多数 seed 至少一次」+「单局明显下界」，避开精确计数。
+// D1.3 重新实测：lightning 46 次/17 seed、flame 86 次/20 seed、frost 126 次/20 seed——
+// 降幅来自「二级攻击不再泄漏 Module 触发资格」后总伤害回落（回弹本身由击破触发），
+// 回弹逻辑与数值一个字节都没改，所以下界不动。
 const pierceRicochet = []
 for (const element of ELEMENTS) {
   const rows = measureDelivery(RICOCHET_SEEDS, 'pierce', element, 'ricochet', recAt)
@@ -1327,7 +1566,7 @@ const measureBlastFreeze = (seeds, core, element, moduleId) => {
   return rows
 }
 
-check('capability delivery：burst × frost 在三个 module 下都真实交付冻结（primary 为主来源）', () => {
+check('capability delivery：burst × frost 在三个 module 下都真实交付冻结（主目标冻结必须真实交付）', () => {
   const observed = []
   for (const moduleId of MODULES) {
     const rows = measureBlastFreeze(RICOCHET_SEEDS, 'burst', 'frost', moduleId)
@@ -1336,7 +1575,7 @@ check('capability delivery：burst × frost 在三个 module 下都真实交付�
     const total = primary + secondary
     const delivering = rows.filter((r) => r.postPrimary + r.postSecondary > 0).length
     const best = Math.max(...rows.map((r) => r.postPrimary + r.postSecondary))
-    observed.push(`${moduleId}=${total}次(${delivering}seed, 峰值${best})`)
+    observed.push(`${moduleId}=${total}次(${delivering}seed, 峰值${best}, primary=${primary}/secondary=${secondary})`)
 
     assert.ok(total > 0, `burst+frost+${moduleId} 的真实冻结交付必须 >0，实测 ${total}`)
     assert.ok(
@@ -1344,11 +1583,16 @@ check('capability delivery：burst × frost 在三个 module 下都真实交付�
       `burst+frost+${moduleId} 至少应有 3/4 的 seed 交付过，实测 ${delivering}/${RICOCHET_SEEDS}`
     )
     assert.ok(best >= 3, `burst+frost+${moduleId} 单局峰值应明显高于 1（否则只是偶发），实测 ${best}`)
-    // 本轮修的是「主目标也要被冻」，所以主来源必须是 primary。
-    // 如果哪天 secondary 反超，说明范围语义被动过，这条断言就是防回归的。
+    // D1.3 收口：这里曾经断言 primary >= secondary。那是**当前编队密度下的统计特征**，
+    // 不是 correctness contract——敌群变密时同一发爆裂会合法地冻到更多次级目标，
+    // secondary 超过 primary 完全是正确行为，把它当不变式只会制造假红。
+    // 与密度无关的真正合同在这里与定向用例里：
+    //   1. 主目标冻结必须真的交付（下面的 primary > 0）；
+    //   2. 主目标存活时按合同被冻结、radius 外不冻结、相邻车道不冻结、
+    //      主目标不重复吃 AoE 伤害 —— 由 'D1.2 burst_frost' 与 'D1.3 burst_frost' 锁死。
     assert.ok(
-      primary >= secondary,
-      `burst+frost+${moduleId} 的交付应以 primary 为主（primary=${primary}, secondary=${secondary}）`
+      primary > 0,
+      `burst+frost+${moduleId} 必须真的交付过主目标冻结（这是 D1.2 合同本身），实测 primary=${primary}`
     )
   }
   console.log(`  burst × frost 真实冻结交付（${RICOCHET_SEEDS} seeds，module 生效后）: ${observed.join('  ')}`)

@@ -46,7 +46,6 @@ const weaponMetric = computed(() => {
         <div><span>狂热暴走</span><b>{{ info.feverCount || 0 }} 次</b></div>
         <div><span>战术道具</span><b>{{ (info.tacticalStats?.magnets || 0) + (info.tacticalStats?.bulletTimes || 0) + (info.tacticalStats?.boosters || 0) + (info.tacticalStats?.drones || 0) }} 次</b></div>
         <div><span>引爆炸药</span><b>{{ info.tacticalStats?.barrels || 0 }} 桶</b></div>
-        <div><span>冲撞击杀</span><b>{{ info.dashKills || 0 }}</b></div>
         <div><span>承受冲击</span><b>{{ info.hitsTaken }}</b></div>
         <div><span>护盾吸收</span><b>{{ info.shieldAbsorbed || 0 }}</b></div>
         <div><span>最终攻击</span><b>{{ info.attack }}</b></div>

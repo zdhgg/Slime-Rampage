@@ -1,0 +1,17 @@
+Runner environment decorations
+
+Pack: Background Elements Redux
+Author: Kenney (kenney.nl)
+Source mirror: https://github.com/ETdoFresh/kenney.nl/tree/master/background-elements-redux
+License: CC0 1.0 Universal
+
+Files used by Runner:
+- castleSmall.png
+- castleSmallAlt.png
+- fenceIron.png
+- tower.png
+- towerAlt.png
+- towerSmall.png
+- towerSmallAlt.png
+
+The original license is preserved in LICENSE-background-elements-redux.txt.

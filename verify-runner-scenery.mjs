@@ -7,6 +7,8 @@ import {
   sceneryRandom,
 } from './src/game/gameplay/runner/RunnerScenery.js'
 import { RunnerRenderer } from './src/game/gameplay/runner/RunnerRenderer.js'
+import { RUNNER_SCENE_PROFILES, runnerSceneProfile } from './src/game/gameplay/runner/RunnerSceneProfiles.js'
+import { getRunnerSection } from './src/game/gameplay/runner/RunnerRules.js'
 
 // Node has no <canvas>/<document>: the scenery service must degrade to no-ops
 // instead of throwing, so server smoke tests stay hermetic.
@@ -121,4 +123,77 @@ const before = renderer.scenery._motes.length
 renderer.ensureLayout()
 assert.equal(renderer.scenery._motes.length, before, 'stable layout must not re-scatter motes')
 
+for (const [width, height] of [[1280, 720], [390, 844], [667, 375], [320, 640]]) {
+  gameplay.game.width = width; gameplay.game.height = height
+  renderer.ensureLayout()
+  for (const depth of [0, 0.2, 0.5, 0.9, 1.05]) {
+    assert.ok(Math.abs(renderer.roadHalfAtY(renderer.depthToY(depth)) * 2 - renderer.roadWidthAt(depth)) < 1e-8,
+      'road floor and lane/collision projection agree at every supported size')
+  }
+}
+
 console.log('✓ runner scenery: node-safe bake, deterministic gates/motes, full-render smoke')
+
+// Follow actual rules at stage boundaries, including endless cycling after
+// named waves are exhausted. A missing endless profile used to stay default.
+const profileAt = (submode, time) => runnerSceneProfile({ submode, section: getRunnerSection(time, submode) })
+assert.equal(new Set(['blitz', 'marathon', 'endless'].map(mode => profileAt(mode, 0).family)).size, 3)
+assert.deepEqual([0, 20, 42].map(t => profileAt('blitz', t).theme), ['highway', 'works', 'checkpoint'])
+assert.deepEqual([0, 35, 85, 140].map(t => profileAt('marathon', t).theme), ['outskirts', 'ramparts', 'royal', 'citadel'])
+assert.deepEqual([0, 30, 60, 90, 120, 150, 180, 240, 300, 360].map(t => profileAt('endless', t).theme), ['ruins', 'ruins', 'tunnel', 'tunnel', 'rift', 'rift', 'ruins', 'tunnel', 'rift', 'ruins'])
+
+// A recording canvas exercises every bake. Stable frames and HUD-only layout
+// changes must reuse bitmaps; resizing and DPR changes must rebuild them.
+let canvases = 0
+globalThis.document = { createElement() { canvases++; return { getContext: () => ctx } } }
+try {
+  const baked = new RunnerScenery()
+  baked.prepare(1280, 720, 2, { horizonY: 120, roadTopWidth: 300 }, RUNNER_SCENE_PROFILES.blitz_outer)
+  const first = baked.sprites, count = canvases
+  assert.equal(first.scale, 2, 'high-DPI baking uses the actual DPR')
+  for (let i = 0; i < 100; i++) baked.prepare(1280, 720, 2, { horizonY: 128, roadTopWidth: 300 }, RUNNER_SCENE_PROFILES.blitz_outer)
+  assert.equal(canvases, count, 'no rebaking on stable frames or HUD-only changes')
+  for (const profile of Object.values(RUNNER_SCENE_PROFILES).slice(1)) {
+    const before = baked.sprites
+    baked.prepare(1280, 720, 2, { horizonY: 128, roadTopWidth: 300 }, profile)
+    assert.equal(baked.previousSprites, before)
+    assert.notEqual(baked.sprites, before)
+    baked.transition = 0.5
+    baked.drawSkyline(ctx, 2); baked.drawClusters(ctx, 2); baked.drawDestination(ctx); baked.drawGate(ctx, 640, 400, 200, 66)
+    baked.finishTransition()
+    assert.equal(baked.previousSprites, null, 'completed transitions release the previous district')
+  }
+  const beforeResize = baked.sprites
+  baked.prepare(390, 844, 1, { horizonY: 220, roadTopWidth: 180 })
+  assert.notEqual(baked.sprites, beforeResize)
+  assert.equal(baked.sprites.scale, 1)
+  assert.equal(baked.previousSprites, null, 'resize never blends different-sized strips')
+
+  // Real renderer transition: color/bakes share the clock; reset and reduced
+  // motion settle immediately, and long endless sessions retain bounded state.
+  gameplay.submode = 'endless'; gameplay.section = getRunnerSection(0, 'endless'); gameplay.visualTime = 1
+  renderer.render(ctx)
+  gameplay.section = getRunnerSection(60, 'endless'); gameplay.visualTime = 61
+  renderer.render(ctx)
+  assert.equal(renderer._sceneProgress, 0)
+  gameplay.visualTime = 61.6; renderer.render(ctx)
+  assert.ok(renderer._sceneProgress > 0.49 && renderer._sceneProgress < 0.51)
+  gameplay.visualTime = 62.3; renderer.render(ctx)
+  assert.equal(renderer.scenery.previousSprites, null)
+  for (let wave = 4; wave < 120; wave += 2) {
+    gameplay.section = getRunnerSection(wave * 30, 'endless'); gameplay.visualTime = wave * 30 + 1
+    renderer.render(ctx)
+    gameplay.visualTime += 1.3; renderer.render(ctx)
+    assert.equal(renderer.scenery.previousSprites, null)
+    assert.ok(renderer.scenery._fogCache.size <= 4)
+  }
+  gameplay.reducedMotion = true; gameplay.section = getRunnerSection(60, 'endless'); gameplay.visualTime += 2
+  renderer.render(ctx)
+  assert.equal(renderer._sceneProgress, 1)
+  assert.equal(renderer.scenery.previousSprites, null)
+  gameplay.reducedMotion = false; gameplay.submode = 'blitz'; gameplay.visualTime = 0; gameplay.section = getRunnerSection(0, 'blitz')
+  renderer.render(ctx)
+  assert.equal(renderer._sceneProfile.theme, 'highway')
+  assert.equal(renderer._sceneProgress, 1, 'new run does not inherit the prior environment')
+} finally { delete globalThis.document }
+console.log('✓ runner environments: distinct modes, all stage boundaries, bounded bakes, smooth transitions, reset and reduced motion')
