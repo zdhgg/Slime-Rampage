@@ -1,3 +1,6 @@
+import { PET_SPEC_INFO, PET_SKILLS, PET_BOSS_SKILLS } from './PetSkills.js'
+import { setCritSource } from './CritSources.js'
+import { SHADOW_EXTRA_SKILLS, SHADOW_SKILL_VARIANTS, SHADOW_CLONE_SKILL_IDS, SHADOW_SPEC_INFO, resolveShadowSkill } from './ShadowSkills.js'
 /**
  * 技能池：流派化专精技能体系（阶段式里程碑觉醒架构）
  *
@@ -25,6 +28,7 @@ export const GATLING_CAPSTONE_RATE = 0.4
 export const getGatlingCapstoneCutPercent = () => Math.round((1 - GATLING_CAPSTONE_RATE) * 100)
 
 export const SPEC_INFO = {
+  symbiosis: PET_SPEC_INFO,
   gluttony: {
     key: 'gluttony',
     name: '暴食巨兽',
@@ -33,12 +37,12 @@ export const SPEC_INFO = {
     desc: '近战冲撞 · 胃袋吞噬 · 自愈肉盾',
     bonus: '👑 觉醒赋能：吞噬阈值提升至 28% · 生命上限 +1',
     roadmap: [
-      'T1: 深渊胃囊 (吞噬强化 · 攻击逐级降低) / 硬化甲壳 (受击反震)',
-      'T2: 腐蚀重碾 (冲刺冷却大幅缩短 & 撞击 4 倍伤害)',
-      'T3: 胃酸迸发 (吞噬向周围喷发 10 团强酸弹)',
-      '🌟 终极觉醒: 荒古吞噬领主 (体型+30% · 冲刺无敌且秒杀吞噬 <=50% 残血怪)',
+      'T1: 深渊胃囊 (吞噬与猎食点强化) / 硬化甲壳 (生命与捕食护甲)',
+      'T2: 腐蚀重碾 (主动技能冷却大幅缩短 & 重咬伤害与范围强化)',
+      'T3: 胃酸迸发 (吞噬触发近身酸液爆发)',
+      '🌟 终极觉醒: 荒古吞噬领主 (体型+30% · 咬击范围/伤害+25% · 重咬与冲撞吞噬半血猎物)',
     ],
-    subBonus: '🥈 副专精共鸣：解锁【坚韧肉壁(生命上限)】与【消化代谢(吞噬必回血+减伤)】',
+    subBonus: '🥈 副专精共鸣：解锁【坚韧肉壁(生命上限)】与【消化代谢(吞噬恢复+减伤)】',
   },
   gatling: {
     key: 'gatling',
@@ -78,16 +82,17 @@ export const SPEC_INFO = {
     desc: '5倍暴击 · 瞬身假人 · 影分身斩',
     bonus: '👑 觉醒赋能：暴击率提升至 25% · 暴击伤害倍率提升至 3.5x',
     roadmap: [
-      'T1: 致命毒腺 (暴击率 55%) / 暗影疾行 (移速与冲刺冷却)',
-      'T2: 穿心绞杀 (暴击倍率提升至 5.0 倍)',
-      'T3: 残影替身 (冲刺留下暗影假人嘲讽怪海 2.5 秒)',
-      '🌟 终极觉醒: 暗影无相主宰 (暴击召唤暗影分身交叉斩 · 冲刺隐匿且下次必暴)',
+      'T1: 致命锋芒 (暴击率 55%) / 暗影疾行 (移速与主动技能冷却)',
+      'T2: 穿心绞杀 (暴击倍率提升至 5.0 倍) / 裂影横斩 (暗影血统：暴击近身群攻)',
+      'T3: 残影替身 (主动技能留下暗影假人嘲讽怪海 2.5 秒)',
+      '🌟 终极觉醒: 暗影无相主宰 (暴击召唤暗影分身交叉斩 · 主动隐匿且下次必暴)',
     ],
     subBonus: '🥈 副专精共鸣：解锁【弱点洞悉(残血暴伤翻倍)】与【影袭连环(击杀移速爆发)】',
   },
 }
 
 export const SKILL_DATABASE = {
+  symbiosis: PET_SKILLS,
   // ==========================================
   // 1. 暴食巨兽流 (Gluttony)
   // ==========================================
@@ -99,22 +104,15 @@ export const SKILL_DATABASE = {
         tier: 1,
         name: '深渊胃囊',
         icon: '🕳️',
-        desc: '主动抑制攻击强度，换取更高吞噬线与更大的吞噬引力范围',
+        desc: '提高吞噬线与吸附范围，加快吞噬和近战命中首领的猎食点获取',
         tags: ['暴食·T1', '吞噬'],
         maxLevel: 3,
         stats(lv) {
-          const t = [28, 32, 36][lv] || 36
-          const r = [20, 40, 60][lv] || 60
-          const damagePenalty = [10, 20, 30][lv] || 30
-          return `吞噬阈值 ${t}% · 吸附 +${r}% · 攻击 -${damagePenalty}%`
+          return `吞噬阈值 ${[28, 32, 36][lv]}% · 吸附 +${[20, 40, 60][lv]}% · 吞噬充能 +${[20, 40, 60][lv]}% · 首领充能 +${[33, 66, 100][lv]}%`
         },
         apply(game, lv) {
-          const damageMultipliers = [0.9, 0.8, 0.7]
-          const previousDamageMul = lv > 1 ? damageMultipliers[lv - 2] : 1
-          const nextDamageMul = damageMultipliers[lv - 1]
           game.devourThreshold = [0.28, 0.32, 0.36][lv - 1]
           game.player.devourRadiusBonus = [1.2, 1.4, 1.6][lv - 1]
-          game.weaponSystem.damage *= nextDamageMul / previousDamageMul
         },
       },
       {
@@ -123,16 +121,16 @@ export const SKILL_DATABASE = {
         tier: 1,
         name: '硬化甲壳',
         icon: '🛡️',
-        desc: '增加生命上限，受击时震退周围所有敌人',
+        desc: '增加生命上限，延长吞噬或重咬命中首领后的一层护甲；护甲抵挡 1 点伤害，每 2.5 秒最多获得一次',
         tags: ['暴食·T1', '体魄'],
         maxLevel: 3,
         stats(lv, game) {
-          return `生命上限 ${game.player.maxHp} → ${game.player.maxHp + 1}`
+          return `生命上限 ${game.player.maxHp} → ${game.player.maxHp + 1} · 捕食护甲 ${[2, 2.4, 2.8][lv]} 秒`
         },
         apply(game) {
           game.player.maxHp += 1
           game.player.hp = Math.min(game.player.maxHp, game.player.hp + 1)
-          game.player.thornsPulse = true
+          game.player.gluttonGuardDuration = Math.min(2.8, game.player.gluttonGuardDuration + 0.4)
         },
       },
       {
@@ -142,18 +140,10 @@ export const SKILL_DATABASE = {
         requires: ['glut_maw', 'glut_bulk'],
         name: '腐蚀重碾',
         icon: '🚜',
-        desc: '冲刺冷却缩短，冲刺时对沿途敌人造成强力撞击伤害',
-        tags: ['暴食·T2', '冲撞'],
-        maxLevel: 3,
-        stats(lv) {
-          const cd = [15, 30, 45][lv] || 45
-          const dmg = [2, 3, 4][lv] || 4
-          return `冲刺冷却 -${cd}% · 冲撞伤害 ×${dmg}`
-        },
-        apply(game, lv) {
-          game.player.dashCdMultiplier = [0.85, 0.7, 0.55][lv - 1]
-          game.player.dashImpactDmg = [2, 3, 4][lv - 1]
-        },
+        desc: '强化重咬的伤害与范围',
+        tags: ['暴食·T2', '重咬'], maxLevel: 3,
+        stats(lv) { return `重咬伤害 +${[15, 30, 45][lv]}% · 范围 +${[10, 20, 30][lv]}%` },
+        apply(game, lv) { game.player.gluttonHeavyLevel = lv },
       },
       {
         id: 'glut_eruption',
@@ -162,15 +152,14 @@ export const SKILL_DATABASE = {
         requires: ['glut_ram'],
         name: '胃酸迸发',
         icon: '🧪',
-        desc: '每次成功吞噬敌人时，向四周喷发强酸腐蚀弹',
+        desc: '吞噬或重咬命中首领后，在身边爆发酸液并减速普通敌人；密集触发合并，每 0.4 秒最多一次',
         tags: ['暴食·T3', '酸液'],
         maxLevel: 2,
         stats(lv) {
-          const n = [6, 10][lv] || 10
-          return `吞噬喷发 ${n} 团酸弹`
+          return `近身酸爆 ${[100, 110][lv]}px · 伤害 ×${[1, 1.35][lv]} · 减速 0.7 秒`
         },
         apply(game, lv) {
-          game.player.devourAcidSpray = [6, 10][lv - 1]
+          game.player.devourAcidBurst = lv
         },
       },
       {
@@ -181,11 +170,11 @@ export const SKILL_DATABASE = {
         requires: ['glut_eruption'],
         name: '🌟 荒古吞噬领主',
         icon: '👑',
-        desc: '体型增大 30% 且常驻吸力黑洞；冲刺期间无敌并直接秒杀吞噬沿途 ≤50% 生命的敌人！',
+        desc: '体型增大 30%，咬击延伸范围与伤害 +25%；重咬将命中后半血以下的血肉敌人直接吞噬，首领充能加快！',
         tags: ['终极觉醒', '暴食领主'],
         maxLevel: 1,
         stats() {
-          return '领主觉醒 · 冲刺秒杀吞噬 ≤50% 残血'
+          return '咬击范围/伤害 +25% · 重咬半血吞噬 · 首领充能 8 次'
         },
         apply(game) {
           game.player.isGluttonyLord = true
@@ -216,11 +205,11 @@ export const SKILL_DATABASE = {
         spec: 'gluttony',
         name: '消化代谢',
         icon: '🍖',
-        desc: '每次吞噬必定恢复 1 点生命值，并获得 3 秒 15% 减伤',
+        desc: '吞噬恢复 1 点生命（与其他吞噬恢复共用 4 秒间隔），并获得 3 秒减伤',
         tags: ['暴食共鸣', '自愈'],
         maxLevel: 2,
         stats(lv) {
-          return `吞噬回血 +1 · 减伤 ${lv === 0 ? 15 : 25}%`
+          return `吞噬回血 +1（4 秒间隔）· 减伤 ${lv === 0 ? 15 : 25}%`
         },
         apply(game, lv) {
           game.player.devourHeal = true
@@ -516,7 +505,7 @@ export const SKILL_DATABASE = {
         id: 'ass_lethal',
         spec: 'assassin',
         tier: 1,
-        name: '致命毒腺',
+        name: '致命锋芒',
         icon: '🎯',
         desc: '大幅提高暴击概率',
         tags: ['刺客·T1', '暴击率'],
@@ -526,7 +515,7 @@ export const SKILL_DATABASE = {
           return `暴击率提升至 ${rate}%`
         },
         apply(game, lv) {
-          game.weaponSystem.critChance = [0.25, 0.4, 0.55][lv - 1]
+          setCritSource(game, 'lethal', { chance: [0.15, 0.3, 0.45][lv - 1] })
         },
       },
       {
@@ -535,16 +524,16 @@ export const SKILL_DATABASE = {
         tier: 1,
         name: '暗影疾行',
         icon: '👟',
-        desc: '移动速度与冲刺冷却全面强化',
+        desc: '移动速度与主动技能冷却全面强化',
         tags: ['刺客·T1', '机动'],
         maxLevel: 3,
         stats(lv, game) {
           const s = Math.round(game.player.speed)
-          return `移速 ${s} → ${Math.round(s * 1.15)} · 冲刺冷却 -15%`
+          return `移速 ${s} → ${Math.round(s * 1.15)} · 主动技能冷却 -15%`
         },
         apply(game) {
           game.player.speed *= 1.15
-          game.player.dashCdMultiplier = (game.player.dashCdMultiplier || 1) * 0.85
+          game.player.activeSkillCdMultiplier = (game.player.activeSkillCdMultiplier || 1) * 0.85
         },
       },
       {
@@ -558,12 +547,26 @@ export const SKILL_DATABASE = {
         tags: ['刺客·T2', '暴伤'],
         maxLevel: 3,
         stats(lv) {
-          const mul = [3.5, 4.2, 5.0][lv] || 5.0
-          return `暴击倍率 ×${mul}`
+          const mul = [0.5, 0.7, 0.8][lv] || 0.8
+          return `暴击倍率 +${mul}（保留觉醒与秘典加成）`
         },
         apply(game, lv) {
-          game.weaponSystem.critMul = [3.5, 4.2, 5.0][lv - 1]
+          setCritSource(game, 'execute', { multiplier: [0.5, 1.2, 2][lv - 1] })
         },
+      },
+      {
+        id: 'ass_cleave',
+        spec: 'assassin',
+        tier: 2,
+        requires: ['ass_lethal', 'ass_stride'],
+        requiresStrain: 'shadow',
+        name: '裂影横斩',
+        icon: '⚔️',
+        desc: '暴击命中后，在目标两侧扫出短距影刃，伤害最多 4 名其他敌人。横斩不能暴击或连续触发自身。',
+        tags: ['刺客·T2', '近身群攻'],
+        maxLevel: 2,
+        stats(lv) { return lv === 0 ? '横斩伤害 0.85 倍攻击 · 触发间隔 0.9 秒' : '横斩伤害 1.2 倍攻击 · 范围扩大 · 触发间隔 0.65 秒' },
+        apply(game, lv) { if (game.startingStrain === 'shadow') game.player.shadowCleaveLevel = lv },
       },
       {
         id: 'ass_decoy',
@@ -572,7 +575,7 @@ export const SKILL_DATABASE = {
         requires: ['ass_execute'],
         name: '残影替身',
         icon: '👤',
-        desc: '冲刺后在原地留下暗影假人嘲讽吸引周围敌人',
+        desc: '释放主动技能后在原地留下暗影假人嘲讽吸引周围敌人',
         tags: ['刺客·T3', '替身'],
         maxLevel: 2,
         stats(lv) {
@@ -591,11 +594,11 @@ export const SKILL_DATABASE = {
         requires: ['ass_decoy'],
         name: '🌟 暗影无相主宰',
         icon: '👑',
-        desc: '暴击时在目标身旁瞬间召唤【暗影分身交叉斩击】；冲刺获得 1.5 秒潜行且下一次攻击必暴击！',
+        desc: '暴击时在目标身旁瞬间召唤【暗影分身交叉斩击】；释放主动技能获得 1.5 秒潜行且下一次攻击必暴击！',
         tags: ['终极觉醒', '暗影主宰'],
         maxLevel: 1,
         stats() {
-          return '主宰觉醒 · 暴击影分身连斩 · 冲刺隐匿必暴'
+          return '主宰觉醒 · 暴击影分身连斩 · 主动隐匿必暴'
         },
         apply(game) {
           game.weaponSystem.isShadowLord = true
@@ -616,7 +619,7 @@ export const SKILL_DATABASE = {
           return `暴击率 +${(lv + 1) * 15}% · 残血暴伤翻倍`
         },
         apply(game, lv) {
-          game.weaponSystem.critChance += 0.15
+          setCritSource(game, 'insight', { chance: 0.15 * lv })
           game.weaponSystem.executeCrit = true
         },
       },
@@ -720,26 +723,140 @@ export const SKILL_DATABASE = {
   ],
 }
 
+// Shared IDs retain origin behavior; the shadow role resolves both effects and presentation.
+SKILL_DATABASE.assassin.primary.push(...SHADOW_EXTRA_SKILLS)
+for (const skill of SKILL_DATABASE.assassin.primary) {
+  const originalApply = skill.apply
+  skill.apply = (game, lv) => {
+    const variant = game.startingStrain === 'shadow' && SHADOW_SKILL_VARIANTS[skill.id]
+    return (variant?.apply || originalApply)?.(game, lv)
+  }
+}
+
+export { resolveShadowSkill }
+export function getSpecInfo(spec, game) {
+  const info = SPEC_INFO[spec]
+  return spec === 'assassin' && (game?.startingStrain || game?.strainId) === 'shadow' ? { ...info, ...SHADOW_SPEC_INFO } : info
+}
+
+/**
+ * BOSS 专属职业秘典：不进入普通升级池，也不占用等级升级次数。
+ * 这些技能只从当前角色可用的职业池中抽取；元素共鸣秘典额外要求
+ * startingStrain === 'elemental'，原生黏液选择元素主专精也不能获得。
+ */
+export const BOSS_SKILL_DATABASE = {
+  symbiosis: PET_BOSS_SKILLS,
+  gluttony: [
+    {
+      id: 'boss_glutton_radiance', spec: 'gluttony', tier: 5, isBossSkill: true,
+      name: '辉胃', icon: '☀️', color: '#ffd166',
+      desc: '每 4 秒释放一次近身光辉，对 150px 内敌人造成伤害并短暂灼烧。',
+      stats: '光辉伤害 ×1.5 · 半径 150 · 冷却 4 秒', tags: ['BOSS秘典', '暴食·光辉'],
+      apply(game) { game.player.gluttonRadiance = Math.max(game.player.gluttonRadiance || 0, 1.5) },
+    },
+    {
+      id: 'boss_glutton_thorns', spec: 'gluttony', tier: 5, isBossSkill: true,
+      name: '荆棘胃壁', icon: '🛡️', color: '#ff9f43',
+      desc: '受击时反震周围敌人，反伤提高；同一次无敌帧只触发一次。',
+      stats: '反震伤害 4 · 半径 160 · 受击触发', tags: ['BOSS秘典', '暴食·反伤'],
+      apply(game) { game.player.thornsPulse = true; game.player.thornsDamage = Math.max(game.player.thornsDamage || 0, 4) },
+    },
+  ],
+  gatling: [
+    {
+      id: 'boss_gatling_overdrive', spec: 'gatling', tier: 5, isBossSkill: true,
+      name: '裂空弹仓', icon: '🌀', color: '#00d2d3',
+      desc: '强化连续射击：每轮追加一枚弹丸，并缩短射击间隔。',
+      stats: '齐射 +1 · 射击间隔 ×0.78', tags: ['BOSS秘典', '弹射·火力'],
+      apply(game) { game.weaponSystem.projectileCount += 1; game.weaponSystem.fireInterval *= 0.78 },
+    },
+    {
+      id: 'boss_gatling_ricochet', spec: 'gatling', tier: 5, isBossSkill: true,
+      name: '弹道回响', icon: '🔷', color: '#74e8f7',
+      desc: '飞弹获得额外穿透，并提高分裂概率，形成持续弹射链。',
+      stats: '基础穿透 +2 · 分裂概率 +25%', tags: ['BOSS秘典', '弹射·穿透'],
+      apply(game) { game.weaponSystem.basePierces += 2; game.weaponSystem.splitChance += 0.25 },
+    },
+  ],
+  elemental: [
+    {
+      id: 'boss_elemental_grimoire', spec: 'elemental', tier: 5, isBossSkill: true,
+      name: '元素法典', icon: '📖', color: '#a29bfe',
+      desc: '四系法术强化：元素附加更稳定，反应伤害显著提高。',
+      stats: '三系附加概率 +15% · 反应伤害 ×1.35', tags: ['BOSS秘典', '元素·法术'],
+      apply(game) {
+        const ws = game.weaponSystem
+        ws.freezeChance += 0.15; ws.burnChance += 0.15; ws.poisonChance += 0.15
+        ws.reactionDmgMul *= 1.35
+      },
+    },
+    {
+      id: 'boss_elemental_resonance', spec: 'elemental', tier: 5, isBossSkill: true,
+      requiresElementalStrain: true,
+      name: '共鸣催化剂', icon: '✦', color: '#d7c9ff',
+      desc: '只有元素史莱姆可以掌握。元素反应范围扩大，并获得额外反应伤害。',
+      stats: '反应伤害 ×1.6 · 反应范围 +25%', tags: ['BOSS秘典', '元素·共鸣'],
+      apply(game) {
+        if (game.startingStrain !== 'elemental') return
+        game.weaponSystem.reactionDmgMul *= 1.6
+        game.player.elementalResonance = true
+      },
+    },
+  ],
+  assassin: [
+    {
+      id: 'boss_assassin_mark', spec: 'assassin', tier: 5, isBossSkill: true,
+      name: '处决印记', icon: '🎯', color: '#ff5656',
+      desc: '暴击率与暴击倍率提升，对残血敌人造成额外暴击伤害。',
+      stats: '暴击率 +18% · 暴击倍率至少 4.2x · 残血暴伤翻倍', tags: ['BOSS秘典', '暗影·处决'],
+      apply(game) { setCritSource(game, 'boss_mark', { chance: 0.18, multiplierFloor: 4.2 }); game.weaponSystem.executeCrit = true },
+    },
+    {
+      id: 'boss_assassin_voidstep', spec: 'assassin', tier: 5, isBossSkill: true,
+      name: '虚空步', icon: '🌑', color: '#b879ff',
+      desc: '主动技能冷却大幅缩短，释放主动技能后下一次攻击必定暴击。',
+      stats: '主动技能冷却 ×0.65 · 释放主动技能后必暴', tags: ['BOSS秘典', '暗影·突袭'],
+      apply(game) { if (game.startingStrain !== 'shadow') game.player.activeSkillCdMultiplier *= 0.65; game.player.shadowBossStep = true },
+    },
+  ],
+}
+
+/** 取当前角色可获得的 BOSS 秘典候选。 */
+export function rollBossSkills(game, count = 3) {
+  const strain = game.startingStrain || game.player?.strainId || 'origin'
+  const spec = game.roleSpec || game.primarySpec
+  if (!spec || !BOSS_SKILL_DATABASE[spec]) return []
+  const owned = game.bossSkillIds || new Set()
+  const pool = BOSS_SKILL_DATABASE[spec].filter((skill) =>
+    !owned.has(skill.id) && (!skill.requiresElementalStrain || strain === 'elemental')
+  )
+  return pool.slice().sort(() => Math.random() - 0.5).slice(0, Math.min(count, pool.length)).map(s => resolveShadowSkill(s, game))
+}
+
 /**
  * 技能的「角色权限」前提（第四批）：把依赖独占能力的技能标出来，
  * 由候选池与里程碑统一过滤，避免把死技能摆到玩家面前。
  *
- * 只列真正完全无效的技能——部分有效的（如 glut_capstone 的冲刺无敌仍在）
+ * 只列真正完全无效的技能——部分有效的技能
  * 一律保留，宁可少过滤也不误伤。
  */
 const SKILL_CAPABILITY = {
   // 只在「吞噬」发生时生效 → 仅 canDevour 的角色可用
   glut_eruption: 'devour',
   glut_sub_digest: 'devour',
-  // 只在元素反应存在时生效 → 仅 canUseElements 的角色可用
-  ele_sub_boost: 'element',
+  // 元素共鸣是元素血统专属；原生黏液可以使用元素法术，但不能取得共鸣体。
+  ele_sub_boost: 'elemental_strain',
+  ele_sub_aura: 'elemental_strain',
 }
 
 /** 该技能在当前角色权限下是否有实际效果 */
-function skillUsable(skill, canDevour, canUseElements) {
+function skillUsable(skill, canDevour, canUseElements, isElementalStrain = true, strainId = null) {
+  if (skill.requiresStrain && skill.requiresStrain !== strainId) return false
   const need = SKILL_CAPABILITY[skill.id]
   if (!need) return true
-  return need === 'devour' ? canDevour : canUseElements
+  if (need === 'devour') return canDevour
+  if (need === 'element') return canUseElements
+  return isElementalStrain
 }
 
 /**
@@ -754,15 +871,15 @@ function specPrimaryUsable(specKey, canDevour) {
 }
 
 /** 某专精的 secondary 技能在当前权限下还剩哪些可用 */
-function secondarySkills(specKey, canDevour = true, canUseElements = true) {
+function secondarySkills(specKey, canDevour = true, canUseElements = true, isElementalStrain = true) {
   return (SKILL_DATABASE[specKey]?.secondary || []).filter((s) =>
-    skillUsable(s, canDevour, canUseElements)
+    skillUsable(s, canDevour, canUseElements, isElementalStrain)
   )
 }
 
 /** 该专精是否还有可用的 secondary（用于 Lv.9 里程碑候选过滤） */
-function specSecondaryUsable(specKey, canDevour, canUseElements) {
-  return secondarySkills(specKey, canDevour, canUseElements).length > 0
+function specSecondaryUsable(specKey, canDevour, canUseElements, isElementalStrain) {
+  return secondarySkills(specKey, canDevour, canUseElements, isElementalStrain).length > 0
 }
 
 /**
@@ -780,8 +897,9 @@ export function rollSkills(game, count = 3) {
   // 引擎侧是 getter（布尔）；测试桩缺省按「有权限」处理，与本文件其它桩口径一致。
   const canDevour = game.canDevour !== false
   const canUseElements = game.canUseElements !== false
-  const isSpecOffered = (k) => specPrimaryUsable(k, canDevour)
-  const isSecondarySpecOffered = (k) => specSecondaryUsable(k, canDevour, canUseElements)
+  const isElementalStrain = game.startingStrain === 'elemental'
+  const isSpecOffered = (k) => (k !== 'symbiosis' || game.startingStrain === 'summoner') && specPrimaryUsable(k, canDevour)
+  const isSecondarySpecOffered = (k) => specSecondaryUsable(k, canDevour, canUseElements, isElementalStrain)
 
   // ===================================================
   // 1. Lv. 5 里程碑：主专精觉醒仪式（四系陈列；按权限过滤）
@@ -811,14 +929,14 @@ export function rollSkills(game, count = 3) {
   // ===================================================
   // 2. Lv. 9 里程碑：副专精共鸣仪式（剩余三系陈列；按权限过滤）
   // ===================================================
-  if (pLevel >= 9 && primarySpec && !secondarySpec) {
+  if (pLevel >= 9 && primarySpec && !secondarySpec && !roleSpec) {
     return Object.keys(SKILL_DATABASE)
       .filter((k) => k !== 'common' && k !== primarySpec && isSecondarySpecOffered(k))
       .map((k) => {
         const info = SPEC_INFO[k]
         // 共鸣预览只承诺本角色实际拿得到的部分：某条共鸣技能被权限过滤掉时，
         // 不得在面板上继续宣告它（否则是「文案承诺了却永远拿不到」）。
-        const keptSkills = secondarySkills(k, canDevour, canUseElements)
+        const keptSkills = secondarySkills(k, canDevour, canUseElements, isElementalStrain)
         const partial = keptSkills.length < SKILL_DATABASE[k].secondary.length
         return {
           id: `milestone_sec_${k}`,
@@ -858,6 +976,9 @@ export function rollSkills(game, count = 3) {
   for (const [specKey, tree] of Object.entries(SKILL_DATABASE)) {
     if (specKey === 'common') continue
 
+    const primarySkills = tree.primary.map(s => resolveShadowSkill(s, game))
+      .filter(s => skillUsable(s, canDevour, canUseElements, isElementalStrain, game.startingStrain))
+
     // 尚未确立主专精（Lv.1~4）：
     //  - 角色血统（roleSpec）：只开放本角色 T1——Lv.5 会自动觉醒，不需要玩家再选一次；
     //  - origin（roleSpec = null）：保留四系 T1 自由探索，但**排除暴食主树**
@@ -867,23 +988,23 @@ export function rollSkills(game, count = 3) {
     if (!primarySpec) {
       if (roleSpec) {
         if (specKey !== roleSpec) continue
-        for (const s of tree.primary.filter((sk) => sk.tier === 1)) {
+        for (const s of primarySkills.filter((sk) => sk.tier === 1)) {
           const curLv = levels[s.id] || 0
           if (curLv < s.maxLevel) candidatePool.push({ ...s, role: 'role_t1', level: curLv })
         }
       } else {
         if (!isSpecOffered(specKey)) continue
-        for (const s of tree.primary.filter((sk) => sk.tier === 1)) {
+        for (const s of primarySkills.filter((sk) => sk.tier === 1)) {
           const curLv = levels[s.id] || 0
           if (curLv < s.maxLevel) candidatePool.push({ ...s, role: 't1_free', level: curLv })
         }
       }
     } else if (specKey === primarySpec) {
       // 当前是【主专精】：按 T1~T4 深度阶梯展开
-      for (const s of tree.primary) {
+      for (const s of primarySkills) {
         const curLv = levels[s.id] || 0
         if (curLv >= s.maxLevel) continue
-        if (!skillUsable(s, canDevour, canUseElements)) continue
+        if (!skillUsable(s, canDevour, canUseElements, isElementalStrain, game.startingStrain)) continue
 
         // 终极觉醒需要构筑深度和战局进度同时达标，防止单次经验暴涨或慢打
         // 单独提前大招；远征用关卡进度替代计时波次。
@@ -912,7 +1033,7 @@ export function rollSkills(game, count = 3) {
         if (curLv >= s.maxLevel) continue
         // 第四批：glut_sub_digest 仅在 canDevour 时可用；ele_sub_boost 仅在 canUseElements 时可用。
         // 角色（非 origin）的 secondary 与角色绑定，天然只会看到本树，过滤对它们是恒等变换。
-        if (!skillUsable(s, canDevour, canUseElements)) continue
+        if (!skillUsable(s, canDevour, canUseElements, isElementalStrain)) continue
         candidatePool.push({ ...s, role: 'secondary', level: curLv })
       }
     }
@@ -931,7 +1052,17 @@ export function rollSkills(game, count = 3) {
     return 0
   })
 
-  return candidatePool.slice(0, count).map((s) => ({
+  const selected = candidatePool.slice(0, count)
+  if (game.startingStrain === 'shadow' && count > 0 &&
+      SHADOW_CLONE_SKILL_IDS.some(id => (levels[id] || 0) > 0) &&
+      !selected.some(s => SHADOW_CLONE_SKILL_IDS.includes(s.id))) {
+    const upgrade = candidatePool.find(s => SHADOW_CLONE_SKILL_IDS.includes(s.id))
+    if (upgrade) {
+      const index = selected.findLastIndex(s => !s.isCapstone)
+      if (index >= 0) selected[index] = upgrade
+    }
+  }
+  return selected.map((s) => ({
     ...s,
     stats: typeof s.stats === 'function' ? s.stats(s.level, game) : s.stats || '',
   }))

@@ -7,6 +7,7 @@ const ctx2d = new Proxy(
   {
     get(_target, prop) {
       if (prop === 'createRadialGradient' || prop === 'createLinearGradient') return () => gradient
+      if (prop === 'measureText') return text => ({ width: [...String(text)].length * 12 })
       return () => {}
     },
     set() {
@@ -42,9 +43,6 @@ const { RunnerGameplay } = await import('./src/game/gameplay/RunnerGameplay.js')
 const { RunnerDirector } = await import('./src/game/gameplay/runner/RunnerDirector.js')
 const {
   RUNNER_COLLISION_DEPTH,
-  RUNNER_DASH_COOLDOWN,
-  RUNNER_DASH_DURATION,
-  RUNNER_DASH_IMPACT_DAMAGE,
   RUNNER_DURATION,
   RUNNER_ENTITY_TYPES,
   RUNNER_FEVER_DURATION,
@@ -156,7 +154,7 @@ assert.equal(runner.state, 'active')
 engine.update(1 / 60)
 assert.ok(runner.entities.length > 0, '倒计时结束后应立即生成首批遭遇')
 assert.ok(runner.bullets.length > 0, '倒计时结束后应开始自动射击')
-assert.equal(latestHud.dash.maxCooldown, RUNNER_DASH_COOLDOWN)
+assert.equal(latestHud.dash, undefined)
 assert.equal(latestHud.lanes.length, 3)
 console.log('✓ Runner session reset, countdown, HUD and first encounter are connected')
 
@@ -177,69 +175,21 @@ assert.equal(runner.lanePosition, 2)
 assert.equal(runner.isSwitching, false)
 console.log('✓ Runner lane switching commits atomically and suppresses mid-switch shots')
 
-// Emergency dash moves one lane, grants a short invulnerability window, and rewards a fresh evade.
+// 普通换道完成避险；空格只释放暴走，不再额外位移/冲撞。
 runner.entities.length = 0
-runner.currentLane = runner.targetLane = 1
-runner.lanePosition = 1
-const dashHpBefore = runner.hp
-runner.dashCooldown = 0
-runner.dashTimer = 0
+runner.currentLane = runner.targetLane = runner.lanePosition = 1
 runner.visualTime = 5
-runner.entities.push({
-  ...RUNNER_ENTITY_TYPES.scout,
-  id: 599,
-  lane: 2,
-  depth: 0.86,
-  previousDepth: 0.86,
-  speed: 1,
-  hp: 2,
-  maxHp: 2,
-  hitFlash: 0,
-  active: true,
-})
-engine.input.state.left = false
+engine.input.state.left = true
 engine.input.state.right = false
-engine.input._dashQueued = true
-runner._updateLaneInput(1 / 60)
-assert.equal(runner.currentLane, 0, '无方向急闪应选择风险更低的邻道')
-assert.equal(runner.dashCooldown, RUNNER_DASH_COOLDOWN)
-assert.equal(runner.dashTimer, RUNNER_DASH_DURATION)
-const dodgeScoreBefore = runner.score
-runner._updateEntities(0.12)
-assert.equal(runner.hp, dashHpBefore, '急闪无敌帧不应受到碰撞伤害')
-assert.ok(runner.perfectDodges > 0)
-assert.equal(runner.score, dodgeScoreBefore + 20)
-runner.dashTimer = 0
-runner.currentLane = runner.targetLane = 2
-runner.lanePosition = 2
-console.log('✓ Runner emergency dash grants invulnerability and perfect-dodge feedback')
-
-// Emergency dash impact against light enemies and fever shard progression
-runner.entities.length = 0
-runner.currentLane = runner.targetLane = 0
-runner.lanePosition = 0
-runner.dashCooldown = 0
-runner.dashTimer = 0
+runner._prevLeft = false
+runner._updateLaneInput(0.2)
+assert.equal(runner.currentLane, 0)
+assert.equal(runner._registerPerfectDodge(1, 0.9), true)
+engine.input.state.left = false
+runner._updateLaneInput(0)
 runner.feverShards = 0
 runner.feverCharges = 0
-runner.entities.push({
-  ...RUNNER_ENTITY_TYPES.scout,
-  id: 601,
-  lane: 1,
-  depth: 0.85,
-  previousDepth: 0.85,
-  speed: 0,
-  hp: 2,
-  maxHp: 2,
-  active: true,
-})
-engine.input.state.right = true
-engine.input._dashQueued = true
-runner._updateLaneInput(1 / 60)
-engine.input.state.right = false
-assert.equal(runner.currentLane, 1)
-assert.equal(runner.dashKills, 1, '急闪冲撞轻型敌人应触发冲撞击杀')
-assert.equal(runner.feverShards, 1, '冲撞击杀应奖励 1 个暴走印记')
+runner._collectFeverShard({ x: 0, y: 0 })
 
 // Collecting 3 shards stores 1 charge (up to max 2 charges)
 runner._collectFeverShard({ x: 0, y: 0 })
@@ -261,11 +211,11 @@ runner._updateShooting(0.001)
 assert.equal(runner.bullets.length, 3, '狂热暴走应同时发射三路弹道')
 assert.deepEqual(runner.bullets.map(b => b.lane).sort(), [0, 1, 2], '狂热暴走弹道应覆盖所有车道')
 runner.feverTimer = 0
-runner.dashTimer = 0
 runner.hitsTaken = 0
 runner.kills = 0
-console.log('✓ Runner dash impact and manual Fever (3 shards -> 1 charge, max 2) verified')
+console.log('✓ Runner ordinary dodge and manual Fever (3 shards -> 1 charge, max 2) verified')
 
+runner.currentLane = runner.targetLane = runner.lanePosition = 1
 // Only the currently occupied lane can damage the player at the collision line.
 runner._encounterTimer = 999
 runner._fireCooldown = 999

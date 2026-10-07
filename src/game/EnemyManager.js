@@ -1,4 +1,5 @@
 import { Entity } from './core/Entity.js'
+import { shadowCircleEntry } from './ShadowGeometry.js'
 import { Enemy } from './entities/Enemy.js'
 import { EnemyBullet } from './entities/EnemyBullet.js'
 import { Boss } from './entities/Boss.js'
@@ -1117,7 +1118,7 @@ export class EnemyManager extends Entity {
       const dx = player.x - e.x
       const dy = player.y - e.y
       if (dx * dx + dy * dy < reach2) {
-        this._startDevour(e)
+        this._startDevour(e, { source: e._devourSource })
         break
       }
     }
@@ -1136,6 +1137,10 @@ export class EnemyManager extends Entity {
   _startDevour(e, ctx = null) {
     e.devouring = true
     e._devourT = 0
+    const combat = this.game.weaponSystem.gluttonCombat
+    e._devourAngle = combat?.enabled
+      ? combat.pose?.angle ?? Math.atan2(e.y - this.game.player.y, e.x - this.game.player.x)
+      : null
     this._devouring.push(e)
     this.game.player._devourPulse = 0.3 // 果冻膨胀脉冲
     this.game.weaponSystem.onDevoured(e, ctx)
@@ -1175,8 +1180,10 @@ export class EnemyManager extends Entity {
       e._devourT += dt
       const k = Math.min(1, e._devourT / 0.22)
       const f = k * k // 加速吸入（先慢后快，吞咽感）
-      e.x += (player.x - e.x) * f * 0.6
-      e.y += (player.y - e.y) * f * 0.6
+      const mouthX = player.x + (e._devourAngle == null ? 0 : Math.cos(e._devourAngle) * player.radius * 0.65)
+      const mouthY = player.y + (e._devourAngle == null ? 0 : Math.sin(e._devourAngle) * player.radius * 0.65)
+      e.x += (mouthX - e.x) * f * 0.6
+      e.y += (mouthY - e.y) * f * 0.6
       e._devourScale = 1 - k * 0.85 // 缩小到 15%
       if (k >= 1) {
         e.destroy() // 溶解消失
@@ -1194,15 +1201,37 @@ export class EnemyManager extends Entity {
     const { width, height } = this.game
     for (const b of list) {
       if (!b.active) continue
+      const fromX = b.x, fromY = b.y
       b.update(dt)
       if (!b.active) continue
+      if (this.game.weaponSystem?.petCombat?.intercept(b, fromX, fromY)) continue
+      const clones = this.game.weaponSystem?.shadowCombat?.clones
+      if (!b.isBoss && clones?.combat.available) {
+        let contact = shadowCircleEntry(fromX, fromY, b.x, b.y, player, b.radius), blocker = null
+        for (const c of clones.items) {
+          if (c.life <= 0) continue
+          const t = shadowCircleEntry(fromX, fromY, b.x, b.y, c, b.radius)
+          if (t < contact) { contact = t; blocker = c }
+        }
+        if (blocker) {
+          clones.blockBullet(blocker)
+          b.active = false
+          continue
+        }
+        if (contact !== Infinity) {
+          b.active = false; b.enemyAttack = true
+          player.hit(b.damage, b)
+          continue
+        }
+      }
       // 玩家碰撞（圆碰撞，平方比较免开方；玩家无敌帧兜底）
       const dx = player.x - b.x
       const dy = player.y - b.y
       const rr = b.radius + player.radius
       if (dx * dx + dy * dy < rr * rr) {
         b.active = false
-        player.hit(b.damage)
+        b.enemyAttack = true
+        player.hit(b.damage, b)
         continue
       }
       // 视口余量外销毁（弹幕不会追出太远）

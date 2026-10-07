@@ -150,6 +150,18 @@ export class Projectile extends Entity {
       ctx.lineTo(r * 0.9, 0)
       ctx.stroke()
     }
+    // 共生契约环（共生 T2+）：虚线环绕弹体，随 this.angle 旋转而滚动。
+    // 与 orbit/crescent/lobes/spine 同级的一次 stroke，不引入额外光栅化开销；
+    // 虚线段长取自 profile 预算常量，热路径不新建数组。
+    if (visual.halo) {
+      ctx.strokeStyle = visual.core
+      ctx.lineWidth = 1.1
+      ctx.setLineDash(visual.haloDash)
+      ctx.beginPath()
+      ctx.arc(0, 0, r * 1.8, 0, TAU)
+      ctx.stroke()
+      ctx.setLineDash([])
+    }
 
     ctx.restore()
   }

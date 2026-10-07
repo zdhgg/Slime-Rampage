@@ -1,7 +1,10 @@
+import { SHADOW_BASE_EVASION, SHADOW_MAX_EVASION } from '../ShadowSkills.js'
 import { Entity } from '../core/Entity.js'
 import { getActiveReactions, getElement } from '../ElementSystem.js'
 import { ENDLESS_FORMATION_BREAK_SPEED_MUL } from '../EndlessMode.js'
 import { AssetManager } from '../AssetManager.js'
+import { renderSlimeBody, renderSlimeFace, paintSlimeSilhouette } from '../SlimeRenderer.js'
+import { SLIME_PALETTES } from '../SlimeAppearance.js'
 
 const TAU = Math.PI * 2
 
@@ -51,10 +54,7 @@ export function getNextExpThreshold(currentThreshold, nextLevel) {
   return Math.floor(currentThreshold * growth)
 }
 
-// —— 冲刺（阶段十三主动技能）：Space/Shift 触发 ——
-const DASH_SPEED = 900 // 冲刺速度（px/s）
-const DASH_TIME = 0.18 // 冲刺持续（秒）
-const DASH_COOLDOWN = 1.2 // 冲刺冷却（秒）
+
 
 /** 异变形态渲染配置表（key 与 ElementSystem 的 mutation/元素 id 对应；shape 为剪影 id） */
 const MUTATIONS = {
@@ -73,54 +73,6 @@ const MUTATIONS = {
 
 /** 形态配置预合并缓存（{ ...cfg, key }）：_mutation 热路径返回同一对象，零分配 */
 const MUTATION_VARIANTS = new Map(Object.entries(MUTATIONS).map(([k, cfg]) => [k, { ...cfg, key: k }]))
-
-/**
- * 元素形态剪影（阶段十五设计改造）：
- * 每种元素拥有独立的轮廓语言，不再千篇一律的正圆——
- * 火有顶焰尖、水呈下坠水袋、雷是放射尖刺、毒是液泡凸起、凝胶微波边、
- * 风暴放射爆裂、酸液顶部气泡、腐蚀坑洼、蒸汽雾霭不规则、毒雷尖刺+液泡。
- * 剪影即身份：隔很远也能认出元素流派（配合颜色与氛围粒子）。
- * 点表：角度（度，0=右 90=下 180=左 270=上）+ 半径系数。
- */
-const P = (arr) => arr.map(([a, k]) => ({ a: (a * Math.PI) / 180, k }))
-
-const SHAPES = {
-  fire: P([[0, 0.93], [45, 0.98], [90, 0.96], [135, 0.98], [180, 0.93], [225, 1.0], [270, 1.2], [315, 1.0]]),
-  water: P([[0, 0.95], [45, 1.05], [90, 1.18], [135, 1.05], [180, 0.95], [225, 0.92], [270, 0.92], [315, 0.92]]),
-  poison: P([[0, 1.0], [30, 0.93], [60, 1.06], [90, 0.95], [120, 1.06], [150, 0.93], [180, 1.0], [210, 0.93], [240, 1.06], [270, 0.95], [300, 1.06], [330, 0.93]]),
-  lightning: P([[0, 0.95], [45, 1.18], [90, 0.95], [135, 1.18], [180, 0.95], [225, 1.18], [270, 0.95], [315, 1.18]]),
-  acid: P([[0, 1.0], [30, 1.02], [60, 0.9], [90, 1.08], [120, 0.9], [150, 1.02], [180, 1.0], [210, 0.98], [240, 1.12], [270, 1.0], [300, 1.12], [330, 0.98]]),
-  gel: P([[0, 1.0], [22.5, 0.96], [45, 1.04], [67.5, 0.96], [90, 1.04], [112.5, 0.96], [135, 1.04], [157.5, 0.96], [180, 1.0], [202.5, 0.96], [225, 1.04], [247.5, 0.96], [270, 1.04], [292.5, 0.96], [315, 1.04], [337.5, 0.96]]),
-  storm: P([[0, 0.9], [45, 1.2], [90, 0.9], [135, 1.2], [180, 0.9], [225, 1.2], [270, 0.9], [315, 1.2]]),
-  corrode: P([[0, 1.0], [40, 0.94], [80, 1.05], [100, 1.1], [120, 0.96], [160, 1.0], [200, 0.94], [240, 1.06], [270, 1.0], [300, 1.05], [330, 0.95]]),
-  steam: P([[0, 1.0], [30, 0.97], [60, 1.05], [90, 0.96], [120, 1.04], [150, 0.96], [180, 1.0], [210, 0.97], [240, 1.05], [270, 0.97], [300, 1.04], [330, 0.96]]),
-  venom: P([[0, 0.95], [45, 1.14], [90, 1.0], [135, 1.14], [180, 0.95], [225, 1.0], [270, 1.14], [315, 1.0]]),
-}
-
-/** 按剪影点表构建平滑闭合身体路径（二次贝塞尔过中点，有机轮廓零尖角） */
-const blobPath = (ctx, r, points) => {
-  const n = points.length
-  const px = []
-  for (const pt of points) px.push({ x: Math.cos(pt.a) * r * pt.k, y: Math.sin(pt.a) * r * pt.k })
-  ctx.beginPath()
-  ctx.moveTo((px[0].x + px[n - 1].x) / 2, (px[0].y + px[n - 1].y) / 2)
-  for (let i = 0; i < n; i++) {
-    const p = px[i]
-    const q = px[(i + 1) % n]
-    ctx.quadraticCurveTo(p.x, p.y, (p.x + q.x) / 2, (p.y + q.y) / 2)
-  }
-  ctx.closePath()
-}
-
-/** 构建身体路径：shape 为空时用经典正圆（基础形态保持原汁原味） */
-const drawBody = (ctx, r, shape) => {
-  const pts = shape ? SHAPES[shape] : null
-  if (pts) blobPath(ctx, r, pts)
-  else {
-    ctx.beginPath()
-    ctx.ellipse(0, 0, r, r, 0, 0, TAU)
-  }
-}
 
 /**
  * 元素氛围粒子配置（阶段十五美化）：形态色微粒环绕/上浮，
@@ -146,7 +98,7 @@ const AURAS = {
  * 渲染（纯 Canvas 程序化，零图片资源）：
  *  - 径向渐变身体（左上受光） + 底部内侧阴影 + 轮廓描边
  *  - 「挤压-拉伸」动画：待机时正弦呼吸式挤压；移动时沿运动方向拉伸（近似保体积）
- *  - 面向角平滑转向，眼睛、腮红、微笑、光泽全部随身体形变
+ *  - 共用选择页造型，五官保持正向，面向角用于前探与咬击方向
  *
  * 移动：deltaTime 驱动，WASD / 方向键 8 方向，受世界边界约束
  */
@@ -207,31 +159,24 @@ export class Player extends Entity {
     this._regenTimer = 10
     this.geneDevourHeal = 0
     this.geneDevourExpMul = 1
-    this.geneDashCdMultiplier = 1
 
     // —— 本体异变与软体反馈（评审改造） ——
-    this._bodyGrads = {} // 形态渐变缓存（按异变形态 key）
     this._devourPulse = 0 // 吞噬膨胀脉冲（衰减）
     this._ripple = 0 // 受击内部波纹（扩散衰减）
     this._stopJitter = 0 // 急停抖动（过冲衰减）
     this._trail = [] // 酸液拖尾液滴（火+毒 / 水+毒 组合）
     this._trailTimer = 0
 
-    // —— 冲刺（阶段十三主动技能） ——
-    this.dashCd = 0 // 冲刺冷却（秒）
-    this._dashT = 0 // 冲刺剩余时间（秒）
-    this._dashDir = { x: 0, y: 0 } // 冲刺方向（单位向量缓存）
-    this._dashHitTargets = new Set() // 单次冲刺已命中目标集合（防多帧重复结算）
-    // —— F 角色专属主动技能（阶段十九） ——
+    // —— 空格 角色专属主动技能（阶段十九） ——
     // 冷却由 GameEngine._updateStrainSkill 推进，这里只持有状态；
-    // origin（无角色身份）没有技能，冷却恒为 0、HUD 不渲染技能条。
+    // 原生黏液使用基础震荡，所有角色共享单主动技能入口。
     // 暴食是唯一例外：它不使用 strainSkillCd（见 GluttonResource.js），
     // 而 resource 型分支由 GameEngine 依据「是否拥有猎食点」自动切换。
     this.strainSkillCd = 0 // 剩余冷却（秒）
     this.strainSkillMax = 0 // 当前技能冷却上限（HUD 进度条用）
     this.strainSkillReadyPulse = 0 // 施放瞬间的反馈脉冲（秒）
-    // —— 暴食猎食点资源（暴食 F 主动捕食） ——
-    // 与「F 冷却」是两套语义：暴食没有主冷却，只有资源 + 0.3s 再次释放锁。
+    // —— 暴食猎食点资源（暴食 空格 主动捕食） ——
+    // 与「空格 冷却」是两套语义：暴食没有主冷却，只有资源 + 0.3s 再次释放锁。
     // 状态放在 Player 上（与 strainSkillCd 同层）：随 resetRunState 归零、
     // 由 applyStrain 决定本角色的启用与否，不新建通用 ResourceSystem。
     // 口径与读写函数在 GluttonResource.js；这里只持有数值。
@@ -239,6 +184,11 @@ export class Player extends Entity {
     this.gluttonDevourProgress = 0 // 正常吞噬进度（满 5 → +1 点）
     this.gluttonBossHuntProgress = 0 // Boss 普攻猎食进度（默认满 10 → +1 点，觉醒满 8）
     this.gluttonRecastLock = 0 // 再次释放锁剩余（0.3s，防同帧/连点连扣两点）
+    this.gluttonGuard = 0
+    this.gluttonGuardTimer = 0
+    this.gluttonGuardCooldown = 0
+    this.gluttonGuardDuration = 1.6
+    this.gluttonHealCooldown = 0
     this.gluttonLastGainPulse = 0 // 获得猎食点瞬间的 HUD 反馈脉冲（秒）
     // —— 肾上腺素（通用技能：受击转机动） ——
     this.adrenalineSpeed = 0 // 受击后移速加成（0 = 未习得）
@@ -250,17 +200,34 @@ export class Player extends Entity {
     // —— 专精流派特质（阶段十八：深潜专精体系） ——
     this.devourRadiusBonus = 1.0 // 暴食：吞噬吸附半径倍率
     this.thornsPulse = false // 暴食：受击震退反伤
-    this.dashCdMultiplier = 1.0 // 暴食/刺客：冲刺冷却倍率
-    this.dashImpactDmg = 0 // 暴食：冲撞伤害倍率
-    this.devourAcidSpray = 0 // 暴食：吞噬喷酸弹数
+    this.thornsDamage = 2 // 暴食：反震伤害（职业秘典可提高）
+    this.gluttonRadiance = 0 // 暴食 BOSS 秘典：近身光辉倍率；0 = 未获得
+    this._gluttonRadianceTimer = 4
+    this.activeSkillCdMultiplier = 1
+    this.gluttonHeavyLevel = 0
+    this.volleyMoveTimer = 0
+    this.devourAcidBurst = 0 // 暴食：近身酸液爆发等级
     this.isGluttonyLord = false // 暴食：终极觉醒（荒古吞噬领主）
     this.devourHeal = false // 暴食共鸣：吞噬必回血
     this.devourDamageReduction = 0 // 暴食共鸣：吞噬减伤
     this.regenInterval = 0 // 通用：自愈周期
     this.frostFireAura = 0 // 元素共鸣：霜火光环周期
+    this.elementalResonance = false // 元素 BOSS 秘典：元素血统专属共鸣强化
     this._frostFireTimer = 0
     this.shadowDecoyDuration = 0 // 刺客：替身假人持续时间
-    this._decoys = [] // 刺客：冲刺后留下的嘲讽替身
+    this.shadowBossStep = false // 暗影 BOSS 秘典：主动技能后必暴
+    this.shadowEvasionBonus = 0
+    this.shadowCloneChanceLevel = 0
+    this.shadowClonePowerLevel = 0
+    this.shadowCloneLifeLevel = 0
+    this.shadowCloneCapLevel = 0
+    this.shadowCloneLord = false
+    this.shadowAssaultClone = false
+    this.evasionFlash = 0
+    this.evasionCount = 0
+    this._dodgedAttacks = new WeakSet()
+    this.shadowCleaveLevel = 0 // 暗影 T2：暴击触发短距横斩。
+    this._decoys = [] // 刺客：主动技能后留下的嘲讽替身
     this.killRushSpeed = 0 // 刺客共鸣：击杀后移速爆发
     this.killRushTimer = 0
     this.stealthTimer = 0 // 刺客：潜行隐匿时间
@@ -295,6 +262,10 @@ export class Player extends Entity {
 
   /** 普通敌人优先攻击附近的暗影替身；Boss 始终锁定本体。 */
   getEnemyTarget(enemy) {
+    const pet = this.game?.weaponSystem?.petCombat?.lureTarget(enemy)
+    if (pet) return pet
+    const clone = this.game?.weaponSystem?.shadowCombat?.clones.lureTarget(enemy)
+    if (clone) return clone
     if (!enemy || enemy.isBoss || this._decoys.length === 0) return this
     let best = null
     let bestD2 = 420 * 420
@@ -322,9 +293,13 @@ export class Player extends Entity {
     this.speedBuffTimer = 0
     this.devourRadiusBonus = 1
     this.thornsPulse = false
-    this.dashCdMultiplier = 1
-    this.dashImpactDmg = 0
-    this.devourAcidSpray = 0
+    this.thornsDamage = 2
+    this.gluttonRadiance = 0
+    this._gluttonRadianceTimer = 4
+    this.activeSkillCdMultiplier = 1
+    this.gluttonHeavyLevel = 0
+    this.volleyMoveTimer = 0
+    this.devourAcidBurst = 0
     this.isGluttonyLord = false
     this.devourHeal = false
     this.devourDamageReduction = 0
@@ -332,17 +307,30 @@ export class Player extends Entity {
     this.regenInterval = 0
     this._regenTimer = 10
     this.frostFireAura = 0
+    this.elementalResonance = false
     this._frostFireTimer = 0
     this.shadowDecoyDuration = 0
+    this.shadowBossStep = false
+    this.shadowEvasionBonus = 0
+    this.shadowCloneChanceLevel = 0
+    this.shadowClonePowerLevel = 0
+    this.shadowCloneLifeLevel = 0
+    this.shadowCloneCapLevel = 0
+    this.shadowCloneLord = false
+    this.shadowAssaultClone = false
+    this.evasionFlash = 0
+    this.evasionCount = 0
+    this._dodgedAttacks = new WeakSet()
+    this.shadowCleaveLevel = 0
     this._decoys.length = 0
     this.killRushSpeed = 0
     this.killRushTimer = 0
     this.stealthTimer = 0
     this.guaranteedCrit = false
+    this.game?.weaponSystem?.shadowCombat?.reset()
     this.adrenalineSpeed = 0
     this.adrenalineTimer = 0
-    this._dashHitTargets.clear()
-    this.strainSkillCd = 0 // F 角色技能冷却归位（角色身份随 applyStrain 重建）
+    this.strainSkillCd = 0 // 空格 角色技能冷却归位（角色身份随 applyStrain 重建）
     this.strainSkillMax = 0
     this.strainSkillReadyPulse = 0
     // 暴食猎食点资源归零（新局/重开不得残留；非暴食角色随后由 applyStrain 置 -1 关闭）
@@ -350,6 +338,11 @@ export class Player extends Entity {
     this.gluttonDevourProgress = 0
     this.gluttonBossHuntProgress = 0
     this.gluttonRecastLock = 0
+    this.gluttonGuard = 0
+    this.gluttonGuardTimer = 0
+    this.gluttonGuardCooldown = 0
+    this.gluttonGuardDuration = 1.6
+    this.gluttonHealCooldown = 0
     this.gluttonLastGainPulse = 0
     this.elementProcCap = ELEMENT_PROC_CHANCE_CAP // 专精改写的附魔封顶归位
   }
@@ -609,10 +602,39 @@ export class Player extends Entity {
   /**
    * 受击结算：无敌帧免疫 → 扣血 + 红闪 + 音效；hp 归零 → 死亡并触发游戏结束
    */
-  hit(damage) {
-    if (this.invincible > 0 || this.dead) return // 无敌帧内免疫（含死亡后）
+  get evasionChance() {
+    return this.game?.startingStrain === 'shadow'
+      ? Math.min(SHADOW_MAX_EVASION, SHADOW_BASE_EVASION + this.shadowEvasionBonus + (this.shadowBossStep ? 0.1 : 0)) : 0
+  }
+
+  hit(damage, attack = null) {
+    if (this.invincible > 0 || this.dead || this.game?.runFinished || !(damage > 0)) return false // 无敌帧内免疫（含结算后）
+    // Only explicit enemy attack tokens are eligible; costs/events retain their old semantics.
+    if (attack?.enemyAttack && this.evasionChance > 0) {
+      // The existing 0.2-second virtual-body visual is also the protection window.
+      // It neither refreshes on hits nor shields non-attack costs/events.
+      if (this.evasionFlash > 0) return false
+      if (this._dodgedAttacks.has(attack)) return false
+      this._dodgedAttacks.add(attack)
+      if (Math.random() < this.evasionChance) {
+        this.evasionFlash = 0.2
+        this.evasionCount++
+        this.game.enemyManager.addText(this.x, this.y - 38, '闪避', null, '#d0baff', 16)
+        return false
+      }
+    }
     if (this.devourDamageReductionTimer > 0 && this.devourDamageReduction > 0) {
       damage = Math.max(1, Math.round(damage * (1 - this.devourDamageReduction)))
+    }
+    if (this.gluttonGuard > 0 && this.gluttonGuardTimer > 0 && damage > 0) {
+      damage = Math.max(0, damage - this.gluttonGuard)
+      this.gluttonGuard = 0
+      this.gluttonGuardTimer = 0
+      this.game.weaponSystem._ring(this.x, this.y, '#d1efa0', this.radius + 14)
+      if (damage <= 0) {
+        this.invincible = 0.18
+        return
+      }
     }
     this.hp -= damage
     this.invincible = 0.5 // 0.5 秒无敌：仍防贴脸每帧连击，但持续受压会稳定掉血——走位有收益
@@ -634,7 +656,7 @@ export class Player extends Entity {
           const d = Math.sqrt(d2) || 1
           e.x += (dx / d) * 45
           e.y += (dy / d) * 45
-          e.hit(2)
+          e.hit(this.thornsDamage || 2)
         }
       }
       this.game.weaponSystem._ring(this.x, this.y, '#ff9f43', 160)
@@ -645,17 +667,41 @@ export class Player extends Entity {
       this.dead = true
       this.game.gameOver() // 引擎暂停 + 回调 Vue 弹结算面板
     }
+    return true
   }
 
   update(dt) {
     if (this.dead) return // 死亡后不再更新（引擎随即暂停）
     this.invincible = Math.max(0, this.invincible - dt)
     this.flash = Math.max(0, this.flash - dt)
-    this.dashCd = Math.max(0, this.dashCd - dt) // 冲刺冷却递减
+    this.evasionFlash = Math.max(0, this.evasionFlash - dt)
+    this.volleyMoveTimer = Math.max(0, this.volleyMoveTimer - dt)
     if (this.stealthTimer > 0) this.stealthTimer -= dt
     if (this.killRushTimer > 0) this.killRushTimer -= dt
     if (this.devourDamageReductionTimer > 0) this.devourDamageReductionTimer -= dt
+    this.gluttonGuardTimer = Math.max(0, this.gluttonGuardTimer - dt)
+    this.gluttonGuardCooldown = Math.max(0, this.gluttonGuardCooldown - dt)
+    this.gluttonHealCooldown = Math.max(0, this.gluttonHealCooldown - dt)
+    if (this.gluttonGuardTimer <= 0) this.gluttonGuard = 0
     this.elapsed += dt
+
+    // 暴食 BOSS 秘典：周期性的近身光辉，强化贴脸和吞噬节奏。
+    if (this.gluttonRadiance > 0 && this.game.enemyManager) {
+      this._gluttonRadianceTimer -= dt
+      if (this._gluttonRadianceTimer <= 0) {
+        this._gluttonRadianceTimer = 4
+        const radius = 150
+        const damage = Math.max(1, Math.round(this.game.weaponSystem.damage * this.game.weaponSystem.levelMul * this.gluttonRadiance))
+        for (const e of this.game.enemyManager.enemies) {
+          if (!e.active || e.devouring) continue
+          if ((e.x - this.x) ** 2 + (e.y - this.y) ** 2 <= radius * radius) {
+            e.hit(damage, { burn: 2, burnDmg: Math.max(1, Math.round(damage * 0.35)) })
+            if (!e.active) this.game.weaponSystem._onKill(e)
+          }
+        }
+        this.game.weaponSystem._ring(this.x, this.y, '#ffd166', radius)
+      }
+    }
 
     for (let i = this._decoys.length - 1; i >= 0; i--) {
       const decoy = this._decoys[i]
@@ -687,21 +733,6 @@ export class Player extends Entity {
           }
         }
         this.game.weaponSystem._ring(this.x, this.y, '#00d2d3', 140)
-      }
-    }
-
-    // 荒古吞噬领主：把附近残血敌人持续拉入吞噬范围。
-    if (this.isGluttonyLord && this.game.enemyManager) {
-      for (const e of this.game.enemyManager.enemies) {
-        if (!e.active || e.isBoss || e.devouring || !e.devourable) continue
-        const dx = this.x - e.x
-        const dy = this.y - e.y
-        const d2 = dx * dx + dy * dy
-        if (d2 > 260 * 260 || d2 < 1) continue
-        const d = Math.sqrt(d2)
-        const pull = Math.min(d, 420 * dt)
-        e.x += (dx / d) * pull
-        e.y += (dy / d) * pull
       }
     }
 
@@ -749,81 +780,12 @@ export class Player extends Entity {
     const moving = dir.x !== 0 || dir.y !== 0
     const previousX = this.x
     const previousY = this.y
-    const wasDashing = this._dashT > 0
     if (this.adrenalineTimer > 0) this.adrenalineTimer -= dt // 肾上腺素计时与移动状态无关，统一衰减
 
-    // —— 冲刺（阶段十三主动技能：Space/Shift） ——
-    if (this._dashT > 0) {
-      // 冲刺中：高速位移 + 残影拖尾，期间无敌帧已在触发时注入
-      this._dashT -= dt
-      this.x += this._dashDir.x * DASH_SPEED * dt
-      this.y += this._dashDir.y * DASH_SPEED * dt
-      this._trailTimer -= dt
-      if (this._trailTimer <= 0) {
-        this._trailTimer = 0.03
-        this._trail.push({
-          x: this.x,
-          y: this.y + this.radius * 0.6,
-          life: 0.35,
-          r: this.radius * 0.18,
-          dash: true,
-        })
-        if (this._trail.length > 24) this._trail.shift()
-      }
-
-      // 暴食冲撞撞击 / 荒古领主冲刺秒杀吞噬（单次冲刺内对同一目标仅结算一次）
-      if ((this.dashImpactDmg > 0 || this.isGluttonyLord) && this.game.enemyManager) {
-        for (const e of this.game.enemyManager.enemies) {
-          if (!e.active || e.devouring || this._dashHitTargets.has(e)) continue
-          const d2 = (e.x - this.x) ** 2 + (e.y - this.y) ** 2
-          const hitR = this.radius + e.radius + 12
-          if (d2 <= hitR * hitR) {
-            this._dashHitTargets.add(e)
-            if (this.isGluttonyLord && !e.isBoss && e.hp <= e.maxHp * 0.5) {
-              this.game.weaponSystem?.onDevoured?.(e)
-              e.destroy()
-            } else if (this.dashImpactDmg > 0 && this.game.weaponSystem) {
-              // 冲撞伤害随等级成长（levelMul）与捕食吞噬加成，并附带元素附魔 + 统一击杀结算
-              const ws = this.game.weaponSystem
-              ws.dashImpact(e, ws.damage * ws.levelMul * ws.devourDamageMul * this.dashImpactDmg)
-            }
-          }
-        }
-      }
-      if (this._dashT <= 0) this._dashHitTargets.clear()
-    } else if (this.input.consumeDash() && this.dashCd <= 0) {
-      // 触发冲刺：方向 = 当前移动方向，静止时朝面朝方向
-      this._dashHitTargets.clear()
-      if (this.shadowDecoyDuration > 0) {
-        this._decoys.push({
-          x: this.x,
-          y: this.y,
-          radius: this.radius * 0.85,
-          life: this.shadowDecoyDuration,
-          maxLife: this.shadowDecoyDuration,
-          flash: 0,
-          isDecoy: true,
-        })
-        if (this._decoys.length > 2) this._decoys.shift()
-      }
-      this.dashCd = DASH_COOLDOWN * (this.dashCdMultiplier || 1) * (this.geneDashCdMultiplier || 1)
-      this._dashT = DASH_TIME
-      if (moving) {
-        this._dashDir.x = dir.x
-        this._dashDir.y = dir.y
-      } else {
-        this._dashDir.x = Math.cos(this.facing)
-        this._dashDir.y = Math.sin(this.facing)
-      }
-      this.invincible = Math.max(this.invincible, this.isGluttonyLord ? 0.45 : 0.25)
-      this.moveBlend = 1
-      this.game.sound.dash()
-
-      // 刺客：潜行与必暴
-      if (this.game.weaponSystem?.isShadowLord) {
-        this.stealthTimer = 1.5
-        this.guaranteedCrit = true
-      }
+    // 影袭独占位移，其余技能不打断普通移动。
+    const shadowMoving = this.game.weaponSystem?.shadowCombat?.updateMovement(dt)
+    if (shadowMoving) {
+      // 影袭自己处理分段移动、碰撞与穿行伤害，避免同时普通移动。
     } else if (moving) {
       if (this.speedBuffTimer > 0) this.speedBuffTimer -= dt
       const rushBonus = this.killRushTimer > 0 ? this.killRushSpeed : 0
@@ -833,7 +795,7 @@ export class Player extends Entity {
         ? ENDLESS_FORMATION_BREAK_SPEED_MUL
         : 1
       const curSpeed = this.speed * (this.speedBuffTimer > 0 ? 1.25 : 1) *
-        (1 + rushBonus + adrenaline) * terrainMul * formationMul
+        (1 + rushBonus + adrenaline) * terrainMul * formationMul * (this.volleyMoveTimer > 0 ? 1.2 : 1)
       this.x += dir.x * curSpeed * dt
       this.y += dir.y * curSpeed * dt
       // 面朝方向平滑转向（dt 归一化，帧率无关）
@@ -865,14 +827,18 @@ export class Player extends Entity {
     const { worldWidth, worldHeight } = this.game
     this.x = clamp(this.x, this.radius, worldWidth - this.radius)
     this.y = clamp(this.y, this.radius, worldHeight - this.radius)
-    this.game.mapFeatures?.resolvePlayerMovement(this, previousX, previousY, wasDashing)
+    if (!shadowMoving) this.game.mapFeatures?.resolvePlayerMovement(this, previousX, previousY)
   }
 
   render(ctx) {
     const r = this.radius
     const t = this.elapsed
     const mut = this._mutation()
+    const look = SLIME_PALETTES[this.strainId] || SLIME_PALETTES.origin
     let baseAlpha = mut.alpha ?? 1
+    const shadowPose = this.game?.weaponSystem?.shadowCombat?.pose
+    if (shadowPose) baseAlpha *= shadowPose.alpha
+    if (this.evasionFlash > 0) baseAlpha *= 0.45
     if (this.stealthTimer > 0) baseAlpha *= 0.45 // 刺客潜行半透明
 
     // 暗影替身：低饱和紫色剪影，保持安静但能清楚解释敌人转火。
@@ -921,7 +887,7 @@ export class Player extends Entity {
     // ---- 酸液拖尾（世界空间，半透明液滴；dash 为冲刺白色残影） ----
     for (const p of this._trail) {
       ctx.globalAlpha = (p.life / 0.5) * 0.4
-      ctx.fillStyle = p.dash ? 'rgba(255, 255, 255, 0.45)' : '#c8e84a'
+      ctx.fillStyle = p.dash ? 'rgba(255, 255, 255, 0.45)' : look.color
       ctx.beginPath()
       ctx.arc(p.x, p.y, p.r, 0, TAU)
       ctx.fill()
@@ -961,6 +927,15 @@ export class Player extends Entity {
     let sx = 1 + stretch - idleSquash
     let sy = 1 - stretch * 0.55 + idleSquash * 1.2 // 与 sx 近似保体积
 
+    const bite = this.game?.weaponSystem?.gluttonCombat.pose || shadowPose
+    if (bite) {
+      const horizontal = Math.cos(bite.angle) ** 2
+      sx *= bite.sx * horizontal + bite.sy * (1 - horizontal)
+      sy *= bite.sy * horizontal + bite.sx * (1 - horizontal)
+    }
+    const chargePulse = this.strainId === 'glutton' ? this.gluttonLastGainPulse / 0.6 : 0
+    if (chargePulse > 0) { sx *= 1 + chargePulse * 0.07; sy *= 1 + chargePulse * 0.07 }
+
     // 吞噬膨胀脉冲（吞咽瞬间果冻鼓起）
     if (this._devourPulse > 0) sx *= 1 + this._devourPulse * 0.35
     if (this._devourPulse > 0) sy *= 1 + this._devourPulse * 0.35
@@ -975,7 +950,9 @@ export class Player extends Entity {
 
     ctx.save()
     ctx.translate(this.x, this.y)
-    ctx.rotate(this.facing) // 面向角：+x 轴即移动方向
+    // Keep the portrait upright; facing drives a small lean and the attack lunge.
+    ctx.rotate(Math.cos(bite?.angle ?? this.facing) * this.moveBlend * 0.06)
+    if (bite) ctx.translate(Math.cos(bite.angle) * r * bite.offset, Math.sin(bite.angle) * r * bite.offset) // 纯动画前探，不改变碰撞位置和冲刺朝向。
     ctx.scale(sx, sy) // 形变作用于整个身体（含五官）
 
     const assets = AssetManager.getInstance()
@@ -991,73 +968,15 @@ export class Player extends Entity {
       assets.draw(ctx, 'prop_poison_bubbles', 0, -r * 0.4, r * 1.6, r * 1.6)
     }
 
-    // 身体径向渐变（按异变形态缓存，懒构建）
-    let g = this._bodyGrads[mut.key]
-    if (!g) {
-      g = ctx.createRadialGradient(-r * 0.3, -r * 0.4, r * 0.1, 0, 0, r * 1.15)
-      g.addColorStop(0, mut.grad[0])
-      g.addColorStop(0.45, mut.grad[1])
-      g.addColorStop(1, mut.grad[2])
-      this._bodyGrads[mut.key] = g
-    }
-
-    // 身体（阶段十五设计改造：元素形态剪影差异化）
-    drawBody(ctx, r, mut.shape)
-    ctx.fillStyle = g
-    ctx.fill()
-
-    // 血统染色（先天属性的可视标识）：岩壳石纹 / 电光弧光 / 贪噬口器
-    if (this.strainTint) {
+    // The same layered vector artwork as the selection portrait, cached offscreen.
+    renderSlimeBody(ctx, this.strainId, r)
+    // Evolution adds material and effects while retaining the selected character.
+    if (mut.key !== 'base') {
       ctx.save()
-      ctx.clip()
-      ctx.fillStyle = this.strainTint
-      ctx.beginPath()
-      ctx.arc(0, 0, r * 1.05, 0, TAU)
-      ctx.fill()
-      if (this.strainDeco === 'stone') {
-        ctx.fillStyle = 'rgba(202, 216, 230, 0.5)'
-        for (const [dx, dy, br] of [[-0.35, -0.2, 0.13], [0.3, 0.16, 0.16], [-0.05, 0.42, 0.1]]) {
-          ctx.beginPath()
-          ctx.arc(dx * r, dy * r, br * r, 0, TAU)
-          ctx.fill()
-        }
-      } else if (this.strainDeco === 'volt') {
-        ctx.strokeStyle = 'rgba(190, 240, 255, 0.75)'
-        ctx.lineWidth = 2
-        ctx.beginPath()
-        ctx.arc(0, 0, r * 0.72, -2.2, -0.9)
-        ctx.stroke()
-      } else if (this.strainDeco === 'glutton') {
-        ctx.strokeStyle = 'rgba(120, 232, 100, 0.8)'
-        ctx.lineWidth = 2.2
-        ctx.beginPath()
-        ctx.ellipse(0, r * 0.18, r * 0.34, r * 0.22, 0, 0, TAU)
-        ctx.stroke()
-      }
+      ctx.globalAlpha *= 0.28
+      paintSlimeSilhouette(ctx, this.strainId, r, { fill: mut.grad[1] })
       ctx.restore()
     }
-
-    // 菲涅尔边缘内发光（Fresnel Rim Light · 果冻晶莹通透感核心）
-    ctx.save()
-    ctx.clip()
-    const rimG = ctx.createRadialGradient(0, 0, r * 0.5, 0, 0, r)
-    rimG.addColorStop(0, 'rgba(255, 255, 255, 0)')
-    rimG.addColorStop(0.8, 'rgba(255, 255, 255, 0.18)')
-    rimG.addColorStop(1, 'rgba(255, 255, 255, 0.48)')
-    ctx.fillStyle = rimG
-    ctx.beginPath()
-    ctx.arc(0, 0, r * 1.1, 0, TAU)
-    ctx.fill()
-    ctx.restore()
-
-    // 底部内侧阴影（裁剪进身体轮廓，营造果冻立体感）
-    ctx.save()
-    ctx.clip()
-    ctx.fillStyle = 'rgba(10, 40, 20, 0.28)'
-    ctx.beginPath()
-    ctx.ellipse(0, r * 0.42, r * 0.82, r * 0.5, 0, 0, TAU)
-    ctx.fill()
-    ctx.restore()
 
     // ---- 元素异变体内纹理 ----
     if (mut.inner === 'fire') {
@@ -1131,25 +1050,13 @@ export class Player extends Entity {
       ctx.fill()
     }
 
-    // 轮廓描边（跟随形态剪影）
-    ctx.lineWidth = 3
-    ctx.strokeStyle = 'rgba(15, 90, 26, 0.55)'
-    drawBody(ctx, r, mut.shape)
-    ctx.stroke()
-
-    // 边缘柔光
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.28)'
-    ctx.lineWidth = 1.5
-    drawBody(ctx, r + 1, mut.shape)
-    ctx.stroke()
-
     // 动态表情判断（平时/愤怒/受击/吞噬/濒死/眨眼）
     let faceState = 'idle'
     if (this.flash > 0 || (this.invincible > 0 && Math.floor(this.invincible * 10) % 2 === 0)) {
       faceState = 'hurt'
     } else if (this._devourPulse > 0.03) {
       faceState = 'devour'
-    } else if (this._dashT > 0 || this.moveBlend > 0.65) {
+    } else if (this.moveBlend > 0.65) {
       faceState = 'angry'
     } else if (this.hp <= this.maxHp * 0.3) {
       faceState = 'lowhp'
@@ -1157,24 +1064,21 @@ export class Player extends Entity {
       faceState = 'blink'
     }
 
-    // 绘制高清面部表情精灵
-    assets.draw(ctx, `slime_face_${faceState}`, 0, 0, r * 1.5, r * 1.5)
-
-    // 顶部水润多层高光
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.6)'
-    ctx.beginPath()
-    ctx.ellipse(-r * 0.32, -r * 0.42, r * 0.22, r * 0.11, -0.6, 0, TAU)
-    ctx.fill()
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.35)'
-    ctx.beginPath()
-    ctx.arc(-r * 0.12, -r * 0.5, r * 0.07, 0, TAU)
-    ctx.fill()
+    renderSlimeFace(ctx, this.strainId, r, {
+      bite, hurt: faceState === 'hurt', blink: faceState === 'blink',
+      swallowing: this._devourPulse > 0.03,
+    })
+    if (chargePulse > 0) {
+      paintSlimeSilhouette(ctx, this.strainId, r, {
+        stroke: `rgba(229, 255, 169, ${chargePulse * 0.8})`, width: 2,
+      })
+    }
 
     // 受击红闪（叠在全身之上）
     if (this.flash > 0) {
-      ctx.fillStyle = `rgba(255, 80, 80, ${((this.flash / 0.25) * 0.45).toFixed(2)})`
-      drawBody(ctx, r, mut.shape)
-      ctx.fill()
+      paintSlimeSilhouette(ctx, this.strainId, r, {
+        fill: `rgba(255, 80, 80, ${((this.flash / 0.25) * 0.45).toFixed(2)})`,
+      })
     }
 
     // 受击内部波纹

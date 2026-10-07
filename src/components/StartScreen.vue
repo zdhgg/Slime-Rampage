@@ -29,11 +29,14 @@ import {
   runKey,
 } from '../game/RunRules.js'
 import { getExpeditionStages } from '../game/RunRules.js'
-import { STRAINS, STRAIN_IDS } from '../game/Strains.js'
+import { STRAINS } from '../game/Strains.js'
+import StrainSelect from './StrainSelect.vue'
+import { STRAIN_PRESENTATION } from './strainPresentation.js'
 import { RUNNER_SUBMODES } from '../game/gameplay/runner/RunnerRules.js'
 
 const emit = defineEmits(['prepare', 'market', 'profiles', 'account', 'leaderboard', 'ui-sound', 'runner', 'tower-defense'])
 const props = defineProps({
+  initialView: { type: String, default: 'playstyles' },
   records: { type: Object, default: () => ({}) },
   progression: {
     type: Object,
@@ -57,41 +60,10 @@ function runnerActionLabel(submode) {
   return Number.isFinite(submode.duration) ? `${submode.duration} 秒目标` : '持续挑战'
 }
 
-const STRAIN_CHOICES = STRAIN_IDS.map((id) => ({ id, ...STRAINS[id] }))
 const MODE_FACTS = {
   expedition: ['独立章节', '章间补给', '讨伐统帅决战'],
   timed: ['十二分钟封锁', '终局勇者', '通关速度计分'],
   endless: ['无时间上限', '二十波后灾变', '长期生存纪录'],
-}
-
-/**
- * 选项图标统一用内联 SVG（24×24 描边风格），不再依赖系统 emoji 字体——
- * 🫧/🪨 这类 Emoji 13+ 字符在旧版 Windows 上会渲染成方框。
- */
-const ICONS = {
-  origin: [
-    'M12 21a7.5 7.5 0 1 0 0-15 7.5 7.5 0 0 0 0 15Z',
-    'M18.5 6.6a1.8 1.8 0 1 0 0-3.6 1.8 1.8 0 0 0 0 3.6Z',
-    'M9.1 11.4a3.6 3.6 0 0 1 2.5-2.3',
-  ],
-  stone: ['M8.2 5 15 4l5 6-2.8 8-8.2 1L4.8 12 8.2 5Z', 'M13 4.6 11.8 11 7 12.8'],
-  volt: ['M13 2 5 13.2h5L9 22l8-11.2h-5L13 2Z'],
-  glutton: ['M20.6 8.4 12 12l8.6 3.6A9 9 0 1 1 20.6 8.4Z'],
-  // 弹射：弹道折线 + 两个命中点（远程弹射的身份）
-  ricochet: ['M3 19 9 11l4.5 5', 'M15 8l3-4 3 3', 'M9.6 9.9a1.9 1.9 0 1 0 0-3.8 1.9 1.9 0 0 0 0 3.8Z'],
-  // 元素：四象环（四系融合的身份）
-  elemental: ['M12 3.2 19.5 12 12 20.8 4.5 12 12 3.2Z', 'M12 8.6a3.4 3.4 0 1 0 0 6.8 3.4 3.4 0 0 0 0-6.8Z'],
-  // 暗影：匕首（暴击与收割的身份）
-  shadow: ['M14.4 3 19 7.6 8.6 18H4v-4.6L14.4 3Z', 'M4.6 15.6 8.4 19.4'],
-}
-
-/** 血统图标配色（血统本身没有 color 字段，这里按主题色手配）。 */
-const STRAIN_COLORS = {
-  origin: '#b7cfaf',
-  glutton: '#96e878',
-  ricochet: '#78d8e8',
-  elemental: '#a29bfe',
-  shadow: '#ff6b6b',
 }
 
 /**
@@ -173,7 +145,7 @@ const modeFacts = computed(() => {
   return [`${count} 个独立章节`, ...MODE_FACTS.expedition.slice(1)]
 })
 
-const view = ref('playstyles')
+const view = ref(props.initialView)
 const selection = ref({ ...normalizeRunSelection(props.preferences), strain: 'origin' })
 const playstyleGrid = ref(null)
 const modeGrid = ref(null)
@@ -181,20 +153,16 @@ const runnerGrid = ref(null)
 const configBackLink = ref(null)
 
 watch(
-  () => props.preferences,
-  (value) => {
+  () => runKey(normalizeRunSelection(props.preferences)),
+  () => {
     selection.value = {
-      ...normalizeRunSelection(value),
+      ...normalizeRunSelection(props.preferences),
       strain: selection.value.strain || 'origin',
     }
-  },
-  { deep: true }
+  }
 )
 
 const unlockedModes = computed(() => getUnlockedModeIds(props.progression))
-const unlockedDifficulties = computed(() =>
-  DIFFICULTY_IDS.filter((id) => isDifficultyUnlocked(props.progression, id))
-)
 const nextUnlock = computed(() => getNextModeUnlock(props.progression))
 const modeCards = computed(() =>
   MODE_IDS.map((mode, index) => ({
@@ -223,7 +191,17 @@ const lanLabel = computed(() => {
   return props.lanStatus?.checked ? '离线单机' : '检测中'
 })
 const publicEntries = computed(() => props.publicLeaderboard?.entries || [])
-const hostAddress = window.location.origin
+/**
+ * 其他设备的加入地址：优先用主机上报的局域网 IP + 端口。
+ * 直接 window.location.origin 在主机上是 localhost，别的设备打开访问的是它自己。
+ */
+const hostAddress = computed(() => {
+  const ips = props.lanStatus?.lanIps
+  const port = props.lanStatus?.lanPort
+  if (Array.isArray(ips) && ips.length && port) return `http://${ips[0]}:${port}`
+  return window.location.origin
+})
+const selectedStrain = computed(() => STRAINS[selection.value.strain] || STRAINS.origin)
 const record = computed(() => props.records[runKey(selection.value)] || {
   best: { wave: 1, stage: 1, kills: 0, time: 0, score: 0, clears: 0, fastestFinale: null, fastestClear: null },
   board: [],
@@ -325,9 +303,17 @@ function quickContinue() {
 }
 
 function selectDifficulty(difficulty) {
+  if (!isDifficultyUnlocked(props.progression, difficulty)) return
   if (selection.value.difficulty === difficulty) return
   selection.value.difficulty = difficulty
   emit('ui-sound', 'select')
+}
+
+/** 锁定难度的解锁提示：线性解锁（简单→普通→困难→地狱），提示通关上一难度。 */
+function difficultyUnlockHint(difficulty) {
+  const index = DIFFICULTY_IDS.indexOf(difficulty)
+  const prev = DIFFICULTIES[DIFFICULTY_IDS[index - 1]]
+  return prev ? `通关${prev.name}解锁` : '尚未解锁'
 }
 
 function selectStrain(strain) {
@@ -359,14 +345,14 @@ watch(
 </script>
 
 <template>
-  <div class="start-overlay" @keydown.esc="onMenuEscape">
+  <div class="start-overlay" :class="{ 'config-active': view === 'config' }" @keydown.esc="onMenuEscape">
     <!-- 史莱姆主题动态背景：漂浮 goo 光晕 + 上浮气泡，纯 CSS 动画，不挡交互 -->
     <div class="goo-layer" aria-hidden="true">
       <div class="goo-blob blob-a"></div>
       <div class="goo-blob blob-b"></div>
       <span v-for="n in 12" :key="n" class="goo-bubble"></span>
     </div>
-    <main class="start-shell">
+    <main class="start-shell" :class="{ 'config-shell': view === 'config' }">
       <header class="start-header">
         <h1>史莱姆大暴走<span>SLIME RAMPAGE</span></h1>
         <div class="header-actions">
@@ -378,7 +364,12 @@ watch(
             <span aria-hidden="true">▣</span>
             <b>{{ props.activeSlot?.name || '史莱姆档案 1' }}</b>
           </button>
-          <button class="market-link" @click="emit('market')">地下城黑市</button>
+          <button
+            v-if="view === 'arena-types' || view === 'config'"
+            class="market-link"
+            title="主战场 · 永久基因改造"
+            @click="emit('market')"
+          >地下城黑市</button>
         </div>
       </header>
 
@@ -608,139 +599,129 @@ watch(
       </section>
 
       <section v-else-if="view === 'config'" class="config-view" aria-labelledby="config-title">
-        <div class="config-intro">
-          <div class="config-heading">
-            <div class="config-kicker">
+        <div class="config-content">
+          <div class="config-intro">
+            <div class="config-heading">
               <button ref="configBackLink" class="back-link" title="返回战斗类型" aria-label="返回战斗类型" @click="showModeSelection">
                 <ArrowLeft :size="17" :stroke-width="1.8" aria-hidden="true" />
               </button>
-              <p>本局配置</p>
+              <div class="config-mode-copy">
+                <div class="config-kicker"><p>本局配置</p><span aria-hidden="true">/</span><h2 id="config-title">{{ selectedMode.name }}</h2></div>
+                <details class="config-mode-details">
+                  <summary>{{ modeFacts.join(' · ') }}</summary>
+                  <p>{{ selectedMode.description }}</p>
+                </details>
+              </div>
             </div>
-            <div class="title-row">
-              <svg class="slime-buddy" viewBox="0 0 48 38" aria-hidden="true">
-                <path d="M7 33C5 21 13 9 24 9s19 12 17 24c-.3 2-1.7 2.6-3.4 2.6H10.4C8.7 35.6 7.3 35 7 33Z" fill="rgba(142, 173, 131, 0.9)" />
-                <path d="M14 15.5c2-2.4 5-3.8 8-4" stroke="rgba(255, 255, 255, 0.55)" stroke-width="2.2" stroke-linecap="round" fill="none" />
-                <circle cx="18.5" cy="24" r="2.1" fill="#0a0d0c" />
-                <circle cx="29.5" cy="24" r="2.1" fill="#0a0d0c" />
-                <path d="M21 28.4c1.9 1.4 4.1 1.4 6 0" stroke="#0a0d0c" stroke-width="1.8" stroke-linecap="round" fill="none" />
-              </svg>
-              <h2 id="config-title">{{ selectedMode.name }}</h2>
-            </div>
-            <span>{{ selectedMode.description }}</span>
-            <ul class="mode-facts" aria-label="行动规则">
-              <li v-for="fact in modeFacts" :key="fact">{{ fact }}</li>
-            </ul>
+
+            <aside class="config-record" aria-label="当前规则纪录">
+              <span>当前规则纪录 · {{ selectedDifficulty.name }}</span>
+              <strong>{{ record.best.score?.toLocaleString('en-US') || '—' }}</strong>
+              <dl>
+                <div>
+                  <dt>{{ selection.mode === 'expedition' ? '最高章节' : '最高波次' }}</dt>
+                  <dd>{{ selection.mode === 'expedition' ? `${record.best.stage || 1} / ${getExpeditionStages(selection.difficulty).length}` : record.best.wave || 1 }}</dd>
+                </div>
+                <div><dt>最多击杀</dt><dd>{{ record.best.kills || 0 }}</dd></div>
+                <div v-if="selection.mode === 'timed'">
+                  <dt>最快终局</dt>
+                  <dd>{{ record.best.fastestFinale ? formatRunClock(record.best.fastestFinale) : '—' }}</dd>
+                </div>
+                <div v-else-if="selection.mode === 'expedition'">
+                  <dt>最快远征</dt>
+                  <dd>{{ record.best.fastestClear ? formatRunClock(record.best.fastestClear) : '—' }}</dd>
+                </div>
+                <div v-else><dt>最长生存</dt><dd>{{ formatRunClock(record.best.time) }}</dd></div>
+              </dl>
+            </aside>
           </div>
 
-          <aside class="config-record" aria-label="当前规则纪录">
-            <span>当前规则纪录 · {{ selectedDifficulty.name }}</span>
-            <strong>{{ record.best.score?.toLocaleString('en-US') || '—' }}</strong>
-            <dl>
-              <div>
-                <dt>{{ selection.mode === 'expedition' ? '最高章节' : '最高波次' }}</dt>
-                <dd>{{ selection.mode === 'expedition' ? `${record.best.stage || 1} / ${getExpeditionStages(selection.difficulty).length}` : record.best.wave || 1 }}</dd>
-              </div>
-              <div><dt>最多击杀</dt><dd>{{ record.best.kills || 0 }}</dd></div>
-              <div v-if="selection.mode === 'timed'">
-                <dt>最快终局</dt>
-                <dd>{{ record.best.fastestFinale ? formatRunClock(record.best.fastestFinale) : '—' }}</dd>
-              </div>
-              <div v-else-if="selection.mode === 'expedition'">
-                <dt>最快远征</dt>
-                <dd>{{ record.best.fastestClear ? formatRunClock(record.best.fastestClear) : '—' }}</dd>
-              </div>
-              <div v-else><dt>最长生存</dt><dd>{{ formatRunClock(record.best.time) }}</dd></div>
-            </dl>
-          </aside>
-        </div>
-
-        <section class="public-board" aria-labelledby="public-board-title">
-          <header class="step-heading">
-            <b id="public-board-title">局域网排行榜</b>
-            <span v-if="props.lanStatus?.online">{{ publicLeaderboard?.totalPlayers || 0 }} 名玩家</span>
-            <span v-else>主机未连接</span>
-          </header>
-          <div v-if="publicEntries.length" class="public-board-list">
-            <div
-              v-for="entry in publicEntries.slice(0, 5)"
-              :key="entry.runId"
-              class="public-board-row"
-              :class="{ current: entry.current }"
-            >
-              <span>#{{ entry.rank }}</span>
-              <b>{{ entry.score.toLocaleString('en-US') }}</b>
-              <i>{{ entry.username }}</i>
-              <em>{{ entry.result === 'victory' ? '通关' : entry.result === 'extracted' ? '撤离' : '败退' }}</em>
-            </div>
-          </div>
-          <p v-else class="public-board-empty">
-            {{ props.lanStatus?.online ? '这套规则还没有公共成绩。' : '启动局域网主机后，全员榜会显示在这里。' }}
-          </p>
-          <p v-if="props.lanStatus?.online" class="public-board-hint">
-            主机地址 <code>{{ hostAddress }}</code> · 其他设备打开同一地址即可加入
-          </p>
-        </section>
-
-        <div class="config-flow">
-          <section class="config-step" aria-labelledby="difficulty-heading">
-            <header class="step-heading">
-              <b id="difficulty-heading">难度</b>
-              <span>{{ selectedDifficulty.description }}</span>
-            </header>
-            <div class="difficulty-options" :style="{ '--difficulty-count': unlockedDifficulties.length }">
-              <button
-                v-for="difficulty in unlockedDifficulties"
-                :key="difficulty"
-                :class="{ selected: selection.difficulty === difficulty }"
-                :aria-pressed="selection.difficulty === difficulty"
-                @click="selectDifficulty(difficulty)"
-              >
-                <span class="option-copy">
-                  <b>{{ DIFFICULTIES[difficulty].name }}</b>
-                  <i>{{ difficultyMeta(difficulty) }}</i>
-                </span>
-                <span class="choice-indicator" aria-hidden="true">✓</span>
-              </button>
-            </div>
-          </section>
-
-          <section class="config-step" aria-labelledby="strain-heading">
-            <header class="step-heading">
-              <b id="strain-heading">史莱姆血统</b>
-              <span>选择先天属性</span>
-            </header>
-            <div class="strain-options">
-              <button
-                v-for="strain in STRAIN_CHOICES"
-                :key="strain.id"
-                :class="{ selected: selection.strain === strain.id }"
-                :aria-pressed="selection.strain === strain.id"
-                @click="selectStrain(strain.id)"
-              >
-                <svg
-                  class="opt-icon"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.7"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  :style="{ color: STRAIN_COLORS[strain.id] }"
-                  aria-hidden="true"
+          <div class="config-flow">
+            <StrainSelect :model-value="selection.strain" @update:model-value="selectStrain" @preview="emit('ui-sound', 'select')" />
+            <section class="config-step" aria-labelledby="difficulty-heading">
+              <header class="step-heading">
+                <b id="difficulty-heading">难度</b>
+                <span>{{ selectedDifficulty.description }}</span>
+              </header>
+              <!-- 锁定难度也展示（灰卡 + 解锁条件），让玩家看得到后面的挑战目标 -->
+              <div class="difficulty-options" :style="{ '--difficulty-count': DIFFICULTY_IDS.length }">
+                <button
+                  v-for="difficulty in DIFFICULTY_IDS"
+                  :key="difficulty"
+                  :class="{
+                    selected: selection.difficulty === difficulty,
+                    locked: !isDifficultyUnlocked(props.progression, difficulty),
+                  }"
+                  :aria-pressed="selection.difficulty === difficulty"
+                  :aria-disabled="!isDifficultyUnlocked(props.progression, difficulty)"
+                  :title="isDifficultyUnlocked(props.progression, difficulty)
+                    ? DIFFICULTIES[difficulty].description
+                    : difficultyUnlockHint(difficulty)"
+                  @click="selectDifficulty(difficulty)"
                 >
-                  <path v-for="d in ICONS[strain.id]" :key="d" :d="d" />
-                </svg>
-                <span class="option-copy">
-                  <b>{{ strain.name }}</b>
-                  <i>{{ strain.desc }}</i>
-                </span>
-                <span class="choice-indicator" aria-hidden="true">✓</span>
-              </button>
-            </div>
+                  <span class="option-copy">
+                    <b>{{ DIFFICULTIES[difficulty].name }}</b>
+                    <i>{{ isDifficultyUnlocked(props.progression, difficulty) ? difficultyMeta(difficulty) : difficultyUnlockHint(difficulty) }}</i>
+                  </span>
+                  <svg
+                    v-if="!isDifficultyUnlocked(props.progression, difficulty)"
+                    class="diff-lock-icon"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.9"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path v-for="d in LOCK_ICON" :key="d" :d="d" />
+                  </svg>
+                  <span v-else class="choice-indicator" aria-hidden="true">✓</span>
+                </button>
+              </div>
+            </section>
+
+          </div>
+
+          <!-- 排行榜挪到配置之后：配置页主角是「做选择」；空态折叠成一行，不再占黄金位置 -->
+          <section class="public-board" :class="{ empty: !publicEntries.length }" aria-labelledby="public-board-title">
+            <template v-if="publicEntries.length">
+              <header class="step-heading">
+                <b id="public-board-title">局域网排行榜</b>
+                <span>{{ publicLeaderboard?.totalPlayers || 0 }} 名玩家</span>
+              </header>
+              <div class="public-board-list">
+                <div
+                  v-for="entry in publicEntries.slice(0, 5)"
+                  :key="entry.runId"
+                  class="public-board-row"
+                  :class="{ current: entry.current }"
+                >
+                  <span>#{{ entry.rank }}</span>
+                  <b>{{ entry.score.toLocaleString('en-US') }}</b>
+                  <i>{{ entry.username }}</i>
+                  <em>{{ entry.result === 'victory' ? '通关' : entry.result === 'extracted' ? '撤离' : '败退' }}</em>
+                </div>
+              </div>
+              <p class="public-board-hint">
+                主机地址 <code>{{ hostAddress }}</code> · 其他设备打开同一地址即可加入
+              </p>
+            </template>
+            <p v-else class="public-board-empty">
+              <b id="public-board-title">局域网排行榜</b>
+              <span>{{ props.lanStatus?.online ? '这套规则还没有公共成绩。' : '主机未连接，启动局域网主机后全员榜会显示在这里。' }}</span>
+            </p>
           </section>
         </div>
 
+        <!-- 独立底部操作区：内容在上方滚动，不遮挡角色与排行榜。 -->
         <div class="config-actions">
+          <p class="config-summary">
+            <b>{{ selectedMode.name }}</b>
+            <span>{{ selectedDifficulty.name }}</span>
+            <i aria-hidden="true">·</i>
+            <span class="summary-strain" :style="{ color: STRAIN_PRESENTATION[selectedStrain.id].color }">{{ selectedStrain.name }}</span>
+          </p>
           <button class="primary-action" @click="prepare">
             开始行动
             <ArrowRight :size="16" :stroke-width="1.9" aria-hidden="true" />
@@ -773,6 +754,8 @@ watch(
     #090806;
 }
 
+.start-overlay.config-active { overflow: hidden; }
+
 /* ---- 史莱姆主题动态背景（纯装饰，不响应事件） ---- */
 .goo-layer {
   position: fixed;
@@ -790,6 +773,17 @@ watch(
   margin: 0 auto;
   padding: 26px 0 38px;
 }
+
+.start-shell.config-shell {
+  display: flex;
+  flex-direction: column;
+  width: min(1180px, calc(100% - 64px));
+  height: 100%;
+  min-height: 0;
+  padding-top: 18px;
+  padding-bottom: max(14px, env(safe-area-inset-bottom));
+}
+.config-shell .start-header { flex: none; min-height: 48px; padding-bottom: 16px; }
 
 .goo-blob {
   position: absolute;
@@ -934,7 +928,6 @@ watch(
 .mode-option,
 .runner-mode-card,
 .difficulty-options button,
-.strain-options button,
 .config-actions button {
   font: inherit;
   cursor: pointer;
@@ -1300,7 +1293,6 @@ watch(
 .profile-link:focus-visible,
 .back-link:focus-visible,
 .difficulty-options button:focus-visible,
-.strain-options button:focus-visible,
 .config-actions button:focus-visible { outline: 2px solid var(--accent-bright); outline-offset: 3px; }
 
 .mode-index {
@@ -1450,7 +1442,6 @@ watch(
   flex: none;
   color: rgba(244, 238, 230, 0.45);
 }
-
 
 .mode-enter {
   display: flex;
@@ -1672,7 +1663,23 @@ watch(
 
 .config-view {
   position: relative;
-  padding-top: 42px;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  padding-top: 18px;
+}
+
+.config-content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin-right: -12px;
+  padding-right: 12px;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+  scrollbar-color: #494735 transparent;
 }
 
 .config-kicker {
@@ -1681,7 +1688,9 @@ watch(
   gap: 10px;
 }
 
-.config-kicker p { margin: 0; }
+.config-kicker p { margin: 0; color: #b19b75; font-size: 11px; }
+.config-kicker > span { color: #5f5b50; font-size: 13px; }
+.config-kicker h2 { margin: 0; font-size: 21px; }
 
 .back-link {
   display: grid;
@@ -1709,37 +1718,25 @@ watch(
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 36px;
-  padding-bottom: 22px;
+  gap: 24px;
+  padding-bottom: 14px;
   border-bottom: 1px solid rgba(238, 214, 180, 0.11);
 }
 
-.config-heading { min-width: 0; flex: 1; }
-.config-heading .title-row { margin-top: 9px; }
-.config-heading .title-row h2 { margin-top: 0; font-size: 27px; }
-.config-heading .slime-buddy { width: 34px; }
-.config-heading > span { margin-top: 5px; font-size: 12px; }
-
-.mode-facts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 15px;
-  margin-top: 10px;
-  color: rgba(244, 238, 230, 0.52);
-  font-size: 10px;
-  list-style: none;
-}
-
-.mode-facts li::before {
-  content: '\2014  ';
-  color: #b98747;
-}
+.config-heading { display: flex; align-items: flex-start; gap: 14px; min-width: 0; flex: 1; }
+.config-heading .back-link { margin-top: 2px; }
+.config-mode-copy { min-width: 0; }
+.config-mode-details { margin-top: 6px; color: #959184; font-size: 10px; line-height: 1.7; }
+.config-mode-details summary { cursor: pointer; }
+.config-mode-details summary::marker { color: #aa9167; font-size: 9px; }
+.config-mode-details summary:focus-visible { outline: 2px solid var(--accent-bright); outline-offset: 3px; }
+.config-mode-details p { max-width: 460px; margin: 8px 0 0; color: #aaa493; font-size: 11px; }
 
 .config-record {
   display: grid;
-  grid-template-columns: 94px minmax(0, 1fr);
+  grid-template-columns: 112px minmax(0, 1fr);
   grid-template-rows: auto auto;
-  width: 350px;
+  width: 380px;
   flex: none;
   align-items: end;
   column-gap: 20px;
@@ -1757,7 +1754,7 @@ watch(
   grid-column: 1;
   margin-top: 5px;
   color: var(--accent-bright);
-  font-size: 22px;
+  font-size: 19px;
   line-height: 1;
   font-variant-numeric: tabular-nums;
 }
@@ -1787,14 +1784,16 @@ watch(
 .config-flow {
   display: grid;
   gap: 24px;
-  margin-top: 22px;
+  margin-top: 14px;
 }
 
 .public-board {
-  margin-top: 18px;
-  padding: 15px 0 3px;
-  border-bottom: 1px solid rgba(238, 214, 180, 0.11);
+  margin-top: 22px;
+  padding: 14px 0 3px;
+  border-top: 1px solid rgba(238, 214, 180, 0.11);
 }
+
+.public-board.empty { padding: 11px 0; }
 
 .public-board .step-heading {
   margin-bottom: 10px;
@@ -1850,12 +1849,23 @@ watch(
   text-align: right;
 }
 
+/* 空态折叠成一行：标题 + 一句话，不再占大块高度 */
 .public-board-empty {
-  min-height: 38px;
-  color: rgba(244, 238, 230, 0.42);
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin: 0;
   font-size: 11px;
   line-height: 1.6;
 }
+
+.public-board-empty b {
+  flex: none;
+  color: rgba(255, 250, 243, 0.9);
+  font-size: 12px;
+}
+
+.public-board-empty span { color: rgba(244, 238, 230, 0.42); }
 
 .public-board-hint {
   margin-top: 9px;
@@ -1898,15 +1908,14 @@ watch(
   display: grid;
   grid-template-columns: repeat(var(--difficulty-count), minmax(0, 1fr));
   gap: 3px;
-  width: min(720px, 100%);
+  width: 100%;
   padding: 3px;
   border: 1px solid rgba(238, 214, 180, 0.12);
   border-radius: 6px;
   background: rgba(255, 255, 255, 0.018);
 }
 
-.difficulty-options button,
-.strain-options button {
+.difficulty-options button {
   position: relative;
   display: flex;
   align-items: center;
@@ -1918,35 +1927,40 @@ watch(
 }
 
 .difficulty-options button {
-  min-height: 54px;
+  min-height: 48px;
   padding: 8px 13px;
   border: 0;
   border-radius: 4px;
   background: transparent;
 }
 
-.strain-options button {
-  min-height: 72px;
-  padding: 10px 12px;
-  border: 1px solid rgba(238, 214, 180, 0.12);
-  border-radius: 6px;
-  background: rgba(18, 16, 13, 0.72);
-}
-
-.difficulty-options button:hover,
-.strain-options button:hover {
+.difficulty-options button:hover {
   color: #fffaf2;
   background: var(--surface-hover);
 }
 
-.strain-options button:hover { border-color: rgba(215, 166, 87, 0.38); }
+/* 锁定难度：灰卡 + 小锁图标，可见但不可选 */
+.difficulty-options button.locked {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+.difficulty-options button.locked:hover {
+  color: rgba(244, 238, 230, 0.66);
+  background: transparent;
+}
+
+.diff-lock-icon {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  color: rgba(244, 238, 230, 0.42);
+}
 
 .difficulty-options button:active,
-.strain-options button:active,
 .config-actions button:active { transform: scale(0.98); }
 
-.difficulty-options button.selected,
-.strain-options button.selected {
+.difficulty-options button.selected {
   color: #fff9ef;
   background: var(--accent-soft);
 }
@@ -1954,8 +1968,6 @@ watch(
 .difficulty-options button.selected {
   box-shadow: inset 0 0 0 1px rgba(236, 196, 119, 0.48);
 }
-
-.strain-options button.selected { border-color: rgba(236, 196, 119, 0.52); }
 
 .option-copy {
   min-width: 0;
@@ -2009,24 +2021,35 @@ button.selected .option-copy i {
   transform: scale(1);
 }
 
-.strain-options {
-  display: grid;
-  /* 阶段十九：血统扩到 5 项（origin + 四角色），固定 4 列会把 origin 挤到第二行孤行 */
-  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
-  gap: 8px;
-}
-
-.opt-icon {
-  width: 22px;
-  height: 22px;
-  flex: none;
-}
-
+/* The action area is outside the content scroller, so it cannot cover choices. */
 .config-actions {
+  position: relative;
+  flex: none;
+  z-index: 5;
   display: flex;
-  justify-content: flex-end;
-  margin-top: 24px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 18px;
+  padding: 10px 12px 10px 18px;
+  border: 1px solid rgba(238, 214, 180, 0.2);
+  border-radius: 8px;
+  background: #15140f;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2);
 }
+
+.config-summary {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+  gap: 8px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.config-summary b { color: var(--accent-bright); }
+.config-summary span { color: var(--text-muted); }
+.config-summary i { color: var(--text-faint); font-style: normal; }
 
 .config-actions button {
   min-height: 48px;
@@ -2053,6 +2076,7 @@ button.selected .option-copy i {
 
 @media (max-width: 760px) {
   .start-shell { width: min(100% - 24px, 620px); padding-top: 14px; }
+  .start-shell.config-shell { width: min(100% - 24px, 620px); padding-top: 14px; }
   .start-header { padding-bottom: 14px; }
   .header-actions { gap: 6px; }
   .market-link,
@@ -2060,8 +2084,9 @@ button.selected .option-copy i {
   .profile-link { padding: 0 9px; font-size: 10px; }
   .account-link,
   .profile-link { gap: 5px; }
-  .mode-view,
-  .config-view { padding-top: 34px; }
+  .mode-view { padding-top: 34px; }
+  .config-view { padding-top: 20px; }
+  .config-content { display: flex; flex-direction: column; }
   .playstyle-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 25px; }
   .playstyle-option { min-height: 244px; padding: 23px; }
   .playstyle-title-row { margin-top: 28px; }
@@ -2075,10 +2100,13 @@ button.selected .option-copy i {
   .unlock-segs { width: 84px; }
   .quick-continue { margin-left: 0; width: 100%; justify-content: center; }
   .title-row { flex-wrap: wrap; }
-  .config-intro { display: block; padding-bottom: 18px; }
-  .config-heading h2 { font-size: 26px; }
+  .config-intro { display: contents; }
+  .config-heading { order: 0; gap: 11px; }
+  .config-heading h2 { font-size: 20px; }
+  .config-kicker { gap: 8px; }
   .config-record {
-    grid-template-columns: 80px minmax(0, 1fr);
+    order: 3;
+    grid-template-columns: 112px minmax(0, 1fr);
     width: 100%;
     margin-top: 18px;
     padding: 14px 0 0;
@@ -2087,15 +2115,22 @@ button.selected .option-copy i {
     border-left: 0;
   }
   .config-record dl { gap: 8px; }
+  .public-board { order: 4; }
+  .public-board-empty { flex-wrap: wrap; gap: 4px 12px; }
   .public-board-row { grid-template-columns: 38px 94px minmax(0, 1fr) 48px; gap: 8px; }
-  .config-flow { gap: 20px; margin-top: 20px; }
+  .config-flow { order: 1; gap: 20px; margin-top: 20px; }
   .config-step { padding: 0; }
   .difficulty-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .strain-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .config-actions {
-    margin-top: 20px;
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    margin-top: 12px;
+    padding: 10px 12px;
   }
-  .config-actions button { width: 100%; }
+  .config-summary { flex-wrap: wrap; gap: 4px 7px; font-size: 11px; }
+  .config-summary b { flex-basis: 100%; }
+  .config-actions button { flex: none; padding: 0 17px; justify-content: center; }
 }
 
 @media (max-width: 540px) {
@@ -2117,7 +2152,6 @@ button.selected .option-copy i {
   .mode-option,
   .runner-mode-card,
   .difficulty-options button,
-  .strain-options button,
   .config-actions button { transition: none; }
   .goo-bubble,
   .goo-blob,

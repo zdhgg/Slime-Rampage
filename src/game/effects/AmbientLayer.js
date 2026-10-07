@@ -47,7 +47,14 @@ export class AmbientLayer {
     this._themeId = null
     this._particles = []
     this._time = 0
+    this._habitats = []
     this._tintCache = new Map() // `theme:档位` → rgba 字符串（避免每帧拼串分配）
+  }
+
+  /** First-chapter fireflies gather around pools and shrubs, using world coordinates. */
+  setHabitats(items = []) {
+    this._habitats = items.filter(item => item.type === 'woodland-pool' || item.type === 'woodland-shrub')
+    this._themeId = null
   }
 
   /** 每帧推进：主题变化时重散布；粒子在相机视野 + 边距的盒内环视回绕 */
@@ -112,11 +119,13 @@ export class AmbientLayer {
 
   _scatter(camera, viewW, viewH, config) {
     this._particles.length = 0
+    const habitats = this._habitats.filter(item => item.x >= camera.x && item.x <= camera.x + viewW && item.y >= camera.y && item.y <= camera.y + viewH)
     for (let i = 0; i < config.count; i++) {
       const size = config.size[0] + Math.random() * (config.size[1] - config.size[0])
+      const anchor = i % 3 !== 0 && habitats.length ? habitats[i % habitats.length] : null
       this._particles.push({
-        x: camera.x + Math.random() * viewW,
-        y: camera.y + Math.random() * viewH,
+        x: anchor ? anchor.x + (Math.random() - 0.5) * 90 : camera.x + Math.random() * viewW,
+        y: anchor ? anchor.y - Math.random() * 45 : camera.y + Math.random() * viewH,
         vx: (Math.random() * 2 - 1) * config.speed * 0.5,
         size,
         phase: Math.random() * TAU,

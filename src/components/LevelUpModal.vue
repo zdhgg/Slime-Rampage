@@ -64,6 +64,7 @@ const isMilestone = props.options?.[0]?.isMilestone || false
 const milestoneType = props.options?.[0]?.milestoneType || 'primary'
 
 const roleLabel = (s) => {
+  if (s.isBossSkill) return '📜 BOSS职业秘典'
   if (s.isCapstone) return '🌟 终极觉醒'
   if (s.role === 't1_free') return '🌱 自由变异尝试'
   if (s.role === 'primary') return '🔥 主专精深潜'
@@ -72,12 +73,15 @@ const roleLabel = (s) => {
 }
 
 const cardClass = (s) => {
+  if (s.isBossSkill) return 'card-boss'
   if (s.isCapstone) return 'card-capstone'
   if (s.role === 'primary') return 'card-primary'
   if (s.role === 'secondary') return 'card-secondary'
   if (s.role === 't1_free') return 'card-free'
   return 'card-common'
 }
+
+const isBossReward = computed(() => !!props.options?.[0]?.isBossSkill)
 </script>
 
 <template>
@@ -138,9 +142,11 @@ const cardClass = (s) => {
 
     <!-- 2. 常规升级 3 卡面板 (自由探索 / 主副专精深潜 / 通用) -->
     <div v-else class="levelup-panel">
-      <h2 class="levelup-title">✨ 升级！Lv.{{ level }} · 选择一项基因进化 ✨</h2>
+      <h2 class="levelup-title">{{ isBossReward ? '📜 王级职业秘典 · 选择一项专属强化 📜' : `✨ 升级！Lv.${level} · 选择一项基因进化 ✨` }}</h2>
       <div class="levelup-grow">
-        {{ level < 5
+        {{ isBossReward
+          ? '击败首领获得的职业秘典：不占用升级次数，只能选择当前职业的强力专属技能。'
+          : level < 5
           ? (roleSpec
             ? '🌱 阶段说明：Lv.1~4 只开放本角色专属技能树（Lv.5 自动觉醒为你的主专精，无需选择）'
             : '🌱 阶段说明：Lv.1~4 为自由变异期（四系技能全开放，不锁死流派，Lv.5 将触发主专精觉醒仪式）')
@@ -154,14 +160,15 @@ const cardClass = (s) => {
           v-for="s in options"
           :key="s.id"
           :class="['skill-card', cardClass(s)]"
-          :title="`当前 Lv.${s.level} · 选择后 Lv.${s.level + 1}`"
+          :title="s.isBossSkill ? 'BOSS 专属技能' : `当前 Lv.${s.level} · 选择后 Lv.${s.level + 1}`"
           @click="emit('select', s)"
         >
           <!-- 流派定位指示 -->
           <div class="role-badge">{{ roleLabel(s) }}</div>
 
           <!-- 等级角标 -->
-          <i class="skill-lv">Lv.{{ s.level + 1 }}/{{ s.maxLevel }}</i>
+          <i v-if="!s.isBossSkill" class="skill-lv">Lv.{{ s.level + 1 }}/{{ s.maxLevel }}</i>
+          <i v-else class="skill-lv boss-lv">BOSS</i>
 
           <div class="skill-icon">{{ s.icon }}</div>
 
@@ -460,6 +467,16 @@ const cardClass = (s) => {
   box-shadow: 0 0 24px rgba(255, 211, 42, 0.4);
   animation: capstonePulse 2s infinite alternate;
 }
+
+.card-boss {
+  border: 2px solid #ff8bd1;
+  background: linear-gradient(165deg, rgba(62, 24, 58, 0.98), rgba(26, 12, 28, 0.98));
+  box-shadow: 0 0 24px rgba(255, 139, 209, 0.35);
+}
+.card-boss:hover {
+  border-color: #ffd1ee;
+  box-shadow: 0 10px 36px rgba(255, 139, 209, 0.5);
+}
 @keyframes capstonePulse {
   from { box-shadow: 0 0 16px rgba(255, 211, 42, 0.3); }
   to { box-shadow: 0 0 32px rgba(255, 211, 42, 0.65); }
@@ -512,6 +529,10 @@ const cardClass = (s) => {
   font-weight: 800;
   color: #1a1206;
   background: linear-gradient(90deg, #ffd166, #f0a63a);
+}
+.skill-lv.boss-lv {
+  color: #32142d;
+  background: linear-gradient(90deg, #ffd1ee, #ff8bd1);
 }
 
 .skill-icon {

@@ -65,7 +65,7 @@ export const GENES = [
     isCapstone: true,
     name: '捕食原核',
     icon: '◆',
-    desc: '生命上限 +2；吞噬回复 1 点生命并额外获得 35% 经验，且每次吞噬攻击永久 +3%（封顶 +100%）——捕食体路线的滚雪球机制',
+    desc: '生命上限 +2；吞噬回复 1 点生命（与其他吞噬恢复共用 4 秒间隔）并额外获得 35% 经验，且每次吞噬攻击永久 +3%（封顶 +100%）——捕食体路线的滚雪球机制',
     // 适用范围提示（第四批）：黑市是档案级永久成长，不按当前角色禁止购买——
     // 玩家可以为一个还没解锁/还没选的角色提前投资，只把「主要适用于谁」讲清楚。
     scope: '主要适用于🍽️暴食史莱姆（吞噬能力专属）',
@@ -114,11 +114,11 @@ export const GENES = [
     isCapstone: true,
     name: '动能原核',
     icon: '◆',
-    desc: '冲刺冷却缩短 20%；所有主弹与分裂弹额外穿透 1 个目标',
+    desc: '移动速度提高 8%；所有主弹与分裂弹额外穿透 1 个目标',
     costs: [120],
     maxLevel: 1,
     apply(game) {
-      game.player.geneDashCdMultiplier = 0.8
+      game.player.speed *= 1.08
       game.weaponSystem.genePierces = 1
     },
   },
@@ -245,7 +245,6 @@ export function applyGenes(game, genes) {
   p.geneDevourHeal = 0
   p.geneDevourExpMul = 1
   p.geneDevourDamage = 0
-  p.geneDashCdMultiplier = 1
   weapon.baseSplitChance = 0
   weapon.genePierces = 0
   weapon.geneReactionDmgMul = 1

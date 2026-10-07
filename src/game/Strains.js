@@ -1,4 +1,6 @@
 import {
+  PET_SKILL,
+  ORIGIN_SKILL,
   RICOCHET_SKILL,
   ELEMENTAL_SKILL,
   SHADOW_SKILL,
@@ -11,11 +13,11 @@ import { disableGluttonResource, resetGluttonResource } from './GluttonResource.
  * 血统管「你这团身体本身是什么」）。
  *
  * 阶段十九「角色化」：血统从「纯属性修正」升级为「角色身份」——
- *  - 四条角色血统各自绑定一棵专精树（roleSpec）：Lv.1~4 只开放本角色 T1 + 通用，
+ *  - 五条角色血统各自绑定一棵专精树（roleSpec）：Lv.1~4 只开放本角色 T1 + 通用，
  *    Lv.5 由引擎自动觉醒（不弹四选一），彻底消除「选了贪噬、Lv.5 却点元素」的身份断裂；
- *  - 四条角色各有 F 专属主动技能（见 StrainSkills.js）；
+ *  - 五条角色各有 空格 专属主动技能（见 StrainSkills.js）；
  *  - `origin` 保持「自由构筑」语义：roleSpec = null，Lv.1~4 四系 T1 全开放、
- *    Lv.5 仍是四选一，且不参与吞噬独占与 F 技能（无身份 = 无专属）。
+ *    Lv.5 仍是四选一，不参与吞噬独占，保留黏液震荡主动。
  *
  * 数值纪律（避免与 Lv.5 专精抢同一个参数）：
  *  - 血统只改「开局就生效」的机制口径与基础属性，且一律用加法/乘法叠加，
@@ -24,23 +26,30 @@ import { disableGluttonResource, resetGluttonResource } from './GluttonResource.
  *    critMul / splitChance / splitInherit）血统一律不碰，见 SkillPool.js 各 apply。
  */
 export const STRAINS = {
+  summoner: {
+    id: 'summoner', name: '共生史莱姆', icon: '🐾', roleSpec: 'symbiosis',
+    bodyProjectileDamageMul: 0.55,
+    desc: '开局携带岩甲团团，伙伴有独立生命，倒地 8 秒后恢复；护卫最多牵制三名普通敌人。空格定向指挥协同狩猎，无目标时回防。可成长为双伙伴；本体飞弹伤害降低 45%。',
+    tint: 'rgba(237,196,121,0.25)', deco: null,
+  },
   origin: {
     id: 'origin',
     name: '原生黏液',
     icon: '🫧',
-    desc: '无修正的原始形态。Lv.1~4 四系技能全开放，Lv.5 自由觉醒任一主专精。',
+    desc: '无修正的原始形态。Lv.1~4 三系技能全开放，Lv.5 自由觉醒主专精；空格释放黏液震荡解围。',
     roleSpec: null,
   },
   glutton: {
     id: 'glutton',
     name: '暴食史莱姆',
+    attackMode: 'melee',
     icon: '🍽️',
-    desc: '唯一能吞噬敌人的角色。吞噬或命中首领积累猎食点（每 5 次吞噬或 10 次普攻命中首领 +1，最多 2 点），消耗 1 点按 F 主动捕食濒临吞噬线的敌人，或撕咬首领造成 5% 最大生命伤害。开火间隔 ×1.5（近身换命），生命 +1，吞噬范围 +35%、吞噬线 +4%。',
+    desc: '自动咬击前方近处敌人，残血或被咬杀的血肉目标直接吞噬。每 5 次基础吞噬或 10 次近战普攻命中首领积累 1 猎食点（上限 2），空格 消耗 1 点发动暴食重咬。捕食后获得持续 1.6 秒、抵挡 1 点伤害的护甲，每 2.5 秒最多获得一次。生命 +1，吞噬范围 +35%、吞噬线 +4%。',
     roleSpec: 'gluttony',
     // 暴食的独占机制在引擎侧（EnemyManager._checkDevour + Enemy.hit 的角色闸门），
     // 这里只补「吃得更稳」的口径，不重复实现独占。
     maxHp: 1,
-    fireIntervalMul: 1.5,
+    fireIntervalMul: 0.85,
     devourRadius: 1.35,
     devourBonus: 0.04,
     tint: 'rgba(150, 232, 120, 0.26)',
@@ -72,42 +81,44 @@ export const STRAINS = {
   shadow: {
     id: 'shadow',
     name: '暗影史莱姆',
+    attackMode: 'melee',
     icon: '🗡️',
-    desc: '暴击率 +12%、冲刺冷却 −20%（冲刺是资源），生命 −1、吞噬范围收窄。',
+    desc: '近战影刃，闪避率 15%，成功后虚化 0.2 秒。暴击后 60% 概率生影，最多 2 个、持续 4 秒、攻击 40%。分身诱导普通远程敌人并优先追击，每挡一发普通弹幕消耗 0.5 秒。空格 首击必暴并指挥夹击。暴击率 +12%、生命 −1。',
     roleSpec: 'assassin',
     critChance: 0.12,
     maxHp: -1,
-    dashCdMul: 0.8,
-    devourRadius: 0.85,
+    fireIntervalMul: 0.55,
     tint: 'rgba(255, 86, 86, 0.24)',
     deco: null,
   },
 }
 
-export const STRAIN_IDS = ['origin', 'glutton', 'ricochet', 'elemental', 'shadow']
+export const STRAIN_IDS = ['origin', 'glutton', 'ricochet', 'elemental', 'shadow', 'summoner']
 
-/** 四名角色的 id（origin 是自由构筑，不算角色） */
-export const CHARACTER_IDS = ['glutton', 'ricochet', 'elemental', 'shadow']
+/** 五名角色的 id（origin 是自由构筑，不算角色） */
+export const CHARACTER_IDS = ['glutton', 'ricochet', 'elemental', 'shadow', 'summoner']
 
 /**
- * F 专属主动技能表（角色 id → 技能定义）。
- * origin 无角色身份，因此没有 F 技能——这是刻意的：自由构筑的代价是没有专属。
+ * 空格 专属主动技能表（角色 id → 技能定义）。
+ * 原生黏液保留自由构筑，并拥有基础解围技能。
  */
 export const STRAIN_SKILLS = {
+  summoner: PET_SKILL,
+  origin: ORIGIN_SKILL,
   glutton: GLUTTON_SKILL,
   ricochet: RICOCHET_SKILL,
   elemental: ELEMENTAL_SKILL,
   shadow: SHADOW_SKILL,
 }
 
-/** 取某角色的 F 技能（origin / 未知 id 返回 null） */
+/** 取某角色的 空格 技能（未知 id 返回 null） */
 export function getStrainSkill(strainId) {
   return STRAIN_SKILLS[strainId] || null
 }
 
 /**
  * 该角色能否吞噬敌人。
- * 只有暴食史莱姆可以；origin（自由构筑）与其余三角色一律不能——
+ * 只有暴食史莱姆可以；origin（自由构筑）与其余角色一律不能——
  * 独占是角色差异的骨架，不能因为「origin 没有身份」就给它全部权限。
  */
 export function canDevour(strainId) {
@@ -115,7 +126,7 @@ export function canDevour(strainId) {
 }
 
 /**
- * 该角色是否拥有猎食点资源（暴食 F 主动捕食的弹药）。
+ * 该角色是否拥有猎食点资源（暴食 空格 主动捕食的弹药）。
  * 与 canDevour 同源但语义不同：这是「资源归属」，不是「吞噬权限」。
  * 单独导出是为了让 HUD / 引擎分支读同一个事实，而不是各自比较角色 id。
  */
@@ -160,9 +171,9 @@ export function applyStrain(engine, id) {
   if (strain.devourRadius) p.devourRadiusBonus *= strain.devourRadius
   engine.strainDevourBonus = strain.devourBonus || 0
 
-  // 猎食点资源归属（暴食 F）：只有暴食拥有它，且每次建立身份时都从 0 点 / 0 进度开始。
+  // 猎食点资源归属（暴食 空格）：只有暴食拥有它，且每次建立身份时都从 0 点 / 0 进度开始。
   // 非暴食角色显式置 -1（无此资源）——既保证切换角色不残留暴食数值，
-  // 也让 HUD 与 F 分支只需读一个字段就能判断「该不该显示/该不该走资源型释放」。
+  // 也让 HUD 与 空格 分支只需读一个字段就能判断「该不该显示/该不该走资源型释放」。
   if (hasGluttonCharge(strain.id)) {
     resetGluttonResource(p)
   } else {
@@ -176,7 +187,6 @@ export function applyStrain(engine, id) {
   if (strain.projectileCount) ws.projectileCount += strain.projectileCount
   if (strain.fireIntervalMul) ws.fireInterval *= strain.fireIntervalMul
   if (strain.critChance) ws.critChance += strain.critChance
-  if (strain.dashCdMul) p.dashCdMultiplier *= strain.dashCdMul
 
   p.hp = p.maxHp
 }

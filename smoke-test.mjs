@@ -438,22 +438,14 @@ weaponSystem._venomStorm({ combo: ['poison', 'lightning'] }) // 合成反应：_
 assert.equal(weaponSystem.stats.venomStorms, 1)
 ok('蒸汽云雾/毒雷风暴：行为统计（物种档案）正常记录')
 
-// 13) 冲刺：触发 + 无敌帧 + 高速位移 + 冷却递减
-player.dashCd = 0
-player._dashT = 0
+// 13) 取消通用冲刺：静止时不注入位移或无敌。
 player.invincible = 0
-const sx = player.x
-const sy = player.y
-input.queueDash()
-player.update(0.016) // 触发帧：进入冲刺态
-assert.equal(player._dashT, 0.18)
-assert.equal(player.invincible, 0.25) // 冲刺无敌帧
-assert.equal(player.dashCd, 1.2)
-player.update(0.016) // 冲刺帧：朝面朝方向（-y）高速位移
-assert.ok(player.y < sy) // 位移明显
-assert.ok(player.dashCd < 1.2) // 冷却递减
-assert.equal(player.input.consumeDash(), false) // 边沿触发，不自动连发
-ok('冲刺：Space 触发、无敌帧 0.25s、高速位移、冷却递减、无自动连发')
+const sx = player.x, sy = player.y
+player.update(0.016)
+assert.equal(player.x, sx)
+assert.equal(player.y, sy)
+assert.equal(player.invincible, 0)
+ok('移除通用冲刺，无额外位移或无敌')
 
 // 14) DOT 跳伤随武器伤害成长（阶段十四调优：元素伤害不再固定 1 点）
 const eD = new Enemy({ x: 900, y: 900, speed: 80, hp: 5, type: 'knight' })
@@ -645,9 +637,7 @@ player.resetRunState()
 player.shadowDecoyDuration = 1.5
 player.killRushSpeed = 0.4
 player.devourDamageReduction = 0.25
-player.dashCd = 0
-input.queueDash()
-player.update(0.016)
+getStrainSkill('origin').use(game)
 assert.equal(player._decoys.length, 1)
 const taunted = new Enemy({ x: player.x + 100, y: player.y, speed: 80, hp: 5, type: 'knight' })
 taunted.attach(game)
@@ -797,12 +787,12 @@ assert.equal(getProgressionStage(30).theme, 'royal')
 assert.equal(getProgressionStage(45).variant, 'outer-bailey')
 // 角色设计护栏（阶段十九）：四条角色血统各绑定一棵互不相同的专精树、各有 F 技能与
 // 明确的玩法短板；origin 保持「无身份」纯净基线（不绑树、不吞、无 F 技能）。
-assert.equal(STRAIN_IDS.length, 5)
-assert.equal(CHARACTER_IDS.length, 4)
+assert.equal(STRAIN_IDS.length, 6)
+assert.equal(CHARACTER_IDS.length, 5)
 assert.deepEqual(STRAIN_IDS, ['origin', ...CHARACTER_IDS])
 assert.ok(!STRAINS.origin.maxHp && !STRAINS.origin.speedMul && !STRAINS.origin.damageMul)
 assert.equal(STRAINS.origin.roleSpec, null, 'origin 不绑定技能树（保留 Lv.5 四选一）')
-assert.equal(getStrainSkill('origin'), null, 'origin 没有 F 专属技能')
+assert.equal(getStrainSkill('origin').id, 'slime_shock', '原生拥有黏液震荡')
 assert.equal(canDevour('origin'), false, 'origin 不享受吞噬独占')
 
 const roleSpecs = CHARACTER_IDS.map((id) => STRAINS[id].roleSpec)
@@ -810,21 +800,21 @@ assert.ok(
   roleSpecs.every((spec) => typeof spec === 'string' && spec.length > 0),
   '每条角色血统都必须绑定 roleSpec'
 )
-assert.equal(new Set(roleSpecs).size, 4, '四条角色绑定四棵互不相同的专精树')
+assert.equal(new Set(roleSpecs).size, 5, '五条角色绑定五棵互不相同的专精树')
 for (const id of CHARACTER_IDS) {
   assert.ok(getStrainSkill(id), `${id} 必须有 F 专属技能`)
   // 玩法短板：每条角色至少有一项明确的负向机制修正（而非只有加成）
   const s = STRAINS[id]
   const hasDrawback =
-    (s.maxHp || 0) < 0 || (s.fireIntervalMul || 1) > 1 || (s.devourRadius || 1) < 1 || (s.speedMul || 1) < 1
+    s.attackMode === 'melee' || (s.bodyProjectileDamageMul || 1) < 1 || (s.maxHp || 0) < 0 || (s.fireIntervalMul || 1) > 1 || (s.devourRadius || 1) < 1 || (s.speedMul || 1) < 1
   assert.ok(hasDrawback, `${id} 必须有玩法层面的短板（负向机制修正）`)
 }
 assert.equal(canDevour('glutton'), true, '只有暴食史莱姆可以吞噬')
 assert.ok(CHARACTER_IDS.filter((id) => canDevour(id)).length === 1, '吞噬独占者只能是暴食')
-assert.ok(STRAINS.glutton.devourRadius > 1 && (STRAINS.glutton.fireIntervalMul || 1) > 1)
+assert.ok(STRAINS.glutton.devourRadius > 1 && STRAINS.glutton.attackMode === 'melee', '暴食以攻击距离换取捕食收益；近战范围另有真实战斗测试')
 assert.ok(STRAINS.ricochet.projectileCount > 0 && (STRAINS.ricochet.fireIntervalMul || 1) > 1)
 assert.ok(STRAINS.elemental.critChance > 0 && STRAINS.elemental.maxHp < 0)
-assert.ok(STRAINS.shadow.critChance > 0 && STRAINS.shadow.dashCdMul < 1 && STRAINS.shadow.maxHp < 0)
+assert.ok(STRAINS.shadow.critChance > 0 && STRAINS.shadow.maxHp < 0)
 const strainIntro = getRunIntro({ mode: 'timed', difficulty: 'normal' }, 'glutton')
 assert.ok(strainIntro.strainNote.includes('暴食史莱姆'))
 assert.equal(getRunIntro({ mode: 'timed', difficulty: 'normal' }, 'origin').strainNote, null)
@@ -859,7 +849,7 @@ wraithUnit.attackCd = 0
 wraithUnit.game = {
   enemyManager: { addText() {} },
   devourThreshold: 0.25,
-  player: { x: wraithUnit.x + 10, y: wraithUnit.y, radius: 12, hit() {} },
+  player: { x: wraithUnit.x + 10, y: wraithUnit.y, radius: 12, hit() { return true } },
 }
 wraithUnit.update(1 / 60)
 assert.ok(wraithUnit.hp > 1, '怨灵命中后应吸血回升')
@@ -991,7 +981,7 @@ assert.equal(
 
 weaponSystem.reset()
 applyGenes(game, { swift: 2, split: 1, kinetic_origin: 1 })
-assert.equal(player.geneDashCdMultiplier, 0.8)
+assert.ok(Math.abs(player.speed - 340 * 1.16 * 1.08) < 1e-7)
 assert.equal(weaponSystem.genePierces, 1)
 assert.equal(weaponSystem.splitChance, 0.25) // 基础分裂概率已同步到实际概率
 enemyManager.reset()

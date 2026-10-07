@@ -120,7 +120,7 @@ engine.mapFeatures.configure('frontier', 'camp-road', 1)
 assert.equal(engine.mapFeatures.speedMultiplierAt(engine.worldWidth * 0.3, engine.worldHeight * 0.34, 'player'), 0.84)
 assert.equal(engine.mapFeatures.speedMultiplierAt(engine.worldWidth * 0.3, engine.worldHeight * 0.34, 'enemy'), 0.88)
 
-// 6. 王城拒马需要两次冲刺冲击，破坏后不再阻挡。
+// 6. 王城拒马需要两次攻击，破坏后不再阻挡。
 engine.mapFeatures.configure('royal', 'outer-bailey', 1)
 const barrier = engine.mapFeatures.barricades[0]
 const barrierPos = engine.mapFeatures._position(barrier)
@@ -130,11 +130,13 @@ const oldY = barrierPos.y
 player.x = barrierPos.x
 player.y = barrierPos.y
 assert.equal(engine.mapFeatures.resolvePlayerMovement(player, oldX, oldY, true), true)
+assert.equal(barrier.hp, 2, '走位不破坏拒马')
+engine.mapFeatures.attackBarricades(oldX, oldY, 100)
 assert.equal(barrier.hp, 1)
 barrier.hitCooldown = 0
 player.x = barrierPos.x
 player.y = barrierPos.y
-engine.mapFeatures.resolvePlayerMovement(player, oldX, oldY, true)
+engine.mapFeatures.attackBarricades(oldX, oldY, 100)
 assert.equal(barrier.active, false)
 player.x = barrierPos.x
 player.y = barrierPos.y

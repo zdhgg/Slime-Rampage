@@ -6,8 +6,10 @@
  *  - 提供人类勇者（骑士/法师/弓手/三王）的身体部位、步态帧、武器与攻击特效；
  *  - 提供史莱姆多表情图层（平时/愤怒/受击/吞噬/濒死/眨眼）与进化外观配件；
  *  - 提供战斗通用光效（弧形刀光、奥术符文阵、命中火花）；
- *  - 零外部网络依赖、零黑屏等待，热路径直接 drawImage 极速绘制。
+ *  - 素材全部随站点打包；外部装饰图异步加载但不会阻塞开局，热路径直接 drawImage。
  */
+
+import { paintCyberCharacter } from './CyberCharacterArt.js'
 
 const TAU = Math.PI * 2
 
@@ -74,6 +76,7 @@ export class AssetManager {
 
   constructor() {
     this.sprites = new Map()
+    this.externalImages = new Map()
     this.initialized = false
     this.init()
   }
@@ -84,7 +87,41 @@ export class AssetManager {
     this._generateSlimeProps()
     this._generateCombatVFX()
     this._generateCharacters()
+    this._loadRunnerDecorationImages()
     this.initialized = true
+  }
+
+  /**
+   * Runner 的环境装饰来自随项目发布的 CC0 素材副本。
+   * 加载失败时渲染器继续使用程序化后备图形，因此不会出现黑屏或阻塞开局。
+   */
+  _loadRunnerDecorationImages() {
+    if (typeof Image === 'undefined' || typeof document === 'undefined') return
+    const files = {
+      runnerCastle: 'assets/runner/kenney/castleSmall.png',
+      runnerCastleAlt: 'assets/runner/kenney/castleSmallAlt.png',
+      runnerTower: 'assets/runner/kenney/tower.png',
+      runnerTowerAlt: 'assets/runner/kenney/towerAlt.png',
+      runnerTowerSmall: 'assets/runner/kenney/towerSmall.png',
+      runnerTowerSmallAlt: 'assets/runner/kenney/towerSmallAlt.png',
+      runnerFence: 'assets/runner/kenney/fenceIron.png',
+      runnerCity01: 'assets/runner/kenney/isometric-buildings/buildingTiles_001.png',
+      runnerCity02: 'assets/runner/kenney/isometric-buildings/buildingTiles_002.png',
+      runnerCity03: 'assets/runner/kenney/isometric-buildings/buildingTiles_003.png',
+      runnerCity04: 'assets/runner/kenney/isometric-buildings/buildingTiles_009.png',
+      runnerCity05: 'assets/runner/kenney/isometric-buildings/buildingTiles_010.png',
+      runnerCity06: 'assets/runner/kenney/isometric-buildings/buildingTiles_014.png',
+      runnerCity07: 'assets/runner/kenney/isometric-buildings/buildingTiles_017.png',
+      runnerCity08: 'assets/runner/kenney/isometric-buildings/buildingTiles_020.png',
+      runnerCity09: 'assets/runner/kenney/isometric-buildings/buildingTiles_023.png',
+      runnerCity10: 'assets/runner/kenney/isometric-buildings/buildingTiles_026.png',
+    }
+    for (const [key, path] of Object.entries(files)) {
+      const image = new Image()
+      image.decoding = 'async'
+      image.onload = () => this.externalImages.set(key, image)
+      image.src = new URL(path, document.baseURI).href
+    }
   }
 
   /**
@@ -449,6 +486,15 @@ export class AssetManager {
         const walkPhase = frame < 4 ? frame / 4 : 0
         const { canvas } = this._drawCharacterFrame(role, walkPhase, isAttack)
         this.sprites.set(`char_${role}_${frame}`, canvas)
+        if (role === 'knight' || role.startsWith('boss_')) {
+          this.sprites.set(`cyber_${role}_${frame}`, canvas)
+        } else {
+          const cyber = createOffscreen(64, 64)
+          cyber.ctx.translate(32, 34)
+          cyber.ctx.scale(0.87, 0.87)
+          paintCyberCharacter(cyber.ctx, role, walkPhase, isAttack)
+          this.sprites.set(`cyber_${role}_${frame}`, cyber.canvas)
+        }
       }
     }
   }
@@ -462,6 +508,14 @@ export class AssetManager {
 
     ctx.save()
     ctx.translate(cx, cy)
+
+    if (role === 'knight' || isBoss) {
+      ctx.translate(0, size * 0.035)
+      ctx.scale(size / 74, size / 74)
+      paintCyberCharacter(ctx, role, walkPhase, isAttack)
+      ctx.restore()
+      return { canvas, ctx }
+    }
 
     const bob = isAttack ? 0 : Math.sin(walkPhase * TAU) * 1.5
     const legSwing = isAttack ? 0 : Math.sin(walkPhase * TAU) * 0.45
@@ -1651,6 +1705,13 @@ export class AssetManager {
     } else {
       ctx.drawImage(s, x - s.width / 4, y - s.height / 4, s.width / 2, s.height / 2)
     }
+    return true
+  }
+
+  drawExternal(ctx, key, x, y, w, h) {
+    const image = this.externalImages.get(key)
+    if (!image) return false
+    ctx.drawImage(image, x - w / 2, y - h, w, h)
     return true
   }
 }

@@ -1,4 +1,5 @@
 import { Entity } from './core/Entity.js'
+import { isFrontierScenery, organicPath } from './FrontierScenery.js'
 
 const TAU = Math.PI * 2
 const NEST_DURABILITY = { easy: 120, normal: 105, hard: 90, hell: 78 }
@@ -160,7 +161,28 @@ export class MapFeatureManager extends Entity {
     return multiplier
   }
 
-  resolvePlayerMovement(player, previousX, previousY, dashing = false) {
+  /** 普攻/主动的范围攻击，拒马耐久按命中次数扣除，不参与击杀奖励。 */
+  attackBarricades(px, py, reach) {
+    let hit = false
+    for (const barrier of this.barricades) {
+      if (!barrier.active || barrier.hitCooldown > 0) continue
+      const { x, y } = this._position(barrier)
+      const dx = Math.cos(barrier.angle) * barrier.length * 0.5
+      const dy = Math.sin(barrier.angle) * barrier.length * 0.5
+      if (segmentDistanceSq(px, py, x - dx, y - dy, x + dx, y + dy) > (reach + barrier.width * 0.5) ** 2) continue
+      hit = true
+      barrier.hp--; barrier.flash = 0.14; barrier.hitCooldown = 0.18
+      this.game?.weaponSystem?._ring?.(x, y, '#b89a68', 48)
+      if (barrier.hp <= 0) {
+        barrier.active = false
+        this.game?.sound?.barrierBreak?.()
+        this.game?.enemyManager?.addText?.(x, y - 18, '拒马破碎', null, '#d7c49b', 13)
+      }
+    }
+    return hit
+  }
+
+  resolvePlayerMovement(player, previousX, previousY) {
     for (const barrier of this.barricades) {
       if (!barrier.active) continue
       const { x, y } = this._position(barrier)
@@ -169,19 +191,6 @@ export class MapFeatureManager extends Entity {
       const radius = player.radius + barrier.width * 0.5
       if (segmentDistanceSq(player.x, player.y, x - dx, y - dy, x + dx, y + dy) > radius * radius) continue
 
-      if (dashing && barrier.hitCooldown <= 0) {
-        barrier.hitCooldown = 0.18
-        barrier.hp--
-        barrier.flash = 0.14
-        this.game?.shakeScreen?.(2.2, 0.12)
-        this.game?.weaponSystem?._ring?.(x, y, '#b89a68', 48)
-        if (barrier.hp <= 0) {
-          barrier.active = false
-          this.game?.sound?.barrierBreak?.()
-          this.game?.enemyManager?.addText?.(x, y - 18, '拒马破碎', null, '#d7c49b', 13)
-          continue
-        }
-      }
 
       player.x = previousX
       player.y = previousY
@@ -294,16 +303,37 @@ export class MapFeatureManager extends Entity {
 
   _renderTerrain(ctx, zone) {
     const { x, y } = this._position(zone)
-    const pulse = zone.type === 'slime' ? Math.sin(this.time * 1.7 + zone.angle) * 2 : 0
     ctx.save()
     ctx.translate(x, y)
-    ctx.rotate(zone.angle)
-    ctx.scale(1.18, 0.72)
+    // Visible effect boundary matches speedMultiplierAt's circular world-space test.
+    if (isFrontierScenery(this.themeId, this.variant) && zone.type === 'slime') {
+      const wet = ctx.createRadialGradient(0, 0, zone.radius * 0.4, 0, 0, zone.radius)
+      wet.addColorStop(0, 'rgba(119,158,75,0.12)')
+      wet.addColorStop(0.85, 'rgba(132,170,86,0.1)')
+      wet.addColorStop(1, 'rgba(165,193,110,0.17)')
+      ctx.fillStyle = wet
+      ctx.beginPath(); ctx.arc(0, 0, zone.radius, 0, TAU); ctx.fill()
+      ctx.strokeStyle = 'rgba(163,192,108,0.3)'; ctx.lineWidth = 1.2; ctx.stroke()
+      // Irregular surface texture stays inside the precise, fixed outer boundary.
+      ctx.save(); ctx.clip()
+      ctx.fillStyle = 'rgba(113,155,73,0.1)'
+      organicPath(ctx, -8, 6, zone.radius * 0.82, zone.radius * 0.76, zone.angle + 3, 0.15); ctx.fill()
+      for (let i = 0; i < 6; i++) {
+        const a = i / 6 * TAU + zone.angle
+        const bx = Math.cos(a) * zone.radius * 0.74, by = Math.sin(a) * zone.radius * 0.68
+        const life = (this.time * 0.13 + i * 0.173) % 1
+        ctx.strokeStyle = `rgba(190,214,142,${Math.sin(life * Math.PI) * 0.23})`
+        ctx.beginPath(); ctx.ellipse(bx, by, 2 + life * 4, 1 + life * 2.5, 0, 0, TAU); ctx.stroke()
+      }
+      ctx.restore()
+      ctx.restore()
+      return
+    }
     ctx.fillStyle = zone.type === 'slime' ? 'rgba(101, 160, 64, 0.12)' : 'rgba(60, 73, 67, 0.18)'
     ctx.strokeStyle = zone.type === 'slime' ? 'rgba(151, 205, 101, 0.24)' : 'rgba(126, 145, 133, 0.16)'
     ctx.lineWidth = 2
     ctx.beginPath()
-    ctx.arc(0, 0, zone.radius + pulse, 0, TAU)
+    ctx.arc(0, 0, zone.radius, 0, TAU)
     ctx.fill()
     ctx.stroke()
     ctx.restore()

@@ -193,7 +193,7 @@ assert.equal(p.devourDamageReduction, 0)
 assert.equal(p.frostFireAura, 0)
 assert.equal(p.isGluttonyLord, false)
 assert.equal(p._decoys.length, 0)
-assert.equal(p.geneDashCdMultiplier, 0.8)
+assert.ok(Math.abs(p.speed - 340 * 1.16 * 1.08) < 1e-7)
 assert.equal(engine.weaponSystem.genePierces, 1)
 assert.equal(engine.weaponSystem.splitChance, 0.25)
 assert.equal(engine.worldEvents.current, null)
@@ -313,15 +313,16 @@ assert.equal(engine.canDevour, false)
 assert.ok(Math.abs(engine.weaponSystem.critChance - (baseCritChance + 0.08)) < 1e-9)
 assert.equal(engine.player.maxHp, baseHp - 1)
 
-// 暗影：暴击 +12%、冲刺冷却 −20%，生命 −1、吞噬范围收窄
+// 暗影：快速近战影刃，暴击 +12%、冲刺冷却 −20%，生命 −1。
 engine.applyStartingStrain('shadow')
 engine.reset()
 assert.equal(engine.roleSpec, 'assassin')
 assert.equal(engine.canDevour, false)
 assert.ok(Math.abs(engine.weaponSystem.critChance - (baseCritChance + 0.12)) < 1e-9)
-assert.ok(Math.abs(engine.player.dashCdMultiplier - 0.8) < 1e-9)
+assert.equal(engine.player.activeSkillCdMultiplier, 1)
 assert.equal(engine.player.maxHp, baseHp - 1)
-assert.ok(engine.player.devourRadiusBonus < 1, '暗影：吞噬范围收窄（短板）')
+assert.ok(engine.weaponSystem.shadowCombat.enabled, '暗影从开局即使用近战影刃')
+assert.ok(Math.abs(engine.weaponSystem.fireInterval - 0.55) < 1e-9, '影刃攻击间隔为 0.55 秒')
 
 // 重开归位：角色身份不得跨局残留
 engine.applyStartingStrain('origin')

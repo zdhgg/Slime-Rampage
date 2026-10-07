@@ -125,7 +125,9 @@ export class Enemy extends Entity {
     this._settled = false
 
     // —— 状态效果（冰冻/燃烧/染毒/减速） ——
+    this.gluttonStagger = 0
     this.freeze = 0 // 冻结剩余时间：期间完全定身
+    this.primeSlow = 0
     this.slow = 0 // 蒸汽减速剩余时间（秒）：期间移动速度 ×0.6
     // 燃烧/中毒用「剩余跳数」而非时长：跳数在附加时锁定，总伤害恒定、帧率无关
     // 每跳伤害在附加时锁定（阶段十四调优：随武器伤害成长），同一状态取较大值
@@ -189,10 +191,22 @@ export class Enemy extends Entity {
     this.hp -= damage
     this.flash = 0.12
 
+    // 近战捕食在扣血/护盾之后、死亡之前衔接吞噬，攻击成长不会丢失捕食收益。
+    if (damage > 0 && effects?.devourOnHit && this.game?.canDevour === true &&
+        !this.isBoss && !NO_DEVOUR_TYPES.has(this.type) && !this.devouring && !this._settled) {
+      const threshold = effects.devourExecute ? Math.max(0.5, this._devourThresh()) : this._devourThresh()
+      if (this.hp <= Math.max(1, Math.ceil(this.maxHp * threshold))) {
+        this.hp = Math.max(0, this.hp)
+        this.game.enemyManager._startDevour(this, { source: effects.devourSource })
+        return
+      }
+    }
+
     // 狂战士 50% 残血暴走判定
     if (this.type === 'berserker' && this.hp > 0 && this.hp <= this.maxHp * 0.5 && !this.isEnraged) {
       this.isEnraged = true
       this.freeze = 0
+      this.primeSlow = 0
       this.slow = 0
       this.game?.enemyManager?.addText(this.x, this.y - 14, '🔥 狂暴!', null, '#ff3838', 14)
     }
@@ -210,6 +224,10 @@ export class Enemy extends Entity {
       this.hp > 0 &&
       this.hp <= devourHp
     ) {
+      // F 引发的酸爆随后被自动吞噬时仍不返充；一次新的普通咬击有自己的来源。
+      if (damage > 0 && (!this.devourable || effects?.devourSource)) {
+        this._devourSource = effects?.devourSource
+      }
       this.devourable = true
     }
     if (effects && (!this.isEnraged)) { // 狂战士狂暴状态免疫控制
@@ -234,6 +252,8 @@ export class Enemy extends Entity {
   _tickStatus(dt) {
     this.flash = Math.max(0, this.flash - dt)
     if (this.freeze > 0) this.freeze -= dt
+    this.gluttonStagger = Math.max(0, (this.gluttonStagger || 0) - dt)
+    this.primeSlow = Math.max(0, (this.primeSlow || 0) - dt)
     this.slow = Math.max(0, this.slow - dt)
     this._spawnT = Math.max(0, this._spawnT - dt) // 出生弹入计时（Boss 继承复用）
     this._swingT = Math.max(0, this._swingT - dt)
@@ -263,7 +283,7 @@ export class Enemy extends Entity {
       }
       return false
     }
-    return this.freeze <= 0
+    return this.freeze <= 0 && this.gluttonStagger <= 0
   }
 
   /** 远程职业射击：向玩家方向发射一枚弹幕 */
@@ -275,8 +295,9 @@ export class Enemy extends Entity {
 
   _hitTarget(target, player, damage) {
     if (target.isMapObjective) target.hit?.(damage, this)
+    else if (target.isPet) return this.game.weaponSystem.petCombat.hit(target, damage)
     else if (target.isDecoy) player.hitDecoy(target, damage)
-    else player.hit(damage)
+    else return player.hit(damage, { enemyAttack: true })
   }
 
   update(dt) {
@@ -298,7 +319,7 @@ export class Enemy extends Entity {
     const ux = dx / (dist || 1)
     const uy = dy / (dist || 1)
     const terrainMul = this.game.mapFeatures?.speedMultiplierAt(this.x, this.y, 'enemy') || 1
-    const spd = this.speed * (this.slow > 0 ? SLOW_MUL : 1) * terrainMul
+    const spd = this.speed * (this.slow > 0 ? SLOW_MUL : this.primeSlow > 0 ? 0.7 : 1) * terrainMul
     this._moving = false
 
     if (
@@ -318,9 +339,9 @@ export class Enemy extends Entity {
         if (this.attackCd <= 0) {
           this.attackCd = this.attackInterval
           this._swingT = this.type === 'golem' ? 0.3 : 0.22 // 魔像重砸前摇更长
-          this._hitTarget(target, player, this.damage)
+          const landed = this._hitTarget(target, player, this.damage)
           // 怨灵吸血：命中回复 30% 生命——本体不可吞噬，克制手段只有爆发输出
-          if (this.type === 'wraith' && this.hp > 0 && this.hp < this.maxHp) {
+          if (landed && this.type === 'wraith' && this.hp > 0 && this.hp < this.maxHp) {
             const drain = Math.max(1, Math.round(this.maxHp * 0.3))
             this.hp = Math.min(this.maxHp, this.hp + drain)
             this.game?.enemyManager?.addText(this.x, this.y - 12, `+${drain} 吸取`, null, '#7ce8c8', 12)
@@ -391,6 +412,7 @@ export class Enemy extends Entity {
       // 狂战士：前排重坦近战，狂暴后移速/攻速激增，免疫冰冻与减速
       if (this.isEnraged) {
         this.freeze = 0
+        this.primeSlow = 0
         this.slow = 0
       }
       const curSpd = spd * (this.isEnraged ? 1.6 : 1.0)
@@ -589,7 +611,8 @@ export class Enemy extends Entity {
       this.type === 'mage' || this.type === 'priest' || this.type === 'wraith'
         ? Math.sin(this.game.elapsed * 3 + this._walkT) * 2 - 2.5
         : 0
-    ctx.translate(this.x, this.y + bob + float)
+    const biteJolt = this.gluttonStagger > 0 ? Math.sin(this.gluttonStagger * 100) * 2.5 * Math.min(1, this.gluttonStagger / 0.14) : 0
+    ctx.translate(this.x + Math.cos(this.facing) * biteJolt, this.y + bob + float + Math.sin(this.facing) * biteJolt)
 
     // 刺客幽影光环与蓄力光辉（本地坐标系）
     if (this.type === 'assassin') {

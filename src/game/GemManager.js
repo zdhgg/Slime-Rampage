@@ -55,8 +55,8 @@ export class GemManager extends Entity {
   }
 
   /** 敌人死亡时掉落：经验宝石（默认）或元素核心（type 指定） */
-  spawn(x, y, value, type = 'exp') {
-    const gem = new Gem(x, y, value, type)
+  spawn(x, y, value, type = 'exp', meta = null) {
+    const gem = new Gem(x, y, value, type, meta)
     if (isElementCore(gem)) {
       gem.life = ELEMENT_CORE_LIFETIME
       gem.maxLife = ELEMENT_CORE_LIFETIME
@@ -388,6 +388,12 @@ export class GemManager extends Entity {
           // （否则同一帧连续拾取会连升多级：Lv.1 → Lv.5 跳级 bug）
           if (leveled) break
           continue
+        } else if (g.type === 'tome' && g.mastery) {
+          // 职业秘典（BOSS 掉落）：当前职业专属技能三选一，不消耗等级。
+          this.game.openBossSkillPanel()
+          list[i] = list[list.length - 1]
+          list.pop()
+          break
         } else if (g.type === 'tome') {
           // 王级秘籍（Boss 掉落）：免费获得一次技能选择（不消耗升级次数）。
           // 面板弹出即暂停引擎——本帧停止继续拾取，否则同帧再拾 exp/元素

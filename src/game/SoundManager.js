@@ -130,6 +130,22 @@ export class SoundManager {
     this._tone({ freq, endFreq, dur: kind === 'fluid' || kind === 'mist' ? 0.065 : 0.05, type, vol: 0.025 })
   }
 
+  /** 近战咬合：短促低音与牙齿闭合声，重咬更低沉。 */
+  bite(heavy = false, landed = true) {
+    if (!landed) {
+      this._tone({ freq: 330, endFreq: 150, dur: 0.045, type: 'triangle', vol: 0.018 })
+      return
+    }
+    this._tone({ freq: heavy ? 160 : 230, endFreq: 65, dur: heavy ? 0.13 : 0.08, type: 'triangle', vol: 0.055 })
+    this._tone({ freq: 460, endFreq: 180, dur: 0.04, type: 'sawtooth', vol: 0.018 })
+  }
+
+  /** 影刃：细而短的划破声；穿行拉长滑音，命中补一个清晰的起音。 */
+  shadowBlade(assault = false, landed = false) {
+    this._tone({ freq: assault ? 850 : 620, endFreq: 160, dur: assault ? 0.14 : 0.055, type: 'triangle', vol: landed ? 0.035 : 0.018 })
+    if (landed) this._tone({ freq: 1250, endFreq: 520, dur: 0.035, type: 'sine', vol: 0.018 })
+  }
+
   /**
    * 击杀：三角波低滑，略带下沉感
    * @param {number} combo 连杀计数（1.8s 窗口内连续击杀数）：音高随连杀爬升，
