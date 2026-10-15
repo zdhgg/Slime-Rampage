@@ -15,7 +15,7 @@ const EVENTS = {
     // 第三批角色化：非元素角色（暴食/弹射/暗影）拿不到元素核心，
     // 因此文案必须与实发奖励一致——不允许「说有核心但实际没有」。
     reward: (game) =>
-      game?.canUseElements === false ? '大型经验' : '元素核心 + 大型经验',
+      game?.canUseElements === false || game?.startingStrain === 'elemental' ? '大型经验' : '元素核心 + 大型经验',
     duration: 28,
     goal: 3,
   },
@@ -430,7 +430,7 @@ export class WorldEventManager extends Entity {
     if (e.type === 'hunt') {
       // 第三批角色化：非元素角色把「元素核心」换成已有的经验奖励——
       // 不新增资源类型，只复用大型经验（65），与 eventReward 的文案一一对应。
-      if (this.game.canUseElements) {
+      if (this.game.canUseElements && this.game.startingStrain !== 'elemental') {
         const elements = ['fire', 'water', 'poison', 'lightning']
         this.game.gemManager.spawn(e.x, e.y, 0, elements[(Math.random() * elements.length) | 0])
         this.game.gemManager.spawn(e.x, e.y, 65)

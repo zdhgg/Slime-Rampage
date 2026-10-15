@@ -168,6 +168,37 @@ export class SoundManager {
     this._tone({ freq: 780, endFreq: 1040, dur: 0.12, type: 'sine', vol: 0.04, delay: 0.08 })
   }
 
+  spellCast(element) {
+    const tone = { fire: [220, 90, 'triangle'], water: [1100, 660, 'sine'], lightning: [1500, 280, 'sawtooth'], poison: [180, 260, 'sine'] }[element]
+    if (tone) this._tone({ freq: tone[0], endFreq: tone[1], type: tone[2], dur: .11, vol: .035 })
+  }
+
+  spellBurst() {
+    this._tone({ freq: 240, endFreq: 70, dur: .3, type: 'triangle', vol: .07 })
+    this._tone({ freq: 880, endFreq: 440, dur: .18, type: 'sine', vol: .04 })
+  }
+
+  poisonThrow() {
+    this._tone({ freq: 320, endFreq: 620, dur: .09, type: 'sine', vol: .025 })
+  }
+
+  spellShield(broken = false) {
+    this._tone({ freq: broken ? 760 : 960, endFreq: broken ? 180 : 640, dur: .12, type: 'sine', vol: .035 })
+  }
+
+  poisonBloom() {
+    this._tone({ freq: 260, endFreq: 90, dur: .18, type: 'triangle', vol: .035 })
+  }
+
+  lightningCharge() {
+    this._tone({ freq: 550, endFreq: 1400, dur: .12, type: 'sine', vol: .028 })
+  }
+
+  lightningImpact(strong = false) {
+    this._tone({ freq: 1300, endFreq: 250, dur: strong ? .2 : .09, type: 'sawtooth', vol: strong ? .045 : .025 })
+    if (strong) this._tone({ freq: 160, endFreq: 65, dur: .2, type: 'triangle', vol: .045 })
+  }
+
   /** 元素升级钟鸣：双正弦泛音，叮——（元素等级提升专属） */
   elementUp() {
     this._tone({ freq: 880, dur: 0.18, type: 'sine', vol: 0.06 })

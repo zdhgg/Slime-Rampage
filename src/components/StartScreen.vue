@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   ArrowLeft,
   ArrowRight,
@@ -7,6 +7,7 @@ import {
   Crown,
   Gauge,
   Hourglass,
+  Info,
   Infinity as InfinityIcon,
   Play,
   Route,
@@ -30,11 +31,13 @@ import {
 } from '../game/RunRules.js'
 import { getExpeditionStages } from '../game/RunRules.js'
 import { STRAINS } from '../game/Strains.js'
+import { SPELL_ELEMENTS } from '../game/SpellRules.js'
 import StrainSelect from './StrainSelect.vue'
+import AboutGame from './AboutGame.vue'
 import { STRAIN_PRESENTATION } from './strainPresentation.js'
 import { RUNNER_SUBMODES } from '../game/gameplay/runner/RunnerRules.js'
 
-const emit = defineEmits(['prepare', 'market', 'profiles', 'account', 'leaderboard', 'ui-sound', 'runner', 'tower-defense'])
+const emit = defineEmits(['prepare', 'market', 'profiles', 'account', 'leaderboard', 'ui-sound', 'runner', 'tower-defense', 'open-leaderboard', 'records'])
 const props = defineProps({
   initialView: { type: String, default: 'playstyles' },
   records: { type: Object, default: () => ({}) },
@@ -44,9 +47,10 @@ const props = defineProps({
   },
   preferences: { type: Object, default: () => ({ mode: 'expedition', difficulty: 'normal' }) },
   activeSlot: { type: Object, default: null },
-  lanAccount: { type: Object, default: null },
-  lanStatus: { type: Object, default: () => ({ checked: false, online: false }) },
+  account: { type: Object, default: null },
+  serviceStatus: { type: Object, default: () => ({ checked: false, online: false }) },
   publicLeaderboard: { type: Object, default: null },
+  accountData: { type: Object, default: null },
 })
 
 const runnerSubmodesList = Object.values(RUNNER_SUBMODES)
@@ -106,7 +110,7 @@ const PLAYSTYLES = [
     name: '突围',
     kicker: 'Runner · 三线推进',
     description: '切换车道、躲避弹幕并融合武器，在王城封锁线上抢出一条生路。',
-    detail: '3 种突围类型 · 独立玩法结算',
+    detail: '3 种突围类型 · 账号记录与排名',
     accent: '#79d5e6',
   },
   {
@@ -146,7 +150,40 @@ const modeFacts = computed(() => {
 })
 
 const view = ref(props.initialView)
-const selection = ref({ ...normalizeRunSelection(props.preferences), strain: 'origin' })
+const aboutTab = ref('guide')
+const aboutLink = ref(null)
+const menuRoot = ref(null)
+let menuScrollTop = 0
+
+// Hash routes also work on static hosting, without changing game sessions.
+async function syncAboutLocation() {
+  const route = window.location.hash
+  const match = route.match(/^#\/about(?:\/(updates|arena|runner|tower-defense))?$/)
+  if (match) {
+    if (view.value !== 'about') menuScrollTop = menuRoot.value?.scrollTop || 0
+    view.value = 'about'
+    aboutTab.value = match[1] === 'updates' ? 'updates' : 'guide'
+    await nextTick()
+    if (match[1] && match[1] !== 'updates') {
+      document.getElementById(`guide-${match[1]}`)?.scrollIntoView({ block: 'start' })
+    } else {
+      menuRoot.value?.scrollTo({ top: 0 })
+    }
+  } else if (view.value === 'about') {
+    view.value = 'playstyles'
+    await nextTick()
+    menuRoot.value?.scrollTo({ top: menuScrollTop })
+    aboutLink.value?.focus({ preventScroll: true })
+  }
+}
+
+onMounted(() => {
+  syncAboutLocation()
+  window.addEventListener('hashchange', syncAboutLocation)
+})
+onUnmounted(() => window.removeEventListener('hashchange', syncAboutLocation))
+
+const selection = ref({ ...normalizeRunSelection(props.preferences), strain: 'origin', element: 'fire' })
 const playstyleGrid = ref(null)
 const modeGrid = ref(null)
 const runnerGrid = ref(null)
@@ -158,6 +195,7 @@ watch(
     selection.value = {
       ...normalizeRunSelection(props.preferences),
       strain: selection.value.strain || 'origin',
+      element: selection.value.element || 'fire',
     }
   }
 )
@@ -185,22 +223,12 @@ let shakeTimer = null
 let noticeTimer = null
 const selectedMode = computed(() => MODES[selection.value.mode])
 const selectedDifficulty = computed(() => DIFFICULTIES[selection.value.difficulty])
-const lanLabel = computed(() => {
-  if (props.lanAccount) return props.lanAccount.displayName || props.lanAccount.username
-  if (props.lanStatus?.online) return '登录局域网'
-  return props.lanStatus?.checked ? '离线单机' : '检测中'
+const accountLabel = computed(() => {
+  if (props.account) return props.account.displayName || props.account.username
+  if (props.serviceStatus?.online) return '登录 / 注册'
+  return props.serviceStatus?.checked ? '连接服务' : '连接中'
 })
 const publicEntries = computed(() => props.publicLeaderboard?.entries || [])
-/**
- * 其他设备的加入地址：优先用主机上报的局域网 IP + 端口。
- * 直接 window.location.origin 在主机上是 localhost，别的设备打开访问的是它自己。
- */
-const hostAddress = computed(() => {
-  const ips = props.lanStatus?.lanIps
-  const port = props.lanStatus?.lanPort
-  if (Array.isArray(ips) && ips.length && port) return `http://${ips[0]}:${port}`
-  return window.location.origin
-})
 const selectedStrain = computed(() => STRAINS[selection.value.strain] || STRAINS.origin)
 const record = computed(() => props.records[runKey(selection.value)] || {
   best: { wave: 1, stage: 1, kills: 0, time: 0, score: 0, clears: 0, fastestFinale: null, fastestClear: null },
@@ -241,6 +269,14 @@ function showPlaystyleSelection(playstyle = 'arena') {
 }
 
 function selectPlaystyle(playstyle) {
+  if (!props.account) {
+    emit('account')
+    return
+  }
+  if (playstyle === 'tower-defense') {
+    emit('tower-defense')
+    return
+  }
   emit('ui-sound', 'select')
   view.value = playstyle === 'runner' ? 'runner-types' : 'arena-types'
   nextTick(() => {
@@ -327,7 +363,8 @@ function showModeSelection() {
 }
 
 function onMenuEscape() {
-  if (view.value === 'config') showArenaTypes()
+  if (view.value === 'about') window.location.hash = '/'
+  else if (view.value === 'config') showArenaTypes()
   else if (view.value === 'arena-types') showPlaystyleSelection('arena')
   else if (view.value === 'runner-types') showPlaystyleSelection('runner')
 }
@@ -345,7 +382,7 @@ watch(
 </script>
 
 <template>
-  <div class="start-overlay" :class="{ 'config-active': view === 'config' }" @keydown.esc="onMenuEscape">
+  <div ref="menuRoot" class="start-overlay" :class="{ 'config-active': view === 'config' }" @keydown.esc="onMenuEscape">
     <!-- 史莱姆主题动态背景：漂浮 goo 光晕 + 上浮气泡，纯 CSS 动画，不挡交互 -->
     <div class="goo-layer" aria-hidden="true">
       <div class="goo-blob blob-a"></div>
@@ -356,14 +393,13 @@ watch(
       <header class="start-header">
         <h1>史莱姆大暴走<span>SLIME RAMPAGE</span></h1>
         <div class="header-actions">
-          <button class="account-link" :class="{ online: props.lanAccount }" title="局域网账号" @click="emit('account')">
-            <span aria-hidden="true">{{ props.lanAccount ? '●' : '○' }}</span>
-            <b>{{ lanLabel }}</b>
+          <button class="account-link" :class="{ online: props.account }" title="游戏账号" @click="emit('account')">
+            <span aria-hidden="true">{{ props.account ? '●' : '○' }}</span>
+            <b>{{ accountLabel }}</b>
           </button>
-          <button class="profile-link" title="管理本地档案" @click="emit('profiles')">
-            <span aria-hidden="true">▣</span>
-            <b>{{ props.activeSlot?.name || '史莱姆档案 1' }}</b>
-          </button>
+          <button class="profile-link" @click="emit('open-leaderboard')"><span aria-hidden="true">♜</span><b>排行榜</b></button>
+          <button v-if="props.account" class="profile-link" @click="emit('records')"><span aria-hidden="true">▣</span><b>我的记录</b></button>
+          <a ref="aboutLink" class="about-link" href="#/about" :aria-current="view === 'about' ? 'page' : undefined"><Info :size="14" aria-hidden="true" /><span>关于游戏</span></a>
           <button
             v-if="view === 'arena-types' || view === 'config'"
             class="market-link"
@@ -373,7 +409,13 @@ watch(
         </div>
       </header>
 
-      <section v-if="view === 'playstyles'" class="mode-view playstyle-view" aria-labelledby="playstyle-title">
+      <div v-if="!props.account && view !== 'about'" class="account-notice">
+        <div><strong>登录，继续你的史莱姆旅程</strong><span>每个账号独立保存三种玩法的进度与成绩。</span></div>
+        <button @click="emit('account')">登录 / 注册 <ArrowRight :size="15" aria-hidden="true" /></button>
+      </div>
+      <div v-else-if="view === 'playstyles'" class="account-welcome"><span>欢迎回来，{{ props.account.displayName || props.account.username }}</span><span>塔防第 {{ props.accountData?.campaign?.unlockedStage || 1 }} 关 · {{ props.accountData?.campaign?.totalStarsEarned || 0 }} 星</span></div>
+      <AboutGame v-if="view === 'about'" :tab="aboutTab" />
+      <section v-else-if="view === 'playstyles'" class="mode-view playstyle-view" aria-labelledby="playstyle-title">
         <div class="view-heading">
           <p>行动档案</p>
           <div class="title-row">
@@ -396,7 +438,7 @@ watch(
             class="playstyle-option"
             :data-playstyle="playstyle.id"
             :style="{ '--playstyle-accent': playstyle.accent }"
-            @click="playstyle.id === 'tower-defense' ? emit('tower-defense') : selectPlaystyle(playstyle.id)"
+            @click="selectPlaystyle(playstyle.id)"
           >
             <div class="playstyle-topline">
               <span class="playstyle-index">{{ playstyle.index }}</span>
@@ -637,7 +679,7 @@ watch(
           </div>
 
           <div class="config-flow">
-            <StrainSelect :model-value="selection.strain" @update:model-value="selectStrain" @preview="emit('ui-sound', 'select')" />
+            <StrainSelect :model-value="selection.strain" :element="selection.element" @update:element="selection.element = $event; emit('ui-sound', 'select')" @update:model-value="selectStrain" @preview="emit('ui-sound', 'select')" />
             <section class="config-step" aria-labelledby="difficulty-heading">
               <header class="step-heading">
                 <b id="difficulty-heading">难度</b>
@@ -687,7 +729,7 @@ watch(
           <section class="public-board" :class="{ empty: !publicEntries.length }" aria-labelledby="public-board-title">
             <template v-if="publicEntries.length">
               <header class="step-heading">
-                <b id="public-board-title">局域网排行榜</b>
+                <b id="public-board-title">公共排行榜</b>
                 <span>{{ publicLeaderboard?.totalPlayers || 0 }} 名玩家</span>
               </header>
               <div class="public-board-list">
@@ -703,13 +745,11 @@ watch(
                   <em>{{ entry.result === 'victory' ? '通关' : entry.result === 'extracted' ? '撤离' : '败退' }}</em>
                 </div>
               </div>
-              <p class="public-board-hint">
-                主机地址 <code>{{ hostAddress }}</code> · 其他设备打开同一地址即可加入
-              </p>
+              <button class="board-all-link" @click="emit('open-leaderboard')">查看完整排行榜 <ArrowRight :size="14" aria-hidden="true" /></button>
             </template>
             <p v-else class="public-board-empty">
-              <b id="public-board-title">局域网排行榜</b>
-              <span>{{ props.lanStatus?.online ? '这套规则还没有公共成绩。' : '主机未连接，启动局域网主机后全员榜会显示在这里。' }}</span>
+              <b id="public-board-title">公共排行榜</b>
+              <span>{{ props.serviceStatus?.online ? '这套规则还没有公共成绩。' : '暂时无法读取榜单，请检查服务器连接。' }}</span>
             </p>
           </section>
         </div>
@@ -721,6 +761,7 @@ watch(
             <span>{{ selectedDifficulty.name }}</span>
             <i aria-hidden="true">·</i>
             <span class="summary-strain" :style="{ color: STRAIN_PRESENTATION[selectedStrain.id].color }">{{ selectedStrain.name }}</span>
+            <span v-if="selectedStrain.id === 'elemental'" :style="{ color: SPELL_ELEMENTS[selection.element].color }">{{ SPELL_ELEMENTS[selection.element].spell }}</span>
           </p>
           <button class="primary-action" @click="prepare">
             开始行动
@@ -733,6 +774,15 @@ watch(
 </template>
 
 <style scoped>
+.account-notice { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-top: 24px; padding: 16px 20px; border: 1px solid #53634966; border-radius: 5px; background: #a1b88d08; }
+.account-notice strong, .account-notice span { display: block; }
+.account-notice strong { font-size: 14px; font-weight: 600; color: #e4e9db; }
+.account-notice span { margin-top: 4px; font-size: 12px; color: #9fa798; }
+.account-notice button { display: flex; gap: 12px; align-items: center; flex-shrink: 0; padding: 10px 14px; border: 1px solid #a4bc92; border-radius: 4px; background: #a4bc92; color: #182012; font: inherit; font-size: 12px; cursor: pointer; }
+.account-welcome { display: flex; justify-content: space-between; gap: 12px; padding-top: 22px; color: #a9b39f; font-size: 12px; }
+.board-all-link { display: flex; align-items: center; gap: 10px; margin-top: 14px; border: 0; padding: 6px 0; background: transparent; color: #d5b578; cursor: pointer; font: inherit; font-size: 12px; }
+@media (max-width: 600px) { .account-notice { align-items: flex-start; padding: 14px; gap: 14px; } .account-notice span { max-width: 220px; line-height: 1.6; } .account-welcome { flex-direction: column; gap: 6px; } .header-actions { flex-wrap: wrap; justify-content: flex-end; } }
+
 .start-overlay {
   --accent: #d7a657;
   --accent-bright: #ecc477;
@@ -938,6 +988,22 @@ watch(
   align-items: center;
   gap: 8px;
 }
+
+.about-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 0 10px;
+  color: rgba(244, 238, 230, 0.6);
+  font-size: 11px;
+  text-decoration: none;
+  white-space: nowrap;
+  border-radius: 5px;
+}
+.about-link:hover, .about-link[aria-current] { color: var(--accent-bright); background: rgba(215, 166, 87, 0.055); }
+.about-link:focus-visible { outline: 2px solid var(--accent-bright); outline-offset: 3px; }
 
 .market-link,
 .account-link,

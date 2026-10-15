@@ -1,7 +1,9 @@
 <script setup>
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
+import { useDialogFocus } from './useDialogFocus.js'
+import { MODES, DIFFICULTIES } from '../game/RunRules.js'
 
-const emit = defineEmits(['close', 'login', 'register', 'logout', 'import-local'])
+const emit = defineEmits(['close', 'login', 'register', 'logout', 'import-local', 'profiles', 'records', 'retry'])
 const props = defineProps({
   account: { type: Object, default: null },
   status: { type: Object, default: () => ({ checked: false, online: false, registrationEnabled: false }) },
@@ -20,15 +22,9 @@ const closeButton = ref(null)
 const isOnline = computed(() => !!props.status?.online)
 const canRegister = computed(() => isOnline.value && props.status?.registrationEnabled !== false)
 const canSubmit = computed(() => isOnline.value && username.value.trim().length >= 3 && password.value.length >= 6 && !props.busy)
-/* 优先用主机上报的局域网 IP + 端口；localhost 对其他设备无意义 */
-const hostAddress = computed(() => {
-  const ips = props.status?.lanIps
-  const port = props.status?.lanPort
-  if (Array.isArray(ips) && ips.length && port) return `http://${ips[0]}:${port}`
-  return window.location.origin
-})
-const copied = ref(false)
-let copiedTimer = 0
+const dialog = ref(null)
+const confirmImport = ref(false)
+useDialogFocus(dialog, () => { if (!props.busy) emit('close') })
 const localSummary = computed(() => {
   const save = props.localSlot?.data
   if (!save) return '暂无可导入的本地档案'
@@ -38,7 +34,7 @@ const localSummary = computed(() => {
 })
 
 function submit() {
-  if (!canSubmit.value) return
+  if (!canSubmit.value || (mode.value === 'register' && !canRegister.value)) return
   emit(mode.value === 'register' ? 'register' : 'login', {
     username: username.value.trim(),
     password: password.value,
@@ -50,72 +46,24 @@ function switchMode(nextMode) {
   nextTick(() => firstInput.value?.focus())
 }
 
-async function copyAddress() {
-  const text = hostAddress.value
-  if (!text) return
-  try {
-    await navigator.clipboard.writeText(text)
-  } catch {
-    // 局域网 http 地址不是安全上下文，剪贴板 API 可能不可用，退回 execCommand
-    const area = document.createElement('textarea')
-    area.value = text
-    area.setAttribute('readonly', '')
-    area.style.position = 'fixed'
-    area.style.opacity = '0'
-    document.body.appendChild(area)
-    area.select()
-    try {
-      document.execCommand('copy')
-    } catch {
-      /* 复制失败：保持按钮原样，不伪装成功 */
-    }
-    area.remove()
-  }
-  copied.value = true
-  clearTimeout(copiedTimer)
-  copiedTimer = setTimeout(() => {
-    copied.value = false
-  }, 1600)
-}
-
-function onKeydown(event) {
-  if (event.code === 'Escape') emit('close')
-}
-
 watch(
   () => props.account,
   () => nextTick(() => (props.account ? closeButton.value?.focus() : firstInput.value?.focus()))
 )
-
-onMounted(() => {
-  window.addEventListener('keydown', onKeydown)
-  nextTick(() => (props.account ? closeButton.value?.focus() : firstInput.value?.focus()))
-})
-
-onUnmounted(() => {
-  window.removeEventListener('keydown', onKeydown)
-  clearTimeout(copiedTimer)
-})
 </script>
 
 <template>
-  <div class="lan-layer" @pointerdown.self="emit('close')">
-    <section class="lan-dialog" role="dialog" aria-modal="true" aria-labelledby="lan-title">
-      <header class="lan-header">
+  <div class="auth-layer" @pointerdown.self="!busy && emit('close')">
+    <section ref="dialog" class="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="auth-title">
+      <header class="auth-header">
         <div>
-          <span>{{ isOnline ? '局域网主机在线' : '局域网主机未连接' }}</span>
-          <h2 id="lan-title">局域网账号</h2>
+          <span>{{ isOnline ? '游戏服务已连接' : '游戏服务未连接' }}</span>
+          <h2 id="auth-title">游戏账号</h2>
         </div>
-        <button ref="closeButton" class="icon-button" title="关闭" aria-label="关闭局域网账号" @click="emit('close')">×</button>
+        <button ref="closeButton" class="icon-button" :disabled="busy" title="关闭" aria-label="关闭游戏账号" @click="emit('close')">×</button>
       </header>
 
-      <div v-if="message" class="lan-message" role="status">{{ message }}</div>
-
-      <div v-if="isOnline" class="lan-address">
-        <span>主机地址</span>
-        <code>{{ hostAddress }}</code>
-        <button type="button" class="ghost-button" @click="copyAddress">{{ copied ? '已复制' : '复制' }}</button>
-      </div>
+      <div v-if="message" class="auth-message" role="status">{{ message }}</div>
 
       <div v-if="account" class="account-panel">
         <div class="account-card">
@@ -125,36 +73,40 @@ onUnmounted(() => {
         </div>
 
         <div class="remote-profile">
-          <span>当前远程档案</span>
+          <span>主战场成长档案</span>
           <strong>{{ activeSlot?.name || '史莱姆档案' }}</strong>
           <p>
             战利品 {{ Math.floor(activeSlot?.data?.drops || 0) }} ·
-            最高进度 {{ activeSlot?.data?.progression?.highestMode || 'expedition' }} /
-            {{ activeSlot?.data?.progression?.highestDifficulty || 'normal' }}
+            最高进度 {{ MODES[activeSlot?.data?.progression?.highestMode || 'expedition']?.name }} /
+            {{ DIFFICULTIES[activeSlot?.data?.progression?.highestDifficulty || 'normal']?.name }}
           </p>
         </div>
 
-        <div class="import-box">
-          <span>本机档案迁移</span>
-          <p>{{ localSummary }}</p>
-          <button class="ghost-button" :disabled="busy || !localSlot" @click="emit('import-local')">
-            导入到当前远程档
-          </button>
+        <div class="account-links">
+          <button class="ghost-button" :disabled="busy" @click="emit('records')">我的游戏记录</button>
+          <button class="ghost-button" :disabled="busy" @click="emit('profiles')">管理主战场档案</button>
         </div>
+        <details class="import-box">
+          <summary>迁移以前的本机进度</summary>
+          <p>{{ localSummary }}</p>
+          <p>主战场本机档案将替换当前成长档案；塔防进度按最高进度合并。迁移成绩不参与公共排名。</p>
+          <button v-if="!confirmImport" class="ghost-button" :disabled="busy || !localSlot" @click="confirmImport = true">迁移本机进度</button>
+          <template v-else><p>确认替换当前主战场档案？</p><button class="ghost-button" :disabled="busy" @click="emit('import-local'); confirmImport = false">确认迁移</button><button class="ghost-button" :disabled="busy" @click="confirmImport = false">取消</button></template>
+        </details>
 
         <footer>
           <button class="ghost-button" :disabled="busy" @click="emit('logout')">退出登录</button>
-          <button class="primary-button" @click="emit('close')">完成</button>
+          <button class="primary-button" :disabled="busy" @click="emit('close')">完成</button>
         </footer>
       </div>
 
       <form v-else class="auth-form" @submit.prevent="submit">
         <div class="auth-tabs" role="tablist" aria-label="账号操作">
-          <button type="button" :class="{ selected: mode === 'login' }" @click="switchMode('login')">登录</button>
+          <button type="button" :disabled="busy" :class="{ selected: mode === 'login' }" @click="switchMode('login')">登录</button>
           <button
             type="button"
             :class="{ selected: mode === 'register' }"
-            :disabled="!canRegister"
+            :disabled="busy || !canRegister"
             @click="switchMode('register')"
           >
             注册
@@ -168,6 +120,7 @@ onUnmounted(() => {
             v-model="username"
             autocomplete="username"
             inputmode="text"
+            maxlength="20"
             placeholder="3-20 位文字、数字、_ 或 -"
             :disabled="busy || !isOnline"
           />
@@ -177,19 +130,21 @@ onUnmounted(() => {
           <span>密码</span>
           <input
             v-model="password"
-            autocomplete="current-password"
+            :autocomplete="mode === 'register' ? 'new-password' : 'current-password'"
             type="password"
+            maxlength="72"
             placeholder="至少 6 个字符"
             :disabled="busy || !isOnline"
           />
         </label>
 
-        <p v-if="!isOnline" class="auth-note">请先启动局域网主机（npm run lan），再从同一地址打开游戏；仍无法连接时，检查主机防火墙是否放行了 8013 端口。</p>
-        <p v-else-if="mode === 'register' && !canRegister" class="auth-note">主机暂时关闭了新账号注册。</p>
-        <p v-else class="auth-note">登录后使用远程三档案，结算会进入全员排行榜。</p>
+        <p v-if="!isOnline" class="auth-note">暂时无法连接游戏服务器，请检查连接后重试。</p>
+        <p v-else-if="mode === 'register' && !canRegister" class="auth-note">暂时关闭了新账号注册。</p>
+        <p v-else class="auth-note">登录后游玩，进度与成绩随账号保存，排行榜向所有玩家开放。</p>
 
         <footer>
-          <button type="button" class="ghost-button" @click="emit('close')">取消</button>
+          <button v-if="!isOnline" type="button" class="ghost-button" :disabled="busy" @click="emit('retry')">重新连接</button>
+          <button type="button" class="ghost-button" :disabled="busy" @click="emit('close')">取消</button>
           <button type="submit" class="primary-button" :disabled="!canSubmit">
             {{ busy ? '处理中…' : mode === 'register' ? '创建账号' : '登录账号' }}
           </button>
@@ -200,7 +155,10 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.lan-layer {
+.account-links { display: flex; flex-wrap: wrap; gap: 10px; }
+.import-box summary { cursor: pointer; font-size: 13px; color: #c5c8b3; }
+
+.auth-layer {
   position: fixed;
   inset: 0;
   z-index: 58;
@@ -212,7 +170,7 @@ onUnmounted(() => {
   backdrop-filter: blur(8px);
 }
 
-.lan-dialog {
+.auth-dialog {
   width: min(520px, 100%);
   overflow: hidden;
   border: 1px solid rgba(238, 214, 180, 0.18);
@@ -221,7 +179,7 @@ onUnmounted(() => {
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.46);
 }
 
-.lan-header {
+.auth-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -231,7 +189,7 @@ onUnmounted(() => {
   background: rgba(18, 16, 13, 0.9);
 }
 
-.lan-header span,
+.auth-header span,
 .account-card span,
 .remote-profile span,
 .import-box span,
@@ -241,7 +199,7 @@ onUnmounted(() => {
   font-weight: 800;
 }
 
-.lan-header h2 {
+.auth-header h2 {
   margin-top: 5px;
   font-size: 24px;
   letter-spacing: 0;
@@ -265,7 +223,7 @@ input {
   cursor: pointer;
 }
 
-.lan-message {
+.auth-message {
   margin: 16px 22px 0;
   padding: 10px 12px;
   border: 1px solid rgba(236, 196, 119, 0.24);
@@ -276,7 +234,7 @@ input {
   line-height: 1.5;
 }
 
-.lan-address {
+.auth-address {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -287,13 +245,13 @@ input {
   background: rgba(255, 255, 255, 0.02);
 }
 
-.lan-address span {
+.auth-address span {
   color: #b98747;
   font-size: 10px;
   font-weight: 800;
 }
 
-.lan-address code {
+.auth-address code {
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -303,7 +261,7 @@ input {
   white-space: nowrap;
 }
 
-.lan-address .ghost-button {
+.auth-address .ghost-button {
   min-height: 30px;
   padding: 0 12px;
 }
@@ -445,12 +403,12 @@ input:focus-visible {
 }
 
 @media (max-width: 560px) {
-  .lan-layer {
+  .auth-layer {
     align-items: end;
     padding: 0;
   }
 
-  .lan-dialog {
+  .auth-dialog {
     width: 100%;
     border-right: 0;
     border-bottom: 0;

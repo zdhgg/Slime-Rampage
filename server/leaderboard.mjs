@@ -1,8 +1,10 @@
 import { compareEntries } from '../src/game/SaveManager.js'
+import { compareAccountEntries, boundedInt } from '../src/game/AccountRules.js'
 
 function runEntry(row) {
   return {
     runId: row.id,
+    gameplay: row.gameplay,
     username: row.display_name,
     profile: row.profile_name,
     mode: row.mode,
@@ -22,19 +24,22 @@ function runEntry(row) {
     scoreVersion: Number(row.score_version),
     submittedAt: row.submitted_at,
     userId: Number(row.user_id),
+    stars: JSON.parse(row.result_json)?.stars || 0,
   }
 }
 
-export function getLeaderboard(db, mode, difficulty, limit = 50, currentUserId = null) {
+export function getLeaderboard(db, mode, difficulty, limit = 50, currentUserId = null, gameplay = 'arena', page = 1) {
   const rows = db.prepare(`
     SELECT r.*, u.display_name, p.name AS profile_name
     FROM runs r
     JOIN users u ON u.id = r.user_id
     JOIN profiles p ON p.id = r.profile_id
-    WHERE r.mode = ? AND r.difficulty = ? AND u.disabled = 0
-  `).all(mode, difficulty).map(runEntry)
+    WHERE r.gameplay = ? AND r.mode = ? AND r.difficulty = ? AND u.disabled = 0
+      AND (r.gameplay != 'tower-defense' OR r.mode != 'campaign' OR r.result = 'victory')
+  `).all(gameplay, mode, difficulty).map(runEntry)
 
-  rows.sort((a, b) => compareEntries(a, b, mode) || a.submittedAt.localeCompare(b.submittedAt))
+  rows.sort((a, b) => (gameplay === 'arena' ? compareEntries(a, b, mode) : compareAccountEntries(a, b, gameplay, mode))
+    || a.submittedAt.localeCompare(b.submittedAt) || a.runId.localeCompare(b.runId))
   const seen = new Set()
   const bestByUser = rows.filter((entry) => {
     if (seen.has(entry.userId)) return false
@@ -46,8 +51,14 @@ export function getLeaderboard(db, mode, difficulty, limit = 50, currentUserId =
     rank: index + 1,
     current: currentUserId != null && entry.userId === Number(currentUserId),
   }))
+  const pageSize = boundedInt(limit, 1, 50, 50)
+  const totalPages = Math.max(1, Math.ceil(ranked.length / pageSize))
+  const currentPage = boundedInt(page, 1, totalPages, 1)
   return {
-    entries: ranked.slice(0, Math.max(1, Math.min(50, Number(limit) || 50))).map(({ userId, ...entry }) => entry),
+    entries: ranked.slice((currentPage - 1) * pageSize, currentPage * pageSize).map(({ userId, ...entry }) => entry),
+    page: currentPage,
+    pageSize,
+    totalPages,
     currentRank: currentUserId == null
       ? null
       : ranked.find((entry) => entry.userId === Number(currentUserId))?.rank || null,

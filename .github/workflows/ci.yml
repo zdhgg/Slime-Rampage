@@ -31,6 +31,10 @@ jobs:
       - name: Build production bundle
         run: npm run build
 
+      # 门户启动契约依赖 dist：紧跟构建执行，复用刚产出的资源而不触发测试内自动构建
+      - name: Verify portal startup contract
+        run: npm run test:startup
+
       - name: Upload production bundle
         uses: actions/upload-artifact@v7
         with:

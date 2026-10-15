@@ -365,6 +365,15 @@ export class Player extends Entity {
    * 热路径零分配：所有查询直接读缓存，不重复扫反应表。
    */
   _refreshElements() {
+    const spells = this.game?.weaponSystem?.spellCombat
+    if (spells?.enabled) {
+      const fusion = spells.fusion
+      this._reactions = fusion ? [fusion] : []
+      this._reactionIds = new Set(this._reactions.map(r => r.id))
+      this._reactionMap = new Map(this._reactions.map(r => [r.id, r]))
+      this._procs = {}
+      return
+    }
     // 激活 = 元素满足 且（主形态 或 已占用副反应槽位）——槽位经济（阶段十六）：
     // 未入槽的组合不产生任何反应效果（元素附魔仍按等级生效）
     const satisfied = getActiveReactions(this.elements)
@@ -420,6 +429,7 @@ export class Player extends Entity {
    *    让玩家明确知道「刚才发生了一件重要的事」。
    */
   absorbElement(type) {
+    if (this.game?.weaponSystem?.spellCombat?.enabled) return
     if (this.dead) return // 死亡帧残差：不再吸收（防进化演出与结算面板叠加）
     // 元素权限（第三批角色化）：暴食/弹射/暗影不使用元素系统。
     // 这是防御性兜底闸门——上游（核心生成、E 交互、吞噬消化）已按同一权限
@@ -502,6 +512,7 @@ export class Player extends Entity {
    * @returns {Array} 本次自动接入的反应（供调用方播放提示；无变化时为空数组）
    */
   refreshReactionSlots() {
+    if (this.game?.weaponSystem?.spellCombat?.enabled) { this.secondarySlots = 0; return [] }
     const base = this.baseSecondarySlots ?? 2
     this.secondarySlots = Math.min(
       MAX_REACTION_SLOTS,
@@ -636,6 +647,9 @@ export class Player extends Entity {
         return
       }
     }
+    const shield = this.game?.weaponSystem?.spellCombat?.shield
+    damage = shield ? shield.absorb(damage, attack) : damage
+    if (damage <= 0) { this.invincible = .18; return false }
     this.hp -= damage
     this.invincible = 0.5 // 0.5 秒无敌：仍防贴脸每帧连击，但持续受压会稳定掉血——走位有收益
     this.flash = 0.25 // 受击红闪
@@ -927,7 +941,7 @@ export class Player extends Entity {
     let sx = 1 + stretch - idleSquash
     let sy = 1 - stretch * 0.55 + idleSquash * 1.2 // 与 sx 近似保体积
 
-    const bite = this.game?.weaponSystem?.gluttonCombat.pose || shadowPose
+    const bite = this.game?.weaponSystem?.gluttonCombat.pose || shadowPose || this.game?.weaponSystem?.spellCombat?.pose
     if (bite) {
       const horizontal = Math.cos(bite.angle) ** 2
       sx *= bite.sx * horizontal + bite.sy * (1 - horizontal)

@@ -114,6 +114,19 @@ function migrate(db) {
         INSERT INTO server_settings(key, value) VALUES ('registration_enabled', '1');
       `,
     },
+    {
+      version: 2,
+      sql: `
+        ALTER TABLE run_tickets ADD COLUMN gameplay TEXT NOT NULL DEFAULT 'arena';
+        ALTER TABLE run_tickets ADD COLUMN stage_id INTEGER NOT NULL DEFAULT 1;
+        ALTER TABLE runs ADD COLUMN gameplay TEXT NOT NULL DEFAULT 'arena';
+        CREATE INDEX runs_gameplay_board_idx ON runs(gameplay, mode, difficulty, score DESC);
+        CREATE TABLE account_game_data (
+          user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+          data_json TEXT NOT NULL
+        );
+      `,
+    },
   ]
 
   for (const migration of migrations) {

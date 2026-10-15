@@ -202,11 +202,13 @@ const digestTitle = computed(() => {
 <template>
   <div
     class="hud"
+    :style="stats.spells?.palette ? { '--fusion-main': stats.spells.palette.main, '--fusion-accent': stats.spells.palette.accent } : undefined"
     :class="{
       'has-boss': stats.boss,
       'has-boss-formation': stats.boss?.formation,
       'has-bounty': stats.run?.bounty,
       'has-shadow': !!cooldown.shadow,
+      'has-spells': !!stats.spells,
       'hud--runner': variant === 'runner',
     }"
   >
@@ -232,9 +234,18 @@ const digestTitle = computed(() => {
         </div>
       </div>
       <div class="hud-build">
+        <div v-if="stats.spells" class="hud-spell-build" :title="`当前配色：${stats.spells.palette?.name || '基础元素'}`">
+          <div class="hud-spell-slots">
+            <span v-for="el in stats.spells.elements" :key="el.id" :style="{ '--spell-color': el.color }" :title="`${el.desc} 自动施法间隔 ${el.interval.toFixed(2)} 秒 · ${el.enhancements || '基础法术'} · 核心改造 ${el.rank}/3`"><i>{{ el.icon }}</i><b>{{ el.spell }}</b><small v-if="el.enhancements">{{ el.enhancements }}</small><small v-else-if="el.rank">改造 {{ el.rank }}</small></span>
+            <span v-if="stats.spells.elements.length === 1" class="spell-slot-empty">◇<small>首个 BOSS 核心融合</small></span>
+          </div>
+          <p v-if="stats.spells.fusion" :title="stats.spells.fusion.desc"><b>{{ stats.spells.fusion.name }}</b><span>核心 {{ stats.spells.cores }} · 空格进化 {{ stats.spells.activeRank }}/3</span></p>
+          <p v-else><span>基础法术自动施放 · 空格原质释放</span></p>
+
+        </div>
         <!-- 元素指示：点亮已吸收的元素并显示等级（评审 Day 2：💧2 ⚡3）
              第三批角色化：暴食/弹射/暗影不使用元素，整组圆点隐藏（灰显占位会误导） -->
-        <div v-if="stats.canUseElements" class="hud-elements">
+        <div v-if="stats.canUseElements && !stats.spells" class="hud-elements">
           <span
             v-for="el in ELEMENTS"
             :key="el.id"
@@ -246,7 +257,7 @@ const digestTitle = computed(() => {
           </span>
         </div>
         <!-- 激活反应徽章（阶段十五）：主形态 ★ 标识，副反应并列，悬停看效果 -->
-        <div v-if="stats.reactions.length" class="hud-reactions">
+        <div v-if="stats.reactions.length && !stats.spells" class="hud-reactions">
           <span class="reaction-meta">
             副反应 {{ stats.secondaryCount }}/{{ stats.secondarySlots }}
             <em v-if="slotMilestone">{{ slotMilestone }}</em>
@@ -263,7 +274,7 @@ const digestTitle = computed(() => {
         </div>
         <!-- 消化进度（吞噬 → 元素联动）：吃下去的血肉正在变成元素养分 -->
         <div
-          v-if="digestRatio > 0"
+          v-if="digestRatio > 0 && !stats.spells"
           class="hud-digest"
           :class="{ ready: digestRatio >= 1 }"
           :title="digestTitle"
@@ -302,7 +313,7 @@ const digestTitle = computed(() => {
       </div>
     </div>
     <div class="hud-hint">
-      WASD / 方向键移动<template v-if="stats.canUseElements"> · E 吸收元素核心</template><template v-if="hasStrainSkill"> · 空格 {{ cooldown.skillName }}<template v-if="cooldown.skillName === '影袭'">（沿移动方向）</template></template><template v-else-if="gluttonCharge"> · 空格 暴食重咬（消耗猎食点）</template> · Esc 暂停
+      WASD / 方向键移动<template v-if="stats.spells"> · 法术自动施放</template><template v-else-if="stats.canUseElements"> · E 吸收元素核心</template><template v-if="hasStrainSkill"> · 空格 {{ cooldown.skillName }}<template v-if="cooldown.skillName === '影袭'">（沿移动方向）</template></template><template v-else-if="gluttonCharge"> · 空格 暴食重咬（消耗猎食点）</template> · Esc 暂停
     </div>
     <div class="hud-stats">
       <span>攻击 <b>{{ stats.dmg }}</b></span>
@@ -326,10 +337,25 @@ const digestTitle = computed(() => {
       <i><em :style="{ width: formationBreakPercent + '%' }"></em></i>
       <small>攻速 +25% · 移速 +15%</small>
     </div>
-    <div v-if="cooldown.pets?.length" class="pet-status" aria-label="共生伙伴状态">
-      <div v-for="pet in cooldown.pets" :key="pet.id" :class="{ resting: pet.down > 0 }">
-        <span>{{ pet.name }}</span><b>{{ pet.down > 0 ? Math.ceil(pet.down) + 's 恢复' : pet.hp + '/' + pet.maxHp }}</b>
-        <i><em :style="{ width: (pet.hp / pet.maxHp * 100) + '%' }"></em></i>
+    <div v-if="cooldown.pets?.length" class="pet-status" :class="{ squad: cooldown.pets.length > 2 }" aria-label="共生伙伴状态">
+      <div v-if="cooldown.petRally" class="pet-status__boost" :title="`伙伴攻击力 +${Math.round(cooldown.petRally.damage * 100)}% · 攻速 +${Math.round(cooldown.petRally.haste * 100)}% · 移速 +${Math.round(cooldown.petRally.move * 100)}%`">
+        <span>共生鼓舞</span><b>{{ cooldown.petRally.remaining.toFixed(1) }}s</b>
+        <i><em :style="{ width: (cooldown.petRally.remaining / cooldown.petRally.duration) * 100 + '%' }"></em></i>
+      </div>
+      <div v-for="pet in cooldown.pets" :key="pet.id" class="pet-status__row" :class="[pet.id, { resting: pet.down > 0, boosted: pet.boosted }]">
+        <span class="pet-status__crest" aria-hidden="true"></span>
+        <div class="pet-status__body" :title="pet.state">
+          <div class="pet-status__meta">
+            <span>{{ pet.name }}</span>
+            <small>{{ pet.role }}</small>
+            <b>{{ pet.down > 0 ? Math.ceil(pet.down) + 's 恢复' : pet.hp + '/' + pet.maxHp }}</b>
+          </div>
+          <i class="pet-status__track"><em :style="{ width: (pet.hp / pet.maxHp) * 100 + '%' }"></em></i>
+          <div class="pet-status__support" :title="pet.supportDesc" :class="{ active: pet.down <= 0 && (pet.supporting || pet.supportActive > 0) }">
+            <span>{{ pet.supportName }}</span>
+            <b>{{ pet.down > 0 ? '暂歇' : pet.supporting ? '施放中' : pet.supportActive > 0 && (pet.id === 'guardian' || pet.id === 'spore' || pet.id === 'hunter') ? pet.supportActive.toFixed(1) + 's' : pet.supportCd > 0 ? Math.ceil(pet.supportCd) + 's' : '就绪' }}</b>
+          </div>
+        </div>
       </div>
     </div>
     <div v-if="cooldown.shadow" class="shadow-status" :title="`暴击率 ${Math.round(cooldown.shadow.crit * 100)}% · 暴击后分身概率 ${Math.round(cooldown.shadow.chance * 100)}% · 分身攻击 ${Math.round(cooldown.shadow.power * 100)}% · 持续 ${cooldown.shadow.duration} 秒`">
@@ -338,7 +364,12 @@ const digestTitle = computed(() => {
       <small>暴击后生影 {{ Math.round(cooldown.shadow.chance * 100) }}%</small>
     </div>
     <!-- 空格 角色专属主动技能：仅角色血统渲染（包含原生黏液） -->
-    <div v-if="hasStrainSkill" role="button" tabindex="0" @click="emit('activate-skill')" @keydown.enter.prevent="emit('activate-skill')" @keydown.space.prevent="!$event.repeat && emit('activate-skill')" :aria-label="cooldown.skillName" class="hud-action hud-action--skill" :class="{ ready: cooldown.skillCd <= 0.02 }">
+<div v-if="cooldown.spellShield" class="spell-shield-status" :class="{ broken: cooldown.spellShield.points <= 0 }" :title="`法术护盾吸收敌人攻击，破盾后 ${cooldown.spellShield.cooldown} 秒自动重建`" aria-label="法术护盾状态">
+            <span>🛡 法术护盾</span><b>{{ Number(cooldown.spellShield.points.toFixed(1)) }}/{{ cooldown.spellShield.capacity }}</b>
+            <small>{{ cooldown.spellShield.points > 0 ? '保护中' : `重建 ${Math.ceil(cooldown.spellShield.remaining)} 秒` }}</small>
+            <i v-if="cooldown.spellShield.points <= 0"><em :style="{ width: `${100 * (1 - cooldown.spellShield.remaining / cooldown.spellShield.cooldown)}%` }"></em></i>
+          </div>
+    <div v-if="hasStrainSkill" role="button" tabindex="0" @click="emit('activate-skill')" @keydown.enter.prevent="emit('activate-skill')" @keydown.space.prevent="!$event.repeat && emit('activate-skill')" :aria-label="cooldown.skillName" :title="cooldown.skillDesc" class="hud-action hud-action--skill" :class="{ ready: cooldown.skillCd <= 0.02 }">
       <div class="hud-action-label">
         <span>SPACE</span>
         <b>{{ cooldown.skillCd <= 0.02 ? cooldown.skillName : `${cooldown.skillCd.toFixed(1)}s` }}</b>
@@ -488,6 +519,23 @@ const digestTitle = computed(() => {
 </template>
 
 <style scoped>
+.hud-spell-build { display: flex; flex-direction: column; gap: 5px; }.hud-spell-slots { display: flex; gap: 6px; }
+.hud-spell-slots > span { display: flex; gap: 5px; align-items: center; min-height: 30px; padding: 3px 8px; border: 1px solid #494351; border-radius: 5px; background: rgb(18 17 23 / .8); color: var(--spell-color, #82798e); }
+.hud-spell-slots i { font-style: normal; font-size: 14px; }.hud-spell-slots b { font-size: 11px; font-weight: 600; }.hud-spell-slots small { color: #a39aac; font-size: 9px; }.hud-spell-slots .spell-slot-empty { border-style: dashed; }
+.hud-spell-build p { display: flex; gap: 8px; margin: 0; font-size: 10px; color: #98909f; }.hud-spell-build p b { font-weight: 600; color: #c8b9df; }
+.spell-shield-status { position: absolute; left: 24px; bottom: 78px; display: flex; align-items: center; gap: 6px; padding: 6px 9px; border: 1px solid #494351; border-radius: 5px; background: rgb(18 17 23 / .85); font-size: 10px; color: #c8b9df; }
+.spell-shield-status b { font-size: 11px; }.spell-shield-status small { color: #a7a0b2; font-size: 9px; }
+.spell-shield-status.broken { color: #8d8497; }.spell-shield-status i { width: 42px; height: 3px; background: #38303e; border-radius: 2px; overflow: hidden; }
+.spell-shield-status em { display: block; height: 100%; background: #b6a4df; }
+.has-spells .spell-shield-status { color: var(--fusion-main); }
+.has-spells .spell-shield-status em { background: var(--fusion-main); }
+.has-spells .hud-spell-build p b { color: var(--fusion-main); }
+.has-spells .hud-action--skill .hud-action-label b,
+.has-spells .hud-action--skill.ready .hud-action-label b { color: var(--fusion-main); }
+.has-spells .hud-action--skill.ready { border-color: var(--fusion-accent); }
+.has-spells .hud-action--skill > i > em { background: linear-gradient(90deg, var(--fusion-accent), var(--fusion-main)); }
+.hud-spell-slots small { max-width: 160px; white-space: normal; }
+@media (max-width: 520px) { .hud-spell-slots > span { padding: 3px 5px; min-height: 26px; }.hud-spell-slots b { font-size: 10px; }.hud-spell-slots small { max-width: 70px; }.hud-spell-slots .spell-slot-empty small { max-width: 65px; line-height: 1.25; }.hud-spell-build p { flex-wrap: wrap; gap: 3px 7px; } }
 .shadow-status { position: absolute; left: 24px; bottom: 78px; width: 168px; box-sizing: border-box; display: flex; flex-wrap: wrap; align-items: center; gap: 5px 12px; padding: 7px 10px; border: 1px solid #bea0ce38; border-radius: 8px; background: #211b29e8; color: #dcc9e7; font-size: 12px; }
 .shadow-status b { color: #f3e6fa; font-variant-numeric: tabular-nums; }
 .shadow-status small { width: 100%; color: #bba9c5; font-size: 10px; }
@@ -1191,13 +1239,83 @@ const digestTitle = computed(() => {
   font-variant-numeric: tabular-nums;
 }
 
-.pet-status { position: absolute; bottom: 80px; left: 24px; width: 172px; padding: 8px 10px; border: 1px solid #edc47940; border-radius: 7px; background: #101912df; color: #edc479; font-size: 11px; }
-.pet-status > div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px; }
-.pet-status > div + div { margin-top: 8px; }
-.pet-status b { font-size: 10px; font-weight: 500; }
-.pet-status i { display: block; width: 100%; height: 3px; background: #ffffff15; }
-.pet-status em { display: block; height: 100%; background: #edc479; }
-.pet-status .resting { color: #aaa; }
+.pet-status {
+  position: absolute;
+  bottom: 82px;
+  left: 24px;
+  box-sizing: border-box;
+  width: 210px;
+  padding: 9px 10px;
+  border: 1px solid rgba(237, 196, 121, 0.23);
+  border-radius: 8px;
+  background: rgba(9, 20, 16, 0.84);
+  backdrop-filter: blur(4px);
+}
+.pet-status__row { --pet-color: #e3b96e; display: flex; align-items: center; gap: 9px; min-width: 0; }
+.pet-status__row.hunter { --pet-color: #83d3bd; }
+.pet-status__row.dew { --pet-color: #8fd7e8; }
+.pet-status__row.spore { --pet-color: #c3a4dc; }
+.pet-status__row + .pet-status__row { margin-top: 9px; }
+.pet-status.squad { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 18px; width: 440px; }
+.pet-status.squad .pet-status__row { margin-top: 0; }
+.pet-status__boost { display: grid; grid-column: 1 / -1; grid-template-columns: 1fr auto; gap: 5px; margin-bottom: 10px; color: #ffe4a1; font-size: 10px; }
+.pet-status.squad .pet-status__boost { margin-bottom: 0; }
+.pet-status__boost b { font-weight: 500; font-variant-numeric: tabular-nums; }
+.pet-status__boost i { grid-column: 1 / -1; height: 2px; overflow: hidden; background: rgba(237,196,121,.15); }
+.pet-status__boost em { display: block; height: 100%; background: #edc479; transition: width .1s linear; }
+.pet-status__row.boosted .pet-status__crest { border-color: #ffe4a1; }
+.pet-status__crest {
+  position: relative;
+  flex: 0 0 25px;
+  height: 25px;
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, var(--pet-color) 50%, #192b24);
+  border-radius: 9px 9px 7px 7px;
+  background: color-mix(in srgb, var(--pet-color) 72%, #493923);
+  box-shadow: inset 0 2px 3px rgba(255, 255, 255, 0.26);
+}
+.pet-status__crest::before,
+.pet-status__crest::after { content: ''; position: absolute; top: 13px; width: 3px; height: 4px; border-radius: 50%; background: #243b34; }
+.pet-status__crest::before { left: 7px; }
+.pet-status__crest::after { right: 7px; }
+.hunter .pet-status__crest {
+  border-radius: 11px 11px 7px 7px;
+  background:
+    radial-gradient(ellipse 2px 3px at 9px 16px, #243b34 95%, transparent 100%),
+    radial-gradient(ellipse 2px 3px at 17px 16px, #243b34 95%, transparent 100%),
+    linear-gradient(135deg, #d5fff0, #69b8a2 75%);
+}
+.hunter .pet-status__crest::before { top: -6px; left: 5px; width: 7px; height: 9px; border-radius: 8px 0 8px 0; transform: rotate(-21deg); background: #83d3bd; }
+.hunter .pet-status__crest::after { top: -6px; right: 3px; width: 7px; height: 9px; border-radius: 0 8px 0 8px; transform: rotate(21deg); background: #a5e7c9; }
+.dew .pet-status__crest {
+  border-radius: 13px 13px 8px 8px;
+  background:
+    radial-gradient(ellipse 2px 3px at 9px 16px, #24495a 95%, transparent 100%),
+    radial-gradient(ellipse 2px 3px at 17px 16px, #24495a 95%, transparent 100%),
+    linear-gradient(135deg, #e4fbff, #8fd7e8 65%, #5099b4);
+}
+.dew .pet-status__crest::before { top: -7px; left: 9px; width: 8px; height: 10px; border-radius: 9px 0 9px 9px; transform: rotate(35deg); background: #bceefa; }
+.dew .pet-status__crest::after { display: none; }
+.spore .pet-status__crest {
+  background:
+    radial-gradient(ellipse 2px 3px at 9px 17px, #303047 95%, transparent 100%),
+    radial-gradient(ellipse 2px 3px at 17px 17px, #303047 95%, transparent 100%),
+    linear-gradient(135deg, #f0ddf8, #b498d1);
+}
+.spore .pet-status__crest::before { top: -5px; left: -3px; width: 29px; height: 14px; border-radius: 15px 15px 7px 7px; background: #8c6eaa; border: 1px solid #59466f; }
+.spore .pet-status__crest::after { display: none; }
+.pet-status__body { flex: 1; min-width: 0; }
+.pet-status__meta { display: flex; align-items: baseline; justify-content: space-between; gap: 7px; margin-bottom: 6px; color: var(--pet-color); font-size: 11px; }
+.pet-status__meta span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.pet-status__meta small { flex: none; color: rgba(242, 245, 231, 0.48); font-size: 9px; }
+.pet-status__meta b { flex: none; margin-left: auto; color: rgba(242, 245, 231, 0.76); font-size: 10px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.pet-status__track { display: block; height: 3px; overflow: hidden; border-radius: 3px; background: rgba(255, 255, 255, 0.14); }
+.pet-status__track em { display: block; height: 100%; border-radius: inherit; background: var(--pet-color); transition: width 0.18s linear; }
+.pet-status__support { display: flex; justify-content: space-between; gap: 6px; margin-top: 5px; color: rgba(242,245,231,.48); font-size: 9px; }
+.pet-status__support span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pet-status__support b { flex: none; font-weight: 500; font-variant-numeric: tabular-nums; }
+.pet-status__support.active { color: var(--pet-color); }
+.pet-status__row.resting { opacity: 0.66; }
 .hud-action {
   pointer-events: auto;
   cursor: pointer;
@@ -1884,7 +2002,12 @@ const digestTitle = computed(() => {
 }
 
 @media (max-width: 900px) {
+  .spell-shield-status { left: 14px; bottom: 70px; }
   .shadow-status { left: 14px; bottom: 70px; width: 148px; }
+  .pet-status { left: 14px; bottom: 74px; width: min(210px, calc(100vw - 28px)); }
+  .pet-status.squad { width: min(390px, calc(100vw - 28px)); gap: 12px; }
+  .pet-status.squad .pet-status__meta { gap: 4px; }
+  .pet-status.squad .pet-status__meta small { display: none; }
   .combo-toast {
     top: auto;
     bottom: 90px;

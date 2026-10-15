@@ -176,7 +176,7 @@ export class GemManager extends Entity {
     const list = this._gems
     // 元素权限（第三批角色化）：非元素角色 E 不进行元素交互，
     // 也不点亮「E」提示气泡（_nearCore 保持 null）。
-    if (this.game?.canUseElements === false) {
+    if (this.game?.canUseElements === false || this.game?.weaponSystem?.spellCombat?.enabled) {
       this.player.input.consumeInteract?.() // 消费掉按键，避免队列残留
       this._nearCore = null
       return false

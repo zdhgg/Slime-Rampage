@@ -50,7 +50,7 @@ const emit = defineEmits(['select'])
  * 槽位再扩也是空槽，提示等于一句空承诺。底层槽位计算不改。
  */
 const slotMilestone = computed(() => {
-  if (!props.canUseElements) return null
+  if (!props.canUseElements || props.roleSpec === 'elemental') return null
   const level = props.level || 1
   if (REACTION_SLOT_LEVELS.includes(level)) {
     return { hit: true, text: `🎉 副反应槽 +1（现 ${2 + getReactionSlotLevelBonus(level)} 个基础槽，已自动接入可用反应）` }
@@ -64,17 +64,22 @@ const isMilestone = props.options?.[0]?.isMilestone || false
 const milestoneType = props.options?.[0]?.milestoneType || 'primary'
 
 const roleLabel = (s) => {
-  if (s.isBossSkill) return '📜 BOSS职业秘典'
+  if (s.element) return `${s.icon} ${s.tags[0]}`
+  if (s.isBossSkill) return s.isPartnerChoice ? '🐾 BOSS伙伴契约' : '📜 BOSS职业秘典'
   if (s.isCapstone) return '🌟 终极觉醒'
+  if (s.isPartnerChoice) return '🐾 招募伙伴 · 在场 +1'
   if (s.role === 't1_free') return '🌱 自由变异尝试'
   if (s.role === 'primary') return '🔥 主专精深潜'
   if (s.role === 'secondary') return '🔗 副专精共鸣'
+  if (s.role === 'role_t1') return '🔮 专属法术强化'
   return '💚 通用生存'
 }
 
 const cardClass = (s) => {
-  if (s.isBossSkill) return 'card-boss'
+  if (s.element || s.role === 'role_t1') return 'card-primary'
+  if (s.isBossSkill) return s.isPartnerChoice ? 'card-partner' : 'card-boss'
   if (s.isCapstone) return 'card-capstone'
+  if (s.isPartnerChoice) return 'card-partner'
   if (s.role === 'primary') return 'card-primary'
   if (s.role === 'secondary') return 'card-secondary'
   if (s.role === 't1_free') return 'card-free'
@@ -82,6 +87,7 @@ const cardClass = (s) => {
 }
 
 const isBossReward = computed(() => !!props.options?.[0]?.isBossSkill)
+const isPartnerSelection = computed(() => props.options?.length > 0 && props.options.every(s => s.isPartnerChoice))
 </script>
 
 <template>
@@ -142,10 +148,14 @@ const isBossReward = computed(() => !!props.options?.[0]?.isBossSkill)
 
     <!-- 2. 常规升级 3 卡面板 (自由探索 / 主副专精深潜 / 通用) -->
     <div v-else class="levelup-panel">
-      <h2 class="levelup-title">{{ isBossReward ? '📜 王级职业秘典 · 选择一项专属强化 📜' : `✨ 升级！Lv.${level} · 选择一项基因进化 ✨` }}</h2>
+      <h2 class="levelup-title">{{ isBossReward ? '📜 王级职业秘典 · 选择一项专属强化 📜' : isPartnerSelection ? '招募你的第一位搭档' : `✨ 升级！Lv.${level} · 选择一项基因进化 ✨` }}</h2>
       <div class="levelup-grow">
         {{ isBossReward
-          ? '击败首领获得的职业秘典：不占用升级次数，只能选择当前职业的强力专属技能。'
+          ? (options.some(s => s.isPartnerChoice) ? '选择伙伴契约即可增加一位在场伙伴；每种一只，最多组成四人小队。' : '击败首领获得的职业秘典：不占用升级次数，只能选择当前职业的强力专属技能。')
+          : isPartnerSelection
+          ? '先选一位搭档同行，后续升级或 BOSS 秘典可继续招募，最多四只伙伴共同作战。'
+          : roleSpec === 'elemental'
+          ? '围绕已掌握的法术成长；融合后两套法术持续施放，各自的升级都保留。'
           : level < 5
           ? (roleSpec
             ? '🌱 阶段说明：Lv.1~4 只开放本角色专属技能树（Lv.5 自动觉醒为你的主专精，无需选择）'
@@ -160,6 +170,7 @@ const isBossReward = computed(() => !!props.options?.[0]?.isBossSkill)
           v-for="s in options"
           :key="s.id"
           :class="['skill-card', cardClass(s)]"
+          :style="s.isPartnerChoice ? { '--partner-color': s.color } : undefined"
           :title="s.isBossSkill ? 'BOSS 专属技能' : `当前 Lv.${s.level} · 选择后 Lv.${s.level + 1}`"
           @click="emit('select', s)"
         >
@@ -170,7 +181,10 @@ const isBossReward = computed(() => !!props.options?.[0]?.isBossSkill)
           <i v-if="!s.isBossSkill" class="skill-lv">Lv.{{ s.level + 1 }}/{{ s.maxLevel }}</i>
           <i v-else class="skill-lv boss-lv">BOSS</i>
 
-          <div class="skill-icon">{{ s.icon }}</div>
+          <div v-if="s.isPartnerChoice" class="skill-icon partner-icon" aria-hidden="true">
+            <span :class="['partner-mark', s.partnerSkillId || s.id]"></span>
+          </div>
+          <div v-else class="skill-icon">{{ s.icon }}</div>
 
           <div class="skill-tags">
             <span v-for="t in s.tags || []" :key="t" class="skill-tag">{{ t }}</span>
@@ -452,6 +466,21 @@ const isBossReward = computed(() => !!props.options?.[0]?.isBossSkill)
   box-shadow: 0 10px 32px rgba(255, 159, 67, 0.35);
 }
 
+.card-partner {
+  border: 1.5px solid color-mix(in srgb, var(--partner-color) 55%, transparent);
+  background: linear-gradient(165deg, rgba(22, 37, 32, 0.98), rgba(10, 19, 17, 0.98));
+}
+.card-partner:hover {
+  border-color: var(--partner-color);
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--partner-color) 22%, transparent);
+}
+.card-partner .skill-name,
+.card-partner .skill-num { color: var(--partner-color); }
+.card-partner .skill-num {
+  background: color-mix(in srgb, var(--partner-color) 10%, transparent);
+  border-color: color-mix(in srgb, var(--partner-color) 28%, transparent);
+}
+
 .card-secondary {
   border: 1.5px solid rgba(0, 210, 211, 0.5);
   background: linear-gradient(165deg, rgba(16, 40, 48, 0.95), rgba(8, 20, 24, 0.95));
@@ -507,6 +536,11 @@ const isBossReward = computed(() => !!props.options?.[0]?.isBossSkill)
   border-color: #f39c12;
   color: #fff;
 }
+.card-partner .role-badge {
+  background: #192823;
+  border-color: var(--partner-color);
+  color: var(--partner-color);
+}
 .card-secondary .role-badge {
   background: #0984e3;
   border-color: #74b9ff;
@@ -540,6 +574,40 @@ const isBossReward = computed(() => !!props.options?.[0]?.isBossSkill)
   line-height: 1.2;
   margin: 6px 0 10px;
 }
+.partner-icon { display: flex; align-items: center; justify-content: center; width: 58px; height: 53px; }
+.partner-mark {
+  position: relative;
+  display: block;
+  width: 48px;
+  height: 39px;
+  border: 2px solid #315e57;
+  border-radius: 46% 46% 35% 35%;
+  background:
+    radial-gradient(ellipse 3px 4px at 16px 25px, #203d3a 95%, transparent),
+    radial-gradient(ellipse 3px 4px at 32px 25px, #203d3a 95%, transparent),
+    linear-gradient(135deg, #d5fff0, #83d3bd 52%, #4a9c8d);
+  box-shadow: inset 0 3px 4px rgba(255, 255, 255, .28), 0 5px 0 rgba(0, 0, 0, .18);
+}
+.partner-mark::before,
+.partner-mark::after { content: ''; position: absolute; }
+.partner-mark.pet_partner::before { width: 13px; height: 20px; left: 7px; top: -15px; border-radius: 90% 0 90% 0; transform: rotate(-22deg); background: #83d3bd; border: 2px solid #315e57; }
+.partner-mark.pet_partner::after { width: 13px; height: 20px; right: 6px; top: -15px; border-radius: 0 90% 0 90%; transform: rotate(22deg); background: #a5e7c9; border: 2px solid #315e57; }
+.partner-mark.pet_dew_partner {
+  border-color: #356a7d;
+  background:
+    radial-gradient(ellipse 3px 4px at 16px 25px, #24495a 95%, transparent),
+    radial-gradient(ellipse 3px 4px at 32px 25px, #24495a 95%, transparent),
+    linear-gradient(135deg, #e4fbff, #8fd7e8 60%, #5099b4);
+}
+.partner-mark.pet_dew_partner::before { width: 20px; height: 20px; left: 14px; top: -16px; border-radius: 3px 100% 8px 100%; transform: rotate(44deg); background: #bceefa; border-left: 2px solid #356a7d; border-top: 2px solid #356a7d; }
+.partner-mark.pet_spore_partner {
+  border-color: #59466f;
+  background:
+    radial-gradient(ellipse 3px 4px at 16px 26px, #303047 95%, transparent),
+    radial-gradient(ellipse 3px 4px at 32px 26px, #303047 95%, transparent),
+    linear-gradient(135deg, #f0ddf8, #c3a4dc 64%, #866aa4);
+}
+.partner-mark.pet_spore_partner::before { width: 60px; height: 25px; top: -13px; left: -8px; border: 2px solid #59466f; border-radius: 50% 50% 28% 28%; background: radial-gradient(circle at 19px 10px, #e9d4f3 0 3px, transparent 4px), radial-gradient(circle at 41px 8px, #e9d4f3 0 4px, transparent 5px), #8c6eaa; }
 
 .skill-tags {
   display: flex;

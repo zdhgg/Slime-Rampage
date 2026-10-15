@@ -21,6 +21,7 @@ import TowerDefenseHudOverlay from './components/TowerDefenseHudOverlay.vue'
 import TowerDefenseResultModal from './components/TowerDefenseResultModal.vue'
 import TowerDefenseWorldMapModal from './components/TowerDefenseWorldMapModal.vue'
 import LevelUpModal from './components/LevelUpModal.vue'
+import SpellCoreModal from './components/SpellCoreModal.vue'
 import GameOverModal from './components/GameOverModal.vue'
 import PauseModal from './components/PauseModal.vue'
 import StartScreen from './components/StartScreen.vue'
@@ -31,51 +32,184 @@ import FusionConfirmModal from './components/FusionConfirmModal.vue'
 import ExpeditionRewardModal from './components/ExpeditionRewardModal.vue'
 import EndlessDecisionModal from './components/EndlessDecisionModal.vue'
 import RunIntroOverlay from './components/RunIntroOverlay.vue'
-import LanAccountModal from './components/LanAccountModal.vue'
+import AccountModal from './components/AccountModal.vue'
+import LeaderboardModal from './components/LeaderboardModal.vue'
+import PlayerRecordsModal from './components/PlayerRecordsModal.vue'
+import { createSettlementQueue } from './services/SettlementQueue.js'
+import { createCampaignSave } from './game/AccountRules.js'
 import {
-  createSaveSlot,
-  deleteSaveSlot,
+  defaultSave,
   getActiveSave,
   getActiveSaveSlot,
   getRunRecord,
   loadSaveCatalog,
   pushScore,
   saveSaveCatalog,
-  switchSaveSlot,
-  updateActiveSave,
 } from './game/SaveManager.js'
 import { calculateMaterialReward, normalizeRunSelection, sumDrops } from './game/RunRules.js'
-import { getGene, getGenePurchaseState } from './game/GenePool.js'
 import { createDefaultStats } from './game/GameEngine.js'
 import { getRunIntro } from './game/RunIntro.js'
-import { lanApi } from './services/LanClient.js'
-import { loadCampaignSave } from './game/gameplay/tower-defense/TowerDefenseSave.js'
+import { normalizeSpellElement } from './game/SpellRules.js'
+import { accountApi } from './services/AccountClient.js'
+import { loadCampaignSave, loadLegacyCampaign, setAccountCampaign } from './game/gameplay/tower-defense/TowerDefenseSave.js'
 
 const engine = shallowRef(null) // 仅作为挂载句柄：浅响应，避免 Vue 深代理整个引擎对象树
 const started = ref(false) // 序章结束、主循环已启动
 const showMarket = ref(false) // 黑市打开
 const showSaveSlots = ref(false)
-const showLanAccount = ref(false)
+const showAccount = ref(false)
 const offlineCatalog = ref(loadSaveCatalog())
 saveSaveCatalog(offlineCatalog.value) // 首次启动即落盘三槽结构，避免旧档每次重复迁移
-const saveCatalog = ref(offlineCatalog.value)
+const emptyCatalog = () => ({ version: 5, activeSlotId: 'slot-1', slots: [{ id: 'slot-1', name: '主战场档案', data: defaultSave() }, null, null] })
+const saveCatalog = ref(emptyCatalog())
 const save = ref(getActiveSave(saveCatalog.value)) // 当前档案（掉落物 + 基因等级 + 分数榜）
 const selectedRun = ref(normalizeRunSelection(save.value.preferences))
-const muted = ref(saveCatalog.value.settings?.sound?.muted || false) // 全局音效设置，不随档案切换
+const muted = ref(offlineCatalog.value.settings?.sound?.muted || false) // 全局音效设置，不随档案切换
 const elementToast = ref('') // 元素组合激活提示（短暂显示）
 const toastKind = ref('info')
 const evolution = ref(null) // 进化事件演出（title/subtitle/mutation）
-const lanStatus = ref({ checked: false, online: false, registrationEnabled: false })
-const lanAccount = ref(null)
-const lanBusy = ref(false)
-const lanMessage = ref('')
-const lanRunTicket = ref(null)
+const serviceStatus = ref({ checked: false, online: false, registrationEnabled: false })
+const account = ref(null)
+const accountBusy = ref(false)
+const accountMessage = ref('')
 const deployingRun = ref(false)
 const publicLeaderboard = ref(null)
 const publicLeaderboardKey = ref('')
 let toastTimer = 0
 let evolutionTimer = 0
-let lanBoardTimer = 0
+let boardTimer = 0
+let sessionRequestId = 0
+const showLeaderboard = ref(false)
+const showPlayerRecords = ref(false)
+const accountData = ref({ campaign: createCampaignSave(), records: {} })
+const settlementQueue = createSettlementQueue()
+const pendingSettlements = ref([])
+const syncing = ref(false)
+const queueDurable = ref(true)
+const runContext = ref(null)
+setAccountCampaign(createCampaignSave())
+
+function updateQueueState() {
+  pendingSettlements.value = [...settlementQueue.list(account.value?.id)]
+  syncing.value = settlementQueue.running
+  queueDurable.value = settlementQueue.durable
+}
+
+function applyAccountData(data) {
+  if (!data) return
+  accountData.value = data
+  setAccountCampaign(data.campaign, queueTutorialCompletion)
+}
+
+function queueTutorialCompletion() {
+  if (!account.value) return
+  settlementQueue.add({ accountId: account.value.id, ticketId: `tutorial-${account.value.id}`,
+    gameplay: 'tower-defense', kind: 'tutorial', run: {} })
+  updateQueueState()
+  flushSettlements()
+}
+
+async function flushSettlements(retryFailed = false) {
+  const accountId = account.value?.id
+  if (!accountId) return
+  await settlementQueue.flush(accountId,
+    job => job.kind === 'tutorial' ? accountApi.completeTutorial() : accountApi.finishRun(job.ticketId, job.run),
+    (job, payload) => {
+      if (job.kind === 'tutorial') {
+        accountData.value.campaign.tutorialCompleted = true
+        return
+      }
+      applyAccountData(payload.accountData)
+      applyCatalog(payload.catalog, true)
+      if (gameOverInfo.value?.ticketId === job.ticketId) {
+        const result = payload.result
+        gameOverInfo.value = { ...gameOverInfo.value, ...result, best: result.best,
+          board: result.personalBoard, publicLeaderboard: payload.leaderboard, accountSync: 'synced', accountSyncError: '' }
+        isNewRecord.value = !!result.isNewRecord
+      }
+      if (gameplayResult.value?.ticketId === job.ticketId) {
+        gameplayResult.value = { ...gameplayResult.value, accountSync: 'synced', rank: payload.leaderboard?.currentRank }
+      }
+      if (gameplayHud.value?.ticketId === job.ticketId) {
+        gameplayHud.value = { ...gameplayHud.value, accountSync: 'synced' }
+      }
+      loadPublicLeaderboard(selectedRun.value)
+    }, { retryFailed, isCurrent: () => account.value?.id === accountId, onChange: updateQueueState })
+  const pending = settlementQueue.list(accountId)
+  if (pending.some(job => job.status === 401) && account.value?.id === accountId) {
+    showPlayerRecords.value = false
+    showLeaderboard.value = false
+    accountMessage.value = '登录已过期，请重新登录后同步游戏记录'
+    showAccount.value = true
+    account.value = null
+    updateQueueState()
+  }
+  if (gameOverInfo.value?.ticketId && pending.some(job => job.ticketId === gameOverInfo.value.ticketId)) {
+    const job = pending.find(job => job.ticketId === gameOverInfo.value.ticketId)
+    gameOverInfo.value = { ...gameOverInfo.value, accountSync: 'pending', accountSyncError: job.error }
+  }
+}
+
+function requireAccount() {
+  if (account.value) return true
+  onOpenAccount()
+  return false
+}
+
+async function beginAccountRun(selection) {
+  if (!requireAccount() || deployingRun.value) return false
+  const accountId = account.value.id
+  deployingRun.value = true
+  try {
+    await flushSettlements()
+    if (account.value?.id !== accountId) return false
+    if (settlementQueue.list(account.value?.id).length || settlementQueue.running) {
+      showToast('请先同步上一局记录，再开始新的行动', 'danger', 4200)
+      if (started.value && engine.value?.running) { engine.value.pause(); paused.value = true }
+      showPlayerRecords.value = true
+      return false
+    }
+    const payload = await accountApi.startRun(selection)
+    if (account.value?.id !== accountId) return false
+    runContext.value = { ...selection, accountId: account.value.id, ticketId: payload.ticket.id }
+    return true
+  } catch (error) {
+    if (error.status === 401) {
+      account.value = null
+      showAccount.value = true
+      accountMessage.value = '登录已过期，请重新登录后继续'
+    }
+    showToast(error.message, 'danger', 4200)
+    return false
+  } finally { deployingRun.value = false }
+}
+
+function queueRunResult(info, gameplay) {
+  const context = runContext.value
+  if (!context || context.accountId !== account.value?.id) return null
+  settlementQueue.add({ accountId: context.accountId, ticketId: context.ticketId, gameplay, run: info })
+  runContext.value = null
+  updateQueueState()
+  return context.ticketId
+}
+
+function onOpenLeaderboard() {
+  showLeaderboard.value = true
+}
+
+function onOpenPlayerRecords() {
+  if (!requireAccount()) return
+  showAccount.value = false
+  showPlayerRecords.value = true
+}
+
+async function discardSettlement(ticketId) {
+  settlementQueue.discard(account.value?.id, ticketId)
+  updateQueueState()
+  const payload = await accountApi.me().catch(() => null)
+  if (payload?.account?.id === account.value?.id) applyAccountPayload(payload)
+}
+
 
 /** 音效快捷访问（引擎未就绪时静默） */
 const snd = () => engine.value?.sound
@@ -90,6 +224,7 @@ function onUiSound(effect) {
 // stats：引擎快照直接整树赋值（shallowRef 不深层代理，形状由 createDefaultStats 保证）
 const stats = shallowRef(createDefaultStats())
 const levelUpOptions = ref(null) // 升级面板的 3 个技能选项（null = 不显示）
+const spellCoreReward = shallowRef(null)
 // 高频冷却数据（引擎 onCooldown ~10Hz 推送）：冲刺 CD / Boss 施法条是连续递变量，
 // 走 2Hz 大快照会肉眼跳变，单独小通道进响应式（仅少量数字，HUD 重渲染开销可忽略）
 const cooldown = ref({
@@ -121,7 +256,7 @@ const pendingRun = ref(null)
 const currentRecord = computed(() => getRunRecord(save.value, selectedRun.value))
 const activeSaveSlot = computed(() => getActiveSaveSlot(saveCatalog.value))
 const activeLocalSaveSlot = computed(() => getActiveSaveSlot(offlineCatalog.value))
-const isLanSignedIn = computed(() => !!lanAccount.value)
+const isSignedIn = computed(() => !!account.value)
 
 function showToast(message, kind = 'info', duration = 3000) {
   toastKind.value = kind
@@ -136,123 +271,40 @@ function cloneSave(source) {
   return JSON.parse(JSON.stringify(source))
 }
 
-function persistActiveSave() {
-  if (isLanSignedIn.value) return
-  updateActiveSave(offlineCatalog.value, save.value)
-  saveCatalog.value = offlineCatalog.value
-  saveSaveCatalog(offlineCatalog.value)
-}
-
 function applyActiveSave() {
   save.value = getActiveSave(saveCatalog.value)
   selectedRun.value = normalizeRunSelection(save.value.preferences)
   engine.value?.setGenes(save.value.genes)
 }
 
-function applyCatalog(catalog, remote = isLanSignedIn.value) {
+function applyCatalog(catalog) {
   if (!catalog) return
-  if (remote) saveCatalog.value = catalog
-  else {
-    offlineCatalog.value = catalog
-    saveCatalog.value = offlineCatalog.value
-    saveSaveCatalog(offlineCatalog.value)
-  }
+  saveCatalog.value = catalog
   applyActiveSave()
 }
 
-function applyLanPayload(payload) {
-  if (payload?.account) lanAccount.value = payload.account
+function applyAccountPayload(payload) {
+  if (payload?.account) account.value = payload.account
   if (payload?.catalog) applyCatalog(payload.catalog, true)
+  if (payload?.accountData) applyAccountData(payload.accountData)
+  updateQueueState()
 }
 
-function persistFallbackSave(targetSave) {
-  updateActiveSave(offlineCatalog.value, targetSave)
-  saveSaveCatalog(offlineCatalog.value)
-}
-
-function buildLocalGameOver(info, options = {}) {
-  const {
-    persist = true,
-    syncError = '',
-    fallbackToOffline = false,
-  } = options
-  const targetSave = fallbackToOffline ? cloneSave(save.value) : persist ? save.value : cloneSave(save.value)
+function previewGameOver(info) {
+  const targetSave = cloneSave(save.value)
   const rawDrops = sumDrops(info.drops)
   const earnedDrops = calculateMaterialReward(rawDrops, selectedRun.value, info)
-  targetSave.drops += earnedDrops
-  const previousScore = getRunRecord(targetSave, selectedRun.value).best.score || 0
-  const { rank, entry, best, board, unlocked, unlockedMode } = pushScore(targetSave, selectedRun.value, {
-    ...info,
-    species: info.species?.name || '',
-  })
-  if (fallbackToOffline) persistFallbackSave(targetSave)
-  else if (persist) persistActiveSave()
-  return {
-    ...info,
-    rawDrops,
-    earnedDrops,
-    score: entry.score,
-    scoreBreakdown: entry.breakdown,
-    rank,
-    entry,
-    best,
-    board,
-    unlocked,
-    unlockedMode,
-    isNewRecord: entry.score > previousScore,
-    lanSync: syncError ? 'failed' : 'offline',
-    lanSyncError: syncError,
-    lanLocalFallback: fallbackToOffline,
-  }
+  const scored = pushScore(targetSave, selectedRun.value, { ...info, species: info.species?.name || '' })
+  return { ...info, rawDrops, earnedDrops, score: scored.entry.score, scoreBreakdown: scored.entry.breakdown,
+    entry: scored.entry, best: scored.best, board: scored.board, accountSync: 'pending' }
 }
 
 async function settleGameOver(info) {
   endlessDecision.value = null
-  lanRunTicket.value ||= null
-  if (isLanSignedIn.value && lanRunTicket.value) {
-    try {
-      const payload = await lanApi.finishRun(lanRunTicket.value, {
-        ...info,
-        species: info.species?.name || '',
-      })
-      lanRunTicket.value = null
-      applyCatalog(payload.catalog, true)
-      publicLeaderboard.value = payload.leaderboard || null
-      publicLeaderboardKey.value = `${info.mode}:${info.difficulty}`
-      const result = payload.result
-      isNewRecord.value = !!result.isNewRecord
-      gameOverInfo.value = {
-        ...info,
-        rawDrops: result.rawDrops,
-        earnedDrops: result.earnedDrops,
-        score: result.score,
-        scoreBreakdown: result.scoreBreakdown,
-        rank: result.rank,
-        entry: result.entry,
-        best: result.best,
-        board: result.personalBoard,
-        publicLeaderboard: payload.leaderboard,
-        unlocked: result.unlocked,
-        unlockedMode: result.unlockedMode,
-        lanSync: 'synced',
-      }
-      if (isNewRecord.value) snd()?.newRecord()
-      return
-    } catch (error) {
-      const message = error?.message || '公共榜同步失败'
-      lanMessage.value = message
-      const fallback = buildLocalGameOver(info, { persist: false, syncError: message, fallbackToOffline: true })
-      gameOverInfo.value = fallback
-      isNewRecord.value = !!fallback.isNewRecord
-      if (isNewRecord.value) snd()?.newRecord()
-      showToast(`局域网结算失败，已保存到本机档案：${message}`, 'danger', 5200)
-      return
-    }
-  }
-
-  gameOverInfo.value = buildLocalGameOver(info, true)
-  isNewRecord.value = !!gameOverInfo.value.isNewRecord
-  if (isNewRecord.value) snd()?.newRecord()
+  const run = { ...info, species: info.species?.name || '' }
+  const ticketId = queueRunResult(run, 'arena')
+  gameOverInfo.value = { ...previewGameOver(info), ticketId }
+  await flushSettlements()
 }
 
 function onEngineReady(eng) {
@@ -269,6 +321,7 @@ function onEngineReady(eng) {
     cooldown.value = c
   }
   eng.onGameplayHud = (snapshot) => {
+    if (snapshot?.state === 'finished' && gameplayHud.value?.ticketId) snapshot = { ...snapshot, ticketId: gameplayHud.value.ticketId, accountSync: gameplayHud.value.accountSync }
     if (snapshot?.mode === 'runner' || snapshot?.mode === 'tower-defense') {
       gameplayHud.value = snapshot
     }
@@ -277,16 +330,20 @@ function onEngineReady(eng) {
     if (result?.mode !== 'runner' && result?.mode !== 'tower-defense') return
     paused.value = false
     activeGameplay.value = result.mode
-    if (result.mode === 'runner') {
-      gameplayResult.value = result
-    }
+    const ticketId = queueRunResult(result, result.mode)
+    if (result.mode === 'runner') gameplayResult.value = { ...result, ticketId, accountSync: 'pending' }
+    else gameplayHud.value = { ...gameplayHud.value, ticketId, accountSync: 'pending' }
+    flushSettlements()
+
   }
   // 引擎升级暂停后回调：把 3 个技能选项交给 Vue 渲染面板
   eng.onLevelUp = (options) => {
     levelUpOptions.value = options
   }
-  // 引擎玩家死亡后回调：离线本地入榜；LAN 登录时提交服务器，返回公共榜与远程档案。
+  eng.onSpellCore = info => { spellCoreReward.value = info }
+  // 引擎玩家死亡后回调：提交账号结算队列，服务器确认后更新成长与公共榜。
   eng.onGameOver = (info) => {
+    spellCoreReward.value = null
     settleGameOver(info)
   }
   // 进化事件回调（评审 Day 2）：融合激活时全屏演出，0.95s 后自动淡出
@@ -389,20 +446,20 @@ function onEngineReady(eng) {
   }
 }
 
-function lanErrorMessage(error) {
-  return error?.message || '局域网请求失败'
+function accountErrorMessage(error) {
+  return error?.message || '账号请求失败'
 }
 
 async function loadPublicLeaderboard(selection = selectedRun.value) {
   const normalized = normalizeRunSelection(selection)
   const key = `${normalized.mode}:${normalized.difficulty}`
   publicLeaderboardKey.value = key
-  if (!lanStatus.value.online) {
+  if (!serviceStatus.value.online) {
     publicLeaderboard.value = null
     return
   }
   try {
-    const payload = await lanApi.leaderboard({ ...normalized, limit: 10 })
+    const payload = await accountApi.leaderboard({ ...normalized, limit: 10 })
     if (publicLeaderboardKey.value === key) publicLeaderboard.value = payload.leaderboard || null
   } catch {
     if (publicLeaderboardKey.value === key) publicLeaderboard.value = null
@@ -410,133 +467,150 @@ async function loadPublicLeaderboard(selection = selectedRun.value) {
 }
 
 /** 停留在开始界面时每 20s 轮询公共榜：朋友的新成绩无需手动刷新（隐藏标签页不请求）。 */
-function startLanBoardPolling() {
-  stopLanBoardPolling()
-  lanBoardTimer = setInterval(() => {
-    if (!document.hidden && lanStatus.value.online && !started.value && !showMarket.value) {
+function startBoardPolling() {
+  stopBoardPolling()
+  boardTimer = setInterval(() => {
+    if (!document.hidden) flushSettlements()
+    if (!document.hidden && serviceStatus.value.online && !started.value && !showMarket.value) {
       loadPublicLeaderboard(selectedRun.value)
     }
   }, 20000)
 }
 
-function stopLanBoardPolling() {
-  clearInterval(lanBoardTimer)
-  lanBoardTimer = 0
+function stopBoardPolling() {
+  clearInterval(boardTimer)
+  boardTimer = 0
 }
 
-async function refreshLanSession() {
+async function refreshAccountSession({ promptIfSignedOut = false } = {}) {
+  const requestId = ++sessionRequestId
   try {
-    const status = await lanApi.status()
-    lanStatus.value = {
+    const status = await accountApi.status()
+    if (requestId !== sessionRequestId) return
+    if (Number(status.version) < 2) throw new Error('游戏服务版本过旧，请重启游戏服务后重试')
+    serviceStatus.value = {
       checked: true,
       online: true,
       registrationEnabled: status.registrationEnabled !== false,
       serverTime: status.serverTime,
-      lanIps: Array.isArray(status.lanIps) ? status.lanIps : [],
-      lanPort: status.lanPort || null,
     }
-    const payload = await lanApi.me()
-    if (payload.account) applyLanPayload(payload)
+    const payload = await accountApi.me()
+    if (requestId !== sessionRequestId) return
+    if (payload.account) applyAccountPayload(payload)
     else {
-      lanAccount.value = null
-      saveCatalog.value = offlineCatalog.value
+      account.value = null
+      saveCatalog.value = emptyCatalog()
+      applyAccountData({ campaign: createCampaignSave(), records: {} })
+      updateQueueState()
       applyActiveSave()
+      if (promptIfSignedOut && !started.value && !showLeaderboard.value && !window.location.hash.startsWith('#/about')) showAccount.value = true
     }
-    await loadPublicLeaderboard(selectedRun.value)
-  } catch {
-    lanStatus.value = { checked: true, online: false, registrationEnabled: false }
-    lanAccount.value = null
-    publicLeaderboard.value = null
-    saveCatalog.value = offlineCatalog.value
-    applyActiveSave()
-  }
-}
-
-function onOpenLanAccount() {
-  snd()?.uiClick()
-  lanMessage.value = ''
-  showLanAccount.value = true
-  refreshLanSession()
-}
-
-async function onLanAuth(kind, credentials) {
-  lanBusy.value = true
-  lanMessage.value = ''
-  try {
-    const payload = await lanApi[kind](credentials)
-    applyLanPayload(payload)
-    showLanAccount.value = false
-    showToast(`已登录局域网账号：${payload.account.displayName || payload.account.username}`, 'success')
+    await flushSettlements()
     await loadPublicLeaderboard(selectedRun.value)
   } catch (error) {
-    lanMessage.value = lanErrorMessage(error)
-  } finally {
-    lanBusy.value = false
-  }
-}
-
-function onLanLogin(credentials) {
-  return onLanAuth('login', credentials)
-}
-
-function onLanRegister(credentials) {
-  return onLanAuth('register', credentials)
-}
-
-async function onLanLogout() {
-  lanBusy.value = true
-  try {
-    await lanApi.logout()
-  } catch {
-    /* 退出登录以本地状态清理为准。 */
-  } finally {
-    lanBusy.value = false
-    lanAccount.value = null
-    lanRunTicket.value = null
-    saveCatalog.value = offlineCatalog.value
+    if (requestId !== sessionRequestId) return
+    accountMessage.value = error.message || '暂时无法连接游戏服务'
+    serviceStatus.value = { checked: true, online: false, registrationEnabled: false }
+    account.value = null
+    applyAccountData({ campaign: createCampaignSave(), records: {} })
+    updateQueueState()
+    publicLeaderboard.value = null
+    saveCatalog.value = emptyCatalog()
     applyActiveSave()
-    showLanAccount.value = false
-    showToast('已切回本地单机档案', 'info')
+    if (promptIfSignedOut && !started.value && !showLeaderboard.value && !window.location.hash.startsWith('#/about')) showAccount.value = true
   }
+}
+
+function onOpenAccount() {
+  snd()?.uiClick()
+  showPlayerRecords.value = false
+  showLeaderboard.value = false
+  showSaveSlots.value = false
+  accountMessage.value = ''
+  showAccount.value = true
+  refreshAccountSession()
+}
+
+async function onAuth(kind, credentials) {
+  const requestId = ++sessionRequestId
+  accountBusy.value = true
+  accountMessage.value = ''
+  try {
+    const payload = await accountApi[kind](credentials)
+    if (requestId !== sessionRequestId) return
+    applyAccountPayload(payload)
+    showAccount.value = false
+    showToast(`已登录：${payload.account.displayName || payload.account.username}`, 'success')
+    await flushSettlements()
+    await loadPublicLeaderboard(selectedRun.value)
+  } catch (error) {
+    accountMessage.value = accountErrorMessage(error)
+  } finally {
+    accountBusy.value = false
+  }
+}
+
+function onLogin(credentials) {
+  return onAuth('login', credentials)
+}
+
+function onRegister(credentials) {
+  return onAuth('register', credentials)
+}
+
+async function onLogout() {
+  if (settlementQueue.running || deployingRun.value) return
+  ++sessionRequestId
+  accountBusy.value = true
+  try {
+    await accountApi.logout()
+    account.value = null
+      runContext.value = null
+    saveCatalog.value = emptyCatalog()
+    applyActiveSave()
+    applyAccountData({ campaign: createCampaignSave(), records: {} })
+    updateQueueState()
+    showAccount.value = false
+    showToast('已退出登录', 'info')
+  } catch (error) { accountMessage.value = `退出失败：${error.message}` }
+  finally { accountBusy.value = false }
 }
 
 async function onImportLocalSlot() {
   const localSlot = activeLocalSaveSlot.value
-  if (!localSlot || !isLanSignedIn.value) return
-  lanBusy.value = true
-  lanMessage.value = ''
+  if (!localSlot || !isSignedIn.value) return
+  accountBusy.value = true
+  accountMessage.value = ''
   try {
-    const payload = await lanApi.importSlot(localSlot)
+    const payload = await accountApi.importSlot(localSlot, loadLegacyCampaign())
     applyCatalog(payload.catalog, true)
-    showToast('本机档案已导入当前局域网档案', 'success')
+    applyAccountData(payload.accountData)
+    showToast('旧档案已迁移到当前账号，旧成绩不会进入公共榜', 'success')
   } catch (error) {
-    lanMessage.value = lanErrorMessage(error)
+    accountMessage.value = accountErrorMessage(error)
   } finally {
-    lanBusy.value = false
+    accountBusy.value = false
   }
 }
 
 async function syncRunPreferences(normalized) {
   save.value.preferences = { ...normalized }
-  if (!isLanSignedIn.value) {
-    persistActiveSave()
-    return true
-  }
+  if (!requireAccount()) return false
   try {
-    const payload = await lanApi.updatePreferences(normalized)
+    const payload = await accountApi.updatePreferences(normalized)
     applyCatalog(payload.catalog, true)
     return true
   } catch (error) {
-    const message = lanErrorMessage(error)
-    lanMessage.value = message
-    showToast(`局域网档案同步失败：${message}`, 'danger', 3800)
+    const message = accountErrorMessage(error)
+    accountMessage.value = message
+    showToast(`账号档案同步失败：${message}`, 'danger', 3800)
     return false
   }
 }
 
-async function runLanCatalogAction(action, successMessage) {
-  lanBusy.value = true
-  lanMessage.value = ''
+async function runCatalogAction(action, successMessage) {
+  accountBusy.value = true
+  accountMessage.value = ''
   try {
     const payload = await action()
     applyCatalog(payload.catalog, true)
@@ -544,15 +618,16 @@ async function runLanCatalogAction(action, successMessage) {
     snd()?.uiSelect()
     if (successMessage) showToast(successMessage, 'success')
   } catch (error) {
-    lanMessage.value = lanErrorMessage(error)
-    showLanAccount.value = true
+    accountMessage.value = accountErrorMessage(error)
+    showAccount.value = true
   } finally {
-    lanBusy.value = false
+    accountBusy.value = false
   }
 }
 
 /** 选择配置后先进入战前简报，确认按钮才真正消耗一次开局。 */
 async function onPrepareRun(selection) {
+  if (!requireAccount()) return
   const normalized = normalizeRunSelection(selection || save.value.preferences)
   const strain = selection?.strain || 'origin'
   selectedRun.value = normalized
@@ -560,7 +635,8 @@ async function onPrepareRun(selection) {
   pendingRun.value = {
     selection: normalized,
     strain,
-    intro: getRunIntro(normalized, strain),
+    element: normalizeSpellElement(selection?.element),
+    intro: getRunIntro(normalized, strain, selection?.element),
   }
   loadPublicLeaderboard(normalized)
 }
@@ -569,21 +645,7 @@ async function onPrepareRun(selection) {
 async function onDeployRun() {
   const plan = pendingRun.value
   if (!plan || !engine.value || deployingRun.value) return
-  deployingRun.value = true
-  if (isLanSignedIn.value) {
-    try {
-      const payload = await lanApi.startRun(plan.selection)
-      lanRunTicket.value = payload.ticket?.id || null
-    } catch (error) {
-      const message = lanErrorMessage(error)
-      lanMessage.value = message
-      showToast(`无法开始局域网行动：${message}`, 'danger', 4200)
-      deployingRun.value = false
-      return
-    }
-  } else {
-    lanRunTicket.value = null
-  }
+  if (!(await beginAccountRun({ ...plan.selection, gameplay: 'arena' }))) return
   snd()?.gameStart()
   activeGameplay.value = 'arena'
   gameplayHud.value = null
@@ -594,7 +656,8 @@ async function onDeployRun() {
   endlessDecision.value = null
   engine.value.configureGameplay('arena') // 从 Runner 独立玩法返回后必须显式切回 Arena 管线
   engine.value.configureRun(plan.selection)
-  engine.value.applyStartingStrain(plan.strain)
+  spellCoreReward.value = null
+  engine.value.applyStartingStrain(plan.strain, plan.element)
   engine.value.reset()
   engine.value.start()
   started.value = true
@@ -606,11 +669,11 @@ const currentRunnerSubmode = ref('marathon')
 
 /**
  * 独立玩法：Runner（三线推进射击）。
- * 不入档、不上榜、不创建 LAN 行动票据、不改存档 preferences——
- * 仅切换 Gameplay 到 runner 并走独立会话生命周期。
+ * 使用独立规则与账号结算，不改主战场 preferences。
  */
-function onStartRunner(submode = 'marathon') {
+async function onStartRunner(submode = 'marathon') {
   if (!engine.value) return
+  if (!(await beginAccountRun({ gameplay: 'runner', mode: submode, difficulty: 'standard' }))) return
   snd()?.uiSelect()
   currentRunnerSubmode.value = (typeof submode === 'string' && submode) ? submode : 'marathon'
   // 清理局内 UI 状态（与 onDeployRun/onChangeRules 同一套复位口径）
@@ -626,7 +689,6 @@ function onStartRunner(submode = 'marathon') {
   pendingRun.value = null
   evolution.value = null
   elementToast.value = ''
-  lanRunTicket.value = null
   activeGameplay.value = 'runner'
   engine.value.configureGameplay('runner')
   engine.value.resetGameplaySession(undefined, currentRunnerSubmode.value)
@@ -636,12 +698,14 @@ function onStartRunner(submode = 'marathon') {
 
 /** 独立玩法：固定路径塔防闯关战役大地图 */
 function onStartTowerDefense() {
+  if (!requireAccount()) return
   snd()?.uiSelect()
   showTowerDefenseMap.value = true
 }
 
-function onStartTowerDefenseStage(stageId = 1) {
+async function onStartTowerDefenseStage(stageId = 1) {
   if (!engine.value) return
+  if (!(await beginAccountRun({ gameplay: 'tower-defense', mode: 'campaign', difficulty: 'standard', stageId }))) return
   snd()?.uiSelect()
   gameOverInfo.value = null
   gameplayResult.value = null
@@ -655,7 +719,6 @@ function onStartTowerDefenseStage(stageId = 1) {
   pendingRun.value = null
   evolution.value = null
   elementToast.value = ''
-  lanRunTicket.value = null
   activeGameplay.value = 'tower-defense'
   engine.value.configureGameplay('tower-defense')
   engine.value.gameplay.loadStage(stageId)
@@ -697,8 +760,10 @@ function onRelocateTower(payload) {
 }
 
 /** 启动无尽试炼：使用玩家最新解锁章节（上限第 20 关）的地图与机关 */
-function onStartTowerDefenseEndless() {
+async function onStartTowerDefenseEndless() {
   if (!engine.value) return
+  const baseStageId = Math.min(20, Math.max(1, Number(loadCampaignSave()?.unlockedStage) || 1))
+  if (!(await beginAccountRun({ gameplay: 'tower-defense', mode: 'endless', difficulty: 'standard', stageId: baseStageId }))) return
   snd()?.uiSelect()
   gameOverInfo.value = null
   gameplayResult.value = null
@@ -712,7 +777,6 @@ function onStartTowerDefenseEndless() {
   pendingRun.value = null
   evolution.value = null
   elementToast.value = ''
-  lanRunTicket.value = null
   const baseStage = Math.min(20, Math.max(1, Number(loadCampaignSave()?.unlockedStage) || 1))
   activeGameplay.value = 'tower-defense'
   engine.value.configureGameplay('tower-defense')
@@ -729,6 +793,7 @@ function onBackFromIntro() {
 
 /** 打开黑市（主战场选择 / 备战 / 结算入口；引擎保持暂停） */
 function onOpenMarket() {
+  if (!requireAccount()) return
   snd()?.uiClick()
   gameOverInfo.value = null
   paused.value = false
@@ -746,6 +811,7 @@ function onCloseMarket() {
 }
 
 function onOpenSaveSlots() {
+  if (!requireAccount()) return
   snd()?.uiClick()
   showSaveSlots.value = true
 }
@@ -756,82 +822,38 @@ function onCloseSaveSlots() {
 }
 
 function onCreateSaveSlot(index) {
-  if (isLanSignedIn.value) {
-    runLanCatalogAction(() => lanApi.createSlot(index), '局域网档案已创建')
-    return
-  }
-  persistActiveSave()
-  if (!createSaveSlot(offlineCatalog.value, index)) return
-  saveSaveCatalog(offlineCatalog.value)
-  saveCatalog.value = offlineCatalog.value
-  applyActiveSave()
-  showSaveSlots.value = false
-  snd()?.uiSelect()
+  if (requireAccount()) runCatalogAction(() => accountApi.createSlot(index), '账号档案已创建')
 }
-
 function onSwitchSaveSlot(id) {
-  if (id === saveCatalog.value.activeSlotId) {
-    showSaveSlots.value = false
-    return
-  }
-  if (isLanSignedIn.value) {
-    runLanCatalogAction(() => lanApi.switchSlot(id), '已切换局域网档案')
-    return
-  }
-  persistActiveSave()
-  if (!switchSaveSlot(offlineCatalog.value, id)) return
-  saveSaveCatalog(offlineCatalog.value)
-  saveCatalog.value = offlineCatalog.value
-  applyActiveSave()
-  showSaveSlots.value = false
-  snd()?.uiSelect()
+  if (requireAccount()) runCatalogAction(() => accountApi.switchSlot(id), '已切换主战场档案')
 }
-
 function onDeleteSaveSlot(id) {
-  if (isLanSignedIn.value) {
-    runLanCatalogAction(() => lanApi.deleteSlot(id), '局域网档案已删除')
-    return
-  }
-  const previousActive = offlineCatalog.value.activeSlotId
-  if (!deleteSaveSlot(offlineCatalog.value, id)) return
-  saveSaveCatalog(offlineCatalog.value)
-  saveCatalog.value = offlineCatalog.value
-  if (previousActive !== offlineCatalog.value.activeSlotId) applyActiveSave()
-  snd()?.uiClick()
+  if (requireAccount()) runCatalogAction(() => accountApi.deleteSlot(id), '账号档案已删除')
 }
-
-/** 购买基因：校验费用 → 扣款升级 → 写档 → 立即应用到引擎 */
 async function onBuyGene(geneId) {
-  const gene = getGene(geneId)
-  if (!gene) return
-  const state = getGenePurchaseState(gene, save.value.genes, save.value.drops)
-  if (!state.canBuy) {
+  if (!requireAccount()) return
+  try {
+    const payload = await accountApi.buyGene(geneId)
+    applyCatalog(payload.catalog, true)
+    snd()?.buy()
+  } catch (error) {
     snd()?.buyFail()
-    return
+    showToast(accountErrorMessage(error), 'danger', 3200)
   }
-  if (isLanSignedIn.value) {
-    try {
-      const payload = await lanApi.buyGene(geneId)
-      applyCatalog(payload.catalog, true)
-      snd()?.buy()
-    } catch (error) {
-      snd()?.buyFail()
-      showToast(lanErrorMessage(error), 'danger', 3200)
-    }
-    return
-  }
-  save.value.drops -= state.cost
-  save.value.genes[geneId] = state.level + 1
-  persistActiveSave()
-  snd()?.buy() // 购买成功：金币双响
-  engine.value?.setGenes(save.value.genes) // 立即生效（后续每局 reset 自动保持）
 }
 
 /** 点击技能卡片：应用技能 → 关面板 → 恢复引擎主循环 */
 function onSelectSkill(skill) {
+  levelUpOptions.value = null
   engine.value?.applySkill(skill)
   snd()?.select() // 技能确认音
-  levelUpOptions.value = null
+}
+
+function onSelectSpellCore(id) {
+  const reward = spellCoreReward.value
+  spellCoreReward.value = null
+  if (!engine.value?.resolveSpellCore(id)) spellCoreReward.value = reward
+  snd()?.select()
 }
 
 /** 副反应替换面板选择（阶段十六）：replacedId 为 null = 放弃新反应 */
@@ -883,34 +905,19 @@ function onRestart() {
   pendingRun.value = {
     selection: { ...selectedRun.value },
     strain,
-    intro: getRunIntro(selectedRun.value, strain),
+    element: engine.value?.startingElement || 'fire',
+    intro: getRunIntro(selectedRun.value, strain, engine.value?.startingElement),
   }
 }
 
-/** Runner 重试：保留模式、不经过 Arena 战前简报，也不写入档案。 */
+/** Runner 重试：保留模式，重新领取账号行动票据。 */
 function onRestartRunner() {
-  if (!engine.value) return
-  snd()?.uiSelect()
-  gameplayResult.value = null
-  paused.value = false
-  activeGameplay.value = 'runner'
-  if (engine.value.gameplayId !== 'runner') engine.value.configureGameplay('runner')
-  engine.value.resetGameplaySession(undefined, currentRunnerSubmode.value)
-  engine.value.start()
-  started.value = true
+  return onStartRunner(currentRunnerSubmode.value)
 }
 
-/** 塔防重试：保留独立玩法规则并重建完整防线会话。 */
 function onRestartTowerDefense() {
-  if (!engine.value) return
-  snd()?.uiSelect()
-  gameplayResult.value = null
-  paused.value = false
-  activeGameplay.value = 'tower-defense'
-  if (engine.value.gameplayId !== 'tower-defense') engine.value.configureGameplay('tower-defense')
-  engine.value.resetGameplaySession()
-  engine.value.start()
-  started.value = true
+  if (engine.value?.gameplay?.isEndless) return onStartTowerDefenseEndless()
+  return onStartTowerDefenseStage(engine.value?.gameplay?.currentStageId || 1)
 }
 
 function onRestartCurrent() {
@@ -920,9 +927,9 @@ function onRestartCurrent() {
 }
 
 function onChangeRules() {
+  runContext.value = null
   snd()?.uiClick()
   engine.value?.stop()
-  lanRunTicket.value = null
   activeGameplay.value = 'arena'
   gameplayHud.value = null
   gameplayResult.value = null
@@ -949,6 +956,7 @@ const isModalOpen = computed(
   () =>
     !!(
       levelUpOptions.value ||
+      spellCoreReward.value ||
       gameOverInfo.value ||
       gameplayResult.value ||
       reactionChoice.value ||
@@ -980,7 +988,6 @@ function onToggleMute() {
   snd()?.setMuted(muted.value)
   offlineCatalog.value.settings ||= {}
   offlineCatalog.value.settings.sound = { muted: muted.value }
-  if (!isLanSignedIn.value) saveCatalog.value = offlineCatalog.value
   saveSaveCatalog(offlineCatalog.value)
 }
 
@@ -998,14 +1005,21 @@ function onKeydown(e) {
   else onPause()
 }
 
+function onNetworkRestored() {
+  if (account.value) flushSettlements()
+  else if (!started.value) refreshAccountSession()
+}
+
 onMounted(() => {
   window.addEventListener('keydown', onKeydown)
-  refreshLanSession()
-  startLanBoardPolling()
+  window.addEventListener('online', onNetworkRestored)
+  refreshAccountSession({ promptIfSignedOut: true })
+  startBoardPolling()
 })
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeydown)
-  stopLanBoardPolling()
+  window.removeEventListener('online', onNetworkRestored)
+  stopBoardPolling()
 })
 </script>
 
@@ -1022,7 +1036,7 @@ onUnmounted(() => {
       :variant="activeGameplay === 'arena' ? 'arena' : 'runner'"
       :muted="muted"
       :paused="paused"
-      :buttons-visible="!levelUpOptions && !gameOverInfo && !gameplayResult && !expeditionReward && !endlessDecision"
+      :buttons-visible="!levelUpOptions && !spellCoreReward && !gameOverInfo && !gameplayResult && !expeditionReward && !endlessDecision"
       :toast="elementToast"
       :toast-kind="toastKind"
       :evolution="evolution"
@@ -1064,6 +1078,7 @@ onUnmounted(() => {
       @toggle-pause="onPause"
       @toggle-resume="onResume"
       @open-map="showTowerDefenseMap = true"
+      @menu="onChangeRules"
       @next-stage="onStartTowerDefenseStage"
       @restart-stage="onRestartTowerDefense"
       @advance-tutorial="engine?.gameplay?.advanceTutorial?.()"
@@ -1075,6 +1090,9 @@ onUnmounted(() => {
     <!-- 升级面板：覆盖层之上，点击卡片应用技能并恢复游戏 -->
     <Transition name="modal-fade">
       <LevelUpModal v-if="levelUpOptions" :options="levelUpOptions" :level="stats.level" :role-spec="stats.roleSpec" :can-use-elements="stats.canUseElements" @select="onSelectSkill" />
+    </Transition>
+    <Transition name="modal-fade" mode="out-in">
+      <SpellCoreModal v-if="spellCoreReward" :key="stats.spells?.cores" :info="spellCoreReward" @select="onSelectSpellCore" />
     </Transition>
 
     <Transition name="modal-fade">
@@ -1170,16 +1188,19 @@ onUnmounted(() => {
       :progression="save.progression"
       :preferences="save.preferences"
       :active-slot="activeSaveSlot"
-      :lan-account="lanAccount"
-      :lan-status="lanStatus"
+      :account="account"
+      :service-status="serviceStatus"
       :public-leaderboard="publicLeaderboard"
+      :account-data="accountData"
       @prepare="onPrepareRun"
       @runner="onStartRunner"
       @tower-defense="onStartTowerDefense"
       @market="onOpenMarket"
       @profiles="onOpenSaveSlots"
-      @account="onOpenLanAccount"
+      @account="onOpenAccount"
       @leaderboard="loadPublicLeaderboard"
+      @open-leaderboard="onOpenLeaderboard"
+      @records="onOpenPlayerRecords"
       @ui-sound="onUiSound"
     />
 
@@ -1214,25 +1235,43 @@ onUnmounted(() => {
     </Transition>
 
     <Transition name="modal-fade">
-      <LanAccountModal
-        v-if="showLanAccount"
-        :account="lanAccount"
-        :status="lanStatus"
+      <AccountModal
+        v-if="showAccount"
+        :account="account"
+        :status="serviceStatus"
         :active-slot="activeSaveSlot"
         :local-slot="activeLocalSaveSlot"
-        :busy="lanBusy"
-        :message="lanMessage"
-        @close="showLanAccount = false"
-        @login="onLanLogin"
-        @register="onLanRegister"
-        @logout="onLanLogout"
+        :busy="accountBusy || syncing || deployingRun"
+        :message="accountMessage"
+        @close="showAccount = false"
+        @login="onLogin"
+        @register="onRegister"
+        @logout="onLogout"
         @import-local="onImportLocalSlot"
+        @profiles="showAccount = false; onOpenSaveSlots()"
+        @records="onOpenPlayerRecords"
+        @retry="refreshAccountSession"
       />
     </Transition>
+    <LeaderboardModal v-if="showLeaderboard" @close="showLeaderboard = false" />
+    <PlayerRecordsModal v-if="showPlayerRecords" :account-data="accountData" :pending="pendingSettlements" :syncing="syncing"
+      @close="showPlayerRecords = false" @retry="flushSettlements(true)" @data="applyAccountData" @discard="discardSettlement" />
+    <div v-if="pendingSettlements.length" class="account-sync-bar" role="status">
+      <span>{{ syncing ? '正在保存游戏记录…' : `${pendingSettlements.length} 条记录等待同步` }}{{ !queueDurable ? ' · 浏览器无法暂存，请保持此页面打开' : '' }}</span>
+      <button :disabled="syncing" @click="flushSettlements(true)">重试</button>
+      <button @click="onOpenPlayerRecords">查看</button>
+    </div>
+    <div v-if="elementToast && !started" class="menu-toast" :class="toastKind" role="status">{{ elementToast }}</div>
   </div>
 </template>
 
 <style scoped>
+.account-sync-bar { position: fixed; z-index: 49; left: 50%; bottom: 18px; transform: translateX(-50%); max-width: calc(100vw - 24px); display: flex; align-items: center; gap: 12px; padding: 12px 16px; border: 1px solid #70603d; border-radius: 6px; background: #201d14; color: #e2c890; font: 13px/1.5 'Microsoft YaHei', sans-serif; }
+.account-sync-bar button { background: transparent; border: 0; color: #f5e2b7; cursor: pointer; white-space: nowrap; }
+.account-sync-bar button:disabled { opacity: .4; }
+.menu-toast { position: fixed; z-index: 65; bottom: 78px; left: 50%; transform: translateX(-50%); max-width: calc(100vw - 40px); padding: 12px 18px; background: #1c281d; border: 1px solid #69846b; border-radius: 6px; color: #dfebdc; font: 13px/1.5 'Microsoft YaHei', sans-serif; }
+.menu-toast.danger { background: #2c1d17; border-color: #9c6e50; }
+
 .app-root {
   position: relative;
   width: 100%;

@@ -5,8 +5,8 @@ import { SLIME_PALETTES } from '../game/SlimeAppearance.js'
 export const STRAIN_PRESENTATION = {
   summoner: {
     ...SLIME_PALETTES.summoner,
-    label: '双生伙伴', epithet: '与你并肩的每一次成长',
-    intro: '岩甲团团守住身旁，疾风芽芽追猎后排。培养长期伙伴，用协同狩猎改变战局。',
+    label: '共生小队', epithet: '与你并肩的每一次成长',
+    intro: '团团嘲讽、疾风减攻、孢云减速、甘露治疗，逐只招募伙伴保护本体。空格鼓舞全队，提高伙伴的攻击力、攻速与移速。',
     awakening: 'Lv.5 自动觉醒共生契约',
   },
   origin: {
@@ -29,8 +29,8 @@ export const STRAIN_PRESENTATION = {
   },
   elemental: {
     ...SLIME_PALETTES.elemental,
-    label: '元素反应', epithet: '不稳定的原质之心',
-    intro: '将元素汇聚于体内，用近身冲击击退并减速敌人，为元素反应争取空间。',
+    label: '双元素法师', epithet: '在体内孕育融合的法术',
+      intro: '两系法术自动施放，空格释放融合爆发。自带自动重建的法术护盾，升级可强化本系威力与防御；法术核心改造当前双元素组合。',
     awakening: 'Lv.5 自动觉醒元素专精',
   },
   shadow: {
@@ -48,7 +48,7 @@ export function strainTraits(id) {
   switch (strain.id) {
     case 'summoner': return [
       { label: '初始伙伴', value: '岩甲团团' },
-      { label: '宠物上限', value: '2 只' },
+      { label: '伙伴上限', value: '4 只' },
       { label: '本体伤害', value: '−45%', cost: true },
     ]
     case 'glutton': return [
@@ -63,7 +63,7 @@ export function strainTraits(id) {
     ]
     case 'elemental': return [
       { label: '暴击率', value: `+${percent(strain.critChance)}%` },
-      { label: '战斗核心', value: '元素反应' },
+      { label: '法术配置', value: '双元素融合' },
       { label: '生命上限', value: String(strain.maxHp).replace('-', '−'), cost: true },
     ]
     case 'shadow': return [

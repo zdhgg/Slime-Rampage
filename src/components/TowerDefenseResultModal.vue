@@ -60,7 +60,7 @@ const stats = computed(() => {
           返回主界面
         </button>
       </div>
-      <div class="result-note"><Swords :size="13" aria-hidden="true" />塔防记录仅用于本次行动</div>
+      <div class="result-note"><Swords :size="13" aria-hidden="true" />{{ info.accountSync === 'synced' ? '已保存到账号' : '等待同步到账号' }}</div>
     </section>
   </div>
 </template>

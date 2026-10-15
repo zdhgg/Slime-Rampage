@@ -8,9 +8,40 @@
     />
     <link rel="icon" href="data:," />
     <title>史莱姆大暴走 · Slime Rampage</title>
+    <style>
+      html, body { margin: 0; background: #0b0d0b; color: #e6ebdf; }
+      #game-boot { position: fixed; inset: 0; display: grid; place-content: center; gap: 14px; padding: 28px; font: 14px/1.7 'Segoe UI', 'Microsoft YaHei', sans-serif; text-align: center; }
+      #game-boot h1 { margin: 0; font-size: 26px; }
+      #game-boot p { margin: 0; color: #a4af9c; }
+      #game-boot button { justify-self: center; padding: 9px 22px; border: 1px solid #a4bc92; border-radius: 5px; background: #a4bc92; color: #182012; font: inherit; cursor: pointer; }
+    </style>
   </head>
   <body>
     <div id="app"></div>
+    <div id="game-boot" role="status" aria-live="polite">
+      <h1>史莱姆大暴走</h1>
+      <p id="game-boot-message">正在加载游戏资源…</p>
+      <button id="game-boot-retry" hidden onclick="location.reload()">重新加载</button>
+    </div>
+    <script>
+      (() => {
+        const fail = () => {
+          const message = document.getElementById('game-boot-message')
+          if (!message) return
+          message.textContent = '游戏资源加载未完成，请重新加载。'
+          document.getElementById('game-boot-retry').hidden = false
+        }
+        const timer = setTimeout(fail, 12000)
+        window.addEventListener('error', fail, true)
+        window.addEventListener('unhandledrejection', fail)
+        window.addEventListener('game-ready', () => {
+          clearTimeout(timer)
+          window.removeEventListener('error', fail, true)
+          window.removeEventListener('unhandledrejection', fail)
+          document.getElementById('game-boot')?.remove()
+        }, { once: true })
+      })()
+    </script>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

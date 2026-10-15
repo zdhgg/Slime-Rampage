@@ -60,16 +60,12 @@ const bestTimeText = computed(() => fmtTime(props.best?.time))
 /** 本局分数（千分位） */
 const scoreText = computed(() => (props.info?.score || 0).toLocaleString('en-US'))
 const publicEntries = computed(() => props.publicBoard?.entries || [])
-const lanSyncText = computed(() => {
-  if (props.info?.lanSync === 'synced') {
-    const rank = props.publicBoard?.currentRank ? ` · 全员第 ${props.publicBoard.currentRank}` : ''
-    return `局域网公共榜已同步${rank}`
+const accountSyncText = computed(() => {
+  if (props.info?.accountSync === 'synced') {
+    const rank = props.publicBoard?.currentRank ? ` · 公共榜第 ${props.publicBoard.currentRank}` : ''
+    return `已保存到账号${rank}`
   }
-  if (props.info?.lanSync === 'failed') {
-    const fallback = props.info?.lanLocalFallback ? '，本局已保存到本机档案' : ''
-    return `局域网同步失败${fallback}：${props.info?.lanSyncError || '请稍后重试'}`
-  }
-  return '本局保存到本机档案'
+  return `等待同步到账号${props.info?.accountSyncError ? `：${props.info.accountSyncError}` : ''}`
 })
 
 const scoreRows = computed(() => {
@@ -155,7 +151,7 @@ const dropEntries = computed(() =>
         </b>
         <b v-else>难度倍率 ×{{ info.rewardMultiplier }} · 实际入账 {{ info.earnedDrops || 0 }}</b>
       </div>
-      <div class="sync-banner" :class="info.lanSync">{{ lanSyncText }}</div>
+      <div class="sync-banner" :class="info.accountSync">{{ accountSyncText }}</div>
       <div v-if="info.unlocked" class="unlock-banner">
         新难度已解锁：{{ info.unlocked === 'hell' ? '地狱' : '困难' }}
       </div>
@@ -210,7 +206,7 @@ const dropEntries = computed(() =>
         <div v-if="info.rank === 0" class="board-miss">本次成绩未上榜，继续变强！</div>
       </div>
       <div v-if="publicEntries.length" class="gameover-board public">
-        <div class="board-title">局域网全员榜</div>
+        <div class="board-title">公共排行榜</div>
         <div
           v-for="entry in publicEntries.slice(0, 8)"
           :key="entry.runId"
@@ -579,7 +575,7 @@ const dropEntries = computed(() =>
   background: rgba(138, 232, 74, 0.07);
 }
 
-.sync-banner.failed {
+.sync-banner.pending {
   border-color: rgba(255, 138, 138, 0.34);
   color: #ffb0a5;
   background: rgba(255, 82, 82, 0.08);

@@ -23,7 +23,7 @@ export const GENE_BRANCHES = [
     name: '共鸣体',
     icon: '◇',
     color: '#9c8ad4',
-    desc: '成长、反应与元素容量',
+    desc: '成长、融合强度与元素容量',
   },
 ]
 
@@ -142,13 +142,14 @@ export const GENES = [
     requires: [{ id: 'lore', level: 1 }],
     name: '共鸣基因',
     icon: '🔗',
-    desc: '每级增加 1 个副反应槽位，基础为 2 个',
-    scope: '适用于🔮元素史莱姆与🫧原生黏液（需元素权限才有反应可入槽）',
+    desc: '元素史莱姆每级融合伤害 +12%；原生黏液每级增加 1 个副反应槽位',
+    scope: '适用于🔮元素史莱姆（双元素融合）与🫧原生黏液（副反应槽）',
     costs: [30, 60, 100],
     maxLevel: 3,
     apply(game, lv) {
       // 只写基础值：最终槽位 = 基础值 + 等级加成（Player.refreshReactionSlots 统一重算）
       game.player.baseSecondarySlots = 2 + lv
+      game.weaponSystem.spellGeneReactionMul = 1 + lv * .12
     },
   },
   {
@@ -160,8 +161,8 @@ export const GENES = [
     isCapstone: true,
     name: '共鸣原核',
     icon: '◆',
-    desc: '反应伤害 +25%，并额外增加 1 个副反应槽位',
-    scope: '适用于🔮元素史莱姆与🫧原生黏液（需元素权限才有反应可入槽）',
+    desc: '反应伤害 +25%；元素史莱姆主动术基础范围 +15px，原生黏液额外增加 1 个副反应槽位',
+    scope: '适用于🔮元素史莱姆（融合主动术）与🫧原生黏液（副反应槽）',
     costs: [140],
     maxLevel: 1,
     apply(game) {
@@ -249,6 +250,8 @@ export function applyGenes(game, genes) {
   weapon.genePierces = 0
   weapon.geneReactionDmgMul = 1
   weapon.devourDamageMul = 1
+  weapon.spellGeneReactionMul = 1
+  weapon.spellGenePowerMul = 1
 
   const chosenOrigin = getChosenOrigin(genes)
   for (const gene of GENES) {
@@ -257,6 +260,7 @@ export function applyGenes(game, genes) {
     if (level > 0) gene.apply(game, level)
   }
   weapon.splitChance = weapon.baseSplitChance
+  weapon.spellGenePowerMul = 1 + weapon.baseSplitChance * .3
   // 基因只决定基础槽位；等级加成与自动接入在此统一结算（重开时元素已清空，是纯重算）
   p.refreshReactionSlots?.()
   p.hp = p.maxHp

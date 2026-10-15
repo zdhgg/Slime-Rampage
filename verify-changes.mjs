@@ -250,6 +250,10 @@ engine.reset()
 engine.running = true
 engine.input.queueFever()
 engine._updateStrainSkill(0.016)
+assert.equal(engine.player.strainSkillCd, 0, '元素空放且无解围目标时不消耗冷却')
+engine.enemyManager.spawnAt(engine.player.x + 60, engine.player.y, 'knight')
+engine.input.queueFever()
+engine._updateStrainSkill(0.016)
 assert.ok(engine.player.strainSkillCd > 0)
 engine.running = wasRunning
 engine.reset()
@@ -369,7 +373,7 @@ ok('元素权限：elemental/origin 可吸收，glutton/gatling/shadow 的 absor
   for (const strainId of ['elemental', 'origin', 'glutton', 'ricochet', 'shadow']) {
     engine.applyStartingStrain(strainId)
     engine.reset()
-    const allowed = engine.canUseElements
+    const allowed = engine.canUseElements && strainId !== 'elemental'
     const tag = `${strainId}(${allowed ? '有' : '无'}权限)`
 
     // ① 普通精英击杀
@@ -383,6 +387,7 @@ ok('元素权限：elemental/origin 可吸收，glutton/gatling/shadow 的 absor
     boss.isBoss = true
     engine.weaponSystem._settleKill(boss)
     assert.equal(countCores() > 0, allowed, `Boss 核心产出与权限一致：${tag}`)
+    if (strainId === 'elemental') assert.equal(engine._spellCoreQueue.length, 1, '元素 BOSS 改为一颗法术核心奖励')
 
     // ③ 吞噬（法师必掉核心那条分支）
     engine.gemManager.reset()
@@ -399,7 +404,7 @@ ok('元素权限：elemental/origin 可吸收，glutton/gatling/shadow 的 absor
       state: 'active',
       x: engine.player.x,
       y: engine.player.y,
-      def: { title: '讨伐队猎营', reward: (g) => (g?.canUseElements === false ? '大型经验' : '元素核心 + 大型经验'), color: '#d6a642' },
+      def: { title: '讨伐队猎营', reward: (g) => (g?.canUseElements === false || g?.startingStrain === 'elemental' ? '大型经验' : '元素核心 + 大型经验'), color: '#d6a642' },
       timeLeft: 1,
       goal: 3,
       progress: 3,
@@ -466,7 +471,8 @@ ok('早期保底精英：只对有元素权限的角色生成，无权限角色�
   engine.applyStartingStrain('elemental')
   engine.reset()
   engine.player.absorbElement('fire')
-  engine.player.absorbElement('water')
+  const spells = engine.weaponSystem.spellCombat
+  assert.equal(spells.applyCore(spells.coreOptions().find(option => option.element === 'water')), true)
   assert.equal(engine.canUseElements, true)
   assert.equal(engine.player.elements.size, 2, '元素角色已累积元素')
 
@@ -482,7 +488,8 @@ ok('早期保底精英：只对有元素权限的角色生成，无权限角色�
   engine.applyStartingStrain('elemental')
   engine.reset()
   assert.equal(engine.canUseElements, true, '切回元素角色后权限恢复')
-  assert.equal(engine.player.elements.size, 0, '重开后元素不残留')
+  assert.equal(engine.player.elements.size, 1, '重开后仅保留起始元素')
+  assert.equal(engine.weaponSystem.spellCombat.cores, 0, '重开后核心强化不残留')
 }
 ok('重置归位：元素权限、元素等级、反应与附魔缓存在换角色/重开后全部归零')
 

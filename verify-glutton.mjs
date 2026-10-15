@@ -241,7 +241,7 @@ check('重碾强化重咬，领主半血吞噬不越过非血肉和护盾限制'
   c.hit(shield, 2, { execute: true, source: 'gluttonF' })
   assert.equal(shield.devouring, false)
 })
-check('重开与角色切换清掉暴食状态；暗影使用影刃，其他角色继续远程攻击', g => {
+check('重开与角色切换清掉暴食状态；暗影用影刃、元素用法术、其他角色用飞弹', g => {
   g.player.gluttonCharge = 2
   spawn(g)
   pressSpace(g)
@@ -261,6 +261,10 @@ check('重开与角色切换清掉暴食状态；暗影使用影刃，其他角�
       assert.equal(g.weaponSystem._projectiles.length, 0)
       g.weaponSystem.fire(spawn(g))
       assert.ok(g.weaponSystem.shadowCombat.swing)
+    } else if (strain === 'elemental') {
+      assert.equal(g.weaponSystem._projectiles.length, 0)
+      assert.ok(g.weaponSystem.spellCombat.shots.length > 0)
+      assert.equal(g.weaponSystem.spellCombat.stats.casts, 1)
     } else assert.ok(g.weaponSystem._projectiles.length > 0)
   }
 })

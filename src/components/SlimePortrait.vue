@@ -5,6 +5,7 @@ import { SLIME_BODIES, SLIME_ART, slimeLayerMarkup } from '../game/SlimeAppearan
 
 const props = defineProps({
   strain: { type: String, default: 'origin' },
+  element: { type: String, default: 'fire' },
   compact: Boolean,
   performing: Boolean,
 })
@@ -98,11 +99,26 @@ const faceMarkup = computed(() => slimeLayerMarkup(art.value.face, uid))
         </g>
       </template>
       <template v-else-if="strain === 'elemental'">
-        <circle class="element-burst" cx="200" cy="210" r="40" stroke-width="4" />
-        <circle class="element-burst second" cx="200" cy="210" r="40" stroke-width="2" />
+        <g class="element-burst" :stroke="element === 'fire' ? '#ffae70' : element === 'water' ? '#94dbef' : element === 'lightning' ? '#f0d588' : '#a8d886'">
+          <path v-if="element === 'lightning'" d="M220 190l35-25-10 22 40-20-12 24 40-18" stroke-width="4" stroke-linejoin="round" />
+          <path v-else-if="element === 'water'" d="M242 190h80m-15-12 18 12-18 12" stroke-width="4" stroke-linecap="round" />
+          <g v-else-if="element === 'poison'"><ellipse cx="292" cy="232" rx="55" ry="20" fill="#a8d886" fill-opacity=".2" stroke-dasharray="4 7" /><circle cx="278" cy="213" r="12" /><circle cx="305" cy="219" r="16" /></g>
+          <g v-else><path d="M237 188h50" stroke-width="6" stroke-linecap="round" /><circle cx="306" cy="188" r="16" fill="#ffae70" fill-opacity=".6" /></g>
+        </g>
       </template>
       <template v-else-if="strain === 'summoner'">
-        <g class="pet-preview"><ellipse cx="92" cy="244" rx="24" ry="19" fill="#edc479"/><circle cx="85" cy="244" r="3" fill="#32473e"/><circle cx="99" cy="244" r="3" fill="#32473e"/><path d="m306 226-8-27 18 16 15-16-3 27" fill="#8edacb"/><ellipse cx="314" cy="244" rx="21" ry="17" fill="#8edacb"/><circle cx="308" cy="244" r="3" fill="#32473e"/><circle cx="322" cy="244" r="3" fill="#32473e"/></g>
+        <g class="pet-preview" stroke-linejoin="round">
+          <path d="M69 252c-4-14 5-28 23-29 15-1 26 9 25 25-1 14-9 16-25 15-14 1-20-2-23-11Z" fill="#e3b96e" stroke="#674c35" stroke-width="2" />
+          <path d="m73 235 11-10 13-2 12 5 7 9-12-3-8 6-10-5Z" fill="#a7804d" stroke="#674c35" stroke-width="1.5" />
+          <path d="m84 225 13-2 12 5-12 4-5 6Z" fill="#e8c17b" />
+          <ellipse cx="85" cy="247" rx="2.5" ry="3.5" fill="#273b34" /><ellipse cx="100" cy="247" rx="2.5" ry="3.5" fill="#273b34" />
+          <path d="M90 253q3 3 6 0" fill="none" stroke="#674c35" stroke-width="1.5" stroke-linecap="round" />
+          <path d="M302 230q-7-9-5-22 9 2 12 13 5-13 18-17 0 13-10 23" fill="#83d3bd" stroke="#315e57" stroke-width="2" />
+          <path d="M293 247c-1-13 8-23 21-23 14 0 22 9 22 22 0 13-9 18-22 17-14 0-21-5-21-16Z" fill="#83d3bd" stroke="#315e57" stroke-width="2" />
+          <path d="m319 214-6 10" fill="none" stroke="#d5fff0" stroke-width="2" stroke-linecap="round" />
+          <ellipse cx="307" cy="246" rx="2.5" ry="3.5" fill="#203d3a" /><ellipse cx="322" cy="246" rx="2.5" ry="3.5" fill="#203d3a" />
+          <path d="M312 252q3 3 6 0" fill="none" stroke="#315e57" stroke-width="1.5" stroke-linecap="round" />
+        </g>
       </template>
       <template v-else-if="strain === 'shadow'">
         <path class="shadow-path" d="M70 252H324m-12-9 12 9-12 9" stroke-width="1.5" stroke-dasharray="5 7" />

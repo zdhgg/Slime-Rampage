@@ -61,7 +61,7 @@ const weaponMetric = computed(() => {
           返回主界面
         </button>
       </div>
-      <div class="trial-note">独立试玩不写入档案与排行榜</div>
+      <div class="trial-note">{{ info.accountSync === 'synced' ? `已保存到账号${info.rank ? ` · 公共榜第 ${info.rank}` : ''}` : '等待同步到账号' }}</div>
     </section>
   </div>
 </template>

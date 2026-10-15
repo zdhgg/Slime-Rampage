@@ -1,5 +1,7 @@
-import { PET_SPEC_INFO, PET_SKILLS, PET_BOSS_SKILLS } from './PetSkills.js'
+import { PET_SPEC_INFO, PET_SKILLS, PET_BOSS_SKILLS, PET_PARTNER_SKILLS } from './PetSkills.js'
 import { setCritSource } from './CritSources.js'
+import { ELEMENTAL_SKILLS, ELEMENTAL_SPEC_INFO, resolveElementalSkill } from './SpellRules.js'
+import { spellSkillAvailable, prioritizeSpellChoices } from './ElementalUpgrades.js'
 import { SHADOW_EXTRA_SKILLS, SHADOW_SKILL_VARIANTS, SHADOW_CLONE_SKILL_IDS, SHADOW_SPEC_INFO, resolveShadowSkill } from './ShadowSkills.js'
 /**
  * 技能池：流派化专精技能体系（阶段式里程碑觉醒架构）
@@ -736,6 +738,7 @@ for (const skill of SKILL_DATABASE.assassin.primary) {
 export { resolveShadowSkill }
 export function getSpecInfo(spec, game) {
   const info = SPEC_INFO[spec]
+  if (spec === 'elemental' && (game?.startingStrain || game?.strainId) === 'elemental') return { ...info, ...ELEMENTAL_SPEC_INFO }
   return spec === 'assassin' && (game?.startingStrain || game?.strainId) === 'shadow' ? { ...info, ...SHADOW_SPEC_INFO } : info
 }
 
@@ -828,9 +831,14 @@ export function rollBossSkills(game, count = 3) {
   if (!spec || !BOSS_SKILL_DATABASE[spec]) return []
   const owned = game.bossSkillIds || new Set()
   const pool = BOSS_SKILL_DATABASE[spec].filter((skill) =>
-    !owned.has(skill.id) && (!skill.requiresElementalStrain || strain === 'elemental')
+    !owned.has(skill.id) && (!skill.requiresElementalStrain || strain === 'elemental') &&
+    (!skill.partnerSkillId || (strain === 'summoner' && !(game.skillLevels?.[skill.partnerSkillId] > 0)))
   )
-  return pool.slice().sort(() => Math.random() - 0.5).slice(0, Math.min(count, pool.length)).map(s => resolveShadowSkill(s, game))
+  const shuffled = pool.slice().sort(() => Math.random() - 0.5)
+  // 未招募的伙伴至少出现一项，让击败首领始终有组队的机会。
+  const recruit = shuffled.find(s => s.partnerSkillId)
+  const choices = recruit ? [recruit, ...shuffled.filter(s => s !== recruit)] : shuffled
+  return choices.slice(0, Math.min(count, pool.length)).map(s => resolveShadowSkill(s, game))
 }
 
 /**
@@ -976,8 +984,10 @@ export function rollSkills(game, count = 3) {
   for (const [specKey, tree] of Object.entries(SKILL_DATABASE)) {
     if (specKey === 'common') continue
 
-    const primarySkills = tree.primary.map(s => resolveShadowSkill(s, game))
+    const primarySkills = (specKey === 'elemental' && isElementalStrain ? ELEMENTAL_SKILLS : tree.primary).map(s => resolveElementalSkill(resolveShadowSkill(s, game), game))
       .filter(s => skillUsable(s, canDevour, canUseElements, isElementalStrain, game.startingStrain))
+      .filter(s => !isElementalStrain || game.weaponSystem?.spellCombat?.fusion || !['ele_resonance', 'ele_overload'].includes(s.id))
+      .filter(s => !isElementalStrain || specKey !== 'elemental' || spellSkillAvailable(s, game))
 
     // 尚未确立主专精（Lv.1~4）：
     //  - 角色血统（roleSpec）：只开放本角色 T1——Lv.5 会自动觉醒，不需要玩家再选一次；
@@ -1005,6 +1015,7 @@ export function rollSkills(game, count = 3) {
         const curLv = levels[s.id] || 0
         if (curLv >= s.maxLevel) continue
         if (!skillUsable(s, canDevour, canUseElements, isElementalStrain, game.startingStrain)) continue
+        if (s.excludes?.some(id => (levels[id] || 0) > 0)) continue
 
         // 终极觉醒需要构筑深度和战局进度同时达标，防止单次经验暴涨或慢打
         // 单独提前大招；远征用关卡进度替代计时波次。
@@ -1039,6 +1050,13 @@ export function rollSkills(game, count = 3) {
     }
   }
 
+  // 觉醒时先选第一位搭档，后续升级仍可招募其余伙伴。
+  if (game.startingStrain === 'summoner' && primarySpec === 'symbiosis' &&
+      !PET_PARTNER_SKILLS.some(id => (levels[id] || 0) > 0)) {
+    const choices = PET_PARTNER_SKILLS.map(id => candidatePool.find(skill => skill.id === id)).filter(Boolean)
+    if (choices.length === PET_PARTNER_SKILLS.length) return choices.slice(0, count)
+  }
+
   // 洗牌算法
   for (let i = candidatePool.length - 1; i > 0; i--) {
     const j = (Math.random() * (i + 1)) | 0
@@ -1052,7 +1070,7 @@ export function rollSkills(game, count = 3) {
     return 0
   })
 
-  const selected = candidatePool.slice(0, count)
+  const selected = isElementalStrain ? prioritizeSpellChoices(candidatePool, game, count) : candidatePool.slice(0, count)
   if (game.startingStrain === 'shadow' && count > 0 &&
       SHADOW_CLONE_SKILL_IDS.some(id => (levels[id] || 0) > 0) &&
       !selected.some(s => SHADOW_CLONE_SKILL_IDS.includes(s.id))) {

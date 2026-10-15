@@ -1,5 +1,6 @@
 import { GLUTTON_CHARGE_MAX, gluttonSkillHud } from './GluttonResource.js'
 import { GLUTTON_HEAVY_DAMAGE, GLUTTON_BOSS_HEAVY_DAMAGE } from './GluttonCombat.js'
+import { PET_RALLY_BASE, getPetRally } from './PetSkills.js'
 
 const VOLLEY_SHOTS = 4
 
@@ -50,6 +51,7 @@ export const ELEMENTAL_SKILL = {
   use(engine) {
     const ws = engine.weaponSystem
     if (!ws) return false
+    if (ws.spellCombat?.enabled) return ws.spellCombat.useActive()
     const player = engine.player
     const power = 2.4
     ws._explode(
@@ -115,8 +117,14 @@ export const ORIGIN_SKILL = {
   },
 }
 
+function petRallyDescription(level = 0) {
+  const rally = getPetRally(level)
+  return `鼓舞全体伙伴 ${rally.duration} 秒：攻击力 +${Math.round(rally.damage * 100)}%、攻速 +${Math.round(rally.haste * 100)}%、移速 +${Math.round(rally.move * 100)}%。无敌人时也可释放，全员倒地时不消耗冷却`
+}
+
 export const PET_SKILL = {
-  id: 'companion_hunt', name: '协同狩猎', icon: '🐾', cooldown: 7,
-  desc: '沿移动方向（静止沿朝向）指挥宠物突袭前方区域：岩甲范围震击，疾风强袭单体；无目标时回防减伤。全部倒地时不消耗冷却',
-  use(engine) { return engine.weaponSystem?.petCombat?.command() || false },
+  id: 'companion_hunt', name: '共生鼓舞', icon: '🐾', cooldown: PET_RALLY_BASE.cooldown,
+  desc: petRallyDescription(),
+  getDesc(engine) { return petRallyDescription(engine.skillLevels?.pet_command || 0) },
+  use(engine) { return engine.weaponSystem?.petCombat?.rally() || false },
 }

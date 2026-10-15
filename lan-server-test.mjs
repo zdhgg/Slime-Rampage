@@ -31,7 +31,7 @@ async function api(path, { method = 'GET', body, cookie } = {}) {
 try {
   const status = await api('/api/status')
   assert.equal(status.status, 200)
-  assert.equal(status.payload.service, 'slime-rampage-lan')
+  assert.equal(status.payload.service, 'slime-rampage')
 
   const aliceRegistration = await api('/api/auth/register', {
     method: 'POST',
@@ -156,7 +156,7 @@ try {
   assert.equal(response.status, 200)
   assert.equal(response.payload.catalog.slots.filter(Boolean).length, 1)
 
-  console.log('✓ 局域网服务：账号隔离、三槽档案、服务端计分、幂等结算与公开排行榜均正常')
+  console.log('✓ 账号服务：账号隔离、兼容旧档案、服务端计分、幂等结算与公开排行榜均正常')
 } finally {
   await new Promise((resolve) => server.close(resolve))
   db.close()

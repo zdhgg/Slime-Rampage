@@ -1,5 +1,6 @@
 import { setCritSource } from './CritSources.js'
 import { resolveShadowSkill } from './ShadowSkills.js'
+import { normalizeSpellElement, resolveElementalSkill } from './SpellRules.js'
 import { InputManager } from './InputManager.js'
 import { ELEMENTAL_SPEC_PROC_CAP, Player, STARTING_EXP_THRESHOLD } from './entities/Player.js'
 import { EnemyManager } from './EnemyManager.js'
@@ -105,6 +106,7 @@ export function createDefaultStats() {
     strainId: 'origin',
     canDevour: false,
     canUseElements: true,
+    spells: null,
     digest: { charge: 0, max: 100, bursts: 0 },
     // 暴食猎食点（仅暴食角色在 _pushStats 里给出 true 与真实数值）
     glutton: { has: false, charge: 0, max: 2, progress: 0, progressPer: 5, ready: false },
@@ -260,6 +262,11 @@ export class GameEngine {
     this.primarySpec = null // 主专精（'gluttony' | 'gatling' | 'elemental' | 'assassin'）
     this.secondarySpec = null // 副专精
     this.startingStrain = 'origin' // 开局血统预选（先天属性，reset 末尾叠加应用）
+    this.startingElement = 'fire'
+    this.onSpellCore = null
+    this._spellCoreQueue = []
+    this._spellCoreChoice = null
+    this._spellCoreSeen = new Set()
     // 角色身份（阶段十九）：血统 → 专属技能树。Lv.1~4 只开放本角色 T1，
     // Lv.5 由 _ensureRoleAwakening 自动确立 primarySpec（origin 为 null = 自由构筑）。
     this.roleSpec = null
@@ -503,7 +510,12 @@ export class GameEngine {
 
   /** 当前角色的空格技能定义，包含原生黏液。 */
   get strainSkill() {
-    return getStrainSkill(this.startingStrain)
+    const skill = getStrainSkill(this.startingStrain), spells = this.weaponSystem.spellCombat
+    if (!spells.enabled) return skill
+    this._spellActiveSkill ||= { ...skill, use: engine => engine.weaponSystem.spellCombat.useActive() }
+    Object.assign(this._spellActiveSkill, { id: spells.fusion ? `fusion_${spells.fusion.id}` : skill.id, name: spells.activeName,
+      cooldown: spells.activeCooldown, getDesc: () => spells.fusion ? `${spells.rank('active') >= 3 ? spells.fusion.evolution : spells.fusion.activeDesc} 同时推开身边的普通敌人。` : skill.desc })
+    return this._spellActiveSkill
   }
 
   /**
@@ -615,6 +627,8 @@ export class GameEngine {
   resume() {
     this._pauseLock = Math.max(0, this._pauseLock - 1)
     if (this._pauseLock > 0) return
+    if (this.runFinished || this.player?.dead) return
+    if (this._openPendingSpellCore?.()) return
     if (this._pendingEndlessBountyReward) {
       this._pendingEndlessBountyReward = false
       this.openFreeSkillPanel()
@@ -679,6 +693,7 @@ export class GameEngine {
   applySkill(skill) {
     if (!skill) return
     skill = resolveShadowSkill(skill, this)
+    skill = resolveElementalSkill(skill, this)
 
     // 1. BOSS 职业秘典：只记录一次，不能通过普通升级重复取得
     if (skill.isBossSkill) {
@@ -710,7 +725,7 @@ export class GameEngine {
         `武器进化：${info?.name || skill.spec}`,
         skill.name.replace(/^🌟\s*/, ''),
         skill.spec,
-        skill.spec === 'symbiosis' ? '双伙伴协作，存活时共同强化伤害' : skill.spec === 'gluttony' ? '咬击范围与伤害提升，重咬和冲撞可吞噬半血猎物' : this.startingStrain === 'shadow' ? '分身影刃贯穿敌群，影袭协同进化为十字夹击' : '弹体轮廓、出膛反馈与命中音色完成终极异化'
+        skill.spec === 'symbiosis' ? '至少两只伙伴存活时，全体伙伴共同强化伤害' : skill.spec === 'gluttony' ? '咬击范围与伤害提升，重咬和冲撞可吞噬半血猎物' : this.startingStrain === 'shadow' ? '分身影刃贯穿敌群，影袭协同进化为十字夹击' : '弹体轮廓、出膛反馈与命中音色完成终极异化'
       )
     }
 
@@ -742,6 +757,7 @@ export class GameEngine {
       this.weaponSystem.fireInterval *= 0.85
       this.weaponSystem.splitInherit = 1
     } else if (spec === 'elemental') {
+      if (this.weaponSystem.spellCombat.enabled) return
       this.weaponSystem.freezeChance += 0.2
       this.weaponSystem.burnChance += 0.2
       this.weaponSystem.poisonChance += 0.2
@@ -757,9 +773,41 @@ export class GameEngine {
   }
 
   /** 开局血统预选：先天属性每局 reset 末尾（基因/难度之后）叠加应用 */
-  applyStartingStrain(id) {
+  applyStartingStrain(id, element = this.startingElement) {
     this.startingStrain = STRAIN_IDS.includes(id) ? id : 'origin'
+    this.startingElement = normalizeSpellElement(element)
     applyStrain(this, this.startingStrain)
+    this.weaponSystem.spellCombat.start(this.startingElement)
+    return true
+  }
+
+  queueSpellCore(boss) {
+    if (!this.weaponSystem.spellCombat.enabled || this.runFinished || this.player.dead) return false
+    const key = boss.bossGroupId || boss
+    if (this._spellCoreSeen.has(key)) return false
+    this._spellCoreSeen.add(key)
+    this._spellCoreQueue.push({ source: boss.encounterLabel || boss.name || '首领' })
+    this.weaponSystem.spellCombat.fx(boss.x, boss.y, 70, '#b6a4ff', 'core', .8)
+    this.enemyManager.addText?.(boss.x, boss.y - 40, '◆ 法术核心', null, '#c9baff', 20)
+    return true
+  }
+
+  _openPendingSpellCore() {
+    if (this.runFinished || this.player?.dead || this._pauseLock > 0 || this._spellCoreChoice || !this._spellCoreQueue?.length || !this.onSpellCore) return false
+    const spells = this.weaponSystem.spellCombat
+    if (!spells.enabled) return false
+    const reward = this._spellCoreQueue.shift(), options = spells.coreOptions()
+    this._spellCoreChoice = { ...reward, first: !spells.fusion, options }
+    this.pause(); this.sound.absorb(); this._pushStats()
+    this.onSpellCore(this._spellCoreChoice)
+    return true
+  }
+
+  resolveSpellCore(id) {
+    const option = this._spellCoreChoice?.options.find(s => s.id === id)
+    if (!option || !this.weaponSystem.spellCombat.applyCore(option)) return false
+    this._spellCoreChoice = null
+    this._pushStats(); this._pushCooldown(); this.resume()
     return true
   }
 
@@ -966,6 +1014,15 @@ export class GameEngine {
     this.runFinished = true
     this.weaponSystem.shadowCombat.reset()
     this.weaponSystem.petCombat.reset()
+    this.weaponSystem.spellCombat.shots.length = 0
+    this.weaponSystem.spellCombat.fields.length = 0
+    this.weaponSystem.spellCombat.delayed.length = 0
+    this.weaponSystem.spellCombat.lightning.reset()
+    this.weaponSystem.spellCombat.shield.reset()
+    this.weaponSystem.spellCombat.contagion.reset()
+    this.weaponSystem.spellCombat.poisonThrow = null
+    this._spellCoreQueue = []
+    this._spellCoreChoice = null
     this.defeatReason = result === 'defeat' ? defeatReason || 'slime-defeated' : null
     this.runState = result === 'victory'
       ? 'victory'
@@ -1003,6 +1060,7 @@ export class GameEngine {
     ) {
       this._completeExpeditionStage()
     }
+    if (encounterComplete && !this.runFinished) this.queueSpellCore(boss)
   }
 
   _enterFinale() {
@@ -1017,6 +1075,7 @@ export class GameEngine {
   }
 
   _updateRunState(dt) {
+    if (this._openPendingSpellCore()) return
     if (this.runSelection.mode === 'expedition') {
       this._updateExpedition(dt)
       return
@@ -1371,6 +1430,9 @@ export class GameEngine {
     resetGluttonResource(p)
     this.skillLevels = {}
     this.bossSkillIds = new Set()
+    this._spellCoreQueue = []
+    this._spellCoreChoice = null
+    this._spellCoreSeen.clear()
     this.elapsed = 0
     this.runState = 'active'
     this.finaleTime = 0
@@ -1407,6 +1469,7 @@ export class GameEngine {
       p.hp = p.maxHp
     }
     applyStrain(this, this.startingStrain) // 血统先天属性：最后叠加（生命/移速/攻击/吞噬口径）
+    this.weaponSystem.spellCombat.start(this.startingElement)
     if (this.runSelection.mode === 'expedition') {
       this._enterExpeditionStage(1, true)
     } else if (this.runSelection.mode === 'endless') {
@@ -1446,6 +1509,7 @@ export class GameEngine {
     this.onGameplayHud = null
     this.onGameplayFinished = null
     this.onLevelUp = null
+    this.onSpellCore = null
     this.onGameOver = null
     this.onBossSpawn = null
     this.onBossGroupSpawn = null
@@ -1509,6 +1573,8 @@ export class GameEngine {
       // 资源型技能（暴食）额外给出 charge 口径，HUD 改渲染猎食点而非冷却条——
       // 它的 skillMax 恒为 0，因此旧的冷却分支天然不会被点亮。
       pets: this.startingStrain === 'summoner' ? this.weaponSystem.petCombat.hud() : null,
+      petRally: this.startingStrain === 'summoner' ? this.weaponSystem.petCombat.rallyHud() : null,
+      spellShield: this.weaponSystem.spellCombat.available ? this.weaponSystem.spellCombat.shield.hud() : null,
       shadow: this.startingStrain === 'shadow' ? {
         evasion: this.player.evasionChance, crit: this.weaponSystem.critChance,
         count: this.weaponSystem.shadowCombat.clones.items.length,
@@ -1519,6 +1585,7 @@ export class GameEngine {
       } : null,
       skillId: this.strainSkill?.id || null,
       skillName: this.strainSkill?.name || '',
+      skillDesc: this.strainSkill?.getDesc?.(this) || this.strainSkill?.desc || '',
       skillCd: this.player.strainSkillCd,
       skillMax: this.player.strainSkillMax,
       charge: this.strainSkill?.getHud?.(this.player) || null,
@@ -1567,6 +1634,7 @@ export class GameEngine {
       strainId: this.startingStrain,
       canDevour: this.canDevour,
       canUseElements: this.canUseElements,
+      spells: this.weaponSystem.spellCombat.enabled ? this.weaponSystem.spellCombat.hud() : null,
       // 消化进度（吞噬 → 元素联动的可见口径）：满载待命时 ratio = 1，吸收首颗核心即兑现
       digest: {
         charge: Math.round(this.weaponSystem.digestCharge),
@@ -1657,9 +1725,11 @@ export class GameEngine {
     if (this._shakeT > 0) this._shakeT -= dt // 屏幕震动计时衰减
     this._updateStrainSkill(dt) // 空格 角色技能：边沿触发 + 自身冷却（origin 短路）
     this._updateRunState(dt)
+    if (this._pauseLock > 0 || this.runFinished) return
     if (this.runState !== 'stage-reward' && this.runState !== 'expedition-intro') {
       for (const e of this.entities) {
         if (e.active && !this.runFinished) e.update(dt)
+        if (this._pauseLock > 0 || this.runFinished) break
       }
     }
     this._updateCamera(dt) // 相机跟随玩家（在实体更新之后）

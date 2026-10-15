@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { networkInterfaces } from 'node:os'
 import { join } from 'node:path'
 import express from 'express'
 import { getGene, getGenePurchaseState } from '../src/game/GenePool.js'
@@ -23,6 +22,9 @@ import {
 } from '../src/game/RunRules.js'
 import { withTransaction } from './database.mjs'
 import { getLeaderboard } from './leaderboard.mjs'
+import { accountGameData, mergeLegacyCampaign, writeAccountGameData } from './account-store.mjs'
+import { finishGameplayRun } from './gameplay-runs.mjs'
+import { validBoardSelection, boundedInt } from '../src/game/AccountRules.js'
 import {
   activateProfileSlot,
   activeProfileRow,
@@ -47,7 +49,7 @@ import {
 } from './security.mjs'
 
 const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60
-const RUN_TTL_MS = 8 * 60 * 60 * 1000
+const RUN_TTL_MS = 30 * 24 * 60 * 60 * 1000 // 给断线结算保留补交窗口
 const DROP_TYPES = ['knight', 'mage', 'archer', 'assassin', 'priest', 'berserker', 'hound', 'golem', 'wraith']
 
 class HttpError extends Error {
@@ -61,6 +63,7 @@ class HttpError extends Error {
 
 const route = (handler) => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next)
 const accountPayload = (row) => ({
+  id: Number(row.id),
   username: row.username,
   displayName: row.display_name,
   createdAt: row.created_at,
@@ -165,19 +168,7 @@ function registrationEnabled(db, forcedValue) {
   return db.prepare("SELECT value FROM server_settings WHERE key = 'registration_enabled'").get()?.value !== '0'
 }
 
-/** 本机局域网 IPv4 列表：给前端展示「其他设备加入地址」，避免 localhost 误导。 */
-function lanIPv4Addresses() {
-  const addresses = []
-  for (const entries of Object.values(networkInterfaces())) {
-    for (const entry of entries || []) {
-      if (entry.family === 'IPv4' && !entry.internal) addresses.push(entry.address)
-    }
-  }
-  // 家庭路由器网段优先：172.x 常为 WSL/Hyper-V/VMware 虚拟网卡，别的设备连不上
-  return addresses.sort((a, b) => Number(!a.startsWith('192.168.')) - Number(!b.startsWith('192.168.')))
-}
-
-export function createLanApp({ db, distDir = null, registration = null }) {
+export function createGameApp({ db, distDir = null, registration = null }) {
   const app = express()
   app.disable('x-powered-by')
   app.use((req, res, next) => {
@@ -188,15 +179,17 @@ export function createLanApp({ db, distDir = null, registration = null }) {
     next()
   })
   app.use(express.json({ limit: '64kb' }))
+  app.use('/api', (_req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store')
+    next()
+  })
 
   app.get('/api/status', (req, res) => {
     res.json({
-      service: 'slime-rampage-lan',
-      version: 1,
+      service: 'slime-rampage',
+      version: 2,
       registrationEnabled: registrationEnabled(db, registration),
       serverTime: new Date().toISOString(),
-      lanIps: lanIPv4Addresses(),
-      lanPort: req.socket.localPort || null,
     })
   })
 
@@ -222,7 +215,7 @@ export function createLanApp({ db, distDir = null, registration = null }) {
       res.json({ account: null })
       return
     }
-    res.json({ account: accountPayload(req.account), catalog: profileCatalog(db, req.account.id) })
+    res.json({ account: accountPayload(req.account), catalog: profileCatalog(db, req.account.id), accountData: accountGameData(db, req.account.id) })
   })
 
   app.post('/api/auth/register', authLimit, route(async (req, res) => {
@@ -253,7 +246,7 @@ export function createLanApp({ db, distDir = null, registration = null }) {
     const account = db.prepare('SELECT * FROM users WHERE id = ?').get(userId)
     const token = createSession(db, userId)
     setSessionCookie(req, res, token)
-    res.status(201).json({ account: accountPayload(account), catalog: profileCatalog(db, userId) })
+    res.status(201).json({ account: accountPayload(account), catalog: profileCatalog(db, userId), accountData: accountGameData(db, userId) })
   }))
 
   app.post('/api/auth/login', authLimit, route(async (req, res) => {
@@ -267,7 +260,7 @@ export function createLanApp({ db, distDir = null, registration = null }) {
     db.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(new Date().toISOString(), account.id)
     const token = createSession(db, account.id)
     setSessionCookie(req, res, token)
-    res.json({ account: accountPayload(account), catalog: profileCatalog(db, account.id) })
+    res.json({ account: accountPayload(account), catalog: profileCatalog(db, account.id), accountData: accountGameData(db, account.id) })
   }))
 
   app.post('/api/auth/logout', (req, res) => {
@@ -283,7 +276,7 @@ export function createLanApp({ db, distDir = null, registration = null }) {
       return
     }
     if (!req.account) {
-      next(new HttpError(401, 'authentication_required', '请先登录局域网账号'))
+      next(new HttpError(401, 'authentication_required', '请先登录账号'))
       return
     }
     next()
@@ -291,6 +284,48 @@ export function createLanApp({ db, distDir = null, registration = null }) {
 
   app.get('/api/profile', (req, res) => {
     res.json({ catalog: profileCatalog(db, req.account.id) })
+  })
+
+  app.get('/api/account/records', (req, res) => {
+    const gameplay = req.query.gameplay || 'all'
+    if (!['all', 'arena', 'runner', 'tower-defense'].includes(gameplay)) {
+      res.status(400).json({ error: { code: 'invalid_gameplay', message: '游戏记录玩法无效' } })
+      return
+    }
+    const pageSize = 20
+    const summary = Object.fromEntries(['arena', 'runner', 'tower-defense'].map(id => [id, { plays: 0, clears: 0, bestScore: null }]))
+    for (const row of db.prepare(`SELECT gameplay, count(*) AS plays,
+      sum(CASE WHEN result = 'victory' THEN 1 ELSE 0 END) AS clears, max(score) AS bestScore
+      FROM runs WHERE user_id = ? GROUP BY gameplay`).all(req.account.id)) {
+      if (summary[row.gameplay]) summary[row.gameplay] = { plays: Number(row.plays), clears: Number(row.clears), bestScore: Number(row.bestScore) }
+    }
+    const overallTotal = Object.values(summary).reduce((sum, item) => sum + item.plays, 0)
+    const total = gameplay === 'all' ? overallTotal : summary[gameplay].plays
+    const totalPages = Math.max(1, Math.ceil(total / pageSize))
+    const page = boundedInt(req.query.page, 1, totalPages, 1)
+    const entries = db.prepare(`SELECT id, gameplay, mode, difficulty, result, stage, wave, kills,
+      elapsed AS time, score, submitted_at AS submittedAt FROM runs WHERE user_id = ? AND (? = 'all' OR gameplay = ?)
+      ORDER BY submitted_at DESC, rowid DESC LIMIT ? OFFSET ?`).all(req.account.id, gameplay, gameplay, pageSize, (page - 1) * pageSize)
+    res.json({ entries, page, totalPages, total, overallTotal, summary, accountData: accountGameData(db, req.account.id) })
+  })
+
+  app.post('/api/account/import-campaign', (req, res, next) => {
+    try {
+      const accountData = withTransaction(db, () => mergeLegacyCampaign(db, req.account.id, req.body?.campaign))
+      res.json({ accountData })
+    } catch (error) { next(error) }
+  })
+
+  app.post('/api/account/tutorial', (req, res, next) => {
+    try {
+      const accountData = withTransaction(db, () => {
+        const data = accountGameData(db, req.account.id)
+        data.campaign.tutorialCompleted = true
+        writeAccountGameData(db, req.account.id, data)
+        return data
+      })
+      res.json({ accountData })
+    } catch (error) { next(error) }
   })
 
   app.post('/api/profiles', (req, res, next) => {
@@ -332,8 +367,13 @@ export function createLanApp({ db, distDir = null, registration = null }) {
       const source = req.body?.slot?.data
       if (!source || typeof source !== 'object') throw new HttpError(400, 'invalid_profile', '本地档案格式无效')
       const row = activeProfileRow(db, req.account.id)
-      withTransaction(db, () => writeProfileData(db, row, sanitizeSave(source)))
-      res.json({ catalog: profileCatalog(db, req.account.id) })
+      const accountData = withTransaction(db, () => {
+        writeProfileData(db, row, sanitizeSave(source))
+        return req.body?.campaign
+          ? mergeLegacyCampaign(db, req.account.id, req.body.campaign)
+          : accountGameData(db, req.account.id)
+      })
+      res.json({ catalog: profileCatalog(db, req.account.id), accountData })
     } catch (error) {
       next(error)
     }
@@ -370,14 +410,19 @@ export function createLanApp({ db, distDir = null, registration = null }) {
 
   app.post('/api/runs/start', (req, res, next) => {
     try {
-      if (!MODE_IDS.includes(req.body?.mode) || !DIFFICULTY_IDS.includes(req.body?.difficulty)) {
+      const gameplay = req.body?.gameplay || 'arena'
+      if (!validBoardSelection({ ...req.body, gameplay })) {
         throw new HttpError(400, 'invalid_selection', '作战模式或难度无效')
       }
-      const selection = normalizeRunSelection(req.body)
+      const selection = gameplay === 'arena' ? normalizeRunSelection(req.body) : req.body
       const profile = activeProfileRow(db, req.account.id)
       const data = parseProfileData(profile)
-      if (!isModeUnlocked(data.progression, selection.mode) || !isDifficultyUnlocked(data.progression, selection.difficulty)) {
+      if (gameplay === 'arena' && (!isModeUnlocked(data.progression, selection.mode) || !isDifficultyUnlocked(data.progression, selection.difficulty))) {
         throw new HttpError(403, 'run_locked', '当前档案尚未解锁这套规则')
+      }
+      const stageId = boundedInt(req.body?.stageId, 1, 99)
+      if (gameplay === 'tower-defense' && stageId > accountGameData(db, req.account.id).campaign.unlockedStage) {
+        throw new HttpError(403, 'stage_locked', '当前账号尚未解锁这个关卡')
       }
       const now = Date.now()
       const ticket = {
@@ -385,9 +430,9 @@ export function createLanApp({ db, distDir = null, registration = null }) {
         expiresAt: now + RUN_TTL_MS,
       }
       db.prepare(`
-        INSERT INTO run_tickets(id, user_id, profile_id, mode, difficulty, issued_at, expires_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `).run(ticket.id, req.account.id, profile.id, selection.mode, selection.difficulty, now, ticket.expiresAt)
+        INSERT INTO run_tickets(id, user_id, profile_id, mode, difficulty, issued_at, expires_at, gameplay, stage_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(ticket.id, req.account.id, profile.id, selection.mode, selection.difficulty, now, ticket.expiresAt, gameplay, stageId)
       res.status(201).json({ ticket })
     } catch (error) {
       next(error)
@@ -409,6 +454,7 @@ export function createLanApp({ db, distDir = null, registration = null }) {
         if (Number(ticket.expires_at) < Date.now()) {
           throw new HttpError(410, 'run_expired', '这局行动记录已经过期')
         }
+        if (ticket.gameplay !== 'arena') return finishGameplayRun(db, req.account.id, ticket, req.body?.run)
         const run = sanitizeSubmission(req.body?.run, ticket)
         const profile = profileRowById(db, req.account.id, ticket.profile_id)
         if (!profile) throw new HttpError(404, 'profile_not_found', '本局对应的档案已不存在')
@@ -452,8 +498,8 @@ export function createLanApp({ db, distDir = null, registration = null }) {
         db.prepare('UPDATE run_tickets SET completed_at = ? WHERE id = ?').run(Date.now(), ticket.id)
         return result
       })
-      const board = getLeaderboard(db, stored.entry.mode, stored.entry.difficulty, 50, req.account.id)
-      res.json({ catalog: profileCatalog(db, req.account.id), result: stored, leaderboard: board })
+      const board = getLeaderboard(db, stored.entry.mode, stored.entry.difficulty, 50, req.account.id, stored.entry.gameplay || 'arena')
+      res.json({ catalog: profileCatalog(db, req.account.id), accountData: accountGameData(db, req.account.id), result: stored, leaderboard: board })
     } catch (error) {
       next(error)
     }
@@ -461,11 +507,11 @@ export function createLanApp({ db, distDir = null, registration = null }) {
 
   app.get('/api/leaderboard', (req, res, next) => {
     try {
-      if (!MODE_IDS.includes(req.query.mode) || !DIFFICULTY_IDS.includes(req.query.difficulty)) {
+      if (!validBoardSelection(req.query)) {
         throw new HttpError(400, 'invalid_selection', '排行榜模式或难度无效')
       }
       res.json({
-        leaderboard: getLeaderboard(db, req.query.mode, req.query.difficulty, req.query.limit, req.account?.id),
+        leaderboard: getLeaderboard(db, req.query.mode, req.query.difficulty, req.query.limit, req.account?.id, req.query.gameplay || 'arena', req.query.page),
       })
     } catch (error) {
       next(error)
@@ -491,10 +537,13 @@ export function createLanApp({ db, distDir = null, registration = null }) {
     res.status(status).json({
       error: {
         code: error.code || 'server_error',
-        message: status >= 500 ? '局域网服务器处理请求时发生错误' : error.message,
+        message: status >= 500 ? '游戏服务器处理请求时发生错误' : error.message,
         details: error.details || null,
       },
     })
   })
   return app
 }
+
+// 兼容旧启动器和已有集成。
+export const createLanApp = createGameApp

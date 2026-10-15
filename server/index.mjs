@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs'
 import { networkInterfaces } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createLanApp } from './app.mjs'
+import { createGameApp } from './app.mjs'
 import { openDatabase } from './database.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -21,9 +21,9 @@ if (!existsSync(join(distDir, 'index.html'))) {
 }
 
 const db = openDatabase(join(dataDir, 'slime-rampage.db'))
-const app = createLanApp({ db, distDir, registration })
+const app = createGameApp({ db, distDir, registration })
 const server = app.listen(port, host, () => {
-  console.log('史莱姆大暴走局域网主机已启动：')
+  console.log('史莱姆大暴走游戏服务已启动：')
   console.log(`  本机  http://127.0.0.1:${port}`)
   for (const entries of Object.values(networkInterfaces())) {
     for (const entry of entries || []) {

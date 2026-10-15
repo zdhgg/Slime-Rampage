@@ -42,6 +42,7 @@ const emit = defineEmits([
   'open-map',
   'next-stage',
   'restart-stage',
+  'menu',
   'advance-tutorial',
   'skip-tutorial',
   'cycle-speed',
@@ -365,6 +366,7 @@ function displayNumber(value) {
             </div>
           </div>
 
+          <p class="account-save-status" role="status">{{ hud.accountSync === 'synced' ? '本局记录已保存到账号' : '本局记录等待同步到账号' }}</p>
           <!-- Outcome Action Buttons -->
           <div class="outcome-actions">
             <button
@@ -389,6 +391,7 @@ function displayNumber(value) {
               <Map :size="16" />
               <span>返回战役地图</span>
             </button>
+            <button class="outcome-btn secondary-btn" type="button" @click="emit('menu')">返回主界面</button>
           </div>
         </div>
       </div>
@@ -397,6 +400,8 @@ function displayNumber(value) {
 </template>
 
 <style scoped>
+.account-save-status { color: #afbea6; font-size: 12px; text-align: center; margin: 16px 0; }
+
 .tower-defense-hud {
   position: absolute;
   inset: 0;

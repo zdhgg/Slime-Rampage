@@ -13,6 +13,7 @@
  */
 
 import { REACTIONS, ELEMENTS, getElement } from './ElementSystem.js'
+import { SPELL_ELEMENTS } from './SpellRules.js'
 
 const THREAT_LEVELS = [
   { minWave: 20, label: '世界级灾害', icon: '☢️' },
@@ -57,9 +58,10 @@ export function buildSpecies(player, genes, wave, kills, behavior = {}) {
   // 1) 物种名：主形态锁定优先（第一个融合的反应 = 物种身份，阶段十五设计改造），
   //    其次按反应表匹配，其次单元素，再次普通
   let name = null
-  const primary = player._primaryReaction
+  const spellFusion = player.game?.weaponSystem?.spellCombat?.enabled ? player.game.weaponSystem.spellCombat.fusion : null
+  const primary = spellFusion || (player._primaryReaction
     ? REACTIONS.find((r) => r.id === player._primaryReaction)
-    : null
+    : null)
   if (primary && primary.combo.every((el) => elMap.has(el))) {
     name = primary.species
   }
@@ -74,7 +76,7 @@ export function buildSpecies(player, genes, wave, kills, behavior = {}) {
   if (!name) {
     for (const id of ['fire', 'water', 'poison', 'lightning']) {
       if (elMap.has(id)) {
-        name = SINGLE_SPECIES[id]
+        name = player.game?.weaponSystem?.spellCombat?.enabled && id === 'water' ? '寒冰史莱姆' : SINGLE_SPECIES[id]
         break
       }
     }
@@ -103,7 +105,7 @@ export function buildSpecies(player, genes, wave, kills, behavior = {}) {
   const total = [...elMap.values()].reduce((s, lv) => s + lv, 0)
   const elementShare = [...elMap.entries()].map(([id, lv]) => ({
     id,
-    icon: getElement(id)?.icon || '?',
+    icon: (player.game?.weaponSystem?.spellCombat?.enabled ? SPELL_ELEMENTS[id]?.icon : getElement(id)?.icon) || '?',
     share: Math.round((lv / Math.max(1, total)) * 100),
   }))
 
@@ -114,6 +116,10 @@ export function buildSpecies(player, genes, wave, kills, behavior = {}) {
 
   // 6) 代表行为（评审 Day 9：本局代表性行为，截图传播点）
   const behaviorText = []
+  const spells = player.game?.weaponSystem?.spellCombat
+  if (spells?.enabled) {
+    behaviorText.push(`法术核心 ${spells.cores} 颗`, `融合反应 ${spells.stats.reactions} 次`, `${spells.activeName} ${spells.stats.activeCasts} 次`)
+  }
   if (behavior.maxChain > 1) behaviorText.push(`最长连锁 ${behavior.maxChain} 名勇者`)
   if (behavior.explosions > 0) behaviorText.push(`引爆酸液 ${behavior.explosions} 次`)
   if (behavior.slowClouds > 0) behaviorText.push(`蒸汽云雾 ${behavior.slowClouds} 次`)

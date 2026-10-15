@@ -110,10 +110,13 @@ export function deleteProfileSlot(db, userId, index) {
   const rows = db.prepare('SELECT id, slot_index FROM profiles WHERE user_id = ? ORDER BY slot_index').all(userId)
   const target = rows.find((row) => Number(row.slot_index) === index)
   if (!target || rows.length <= 1) return false
+  // 成绩属于账号，删除成长档案不删除已完成行动与公开排名。
+  const fallback = rows.find((row) => Number(row.slot_index) !== index)
+  db.prepare('UPDATE run_tickets SET profile_id = ? WHERE profile_id = ?').run(fallback.id, target.id)
+  db.prepare('UPDATE runs SET profile_id = ? WHERE profile_id = ?').run(fallback.id, target.id)
   db.prepare('DELETE FROM profiles WHERE id = ?').run(target.id)
   const state = db.prepare('SELECT active_slot_index FROM account_state WHERE user_id = ?').get(userId)
   if (Number(state.active_slot_index) === index) {
-    const fallback = rows.find((row) => Number(row.slot_index) !== index)
     db.prepare('UPDATE account_state SET active_slot_index = ? WHERE user_id = ?').run(
       fallback.slot_index,
       userId

@@ -1,4 +1,5 @@
 import { PetCombat } from './PetCombat.js'
+import { SpellCombat } from './SpellCombat.js'
 import { STRAINS } from './Strains.js'
 import { Entity } from './core/Entity.js'
 import { Projectile } from './entities/Projectile.js'
@@ -133,6 +134,7 @@ export class WeaponSystem extends Entity {
     this.gluttonCombat = new GluttonCombat(this)
     this.shadowCombat = new ShadowCombat(this)
     this.petCombat = new PetCombat(this)
+    this.spellCombat = new SpellCombat(this)
     this._projectiles = []
     this._particles = []
     this._pools = [] // 酸液池（火+毒：区域污染 + 引爆）
@@ -208,6 +210,7 @@ export class WeaponSystem extends Entity {
     this.gluttonCombat.reset()
     this.shadowCombat.reset()
     this.petCombat.reset()
+    this.spellCombat.reset()
     this._projectiles.length = 0
     this._particles.length = 0
     this._pools.length = 0
@@ -226,12 +229,12 @@ export class WeaponSystem extends Entity {
    * 阶段十三：改读玩家侧缓存集合（吸收元素时重建），热路径 O(1) 零分配。
    */
   _hasReaction(id) {
-    return this.player._reactionIds.has(id)
+    return !this.spellCombat.enabled && this.player._reactionIds.has(id)
   }
 
   /** 取激活反应定义（供强度缩放读取 combo 元素等级） */
   _getReaction(id) {
-    return this.player._reactionMap.get(id) || null
+    return this.spellCombat.enabled ? null : this.player._reactionMap.get(id) || null
   }
 
   /**
@@ -330,6 +333,7 @@ export class WeaponSystem extends Entity {
 
   /** 以玩家位置为原点，向目标发射飞弹（多弹时并排扇形齐射） */
   fire(target) {
+    if (this.spellCombat.enabled) return this.spellCombat.cast([...this.spellCombat.elements][0], target)
     if (this.gluttonCombat.enabled) return this.gluttonCombat.bite(target)
     if (this.shadowCombat.enabled) return this.shadowCombat.stab(target)
     const px = this.player.x
@@ -382,7 +386,7 @@ export class WeaponSystem extends Entity {
   update(dt) {
     // 玩家死亡（gameOver 已触发，仅本帧残差）：停止射击与结算，
     // 防止结算快照（击杀/掉落物）之后的数据继续变动
-    if (this.player.dead || this.game.runFinished) { this.shadowCombat.reset(); this.petCombat.reset(); this.rapidVolley = null; return }
+    if (this.player.dead || this.game.runFinished) { this.shadowCombat.reset(); this.petCombat.reset(); this.spellCombat.reset(); this.rapidVolley = null; return }
 
     // 连杀窗口倒计时：超时清零（仅游戏时间，暂停不消耗）
     if (this._comboTimer < 1.8) {
@@ -417,8 +421,9 @@ export class WeaponSystem extends Entity {
     if (this.player.dead || this.game.runFinished) return
 
     // 1) 冷却计时 → 自动索敌 → 发射 / 咬击
+    this.spellCombat.update(dt)
     this.cooldown -= dt
-    if (this.cooldown <= 0) {
+    if (!this.spellCombat.enabled && this.cooldown <= 0) {
       const curInterval = this.attackInterval
       if (this.gluttonCombat.enabled) {
         // 没有近战目标时保留就绪；进入范围即起手，前摇内不重复攻击。
@@ -736,7 +741,7 @@ export class WeaponSystem extends Entity {
    * 这是所有核心产出路径的统一收口（Boss / 精英 / 吞噬 / hunt 事件）。
    */
   _spawnElementCore(x, y, type) {
-    if (!this.game.canUseElements) return null
+    if (!this.game.canUseElements || this.spellCombat.enabled) return null
     return this.game.gemManager.spawn(x, y, 0, type)
   }
 
@@ -779,12 +784,12 @@ export class WeaponSystem extends Entity {
       for (let i = 0; i < coreCount; i++) {
         this._spawnElementCore(e.x, e.y, els[(Math.random() * 4) | 0])
       }
-      if (!chapterGuardian && (!squadMember || squadLast)) {
+      if (!this.spellCombat.enabled && !chapterGuardian && (!squadMember || squadLast)) {
         this.game.gemManager.spawn(e.x, e.y, 0, 'tome')
       }
       // 职业秘典：章节守将必掉，普通首领与编队末王高概率掉落。
       // 它与王级秘籍分开拾取，打开当前职业专属三选一，不占用等级升级。
-      const canDropMastery = !!(this.game.roleSpec || this.game.primarySpec)
+      const canDropMastery = !this.spellCombat.enabled && !!(this.game.roleSpec || this.game.primarySpec)
       const masteryChance = chapterGuardian ? 1 : squadMember ? (squadLast ? 0.85 : 0) : 0.65
       if (canDropMastery && Math.random() < masteryChance) {
         this.game.gemManager.spawn(e.x + 12, e.y - 8, 0, 'tome', { mastery: true })
@@ -1183,7 +1188,7 @@ export class WeaponSystem extends Entity {
   addDigestCharge(amount) {
     // 权限闸门（第三批角色化）：消化链会经 absorbElement 授予元素等级，
     // 因此只对有元素权限的角色开放。暴食不再通过吞噬累计/转化元素。
-    if (!this.game.canUseElements) return false
+    if (!this.game.canUseElements || this.spellCombat.enabled) return false
     this.digestCharge = Math.min(
       this.digestChargeMax,
       this.digestCharge + Math.max(0, amount)
@@ -1396,6 +1401,7 @@ export class WeaponSystem extends Entity {
     this.gluttonCombat.render(ctx)
     this.shadowCombat.render(ctx)
     this.petCombat.render(ctx)
+    this.spellCombat.render(ctx)
     // 先粒子后飞弹：炸裂特效叠在飞弹之下，视觉更自然
     for (const pt of this._particles) pt.render(ctx)
     for (const p of this._projectiles) p.render(ctx)

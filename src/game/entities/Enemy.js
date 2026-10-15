@@ -128,6 +128,11 @@ export class Enemy extends Entity {
     this.gluttonStagger = 0
     this.freeze = 0 // 冻结剩余时间：期间完全定身
     this.primeSlow = 0
+    this.elementStun = 0
+    this.spellSlowTime = 0
+    this.spellSlowAmount = 0
+    this.petWeakenTime = 0
+    this.petWeakenAmount = 0
     this.slow = 0 // 蒸汽减速剩余时间（秒）：期间移动速度 ×0.6
     // 燃烧/中毒用「剩余跳数」而非时长：跳数在附加时锁定，总伤害恒定、帧率无关
     // 每跳伤害在附加时锁定（阶段十四调优：随武器伤害成长），同一状态取较大值
@@ -206,6 +211,8 @@ export class Enemy extends Entity {
     if (this.type === 'berserker' && this.hp > 0 && this.hp <= this.maxHp * 0.5 && !this.isEnraged) {
       this.isEnraged = true
       this.freeze = 0
+      this.elementStun = 0
+      this.spellSlowTime = 0
       this.primeSlow = 0
       this.slow = 0
       this.game?.enemyManager?.addText(this.x, this.y - 14, '🔥 狂暴!', null, '#ff3838', 14)
@@ -234,12 +241,14 @@ export class Enemy extends Entity {
       // 同类状态取较长剩余；时长换算成固定跳数
       if (effects.freeze) this.freeze = Math.max(this.freeze, effects.freeze)
       if (effects.burn) {
+        const inactive = this.burnHits <= 0
         this.burnHits = Math.max(this.burnHits, Math.ceil(effects.burn / 0.5))
-        if (effects.burnDmg > 0) this._burnDmg = Math.max(this._burnDmg, effects.burnDmg)
+        if (effects.burnDmg > 0) this._burnDmg = effects.replaceInactiveDots && inactive ? effects.burnDmg : Math.max(this._burnDmg, effects.burnDmg)
       }
       if (effects.poison) {
+        const inactive = this.poisonHits <= 0
         this.poisonHits = Math.max(this.poisonHits, Math.ceil(effects.poison / 1))
-        if (effects.poisonDmg > 0) this._poisonDmg = Math.max(this._poisonDmg, effects.poisonDmg)
+        if (effects.poisonDmg > 0) this._poisonDmg = effects.replaceInactiveDots && inactive ? effects.poisonDmg : Math.max(this._poisonDmg, effects.poisonDmg)
       }
     }
     if (this.hp <= 0) this.destroy()
@@ -254,7 +263,12 @@ export class Enemy extends Entity {
     if (this.freeze > 0) this.freeze -= dt
     this.gluttonStagger = Math.max(0, (this.gluttonStagger || 0) - dt)
     this.primeSlow = Math.max(0, (this.primeSlow || 0) - dt)
+    this.elementStun = Math.max(0, (this.elementStun || 0) - dt)
+    this.spellSlowTime = this.isEnraged ? 0 : Math.max(0, (this.spellSlowTime || 0) - dt)
+    if (this.spellSlowTime === 0) this.spellSlowAmount = 0
     this.slow = Math.max(0, this.slow - dt)
+    this.petWeakenTime = Math.max(0, this.petWeakenTime - dt)
+    if (this.petWeakenTime === 0) this.petWeakenAmount = 0
     this._spawnT = Math.max(0, this._spawnT - dt) // 出生弹入计时（Boss 继承复用）
     this._swingT = Math.max(0, this._swingT - dt)
     this._shootFlash = Math.max(0, this._shootFlash - dt)
@@ -264,7 +278,7 @@ export class Enemy extends Entity {
         this._burnTick = 0.5 // 每 0.5s 一跳
         this.burnHits--
         this.hit(this._burnDmg)
-        this.game?.enemyManager?.addText(this.x, this.y - 10, String(this._burnDmg), null, '#ff9d4a', 12)
+        this.game?.enemyManager?.addText(this.x, this.y - 10, String(Math.round(this._burnDmg * 10) / 10), null, '#ff9d4a', 12)
       }
     }
     if (this.poisonHits > 0) {
@@ -273,7 +287,7 @@ export class Enemy extends Entity {
         this._poisonTick = 1 // 每 1s 一跳
         this.poisonHits--
         this.hit(this._poisonDmg)
-        this.game?.enemyManager?.addText(this.x, this.y - 10, String(this._poisonDmg), null, '#7ce86a', 12)
+        this.game?.enemyManager?.addText(this.x, this.y - 10, String(Math.round(this._poisonDmg * 10) / 10), null, '#7ce86a', 12)
       }
     }
     if (this.hp <= 0) {
@@ -283,17 +297,20 @@ export class Enemy extends Entity {
       }
       return false
     }
-    return this.freeze <= 0 && this.gluttonStagger <= 0
+    return this.freeze <= 0 && this.gluttonStagger <= 0 && this.elementStun <= 0
   }
 
   /** 远程职业射击：向玩家方向发射一枚弹幕 */
   _shoot() {
-    this.game.enemyManager.spawnBullet(this.x, this.y, this.facing, this.type)
+    this.game.enemyManager.spawnBullet(this.x, this.y, this.facing, this.type, { damage: this.outgoingDamage(1) })
     this.game.sound.enemyShoot()
     this._shootFlash = 0.12 // 射击闪光
   }
 
+  outgoingDamage(damage) { return damage * (this.petWeakenTime > 0 ? 1 - this.petWeakenAmount : 1) }
+
   _hitTarget(target, player, damage) {
+    damage = this.outgoingDamage(damage)
     if (target.isMapObjective) target.hit?.(damage, this)
     else if (target.isPet) return this.game.weaponSystem.petCombat.hit(target, damage)
     else if (target.isDecoy) player.hitDecoy(target, damage)
@@ -319,7 +336,8 @@ export class Enemy extends Entity {
     const ux = dx / (dist || 1)
     const uy = dy / (dist || 1)
     const terrainMul = this.game.mapFeatures?.speedMultiplierAt(this.x, this.y, 'enemy') || 1
-    const spd = this.speed * (this.slow > 0 ? SLOW_MUL : this.primeSlow > 0 ? 0.7 : 1) * terrainMul
+    const slowMul = Math.min(this.slow > 0 ? SLOW_MUL : this.primeSlow > 0 ? .7 : 1, this.spellSlowTime > 0 ? 1 - this.spellSlowAmount : 1)
+    const spd = this.speed * slowMul * terrainMul
     this._moving = false
 
     if (
@@ -354,8 +372,9 @@ export class Enemy extends Entity {
 
       if (this.assassinState === 'dashing') {
         this._dashTimer -= dt
-        this.x += this._dashDir.x * 880 * dt
-        this.y += this._dashDir.y * 880 * dt
+        const frostMul = this.spellSlowTime > 0 ? 1 - this.spellSlowAmount : 1
+        this.x += this._dashDir.x * 880 * frostMul * dt
+        this.y += this._dashDir.y * 880 * frostMul * dt
         this._moving = true
         // 冲刺残影
         this._shadowTrail.push({ x: this.x, y: this.y, life: 0.22, maxLife: 0.22 })
@@ -498,7 +517,7 @@ export class Enemy extends Entity {
         }
       }
     }
-    if (this._moving) this._walkT += dt * 9
+    if (this._moving) this._walkT += dt * 9 * slowMul
   }
 
   render(ctx) {
@@ -816,6 +835,20 @@ export class Enemy extends Entity {
       ctx.ellipse(0, 0, r, r, 0, 0, TAU)
       ctx.fill()
     }
+    if (this.spellSlowTime > 0 && this.freeze <= 0) {
+      const fade = Math.min(1, this.spellSlowTime / .3)
+      ctx.save()
+      ctx.fillStyle = `rgba(130, 213, 245, ${.25 * fade})`
+      ctx.beginPath(); ctx.ellipse(0, 0, r * .92, r * 1.06, 0, 0, TAU); ctx.fill()
+      ctx.strokeStyle = `rgba(191, 243, 255, ${.8 * fade})`; ctx.lineWidth = 1.5
+      ctx.beginPath(); ctx.ellipse(0, r * .6, r + 5, r * .38, 0, 0, TAU); ctx.stroke()
+      for (let i = 0; i < 4; i++) {
+        const a = i * Math.PI / 2 + this.game.elapsed * .25
+        const x = Math.cos(a) * (r + 4), y = r * .6 + Math.sin(a) * r * .37
+        ctx.beginPath(); ctx.moveTo(x, y - 3); ctx.lineTo(x + 2, y); ctx.lineTo(x, y + 3); ctx.lineTo(x - 2, y); ctx.closePath(); ctx.fill()
+      }
+      ctx.restore()
+    }
     if (this.burnHits > 0) {
       ctx.fillStyle = 'rgba(255, 140, 60, 0.35)'
       ctx.beginPath()
@@ -830,6 +863,19 @@ export class Enemy extends Entity {
     }
 
     ctx.restore()
+
+    // The snowflake badge is independent of elemental-contact marks and disappears with slow.
+    if (this.spellSlowTime > 0 && this.freeze <= 0) {
+      const x = this.x - r - 5, y = this.y - r - 6, fade = Math.min(1, this.spellSlowTime / .3)
+      ctx.save(); ctx.globalAlpha = fade; ctx.fillStyle = '#233d4d'
+      ctx.beginPath(); ctx.arc(x, y, 6.5, 0, TAU); ctx.fill()
+      ctx.strokeStyle = '#c8f4ff'; ctx.lineWidth = 1.2
+      for (let i = 0; i < 3; i++) {
+        const a = i * Math.PI / 3, dx = Math.cos(a) * 4, dy = Math.sin(a) * 4
+        ctx.beginPath(); ctx.moveTo(x - dx, y - dy); ctx.lineTo(x + dx, y + dy); ctx.stroke()
+      }
+      ctx.restore()
+    }
 
     // 状态图标
     let icon = ''

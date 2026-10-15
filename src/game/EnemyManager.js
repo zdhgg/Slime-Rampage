@@ -336,6 +336,7 @@ export class EnemyManager extends Entity {
       wave >= EARLY_ELEMENT_WAVE &&
       !this._earlyEliteDone &&
       !this._finale &&
+      this.game?.startingStrain !== 'elemental' &&
       this.game?.canUseElements !== false
     ) {
       this._earlyEliteDone = true
