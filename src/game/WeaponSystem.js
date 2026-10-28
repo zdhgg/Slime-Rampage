@@ -386,7 +386,7 @@ export class WeaponSystem extends Entity {
   update(dt) {
     // 玩家死亡（gameOver 已触发，仅本帧残差）：停止射击与结算，
     // 防止结算快照（击杀/掉落物）之后的数据继续变动
-    if (this.player.dead || this.game.runFinished) { this.shadowCombat.reset(); this.petCombat.reset(); this.spellCombat.reset(); this.rapidVolley = null; return }
+    if (this.player.dead || this.game.runFinished) { this.gluttonCombat.reset(); this.shadowCombat.reset(); this.petCombat.reset(); this.spellCombat.reset(); this.rapidVolley = null; return }
 
     // 连杀窗口倒计时：超时清零（仅游戏时间，暂停不消耗）
     if (this._comboTimer < 1.8) {

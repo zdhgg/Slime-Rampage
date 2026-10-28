@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { createArena, spawn, spawnBoss, strike, pressSpace, learn, dispose, ctx2d, rollSkills } from './test-support/arena-fixture.mjs'
+import { createArena, spawn, spawnBoss, strike, settleSwing, pressSpace, learn, dispose, ctx2d, rollSkills } from './test-support/arena-fixture.mjs'
 import { GLUTTON_BITE_DAMAGE, GLUTTON_HEAVY_DAMAGE, GLUTTON_BOSS_HEAVY_DAMAGE, GLUTTON_BITE_ARC, GLUTTON_HEAVY_ARC, inBiteSector } from './src/game/GluttonCombat.js'
 import { onNormalDevoured, onGluttonBossBasicHit, gluttonSkillHud } from './src/game/GluttonResource.js'
 
@@ -20,7 +20,7 @@ check('开局即近战；远处目标不消耗攻击就绪，进入范围后出�
   assert.ok(c.swing)
   assert.equal(e.hp, 100, '前摇期间还未造成伤害')
   c.render(ctx2d)
-  c.update(0.17)
+  settleSwing(c)
   assert.equal(e.hp, 100 - GLUTTON_BITE_DAMAGE)
   assert.equal(g.primarySpec, null, '无需等到 Lv.5')
   c.render(ctx2d)
@@ -36,7 +36,7 @@ check('扇形攻击多目标、身体边缘与背后边界；前摇后离开范�
   c.bite(e)
   e.x = g.player.x + 400
   const hp = e.hp
-  c.update(0.17)
+  settleSwing(c)
   assert.equal(e.hp, hp)
   const angle = Math.PI / 2 + 0.08
   const corner = { active: true, hp: 1, radius: 10, x: g.player.x + Math.cos(angle) * 109, y: g.player.y + Math.sin(angle) * 109 }
@@ -78,7 +78,7 @@ check('F 对满血目标有效；正面多目标受伤，背后与远处目标�
   assert.equal(g.player.gluttonCharge, 1)
   pressSpace(g)
   assert.equal(g.player.gluttonCharge, 1, '再次释放锁防连扣')
-  g.weaponSystem.gluttonCombat.update(0.23)
+  settleSwing(g.weaponSystem.gluttonCombat)
   assert.equal(front.hp, 100 - GLUTTON_HEAVY_DAMAGE)
   assert.equal(side.hp, 100 - GLUTTON_HEAVY_DAMAGE)
   assert.equal(back.hp, 100)
@@ -91,7 +91,7 @@ check('F 吞噬不返充；无资源、无近处目标、死亡时不释放', g 
   g.player.gluttonCharge = 1
   g.player.gluttonDevourProgress = 4
   pressSpace(g)
-  g.weaponSystem.gluttonCombat.update(0.23)
+  settleSwing(g.weaponSystem.gluttonCombat)
   assert.equal(g.weaponSystem.devours, 6)
   assert.equal(g.player.gluttonCharge, 0)
   assert.equal(g.player.gluttonDevourProgress, 4)
@@ -122,7 +122,7 @@ check('首领只能由真实近战普攻命中充能；护盾、重咬和酸爆�
   g.player.devourAcidBurst = 2
   const before = boss.hp
   pressSpace(g)
-  c.update(0.23)
+  settleSwing(c)
   assert.ok(before - boss.hp >= GLUTTON_BOSS_HEAVY_DAMAGE)
   assert.equal(g.player.gluttonCharge, 0)
   assert.equal(g.player.gluttonBossHuntProgress, 0)
@@ -138,7 +138,7 @@ check('首领重咬随攻击与等级成长，仍遵循首领易伤和护盾', g
   const vulnerability = boss.vulnerableMultiplier
   g.player.gluttonCharge = 1
   pressSpace(g)
-  g.weaponSystem.gluttonCombat.update(0.23)
+  settleSwing(g.weaponSystem.gluttonCombat)
   assert.equal(boss.hp, 1000 - 3 * 2 * GLUTTON_BOSS_HEAVY_DAMAGE * vulnerability)
 })
 check('胃囊不降低攻击，强化两种充能；5 级自动觉醒且进阶遵循技能前置', g => {
@@ -228,7 +228,7 @@ check('重碾强化重咬，领主半血吞噬不越过非血肉和护盾限制'
   learn(g, 'glut_ram', 3)
   const c = g.weaponSystem.gluttonCombat, boss = spawnBoss(g, 1000)
   g.player.gluttonCharge = 2
-  pressSpace(g); c.update(0.23)
+  pressSpace(g); settleSwing(c)
   assert.ok(Math.abs((1000 - boss.hp) - 6 * 1.45) < 1e-7)
   learn(g, 'glut_capstone')
   const e = spawn(g); e.hp = 51
@@ -270,6 +270,8 @@ check('重开与角色切换清掉暴食状态；暗影用影刃、元素用法�
 })
 check('前摇压缩张嘴，出手前探，咬合才扣血；移动/冲刺朝向不受动画修改', g => {
   const c = g.weaponSystem.gluttonCombat, p = g.player, e = spawn(g)
+  p.facing = 0 // 与目标同向：本组只验证前摇/出手/咬合时序
+  c.aimAngle = 0
   const before = { x: p.x, y: p.y, facing: p.facing }
   c.bite(e)
   c.update(c.swing.windup * 0.9)
@@ -298,6 +300,8 @@ check('前摇压缩张嘴，出手前探，咬合才扣血；移动/冲刺朝向
 })
 check('出手方向锁定；绕背/越界咬空，没有命中粒子、奖励或命中音', g => {
   const c = g.weaponSystem.gluttonCombat, e = spawn(g)
+  g.player.facing = 0
+  c.aimAngle = 0
   const sounds = []
   g.sound.bite = (heavy, landed) => sounds.push({ heavy, landed })
   for (const position of [{ x: -60, y: 0 }, { x: 0, y: 85 }, { x: 200, y: 0 }]) {
@@ -317,6 +321,8 @@ check('出手方向锁定；绕背/越界咬空，没有命中粒子、奖励或
 })
 check('普攻/F 的前方边界、可视扇面与判定使用相同方向和半径', g => {
   const c = g.weaponSystem.gluttonCombat, p = g.player
+  p.facing = 0
+  c.aimAngle = 0
   for (const heavy of [false, true]) {
     p.gluttonCharge = 1
     const front = spawn(g), flank = spawn(g, { x: 0, y: c.reach(heavy) + 2 })
@@ -333,6 +339,8 @@ check('普攻/F 的前方边界、可视扇面与判定使用相同方向和半�
 })
 check('高攻速保留短前摇，攻击周期不叠加动作延迟；收势可被下一次普攻接续', g => {
   const ws = g.weaponSystem, c = ws.gluttonCombat, e = spawn(g, { hp: 10000 })
+  g.player.facing = 0
+  c.aimAngle = 0
   ws.fireInterval = 0.3; ws.berserkBuffTimer = 10; ws.cooldown = 0
   const starts = []
   for (let i = 0; i < 700; i++) {
@@ -350,6 +358,8 @@ check('高攻速保留短前摇，攻击周期不叠加动作延迟；收势可�
 })
 check('重咬只可替换普通前摇；吞食产生回收粒子，死亡/重开清除所有动作与反馈', g => {
   const c = g.weaponSystem.gluttonCombat, e = spawn(g, { hp: 2 })
+  g.player.facing = 0
+  c.aimAngle = 0
   g.player.gluttonCharge = 1
   c.bite(e)
   assert.ok(c.heavyBite())
@@ -368,4 +378,112 @@ check('重咬只可替换普通前摇；吞食产生回收粒子，死亡/重开
   g.reset()
   assert.equal(c.pose, null)
 })
+
+check('前方优先：更近的身后目标不会抢走正前方目标', g => {
+  const c = g.weaponSystem.gluttonCombat, p = g.player
+  p.facing = 0 // 正右
+  c.aimAngle = 0
+  const rear = spawn(g, { x: -20, y: 0 })
+  const front = spawn(g, { x: 60, y: 0 })
+  assert.equal(c.nearest(), front, '前方 100° 内优先，即使身后目标更近')
+  assert.ok(c.bite())
+  assert.equal(c.swing.target, front)
+  settleSwing(c)
+  assert.ok(front.hp < 100)
+  assert.equal(rear.hp, 100)
+})
+
+check('身后只有敌人时仍会自动防身：先转头预告，再咬合命中', g => {
+  const c = g.weaponSystem.gluttonCombat, p = g.player
+  p.facing = -Math.PI / 2 // 正上
+  const rear = spawn(g, { x: 0, y: 60 })
+  assert.equal(c.nearest(), rear)
+  assert.ok(c.bite())
+  assert.equal(c.swing.phase, 'aim', '身后目标先进入转头阶段')
+  assert.notEqual(c.swing.angle, c.swing.desiredAngle)
+  assert.equal(rear.hp, 100, '转头阶段不结算伤害')
+  let previous = c.swing.angle
+  let frames = 0
+  while (c.swing && frames++ < 200) {
+    c.update(0.01)
+    if (!c.swing) break
+    const step = Math.abs(Math.atan2(Math.sin(c.swing.angle - previous), Math.cos(c.swing.angle - previous)))
+    assert.ok(step <= 14 * 0.01 + 0.04, `转头单帧角速度过大：${step}`)
+    previous = c.swing.angle
+  }
+  assert.ok(rear.hp < 100, '转头完成后必须真实咬中')
+})
+
+check('多目标左右接近时保持目标粘性，只有明显更近才换目标', g => {
+  const c = g.weaponSystem.gluttonCombat, p = g.player
+  p.facing = 0
+  const first = spawn(g, { x: 60, y: 0 })
+  assert.equal(c.nearest(), first)
+  const slightlyCloser = spawn(g, { x: 54, y: 0 })
+  assert.equal(c.nearest(), first, '新目标只近 10% 时保持当前目标，避免左右横跳')
+  slightlyCloser.x = p.x + 28
+  assert.equal(c.nearest(), slightlyCloser, '新目标明显更近时切换')
+})
+
+check('普攻前摇中按重咬只结算一次重咬伤害与一次猎食点', g => {
+  const c = g.weaponSystem.gluttonCombat, p = g.player
+  p.facing = 0
+  c.aimAngle = 0
+  const e = spawn(g, { x: 60, hp: 1000 })
+  p.gluttonCharge = 1
+  assert.ok(c.bite(e), '先进入普通咬击前摇')
+  assert.ok(c.heavyBite(), '重咬可以替换尚未结算的普通前摇')
+  assert.equal(p.gluttonCharge, 0, '只扣一点猎食点')
+  settleSwing(c)
+  assert.ok(Math.abs((1000 - e.hp) - GLUTTON_HEAVY_DAMAGE) < 1e-7, '不能额外结算一次普攻')
+  assert.equal(p.gluttonCharge, 0, '重咬不返还猎食点')
+})
+
+check('转头期间玩家移动与朝向不受自动攻击影响', g => {
+  const c = g.weaponSystem.gluttonCombat, p = g.player
+  p.facing = -Math.PI / 2
+  spawn(g, { x: 0, y: 60 })
+  assert.ok(c.bite())
+  assert.equal(c.swing.phase, 'aim')
+  const angle = c.swing.angle
+  const x = p.x
+  g.input.state.right = true
+  p.update(0.1)
+  g.input.state.right = false
+  assert.ok(p.x > x, '自动攻击不能阻止移动')
+  assert.equal(c.swing.angle, angle, '移动本身不修改已起手的攻击方向')
+})
+
+check('死亡与重开清掉转头目标、酸团和未结算动作', g => {
+  const c = g.weaponSystem.gluttonCombat, p = g.player
+  p.facing = -Math.PI / 2
+  spawn(g, { x: 0, y: 60 })
+  c.bite()
+  c.spawnAcidBurst(90)
+  assert.ok(c.aimTarget)
+  p.dead = true
+  g.weaponSystem.update(0.001)
+  assert.equal(c.swing, null)
+  assert.equal(c.aimTarget, null)
+  assert.equal(c.acidBursts.length, 0)
+  g.reset()
+  assert.equal(c.swing, null)
+  assert.equal(c.acidBursts.length, 0)
+})
+
+check('胃酸迸发不再使用通用圆环，团块视觉不超出真实圆形判定', g => {
+  const c = g.weaponSystem.gluttonCombat, p = g.player
+  p.devourAcidBurst = 2
+  spawn(g, { x: 90, hp: 1000 })
+  c.queueAcid()
+  c.update(0.01)
+  assert.equal(g.weaponSystem._rings.length, 0, '酸爆不生成扩散圆环')
+  assert.equal(c.acidBursts.length, 1)
+  const burst = c.acidBursts[0]
+  assert.equal(burst.radius, 110)
+  for (const blob of burst.blobs) {
+    assert.ok(blob.distance + blob.radius <= burst.radius + 1e-6, '酸团不能画出实际伤害半径之外')
+  }
+})
+
 console.log(`暴食近战契约：${count} 组通过`)
