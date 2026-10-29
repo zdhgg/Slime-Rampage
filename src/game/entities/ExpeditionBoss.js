@@ -30,17 +30,19 @@ export class ExpeditionBoss extends Boss {
     this.skillData = {}
   }
 
+  get attackMove() {
+    return Object.freeze({ id: this.encounter.mechanic, name: this.encounter.special })
+  }
+
   get combatInfo() {
-    const casting = this.specialState === 'telegraph'
+    const attack = this.attackPresentation
     return {
       phase: this.phase,
       phaseName: this.phase === 2 ? this.encounter.phaseName : '章节首领',
       state: this.stateLabel,
-      special: this.encounter.special,
-      castProgress: casting && this.specialDuration > 0
-        ? Math.max(0, Math.min(1, 1 - this.specialTimer / this.specialDuration))
-        : 0,
-      vulnerable: this.vulnerableTimer > 0,
+      special: attack.name,
+      castProgress: attack.stage === 'telegraph' ? attack.progress : 0,
+      vulnerable: this.active && this.hp > 0 && this.vulnerableTimer > 0,
     }
   }
 
@@ -50,7 +52,7 @@ export class ExpeditionBoss extends Boss {
   }
 
   _enterPhaseTwo() {
-    this.game.enemyManager.releaseBossCast?.(this)
+    this.cancelAttack({ preserveVulnerability: true })
     this.phase = 2
     this.enraged = true
     this.phaseShift = 0.85
@@ -138,7 +140,7 @@ export class ExpeditionBoss extends Boss {
     }
 
     this._moving = false
-    this.stateLabel = `蓄力 · ${this.encounter.special}`
+    this.stateLabel = `蓄力 · ${this.attackMove.name}`
     this.game.sound.enemyShoot()
   }
 
@@ -263,6 +265,7 @@ export class ExpeditionBoss extends Boss {
     this.specialState = 'recover'
     const breakWindow = this._chainBreakWindow(duration, chain.steps)
     this.specialTimer = breakWindow
+    this._recoveryDuration = breakWindow
     this.vulnerableTimer = breakWindow
     this.stateLabel = '破绽暴露'
     this.specialCd = this.encounter.cooldown * (this.phase === 2 ? 0.78 : 1) / this.attackTempo

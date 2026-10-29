@@ -131,6 +131,65 @@ export class Boss extends Enemy {
     this._moving = false
     this._spawnT = 0.35
     this._shadowGrad = null
+    this._animClock = 0
+    this._attackAnim = 0
+    this._recoveryDuration = 0
+  }
+
+  get attackMove() {
+    const cfg = BOSS_CFG[this.specialPattern] || BOSS_CFG[this.type]
+    return Object.freeze({ id: this.specialPattern, name: cfg.special })
+  }
+
+  /** Read-only presentation snapshot. Never advances combat or exposes mutable hit geometry. */
+  get attackPresentation() {
+    const stage = !this.active || this.hp <= 0 ? 'dead' : this.phaseShift > 0 ? 'phase' : this.specialState
+    const move = this.attackMove
+    let progress = 0
+    if (stage === 'telegraph') progress = 1 - this.specialTimer / this.specialDuration
+    else if (stage === 'dash' || stage === 'step') {
+      progress = this._cast ? (this._cast.travel || 0) / this._cast.length
+        : 1 - this.specialTimer / (0.42 + (this.dashChain || 0) * 0.06)
+    } else if (stage === 'recover') progress = 1 - this.specialTimer / this._recoveryDuration
+    else if (stage === 'chain') progress = 1 - this.specialTimer / (this._sequence ? .32 : this._chainDelay)
+    return Object.freeze({
+      id: stage === 'dead' || stage === 'phase' || stage === 'idle' ? null : move.id,
+      name: move.name, stage,
+      progress: Number.isFinite(progress) ? clamp(progress, 0, 1) : 0,
+      clock: this._animClock, attackRemaining: this._attackAnim,
+    })
+  }
+
+  _tickAnimation(dt, canAct) {
+    if (!canAct || !this.active) return
+    this._animClock += dt
+    this._attackAnim = Math.max(0, this._attackAnim - dt)
+  }
+
+  /** Explicit interruption, shared by phase transitions, destruction and manager reset. */
+  cancelAttack({ preserveVulnerability = false } = {}) {
+    this.game?.enemyManager?.releaseBossCast?.(this)
+    this.specialState = 'idle'
+    this.specialTimer = this.specialDuration = this._recoveryDuration = 0
+    if (!preserveVulnerability) this.vulnerableTimer = 0
+    this._attackAnim = 0
+    this.dashHit = false
+    this.dashChain = 0
+    this._specialAttackEvent = null
+    this._chainStep = 0
+    this._chainTotal = 1
+    this._moving = false
+    this.stateLabel = '追猎'
+    if (this.skillData) this.skillData = {}
+    if (this._sequence) this._sequence = []
+    if ('_cast' in this) this._cast = this._fx = null
+    if ('_presentationMove' in this) this._presentationMove = null
+  }
+
+  destroy() {
+    super.destroy()
+    // Formation defeat settlement still reads the original vulnerability window.
+    this.cancelAttack({ preserveVulnerability: true })
   }
 
   /** 强招后的破绽承伤倍率：躲完一整套机制的回报必须值得专门去抓 */
@@ -140,17 +199,14 @@ export class Boss extends Enemy {
 
   get combatInfo() {
     const cfg = BOSS_CFG[this.type]
-    const patternCfg = BOSS_CFG[this.specialPattern] || cfg
-    const casting = this.specialState === 'telegraph'
+    const attack = this.attackPresentation
     return {
       phase: this.phase,
       phaseName: this.phase === 2 ? cfg.phaseName : '王级交锋',
       state: this.stateLabel,
-      special: this.isCompositeBoss ? `${cfg.special} · ${patternCfg.special}` : cfg.special,
-      castProgress: casting && this.specialDuration > 0
-        ? Math.max(0, Math.min(1, 1 - this.specialTimer / this.specialDuration))
-        : 0,
-      vulnerable: this.vulnerableTimer > 0,
+      special: this.isCompositeBoss ? `${cfg.special} · ${attack.name}` : attack.name,
+      castProgress: attack.stage === 'telegraph' ? attack.progress : 0,
+      vulnerable: this.active && this.hp > 0 && this.vulnerableTimer > 0,
     }
   }
 
@@ -214,7 +270,9 @@ export class Boss extends Enemy {
   }
 
   update(dt) {
+    if (!Number.isFinite(dt) || dt <= 0 || !this.active) return
     const canAct = this._tickStatus(dt)
+    this._tickAnimation(dt, canAct)
     this.vulnerableTimer = Math.max(0, this.vulnerableTimer - dt)
     if (this.hp <= 0) return
     if (this.phase === 1 && this.hp <= this.maxHp * 0.5) this._enterPhaseTwo()
@@ -264,7 +322,7 @@ export class Boss extends Enemy {
   }
 
   _enterPhaseTwo() {
-    this.game.enemyManager.releaseBossCast?.(this)
+    this.cancelAttack({ preserveVulnerability: true })
     this.phase = 2
     this.enraged = true
     this.phaseShift = 0.85
@@ -298,7 +356,6 @@ export class Boss extends Enemy {
     if (this._chainStep === 0) {
       this._chainTotal = this.phase === 2 ? (this.patternBonus >= 1 ? 3 : 2) : 1
     }
-    const cfg = BOSS_CFG[this.type]
     const p = this.game.player
     if (this.isCompositeBoss) {
       const patterns = ['boss-knight', 'boss-mage', 'boss-archer']
@@ -306,7 +363,6 @@ export class Boss extends Enemy {
     } else {
       this.specialPattern = this.type
     }
-    const patternCfg = BOSS_CFG[this.specialPattern]
     this.specialState = 'telegraph'
     // 难度只增强招式内容与冷却，不缩短预警时间。
     this.specialDuration = this.specialPattern === 'boss-mage' ? 0.95 : this.specialPattern === 'boss-archer' ? 0.78 : 0.72
@@ -320,7 +376,7 @@ export class Boss extends Enemy {
     this.dashDistance = (this.phase === 2 ? 760 : 650) * 0.42
     this._moving = false
     const chainLabel = this._chainTotal > 1 ? `（连击 ${this._chainStep + 1}/${this._chainTotal}）` : ''
-    this.stateLabel = `蓄力 · ${this.isCompositeBoss ? patternCfg.special : cfg.special}${chainLabel}`
+    this.stateLabel = `蓄力 · ${this.attackMove.name}${chainLabel}`
     this.game.sound.enemyShoot()
   }
 
@@ -332,7 +388,7 @@ export class Boss extends Enemy {
       this.specialTimer = 0.42 + chain * 0.06
       this.dashHit = false
       this.dashChain = chain // 供 _updateKnightDash 读取（段数越高冲得越远越快）
-      this.stateLabel = chain > 0 ? `王者冲锋 · 第 ${chain + 1} 段` : '王者冲锋'
+      this.stateLabel = chain > 0 ? `${this.attackMove.name} · 第 ${chain + 1} 段` : this.attackMove.name
       return
     }
 
@@ -427,6 +483,7 @@ export class Boss extends Enemy {
     this.specialState = 'recover'
     const breakWindow = this._chainBreakWindow(duration, chain.steps)
     this.specialTimer = breakWindow
+    this._recoveryDuration = breakWindow
     this.vulnerableTimer = breakWindow
     this.stateLabel = '破绽暴露'
     const pattern = this.specialPattern || this.type
@@ -558,6 +615,7 @@ export class Boss extends Enemy {
   }
 
   render(ctx) {
+    if (!this.active || this.hp <= 0) return
     const r = this.radius
     const t = this.game.elapsed
     const assets = AssetManager.getInstance()

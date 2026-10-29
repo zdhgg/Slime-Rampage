@@ -27,17 +27,23 @@ export class BorderWarden extends ExpeditionBoss {
     this._sequence = []
     this._cast = null
     this._fx = null
+    this._presentationMove = null
     this._lastPlayer = null
     this._velocity = { x: 0, y: 0 }
     this._engageSpeed = 195 * (options.speedMultiplier || 1)
   }
 
   get positionLocked() { return this.specialState !== 'idle' || this.phaseShift > 0 }
+  get attackMove() {
+    if (this.specialState === 'step') return Object.freeze({ id: 'step', name: '跨步压进 · 随后枪刺' })
+    const kind = this._presentationMove
+    return kind && MOVES[kind] ? Object.freeze({ id: kind, name: MOVES[kind].name }) : super.attackMove
+  }
   _onReinforce() {} // Existing battlefield survivors suffice; no surprise encirclement.
   _onLastStand() {} // Phase two changes actions, not damage or hidden haste.
 
   _enterPhaseTwo() {
-    this.game.enemyManager.releaseBossCast?.(this)
+    this.cancelAttack()
     this.phase = 2
     this.enraged = true
     this.phaseShift = .85
@@ -55,7 +61,7 @@ export class BorderWarden extends ExpeditionBoss {
   }
 
   update(dt) {
-    if (!(dt > 0) || !this.active) return
+    if (!Number.isFinite(dt) || !(dt > 0) || !this.active) return
     // Sample real player motion once per frame, before subdividing boss motion.
     // Sampling inside the substeps would underestimate speed at 15/30 FPS.
     const p = this.game.player
@@ -73,8 +79,7 @@ export class BorderWarden extends ExpeditionBoss {
 
   _tickWarden(dt) {
     const canAct = this._tickStatus(dt)
-    this._animClock += dt
-    this._attackAnim = Math.max(0, this._attackAnim - dt)
+    this._tickAnimation(dt, canAct)
     if (this._fx && (this._fx.life -= dt) <= 0) this._fx = null
     const p = this.game.player
     if (this.hp <= 0) return
@@ -164,6 +169,7 @@ export class BorderWarden extends ExpeditionBoss {
   }
 
   _prepare(kind) {
+    this._presentationMove = kind
     const p = this.game.player, move = MOVES[kind]
     // A bounded lead threatens constant circling. It is visible for the whole
     // tell and never follows the player after commitment.
@@ -179,7 +185,7 @@ export class BorderWarden extends ExpeditionBoss {
     // Turn visibly during a harmless setup; the footprint is already fixed.
     this.specialDuration = move.tell + Math.abs(delta(this.facing, aim)) / 9
     this.specialTimer = this.specialDuration
-    this.stateLabel = `蓄力 · ${move.name}`
+    this.stateLabel = `蓄力 · ${this.attackMove.name}`
     this._moving = false
     this.game.sound.enemyShoot()
   }
@@ -210,7 +216,7 @@ export class BorderWarden extends ExpeditionBoss {
     this._cast = { x: this.x, y: this.y, angle: Math.atan2(p.y - this.y, p.x - this.x),
       length: Math.min(160, Math.max(0, Math.hypot(p.x - this.x, p.y - this.y) - 115)) }
     this._clipTravel(this._cast)
-    this.specialState = 'step'; this.stateLabel = '跨步压进 · 随后枪刺'
+    this.specialState = 'step'; this.stateLabel = this.attackMove.name
   }
 
   _finishMove() {
@@ -222,6 +228,7 @@ export class BorderWarden extends ExpeditionBoss {
     this.specialState = 'recover'
     this._sequence = []
     this.specialTimer = this.phase === 2 ? 2.7 : 2.4
+    this._recoveryDuration = this.specialTimer
     this.vulnerableTimer = this.specialTimer
     this.stateLabel = '破绽暴露'
     this._cast = null
@@ -253,6 +260,7 @@ export class BorderWarden extends ExpeditionBoss {
   }
 
   render(ctx) {
+    if (!this.active || this.hp <= 0) return
     super.render(ctx)
     if (this._fx) this._drawFootprint(ctx, this._fx, 1 - this._fx.life / .28, true)
   }

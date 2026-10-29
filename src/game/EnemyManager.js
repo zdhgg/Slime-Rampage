@@ -235,6 +235,7 @@ export class EnemyManager extends Entity {
 
   /** 重置波次、敌人与弹幕（游戏重开时由引擎调用） */
   reset() {
+    for (const enemy of this._enemies) if (enemy.isBoss) enemy.destroy()
     this._enemies.length = 0
     this._bullets.length = 0
     this._spawnTimer = 0
