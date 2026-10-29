@@ -112,6 +112,27 @@ export class DialogueManager extends Entity {
     return line
   }
 
+  sayBossSkill(boss) {
+    if (!boss) return null
+    const pattern = boss.specialPattern || boss.type
+    const eventKey = `skill:${pattern}`
+    if (!boss._dialogueEvents) boss._dialogueEvents = new Set()
+    if (boss._dialogueEvents.has(eventKey)) return null
+    boss._dialogueEvents.add(eventKey)
+    const text = getBossDialogue(boss.dialogueKey || boss.type, 'skill')
+    if (!text) return null
+    return this._show({
+      kind: 'boss',
+      speaker: boss.name,
+      text,
+      color: SPEAKER_COLORS.boss,
+      entity: boss,
+      duration: 1.65,
+      priority: 92,
+      event: 'skill',
+    })
+  }
+
   _show(payload) {
     if (this.current && this.current.priority > payload.priority) return null
     this.current = {

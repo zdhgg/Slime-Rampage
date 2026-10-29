@@ -305,27 +305,43 @@ export class MapFeatureManager extends Entity {
     const { x, y } = this._position(zone)
     ctx.save()
     ctx.translate(x, y)
-    // Visible effect boundary matches speedMultiplierAt's circular world-space test.
+    // The collision test stays circular, but the frontier artwork reads as a
+    // pooled material instead of a debug range indicator. The invisible arc
+    // remains the exact gameplay boundary and also keeps the visual clipped to
+    // the same footprint.
     if (isFrontierScenery(this.themeId, this.variant) && zone.type === 'slime') {
       const wet = ctx.createRadialGradient(0, 0, zone.radius * 0.4, 0, 0, zone.radius)
-      wet.addColorStop(0, 'rgba(119,158,75,0.12)')
-      wet.addColorStop(0.85, 'rgba(132,170,86,0.1)')
-      wet.addColorStop(1, 'rgba(165,193,110,0.17)')
+      wet.addColorStop(0, 'rgba(117,161,72,0.16)')
+      wet.addColorStop(0.68, 'rgba(128,169,79,0.11)')
+      wet.addColorStop(1, 'rgba(165,193,110,0.03)')
       ctx.fillStyle = wet
       ctx.beginPath(); ctx.arc(0, 0, zone.radius, 0, TAU); ctx.fill()
-      ctx.strokeStyle = 'rgba(163,192,108,0.3)'; ctx.lineWidth = 1.2; ctx.stroke()
+
       // Irregular surface texture stays inside the precise, fixed outer boundary.
       ctx.save(); ctx.clip()
-      ctx.fillStyle = 'rgba(113,155,73,0.1)'
-      organicPath(ctx, -8, 6, zone.radius * 0.82, zone.radius * 0.76, zone.angle + 3, 0.15); ctx.fill()
-      for (let i = 0; i < 6; i++) {
+      ctx.fillStyle = 'rgba(113,155,73,0.09)'
+      organicPath(ctx, -zone.radius * 0.08, zone.radius * 0.04, zone.radius * 0.82, zone.radius * 0.67, zone.angle + 3, 0.18); ctx.fill()
+      ctx.fillStyle = 'rgba(181,214,116,0.045)'
+      organicPath(ctx, zone.radius * 0.12, -zone.radius * 0.1, zone.radius * 0.56, zone.radius * 0.35, zone.angle + 1.7, 0.22); ctx.fill()
+
+      // Slow bubbles and short flow marks give the zone a material identity.
+      for (let i = 0; i < 5; i++) {
         const a = i / 6 * TAU + zone.angle
-        const bx = Math.cos(a) * zone.radius * 0.74, by = Math.sin(a) * zone.radius * 0.68
-        const life = (this.time * 0.13 + i * 0.173) % 1
-        ctx.strokeStyle = `rgba(190,214,142,${Math.sin(life * Math.PI) * 0.23})`
-        ctx.beginPath(); ctx.ellipse(bx, by, 2 + life * 4, 1 + life * 2.5, 0, 0, TAU); ctx.stroke()
+        const distance = zone.radius * (0.28 + (i % 2) * 0.16)
+        const bx = Math.cos(a) * distance, by = Math.sin(a) * distance * 0.78
+        const life = (this.time * 0.1 + i * 0.19 + zone.angle * 0.05) % 1
+        ctx.strokeStyle = `rgba(198,224,151,${0.08 + Math.sin(life * Math.PI) * 0.12})`
+        ctx.lineWidth = 1
+        ctx.beginPath(); ctx.ellipse(bx, by, 2.5 + life * 3.5, 1.2 + life * 1.8, zone.angle * 0.2, 0, TAU); ctx.stroke()
+        ctx.strokeStyle = 'rgba(183,213,129,0.08)'
+        ctx.beginPath(); ctx.moveTo(bx - 8, by + 5); ctx.quadraticCurveTo(bx, by - 1, bx + 10, by + 1); ctx.stroke()
       }
       ctx.restore()
+
+      // A low-contrast organic rim communicates the pool without drawing a
+      // perfect circle over the playfield.
+      ctx.strokeStyle = 'rgba(163,192,108,0.16)'; ctx.lineWidth = 1.4
+      organicPath(ctx, 0, 0, zone.radius * 0.95, zone.radius * 0.73, zone.angle, 0.12); ctx.stroke()
       ctx.restore()
       return
     }

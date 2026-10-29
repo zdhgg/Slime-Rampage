@@ -1,11 +1,12 @@
 import express from 'express'
 import { request } from 'node:http'
 import { spawn } from 'node:child_process'
-import { readdirSync, statSync, existsSync } from 'node:fs'
+import { readdirSync, statSync, existsSync, realpathSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+// 取磁盘上的真实大小写：门户可能以小写工作目录启动，Vite 在 Windows 上会因路径大小写不一致而构建失败
+const root = realpathSync.native(resolve(dirname(fileURLToPath(import.meta.url)), '..'))
 const dist = join(root, 'dist')
 const index = join(dist, 'index.html')
 const port = Number(process.env.VITE_PORT) || 3013

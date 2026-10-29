@@ -88,6 +88,7 @@ export class AssetManager {
     this._generateCombatVFX()
     this._generateCharacters()
     this._loadRunnerDecorationImages()
+    this._loadBossImages()
     this.initialized = true
   }
 
@@ -122,6 +123,16 @@ export class AssetManager {
       image.onload = () => this.externalImages.set(key, image)
       image.src = new URL(path, document.baseURI).href
     }
+  }
+
+  /** Generated boss sheets are optional: the procedural sprite remains the
+   * immediate fallback while the project asset loads asynchronously. */
+  _loadBossImages() {
+    if (typeof Image === 'undefined' || typeof document === 'undefined') return
+    const image = new Image()
+    image.decoding = 'async'
+    image.onload = () => this.externalImages.set('bossBorderWardenSheet', image)
+    image.src = new URL('assets/boss/border-warden-sprite-v1.png', document.baseURI).href
   }
 
   /**
@@ -479,6 +490,11 @@ export class AssetManager {
       'boss_knight',
       'boss_mage',
       'boss_archer',
+      'boss_warden',
+      'boss_marshal',
+      'boss_paladin',
+      'boss_guard',
+      'boss_commander',
     ]
     for (const role of roles) {
       for (let frame = 0; frame < 5; frame++) {
@@ -1712,6 +1728,15 @@ export class AssetManager {
     const image = this.externalImages.get(key)
     if (!image) return false
     ctx.drawImage(image, x - w / 2, y - h, w, h)
+    return true
+  }
+
+  drawExternalFrame(ctx, key, frame, frameCount, x, y, w, h) {
+    const image = this.externalImages.get(key)
+    if (!image) return false
+    const sourceWidth = (image.naturalWidth || image.width) / frameCount
+    const sourceHeight = image.naturalHeight || image.height
+    ctx.drawImage(image, frame * sourceWidth, 0, sourceWidth, sourceHeight, x - w / 2, y - h / 2, w, h)
     return true
   }
 }

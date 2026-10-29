@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 
 import { getBossDialogue } from './src/game/DialogueData.js'
 import { EnemyManager } from './src/game/EnemyManager.js'
+import { bossMeleeShape, bossMeleeContains } from './src/game/BossMelee.js'
 import {
   EXPEDITION_BOSSES,
   getExpeditionBoss,
@@ -103,6 +104,10 @@ for (let index = 0; index < hellStages.length; index++) {
   const boss = manager.beginExpeditionStageBoss(encounter, !!encounter.final)
   assert.equal(boss.stageBossId, encounter.id)
   assert.equal(boss.combatInfo.special, encounter.special)
+  if (bossMeleeShape(encounter.mechanic, 1)) {
+    boss.x = boss.game.player.x - 110
+    boss.y = boss.game.player.y
+  }
   boss._startSpecial()
   assert.equal(boss.specialPattern, encounter.mechanic)
   assert.equal(boss.specialState, 'telegraph')
@@ -120,6 +125,76 @@ for (let index = 0; index < hellStages.length; index++) {
 }
 assert.equal(effectSignatures.length, 12)
 ok('十二套技能均可完成预警绘制、效果结算、破绽与二阶段切换')
+
+for (const encounter of encounters.filter(e => bossMeleeShape(e.mechanic, 1))) {
+  for (const phase of [1, 2]) for (const chain of [0, 1]) {
+    const { game, manager, effects } = createEncounterGame(0)
+    const boss = manager.beginExpeditionStageBoss(encounter)
+    boss.phase = phase
+    boss._chainStep = chain
+    // At range a melee boss must pursue instead of casting at the player remotely.
+    boss.x = game.player.x - 600; boss.y = game.player.y
+    boss._startSpecial()
+    assert.equal(boss.specialState, 'idle')
+    boss.x = game.player.x - 100
+    boss._startSpecial()
+    assert.equal(boss.specialState, 'telegraph')
+    const cast = boss._meleeCast
+    const { shape } = cast
+    boss._renderTelegraph(ctx)
+    assert.ok(bossMeleeContains(shape, cast.x, cast.y, cast.angle, game.player.x, game.player.y))
+    boss._executeSpecial()
+    assert.equal(effects.hits, 1, `${encounter.id}: forward melee hit`)
+    assert.equal(effects.bullets, 0, `${encounter.id}: melee must not spawn bullets`)
+    assert.equal(boss.x, cast.x, 'strike cannot teleport the boss')
+    assert.equal(boss.y, cast.y)
+
+    // Lock once, then move out of reach before impact. The warning cannot
+    // follow the escaping player, and backing out must actually avoid damage.
+    for (const dodge of ['distance', 'side']) {
+      boss.specialState = 'idle'
+      game.player.x = boss.x + 100; game.player.y = boss.y
+      boss._startSpecial()
+      const currentShape = boss._meleeCast.shape
+      const distance = dodge === 'distance' ? currentShape.reach + 1 : 100
+      const angle = dodge === 'distance' ? 0 : currentShape.kind === 'cross' ? Math.PI / 4 : Math.PI
+      game.player.x = boss.x + Math.cos(angle) * distance
+      game.player.y = boss.y + Math.sin(angle) * distance
+      const before = effects.hits
+      boss._executeSpecial()
+      assert.equal(effects.hits, before, `${encounter.id}: dodge must escape the locked strike`)
+    }
+  }
+}
+ok('四名近战首领：双阶段、连段、近身命中、远处追击、锁向闪避和零弹幕通过')
+
+{
+  const { game, manager, effects } = createEncounterGame(0)
+  const boss = manager.beginExpeditionStageBoss(getExpeditionBoss('border_warden'))
+  boss.x = game.player.x - 100; boss.y = game.player.y
+  boss.phase = 2
+  boss.patternBonus = 0
+  boss._startSpecial()
+  assert.equal(boss._meleeCast.shape.name, '盾缘横扫')
+  boss.update(boss.specialDuration - 0.05)
+  assert.equal(effects.hits, 0, 'windup must not deal damage')
+  boss.update(0)
+  assert.equal(effects.hits, 0, 'zero game time must preserve windup')
+  boss.update(0.06)
+  assert.equal(effects.hits, 1)
+  assert.equal(boss.specialState, 'chain')
+  assert.ok(boss._meleeFX)
+  boss.update(0.51)
+  assert.equal(boss.specialState, 'telegraph')
+  assert.equal(boss._meleeCast.shape.name, '长枪突刺')
+  boss.update(boss.specialDuration + 0.01)
+  assert.equal(effects.hits, 2, 'second blow must resolve once after its own tell')
+  assert.equal(boss.specialState, 'recover')
+  boss.update(0.5)
+  assert.equal(effects.hits, 2, 'recovery must not add damage')
+  assert.equal(boss._meleeFX, null)
+}
+ok('边防官真实更新链：蓄力无伤害、盾扫接枪刺、逐段独立预告与收势回收通过')
 
 const escortEncounter = createEncounterGame(0)
 const escort = escortEncounter.manager.spawnAt(120, 120, 'knight')
