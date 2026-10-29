@@ -4,6 +4,7 @@ import { Enemy } from './entities/Enemy.js'
 import { EnemyBullet } from './entities/EnemyBullet.js'
 import { Boss } from './entities/Boss.js'
 import { ExpeditionBoss } from './entities/ExpeditionBoss.js'
+import { BorderWarden } from './entities/BorderWarden.js'
 import { FloatingText } from './effects/FloatingText.js'
 import { AssetManager } from './AssetManager.js'
 import {
@@ -234,6 +235,7 @@ export class EnemyManager extends Entity {
 
   /** 重置波次、敌人与弹幕（游戏重开时由引擎调用） */
   reset() {
+    for (const enemy of this._enemies) if (enemy.isBoss) enemy.destroy()
     this._enemies.length = 0
     this._bullets.length = 0
     this._spawnTimer = 0
@@ -711,7 +713,7 @@ export class EnemyManager extends Entity {
       expeditionBoss: !!options.expeditionBoss,
     }
     const boss = encounter
-      ? new ExpeditionBoss({ ...bossOptions, encounter })
+      ? new (encounter.id === 'border_warden' ? BorderWarden : ExpeditionBoss)({ ...bossOptions, encounter })
       : new Boss(bossOptions)
     boss.bossGroupId = options.groupId || `solo-${++this._bossGroupSeq}`
     boss.bossMemberId = `${boss.bossGroupId}-${this._bosses.length + 1}`

@@ -77,6 +77,7 @@ function buildProfile(materialId, spec, tier, split = false) {
     middle: rgba(material.color, 0.36),
     trail: rgba(material.color, 0.5),
     faint: rgba(material.color, 0.22),
+    highlight: rgba(material.core, 0.72),
     sound: material.sound,
     impactCount: split ? 3 : spec === 'gatling' && level >= 3 ? 4 : 8,
     orbit: !split && spec === 'elemental' && level >= 2,

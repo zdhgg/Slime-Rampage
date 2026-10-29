@@ -113,6 +113,18 @@ export class Projectile extends Entity {
 
     this._renderBody(ctx, r, visual)
 
+    // Painterly edge glint: one short highlight keeps small projectiles legible
+    // against dark maps without changing their hitbox or material identity.
+    ctx.strokeStyle = visual.highlight || 'rgba(255, 248, 220, 0.7)'
+    ctx.globalAlpha = 0.72
+    ctx.lineWidth = Math.max(0.7, r * 0.18)
+    ctx.lineCap = 'round'
+    ctx.beginPath()
+    ctx.moveTo(r * 0.12, -r * 0.48)
+    ctx.lineTo(r * 0.62, -r * 0.24)
+    ctx.stroke()
+    ctx.globalAlpha = 1
+
     ctx.strokeStyle = visual.trail
     ctx.lineWidth = visual.trailWidth
     ctx.lineCap = 'round'

@@ -2,25 +2,6 @@ import { Enemy } from './Enemy.js'
 import { AssetManager } from '../AssetManager.js'
 
 const TAU = Math.PI * 2
-const BOSS_ROLE_BY_STAGE = {
-  border_warden: 'boss_warden',
-  gate_marshal: 'boss_marshal',
-  ash_paladin: 'boss_paladin',
-  throne_guard: 'boss_guard',
-  court_commander: 'boss_commander',
-  'boss-final': 'boss_commander',
-  'boss-expedition': 'boss_commander',
-}
-
-const roleKeyForBoss = boss => BOSS_ROLE_BY_STAGE[boss.stageBossId || boss.type]
-  || (boss.type === 'boss-mage' ? 'boss_mage' : boss.type === 'boss-archer' ? 'boss_archer' : 'boss_knight')
-
-// Keep combat fairness tied to radius while letting the boss own more screen
-// presence. The first chapter gets a strong but controlled prominence bump;
-// late-tier commanders grow a little further for their encounter role.
-const visualScaleForBoss = boss => boss.stageBossId
-  ? (boss.isExpeditionBoss ? 1.28 : 1.22)
-  : boss.isFinalBoss || boss.isExpeditionBoss ? 1.18 : 1.08
 
 const BOSS_CFG = {
   'boss-knight': {
@@ -147,12 +128,74 @@ export class Boss extends Enemy {
     this._lastStand = false
 
     this._walkT = Math.random() * 10
-    this._animClock = Math.random() * 10
-    this._attackAnim = 0
-    this._castBurst = 0
     this._moving = false
     this._spawnT = 0.35
     this._shadowGrad = null
+    this._animClock = 0
+    this._attackAnim = 0
+    this._recoveryDuration = 0
+  }
+
+  get attackMove() {
+    const cfg = BOSS_CFG[this.specialPattern] || BOSS_CFG[this.type]
+    return Object.freeze({ id: this.specialPattern, name: cfg.special })
+  }
+
+  get artKey() {
+    return this.type === 'boss-mage' ? 'artV1BossMage'
+      : this.type === 'boss-archer' ? 'artV1BossArcher'
+      : null
+  }
+
+  /** Read-only presentation snapshot. Never advances combat or exposes mutable hit geometry. */
+  get attackPresentation() {
+    const stage = !this.active || this.hp <= 0 ? 'dead' : this.phaseShift > 0 ? 'phase' : this.specialState
+    const move = this.attackMove
+    let progress = 0
+    if (stage === 'telegraph') progress = 1 - this.specialTimer / this.specialDuration
+    else if (stage === 'dash' || stage === 'step') {
+      progress = this._cast ? (this._cast.travel || 0) / this._cast.length
+        : 1 - this.specialTimer / (0.42 + (this.dashChain || 0) * 0.06)
+    } else if (stage === 'recover') progress = 1 - this.specialTimer / this._recoveryDuration
+    else if (stage === 'chain') progress = 1 - this.specialTimer / (this._sequence ? .32 : this._chainDelay)
+    return Object.freeze({
+      id: stage === 'dead' || stage === 'phase' || stage === 'idle' ? null : move.id,
+      name: move.name, stage,
+      progress: Number.isFinite(progress) ? clamp(progress, 0, 1) : 0,
+      clock: this._animClock, attackRemaining: this._attackAnim,
+    })
+  }
+
+  _tickAnimation(dt, canAct) {
+    if (!canAct || !this.active) return
+    this._animClock += dt
+    this._attackAnim = Math.max(0, this._attackAnim - dt)
+  }
+
+  /** Explicit interruption, shared by phase transitions, destruction and manager reset. */
+  cancelAttack({ preserveVulnerability = false } = {}) {
+    this.game?.enemyManager?.releaseBossCast?.(this)
+    this.specialState = 'idle'
+    this.specialTimer = this.specialDuration = this._recoveryDuration = 0
+    if (!preserveVulnerability) this.vulnerableTimer = 0
+    this._attackAnim = 0
+    this.dashHit = false
+    this.dashChain = 0
+    this._specialAttackEvent = null
+    this._chainStep = 0
+    this._chainTotal = 1
+    this._moving = false
+    this.stateLabel = '追猎'
+    if (this.skillData) this.skillData = {}
+    if (this._sequence) this._sequence = []
+    if ('_cast' in this) this._cast = this._fx = null
+    if ('_presentationMove' in this) this._presentationMove = null
+  }
+
+  destroy() {
+    super.destroy()
+    // Formation defeat settlement still reads the original vulnerability window.
+    this.cancelAttack({ preserveVulnerability: true })
   }
 
   /** 强招后的破绽承伤倍率：躲完一整套机制的回报必须值得专门去抓 */
@@ -162,17 +205,14 @@ export class Boss extends Enemy {
 
   get combatInfo() {
     const cfg = BOSS_CFG[this.type]
-    const patternCfg = BOSS_CFG[this.specialPattern] || cfg
-    const casting = this.specialState === 'telegraph'
+    const attack = this.attackPresentation
     return {
       phase: this.phase,
       phaseName: this.phase === 2 ? cfg.phaseName : '王级交锋',
       state: this.stateLabel,
-      special: this.isCompositeBoss ? `${cfg.special} · ${patternCfg.special}` : cfg.special,
-      castProgress: casting && this.specialDuration > 0
-        ? Math.max(0, Math.min(1, 1 - this.specialTimer / this.specialDuration))
-        : 0,
-      vulnerable: this.vulnerableTimer > 0,
+      special: this.isCompositeBoss ? `${cfg.special} · ${attack.name}` : attack.name,
+      castProgress: attack.stage === 'telegraph' ? attack.progress : 0,
+      vulnerable: this.active && this.hp > 0 && this.vulnerableTimer > 0,
     }
   }
 
@@ -236,10 +276,9 @@ export class Boss extends Enemy {
   }
 
   update(dt) {
+    if (!Number.isFinite(dt) || dt <= 0 || !this.active) return
     const canAct = this._tickStatus(dt)
-    this._animClock += dt
-    this._attackAnim = Math.max(0, this._attackAnim - dt)
-    this._castBurst = Math.max(0, this._castBurst - dt)
+    this._tickAnimation(dt, canAct)
     this.vulnerableTimer = Math.max(0, this.vulnerableTimer - dt)
     if (this.hp <= 0) return
     if (this.phase === 1 && this.hp <= this.maxHp * 0.5) this._enterPhaseTwo()
@@ -289,7 +328,7 @@ export class Boss extends Enemy {
   }
 
   _enterPhaseTwo() {
-    this.game.enemyManager.releaseBossCast?.(this)
+    this.cancelAttack({ preserveVulnerability: true })
     this.phase = 2
     this.enraged = true
     this.phaseShift = 0.85
@@ -323,7 +362,6 @@ export class Boss extends Enemy {
     if (this._chainStep === 0) {
       this._chainTotal = this.phase === 2 ? (this.patternBonus >= 1 ? 3 : 2) : 1
     }
-    const cfg = BOSS_CFG[this.type]
     const p = this.game.player
     if (this.isCompositeBoss) {
       const patterns = ['boss-knight', 'boss-mage', 'boss-archer']
@@ -331,7 +369,6 @@ export class Boss extends Enemy {
     } else {
       this.specialPattern = this.type
     }
-    const patternCfg = BOSS_CFG[this.specialPattern]
     this.specialState = 'telegraph'
     // 难度只增强招式内容与冷却，不缩短预警时间。
     this.specialDuration = this.specialPattern === 'boss-mage' ? 0.95 : this.specialPattern === 'boss-archer' ? 0.78 : 0.72
@@ -344,28 +381,24 @@ export class Boss extends Enemy {
     this.dashLaneRadius = this.radius + p.radius + 12
     this.dashDistance = (this.phase === 2 ? 760 : 650) * 0.42
     this._moving = false
-    this.game.dialogue?.sayBossSkill?.(this)
     const chainLabel = this._chainTotal > 1 ? `（连击 ${this._chainStep + 1}/${this._chainTotal}）` : ''
-    this.stateLabel = `蓄力 · ${this.isCompositeBoss ? patternCfg.special : cfg.special}${chainLabel}`
+    this.stateLabel = `蓄力 · ${this.attackMove.name}${chainLabel}`
     this.game.sound.enemyShoot()
   }
 
   _executeSpecial() {
-    this._castBurst = 0.34
     // 连击逐段强化：同一场战斗里动作模式随段数变化，而不是简单重复
     const chain = this._chainStep
     if (this.specialPattern === 'boss-knight') {
       this.specialState = 'dash'
-      this._attackAnim = 0.48
       this.specialTimer = 0.42 + chain * 0.06
       this.dashHit = false
       this.dashChain = chain // 供 _updateKnightDash 读取（段数越高冲得越远越快）
-      this.stateLabel = chain > 0 ? `王者冲锋 · 第 ${chain + 1} 段` : '王者冲锋'
+      this.stateLabel = chain > 0 ? `${this.attackMove.name} · 第 ${chain + 1} 段` : this.attackMove.name
       return
     }
 
     if (this.specialPattern === 'boss-mage') {
-      this._attackAnim = 0.36
       const p = this.game.player
       if ((p.x - this.targetX) ** 2 + (p.y - this.targetY) ** 2 <= 102 * 102) p.hit(2, this._specialAttackEvent ||= { enemyAttack: true })
       const count = (this.phase === 2 ? 16 : 12) + this.patternBonus * 2 + chain * 4
@@ -387,7 +420,6 @@ export class Boss extends Enemy {
     // 远距离横向走位可以钻缝，贴脸则躲不开——拉扯站位有收益。
     // 连击段数提高弹幕密度（间隔收窄），但仍保留可钻的缝。
     const count = (this.phase === 2 ? 8 : 6) + this.patternBonus + chain * 2
-    this._attackAnim = 0.34
     const step = Math.max(0.16, 0.22 - chain * 0.02)
     for (let i = 0; i < count; i++) {
       const off = (i - (count - 1) / 2) * step
@@ -457,6 +489,7 @@ export class Boss extends Enemy {
     this.specialState = 'recover'
     const breakWindow = this._chainBreakWindow(duration, chain.steps)
     this.specialTimer = breakWindow
+    this._recoveryDuration = breakWindow
     this.vulnerableTimer = breakWindow
     this.stateLabel = '破绽暴露'
     const pattern = this.specialPattern || this.type
@@ -486,7 +519,6 @@ export class Boss extends Enemy {
         this.attackCd -= dt
         if (this.attackCd <= 0) {
           this.attackCd = this.attackInterval
-          this._attackAnim = 0.46
           player.hit(this.damage, { enemyAttack: true })
         }
       }
@@ -506,7 +538,6 @@ export class Boss extends Enemy {
       this.attackCd -= dt
       if (this.attackCd <= 0) {
         this.attackCd = this.attackInterval
-        this._attackAnim = 0.3
         const count = this.type === 'boss-mage'
           ? (this.phase === 2 ? 5 : 3)
           : (this.phase === 2 ? 7 : 5)
@@ -538,14 +569,10 @@ export class Boss extends Enemy {
   _renderTelegraph(ctx) {
     if (this.specialState !== 'telegraph') return
     const progress = this.specialDuration > 0 ? 1 - this.specialTimer / this.specialDuration : 0
-    const pulse = 0.72 + Math.sin(this.game.elapsed * 10) * 0.18
-    const accent = this.type === 'boss-mage' ? '#d5a4ff' : this.type === 'boss-archer' ? '#b5edb3' : '#ffd18a'
     ctx.save()
     ctx.fillStyle = 'rgba(224, 68, 68, 0.14)'
-    ctx.strokeStyle = accent
-    ctx.lineWidth = 2.2
-    ctx.setLineDash([10, 8])
-    ctx.lineDashOffset = -progress * 28
+    ctx.strokeStyle = 'rgba(255, 116, 102, 0.9)'
+    ctx.lineWidth = 2
 
     if (this.specialPattern === 'boss-knight') {
       ctx.translate(this.x, this.y)
@@ -590,62 +617,26 @@ export class Boss extends Enemy {
       )
       ctx.stroke()
     }
-    ctx.setLineDash([])
-    ctx.strokeStyle = `rgba(255, 255, 255, ${0.34 + pulse * 0.3})`
-    ctx.lineWidth = 1
-    ctx.beginPath()
-    ctx.arc(this.targetX, this.targetY, 10 + progress * 16, 0, TAU)
-    ctx.stroke()
-    ctx.fillStyle = accent
-    ctx.beginPath()
-    ctx.arc(this.targetX, this.targetY, 3.5 + progress * 5, 0, TAU)
-    ctx.fill()
     ctx.restore()
   }
 
   render(ctx) {
+    if (!this.active || this.hp <= 0) return
     const r = this.radius
     const t = this.game.elapsed
-    const visualScale = visualScaleForBoss(this)
     const assets = AssetManager.getInstance()
     this._renderTelegraph(ctx)
-
-    if (this._castBurst > 0) {
-      const burst = 1 - this._castBurst / 0.34
-      const accent = this.specialPattern === 'boss-mage' ? '#d5a4ff' : this.specialPattern === 'boss-archer' ? '#b5edb3' : '#ffd18a'
-      ctx.save()
-      ctx.translate(this.x, this.y)
-      ctx.globalAlpha = 0.72 * (1 - burst * 0.55)
-      ctx.strokeStyle = accent
-      ctx.lineWidth = 3 - burst * 1.5
-      ctx.beginPath()
-      ctx.arc(0, 0, r * (1.15 + burst * 1.9), -Math.PI / 2, -Math.PI / 2 + TAU * (0.72 + burst * 0.28))
-      ctx.stroke()
-      ctx.lineWidth = 1.4
-      for (let i = 0; i < 6; i++) {
-        const angle = i / 6 * TAU + burst * 0.8
-        const inner = r * (0.7 + burst * 0.4)
-        const outer = r * (1.35 + burst * 1.25)
-        ctx.beginPath()
-        ctx.moveTo(Math.cos(angle) * inner, Math.sin(angle) * inner)
-        ctx.lineTo(Math.cos(angle) * outer, Math.sin(angle) * outer)
-        ctx.stroke()
-      }
-      ctx.fillStyle = accent
-      ctx.beginPath(); ctx.arc(0, 0, r * (0.18 + burst * 0.16), 0, TAU); ctx.fill()
-      ctx.restore()
-    }
 
     const auraPulse = 0.5 + 0.5 * Math.sin(t * 2.5)
     ctx.fillStyle = this.enraged
       ? `rgba(255, 70, 50, ${0.12 + auraPulse * 0.1})`
       : `rgba(255, 209, 102, ${0.08 + auraPulse * 0.08})`
     ctx.beginPath()
-    ctx.arc(this.x, this.y, r * visualScale * (1.6 + auraPulse * 0.25), 0, TAU)
+    ctx.arc(this.x, this.y, r * (1.6 + auraPulse * 0.25), 0, TAU)
     ctx.fill()
 
     ctx.save()
-    ctx.translate(this.x, this.y + r * visualScale * 0.85)
+    ctx.translate(this.x, this.y + r * 0.85)
     ctx.scale(1, 0.3)
     if (!this._shadowGrad) {
       const shadow = ctx.createRadialGradient(0, 0, r * 0.1, 0, 0, r)
@@ -655,27 +646,14 @@ export class Boss extends Enemy {
     }
     ctx.fillStyle = this._shadowGrad
     ctx.beginPath()
-    ctx.arc(0, 0, r * visualScale, 0, TAU)
+    ctx.arc(0, 0, r, 0, TAU)
     ctx.fill()
     ctx.restore()
 
     ctx.save()
     const bob = this._moving ? Math.sin(this._walkT * 1.6) * 2 : 0
-    const idleBob = Math.sin(this._animClock * 4.2) * 0.9
-    const recoil = this.flash > 0 ? -Math.sin((this.flash / 0.12) * Math.PI) * 3.5 : 0
-    const phasePulse = this.phaseShift > 0 ? 1 + Math.sin((0.85 - this.phaseShift) * 18) * 0.06 : 1
-    const attackProgress = this._attackAnim > 0 ? 1 - this._attackAnim / 0.48 : 0
-    const meleeWindup = this._meleeCast && this.specialState === 'telegraph'
-      ? Math.max(0, 1 - this.specialTimer / this.specialDuration) : 0
-    const meleeLunge = this._meleeFX ? Math.sin(attackProgress * Math.PI) * 7 : -meleeWindup * 4
-    ctx.translate(
-      this.x + Math.cos(this.facing) * (recoil + meleeLunge),
-      this.y + bob + idleBob + Math.sin(this.facing) * meleeLunge + Math.sin(attackProgress * Math.PI) * -2.5
-    )
+    ctx.translate(this.x, this.y + bob)
     if (Math.cos(this.facing) < 0) ctx.scale(-1, 1)
-    if (this._attackAnim > 0) ctx.rotate(Math.sin(attackProgress * Math.PI) * 0.08)
-    if (meleeWindup) ctx.rotate(-meleeWindup * 0.06)
-    ctx.scale(visualScale * phasePulse, visualScale * phasePulse)
 
     if (this._spawnT > 0) {
       const k = 1 - this._spawnT / 0.35
@@ -685,9 +663,9 @@ export class Boss extends Enemy {
       ctx.scale(scale, scale)
     }
 
-    const roleKey = roleKeyForBoss(this)
-    let frame = Math.floor(((this._animClock % 1.8) / 1.8) * 4) % 4
-    if (this._attackAnim > 0 || this.specialState === 'dash') frame = 4
+    const roleKey = this.type === 'boss-mage' ? 'boss_mage' : this.type === 'boss-archer' ? 'boss_archer' : 'boss_knight'
+    let frame = Math.floor(((this._walkT % (TAU * 1.5)) / (TAU * 1.5)) * 4) % 4
+    if ((this.attackCd > 0 && this.attackCd < 0.4) || this.specialState === 'dash') frame = 4
 
     if (this.type === 'boss-mage') {
       ctx.save()
@@ -696,13 +674,10 @@ export class Boss extends Enemy {
       assets.draw(ctx, 'vfx_magic_circle', 0, 0, r * 3.2, r * 3.2)
       ctx.restore()
     }
-    // The fourth generated cell is a thrust, never part of the walk loop.
-    const generatedFrame = frame === 4 ? 3 : this._moving ? [0, 1, 0, 2][frame] : 0
-    const generatedBoss = this.stageBossId === 'border_warden'
-      && assets.drawExternalFrame(ctx, 'bossBorderWardenSheet', generatedFrame, 4, 0, 0, r * 2.7, r * 3.45)
-    if (!generatedBoss) assets.draw(ctx, `char_${roleKey}_${frame}`, 0, 0, r * 2.6, r * 2.6)
+    const artV1 = this.artKey && assets.drawArt(ctx, this.artKey, 0, 0, r * 3.0, r * 3.0)
+    if (!artV1) assets.draw(ctx, `char_${roleKey}_${frame}`, 0, 0, r * 2.6, r * 2.6)
 
-    if (!this._meleeFX && this.type === 'boss-knight' && (this._attackAnim > 0 || this.specialState === 'dash')) {
+    if (this.type === 'boss-knight' && ((this.attackCd > 0 && this.attackCd < 0.3) || this.specialState === 'dash')) {
       ctx.save()
       ctx.translate(r * 0.8, 0)
       assets.draw(ctx, 'vfx_slash_arc', 0, 0, r * 3.8, r * 3.8)

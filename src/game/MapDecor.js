@@ -261,6 +261,11 @@ export function drawBgItem(ctx, item, themeId = 'frontier') {
     case 'patch':
       ctx.fillStyle = theme.patch
       ellipse(ctx, 0, 0, 25, 14, 0.3)
+      ctx.globalAlpha = 0.42
+      ctx.fillStyle = theme.stone[1]
+      ellipse(ctx, -9, -3, 8, 3.5, -0.25)
+      ellipse(ctx, 8, 3, 11, 4, 0.18)
+      ctx.globalAlpha = 1
       break
     case 'pebble':
       ctx.fillStyle = theme.stone[0]

@@ -971,6 +971,21 @@ export class Player extends Entity {
 
     const assets = AssetManager.getInstance()
 
+    const artV1Key = {
+      origin: 'artV1SlimeOrigin',
+      glutton: 'artV1SlimeGlutton',
+      ricochet: 'artV1SlimeRicochet',
+      elemental: 'artV1SlimeElemental',
+      shadow: 'artV1SlimeShadow',
+      summoner: 'artV1SlimeSummoner',
+    }[this.strainId]
+    const artV1 = artV1Key && assets.drawArt(ctx, artV1Key, 0, 0, r * 3.2, r * 3.2)
+    if (artV1) {
+      ctx.restore()
+      ctx.globalAlpha = 1
+      return
+    }
+
     // 进化外显配件（背面层：角/甲壳）
     if (this.elements.has('lightning') || mut.arcs) {
       assets.draw(ctx, 'prop_lightning_horns', 0, -r * 0.5, r * 1.8, r * 1.8)

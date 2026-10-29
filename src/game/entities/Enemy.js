@@ -711,8 +711,15 @@ export class Enemy extends Entity {
       ctx.restore()
     }
 
-    // 绘制高精度职业精灵
-    assets.draw(ctx, `char_${this.type}_${frame}`, 0, 0, r * 2.9, r * 2.9)
+    // Approved painterly slice; all other roles retain the procedural sprite fallback.
+    const artV1Key = {
+      knight: 'artV1EnemyKnight',
+      mage: 'artV1EnemyMage',
+      archer: 'artV1EnemyArcher',
+      golem: 'artV1EnemyGolem',
+    }[this.type]
+    const artV1 = artV1Key && assets.drawArt(ctx, artV1Key, 0, 0, r * 3.05, r * 3.05)
+    if (!artV1) assets.draw(ctx, `char_${this.type}_${frame}`, 0, 0, r * 2.9, r * 2.9)
 
     // 骑士挥剑半透明银弧刀光（Slash Arc 特效）
     if (this.type === 'knight' && this._swingT > 0) {

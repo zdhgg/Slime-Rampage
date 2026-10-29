@@ -1,0 +1,37 @@
+<!doctype html><html lang="zh"><meta charset="utf-8">
+<title>边防官专项试玩</title>
+<style>body{margin:0;background:#17251e;color:#f4e5c1;font:15px system-ui}header{padding:12px;display:flex;gap:16px;align-items:center}canvas{display:block;width:100vw;height:calc(100vh - 100px)}select,button{font:inherit;padding:6px}p{margin:0 12px}#status{white-space:pre}</style>
+<header><strong>边防官 · 普通成长试玩</strong><select id="role"><option>glutton</option><option>shadow</option><option>ricochet</option><option>elemental</option><option>summoner</option><option>origin</option></select><select id="phase"><option value="1">第一阶段</option><option value="2">第二阶段</option></select><label><input id="mobs" type="checkbox">残兵</label><button id="reset">重新开始</button><span id="status"></span></header>
+<p>WASD / 方向键移动，空格角色主动。Lv.4、无局外基因、基础武器成长；元素选择 <select id="element"><option value="water">寒冰</option><option value="fire">火焰</option><option value="poison">毒素</option><option value="lightning">雷电</option></select>。死亡后重新开始。供开发试玩，不计入存档。</p>
+<canvas id="arena" tabindex="0"></canvas>
+<script type="module">
+import { GameEngine } from '../src/game/GameEngine.js'
+import { getExpeditionBoss } from '../src/game/RunRules.js'
+const g = GameEngine.create(document.querySelector('canvas'))
+window.wardenGame = g
+let boss
+function reset() {
+  g.pause(); g.configureRun({ mode: 'expedition', difficulty: 'normal' })
+  g.applyStartingStrain(document.querySelector('#role').value)
+  g.startingElement = document.querySelector('#element').value; g.reset()
+  g.player.level = 4; g.weaponSystem.damage *= 1.08 ** 3
+  g.enemyManager._enemies.length = 0
+  g.enemyManager._spawnTimer = Infinity
+  g.mapFeatures.barricades = []
+  g.mapFeatures.resolvePlayerMovement = () => false
+  boss = g.enemyManager.beginExpeditionStageBoss(getExpeditionBoss('border_warden'))
+  g.runState = 'expedition-boss'
+  g._updateRunState = () => {} // Hold this encounter; no chapter objectives in the fixture.
+  boss.x = g.player.x + 350; boss.y = g.player.y; boss.facing = Math.PI
+  if (document.querySelector('#phase').value === '2') { boss.hp = boss.maxHp * .49; boss._enterPhaseTwo() }
+  if (document.querySelector('#mobs').checked) for (const [i, type] of ['knight','archer','mage'].entries())
+    g.enemyManager.spawnAt(g.player.x - 220 + i * 200, g.player.y + 260, type)
+  window.wardenBoss = boss
+  g.start(); document.querySelector('canvas').focus()
+}
+document.querySelector('#reset').onclick = reset
+g.onLevelUp = () => {}
+g.onGameOver = () => g.pause()
+g.onStats = () => { document.querySelector('#status').textContent = `生命 ${g.player.hp}/${g.player.maxHp}   Boss ${Math.ceil(boss?.hp || 0)}  ${boss?.stateLabel || ''}` }
+reset()
+</script></html>

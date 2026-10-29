@@ -1,0 +1,27 @@
+{
+  "version": "v1",
+  "style": "high-detail thick-painted fantasy",
+  "assets": [
+    { "key": "artV1SlimeOrigin", "file": "slime-origin-v1.png", "role": "player", "fallback": "SlimeRenderer", "source": "generated with Codex ImageGen after approval" },
+    { "key": "artV1SlimeGlutton", "file": "slime-glutton-v1.png", "role": "glutton slime", "fallback": "SlimeRenderer", "source": "generated with Codex ImageGen after approval" },
+    { "key": "artV1SlimeRicochet", "file": "slime-ricochet-v1.png", "role": "ricochet slime", "fallback": "SlimeRenderer", "source": "generated with Codex ImageGen after approval" },
+    { "key": "artV1SlimeElemental", "file": "slime-elemental-v1.png", "role": "elemental slime", "fallback": "SlimeRenderer", "source": "generated with Codex ImageGen after approval" },
+    { "key": "artV1SlimeShadow", "file": "slime-shadow-v1.png", "role": "shadow slime", "fallback": "SlimeRenderer", "source": "generated with Codex ImageGen after approval" },
+    { "key": "artV1SlimeSummoner", "file": "slime-summoner-v1.png", "role": "symbiosis slime", "fallback": "SlimeRenderer", "source": "generated with Codex ImageGen after approval" },
+    { "key": "artV1EnemyKnight", "file": "enemy-knight-v1.png", "role": "ordinary knight enemy", "fallback": "AssetManager char_knight_*", "source": "generated with Codex ImageGen after approval" },
+    { "key": "artV1EnemyMage", "file": "enemy-mage-v1.png", "role": "ordinary mage enemy", "fallback": "AssetManager char_mage_*", "source": "generated with Codex ImageGen after approval" },
+    { "key": "artV1EnemyArcher", "file": "enemy-archer-v1.png", "role": "ordinary archer enemy", "fallback": "AssetManager char_archer_*", "source": "generated with Codex ImageGen after approval" },
+    { "key": "artV1EnemyGolem", "file": "enemy-golem-v1.png", "role": "ordinary golem enemy", "fallback": "AssetManager char_golem_*", "source": "generated with Codex ImageGen after approval" },
+    { "key": "artV1BorderWarden", "file": "boss-border-warden-v1.png", "role": "Border Warden gun-shield Boss", "fallback": "Boss char_boss_knight_*", "source": "generated with Codex ImageGen after approval" },
+    { "key": "artV1GateMarshal", "file": "boss-gate-marshal-v1.png", "role": "Gate Marshal tower-shield and short-hammer Boss", "fallback": "Boss char_boss_knight_*", "source": "generated with Codex ImageGen after approval" },
+    { "key": "artV1AshPaladin", "file": "boss-ash-paladin-v1.png", "role": "Ash Paladin two-handed warhammer Boss", "fallback": "Boss char_boss_knight_*", "source": "generated with Codex ImageGen after approval" },
+    { "key": "artV1ThroneGuard", "file": "boss-throne-guard-v1.png", "role": "Throne Guard polearm axe Boss", "fallback": "Boss char_boss_knight_*", "source": "generated with Codex ImageGen after approval" },
+    { "key": "artV1BossMage", "file": "boss-mage-v1.png", "role": "generic arcane mage Boss", "fallback": "Boss char_boss_mage_*", "source": "generated with Codex ImageGen after approval" },
+    { "key": "artV1BossArcher", "file": "boss-archer-v1.png", "role": "generic royal hunt captain Boss", "fallback": "Boss char_boss_archer_*", "source": "generated with Codex ImageGen after approval" }
+  ],
+  "anchors": {
+    "player": "center at logical entity position",
+    "enemy": "center at logical entity position",
+    "boss": "center at logical entity position; weapon remains visual only"
+  }
+}
