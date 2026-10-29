@@ -52,7 +52,9 @@ app.use((_req, res, next) => {
 app.use(express.static(dist, { index: false, setHeaders(res, path) {
   res.setHeader('Cache-Control', path.includes(`${join(dist, 'assets')}`) ? 'public, max-age=31536000, immutable' : 'no-cache')
 } }))
-app.get('/', (_req, res) => res.set('Cache-Control', 'no-cache').sendFile(index))
+// Resolve the entry relative to the static root. This is robust on Windows
+// worktrees whose absolute path contains spaces; /index.html remains equivalent.
+app.get('/', (_req, res) => res.set('Cache-Control', 'no-cache').sendFile('index.html', { root: dist }))
 
 const server = app.listen(port, '0.0.0.0', () => console.log(`游戏入口 http://localhost:${port}`))
 server.on('error', error => { console.error(error); process.exit(1) })
