@@ -34,6 +34,7 @@ export class BorderWarden extends ExpeditionBoss {
   }
 
   get positionLocked() { return this.specialState !== 'idle' || this.phaseShift > 0 }
+  get artKey() { return 'artV1BorderWarden' }
   get attackMove() {
     if (this.specialState === 'step') return Object.freeze({ id: 'step', name: '跨步压进 · 随后枪刺' })
     const kind = this._presentationMove

@@ -1,0 +1,14 @@
+{
+  "version": "v1",
+  "style": "high-detail thick-painted fantasy",
+  "assets": [
+    { "key": "artV1SlimeOrigin", "file": "slime-origin-v1.png", "role": "player", "fallback": "SlimeRenderer", "source": "generated with Codex ImageGen after approval" },
+    { "key": "artV1EnemyKnight", "file": "enemy-knight-v1.png", "role": "ordinary knight enemy", "fallback": "AssetManager char_knight_*", "source": "generated with Codex ImageGen after approval" },
+    { "key": "artV1BorderWarden", "file": "boss-border-warden-v1.png", "role": "Border Warden gun-shield Boss", "fallback": "Boss char_boss_knight_*", "source": "generated with Codex ImageGen after approval" }
+  ],
+  "anchors": {
+    "player": "center at logical entity position",
+    "enemy": "center at logical entity position",
+    "boss": "center at logical entity position; weapon remains visual only"
+  }
+}

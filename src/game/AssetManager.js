@@ -88,7 +88,24 @@ export class AssetManager {
     this._generateCombatVFX()
     this._generateCharacters()
     this._loadRunnerDecorationImages()
+    this._loadArtV1Images()
     this.initialized = true
+  }
+
+  /** First approved painterly vertical slice. Every key has a procedural fallback. */
+  _loadArtV1Images() {
+    if (typeof Image === 'undefined' || typeof document === 'undefined') return
+    const files = {
+      artV1SlimeOrigin: '/assets/art/v1/slime-origin-v1.png',
+      artV1EnemyKnight: '/assets/art/v1/enemy-knight-v1.png',
+      artV1BorderWarden: '/assets/art/v1/boss-border-warden-v1.png',
+    }
+    for (const [key, path] of Object.entries(files)) {
+      const image = new Image()
+      image.decoding = 'async'
+      image.onload = () => this.externalImages.set(key, image)
+      image.src = new URL(path, document.baseURI).href
+    }
   }
 
   /**
@@ -1712,6 +1729,18 @@ export class AssetManager {
     const image = this.externalImages.get(key)
     if (!image) return false
     ctx.drawImage(image, x - w / 2, y - h, w, h)
+    return true
+  }
+
+  /** Draw a project art slice around a center anchor, preserving its aspect ratio. */
+  drawArt(ctx, key, x, y, w, h = w) {
+    const image = this.externalImages.get(key)
+    if (!image) return false
+    const aspect = image.width / image.height || 1
+    let dw = w, dh = h
+    if (aspect > 1) dh = dw / aspect
+    else dw = dh * aspect
+    ctx.drawImage(image, x - dw / 2, y - dh / 2, dw, dh)
     return true
   }
 }

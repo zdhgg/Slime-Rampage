@@ -668,7 +668,8 @@ export class Boss extends Enemy {
       assets.draw(ctx, 'vfx_magic_circle', 0, 0, r * 3.2, r * 3.2)
       ctx.restore()
     }
-    assets.draw(ctx, `char_${roleKey}_${frame}`, 0, 0, r * 2.6, r * 2.6)
+    const artV1 = this.artKey && assets.drawArt(ctx, this.artKey, 0, 0, r * 3.0, r * 3.0)
+    if (!artV1) assets.draw(ctx, `char_${roleKey}_${frame}`, 0, 0, r * 2.6, r * 2.6)
 
     if (this.type === 'boss-knight' && ((this.attackCd > 0 && this.attackCd < 0.3) || this.specialState === 'dash')) {
       ctx.save()
