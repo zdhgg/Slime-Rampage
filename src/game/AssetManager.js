@@ -110,6 +110,8 @@ export class AssetManager {
       artV1GateMarshal: '/assets/art/v1/boss-gate-marshal-v1.png',
       artV1AshPaladin: '/assets/art/v1/boss-ash-paladin-v1.png',
       artV1ThroneGuard: '/assets/art/v1/boss-throne-guard-v1.png',
+      artV1BossMage: '/assets/art/v1/boss-mage-v1.png',
+      artV1BossArcher: '/assets/art/v1/boss-archer-v1.png',
     }
     for (const [key, path] of Object.entries(files)) {
       const image = new Image()

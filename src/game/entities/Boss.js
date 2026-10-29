@@ -141,6 +141,12 @@ export class Boss extends Enemy {
     return Object.freeze({ id: this.specialPattern, name: cfg.special })
   }
 
+  get artKey() {
+    return this.type === 'boss-mage' ? 'artV1BossMage'
+      : this.type === 'boss-archer' ? 'artV1BossArcher'
+      : null
+  }
+
   /** Read-only presentation snapshot. Never advances combat or exposes mutable hit geometry. */
   get attackPresentation() {
     const stage = !this.active || this.hp <= 0 ? 'dead' : this.phaseShift > 0 ? 'phase' : this.specialState
