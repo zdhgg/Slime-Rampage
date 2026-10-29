@@ -40,6 +40,7 @@ app.use('/api', (req, res) => {
   req.pipe(upstream)
 })
 app.get('/__startup', (_req, res) => res.set('Cache-Control', 'no-store').json(state))
+app.get('/favicon.ico', (_req, res) => res.redirect(302, '/favicon.svg'))
 app.use((_req, res, next) => {
   if (state.ready) return next()
   res.set('Cache-Control', 'no-store').status(state.failed ? 503 : 200).type('html').send(`<!doctype html>
