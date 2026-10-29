@@ -3,6 +3,11 @@
   "style": "high-detail thick-painted fantasy",
   "assets": [
     { "key": "artV1SlimeOrigin", "file": "slime-origin-v1.png", "role": "player", "fallback": "SlimeRenderer", "source": "generated with Codex ImageGen after approval" },
+    { "key": "artV1SlimeGlutton", "file": "slime-glutton-v1.png", "role": "glutton slime", "fallback": "SlimeRenderer", "source": "generated with Codex ImageGen after approval" },
+    { "key": "artV1SlimeRicochet", "file": "slime-ricochet-v1.png", "role": "ricochet slime", "fallback": "SlimeRenderer", "source": "generated with Codex ImageGen after approval" },
+    { "key": "artV1SlimeElemental", "file": "slime-elemental-v1.png", "role": "elemental slime", "fallback": "SlimeRenderer", "source": "generated with Codex ImageGen after approval" },
+    { "key": "artV1SlimeShadow", "file": "slime-shadow-v1.png", "role": "shadow slime", "fallback": "SlimeRenderer", "source": "generated with Codex ImageGen after approval" },
+    { "key": "artV1SlimeSummoner", "file": "slime-summoner-v1.png", "role": "symbiosis slime", "fallback": "SlimeRenderer", "source": "generated with Codex ImageGen after approval" },
     { "key": "artV1EnemyKnight", "file": "enemy-knight-v1.png", "role": "ordinary knight enemy", "fallback": "AssetManager char_knight_*", "source": "generated with Codex ImageGen after approval" },
     { "key": "artV1BorderWarden", "file": "boss-border-warden-v1.png", "role": "Border Warden gun-shield Boss", "fallback": "Boss char_boss_knight_*", "source": "generated with Codex ImageGen after approval" }
   ],

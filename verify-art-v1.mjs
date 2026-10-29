@@ -4,7 +4,7 @@ import { resolve } from 'node:path'
 
 const manifest = JSON.parse(readFileSync(resolve('public/assets/art/v1/manifest.json'), 'utf8'))
 assert.equal(manifest.version, 'v1')
-assert.equal(manifest.assets.length, 3)
+assert.equal(manifest.assets.length, 8)
 for (const asset of manifest.assets) {
   const path = resolve('public/assets/art/v1', asset.file)
   const bytes = readFileSync(path)

@@ -97,6 +97,11 @@ export class AssetManager {
     if (typeof Image === 'undefined' || typeof document === 'undefined') return
     const files = {
       artV1SlimeOrigin: '/assets/art/v1/slime-origin-v1.png',
+      artV1SlimeGlutton: '/assets/art/v1/slime-glutton-v1.png',
+      artV1SlimeRicochet: '/assets/art/v1/slime-ricochet-v1.png',
+      artV1SlimeElemental: '/assets/art/v1/slime-elemental-v1.png',
+      artV1SlimeShadow: '/assets/art/v1/slime-shadow-v1.png',
+      artV1SlimeSummoner: '/assets/art/v1/slime-summoner-v1.png',
       artV1EnemyKnight: '/assets/art/v1/enemy-knight-v1.png',
       artV1BorderWarden: '/assets/art/v1/boss-border-warden-v1.png',
     }
