@@ -103,6 +103,18 @@ for (let index = 0; index < hellStages.length; index++) {
   const boss = manager.beginExpeditionStageBoss(encounter, !!encounter.final)
   assert.equal(boss.stageBossId, encounter.id)
   assert.equal(boss.combatInfo.special, encounter.special)
+  // BorderWarden has a multi-action pursuit cycle, verified separately.
+  if (encounter.id === 'border_warden') {
+    boss._startSpecial()
+    boss._renderTelegraph(ctx)
+    for (let i = 0; i < 600 && boss.specialState !== 'recover'; i++) boss.update(1 / 60)
+    assert.equal(boss.specialState, 'recover')
+    assert.ok(boss.vulnerableTimer > 0)
+    effectSignatures.push('border-warden:pursuit')
+    boss._enterPhaseTwo()
+    assert.equal(boss.combatInfo.phaseName, encounter.phaseName)
+    continue
+  }
   boss._startSpecial()
   assert.equal(boss.specialPattern, encounter.mechanic)
   assert.equal(boss.specialState, 'telegraph')
