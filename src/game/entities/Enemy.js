@@ -1,5 +1,9 @@
 import { Entity } from '../core/Entity.js'
 import { AssetManager } from '../AssetManager.js'
+import { drawArenaKnightA, getArenaKnightArtMode } from '../ArenaKnightPrototype.js'
+import { getArenaKnightFrameCache } from '../ArenaKnightFrameCache.js'
+import { drawArenaMageA, getArenaMageArtMode } from '../ArenaMagePrototype.js'
+import { getArenaMageFrameCache } from '../ArenaMageFrameCache.js'
 
 const TAU = Math.PI * 2
 
@@ -711,15 +715,41 @@ export class Enemy extends Entity {
       ctx.restore()
     }
 
-    // Approved painterly slice; all other roles retain the procedural sprite fallback.
-    const artV1Key = {
-      knight: 'artV1EnemyKnight',
-      mage: 'artV1EnemyMage',
-      archer: 'artV1EnemyArcher',
-      golem: 'artV1EnemyGolem',
-    }[this.type]
-    const artV1 = artV1Key && assets.drawArt(ctx, artV1Key, 0, 0, r * 3.05, r * 3.05)
-    if (!artV1) assets.draw(ctx, `char_${this.type}_${frame}`, 0, 0, r * 2.9, r * 2.9)
+    // Arena ordinary knight/mage use the approved procedural style. Cache is
+    // the production path; query/forced mode A keeps the realtime renderer as
+    // a visual fallback for regression comparison. Other roles retain their
+    // existing renderer and combat presentation.
+    let arenaArtDrawn = false
+    if (this.type === 'knight') {
+      const state = {
+        walkPhase: this._walkT,
+        moving: this._moving,
+        attacking: this._swingT > 0,
+        hurt: this.flash > 0,
+      }
+      if (getArenaKnightArtMode() === 'cache') {
+        arenaArtDrawn = getArenaKnightFrameCache().draw(ctx, 0, 0, r, state)
+      }
+      if (!arenaArtDrawn) {
+        drawArenaKnightA(ctx, r * 1.52, state)
+        arenaArtDrawn = true
+      }
+    } else if (this.type === 'mage') {
+      const casting = this._shootFlash > 0 || (this.attackCd > 0 && this.attackCd < 0.5)
+      const state = { walkPhase: this._walkT, moving: this._moving, casting, hurt: this.flash > 0 }
+      if (getArenaMageArtMode() === 'cache') {
+        arenaArtDrawn = getArenaMageFrameCache().draw(ctx, 0, 0, r, state)
+      }
+      if (!arenaArtDrawn) {
+        drawArenaMageA(ctx, r * 1.45, state)
+        arenaArtDrawn = true
+      }
+    }
+    if (!arenaArtDrawn) {
+      const artV1Key = { archer: 'artV1EnemyArcher', golem: 'artV1EnemyGolem' }[this.type]
+      const artV1 = artV1Key && assets.drawArt(ctx, artV1Key, 0, 0, r * 3.05, r * 3.05)
+      if (!artV1) assets.draw(ctx, `char_${this.type}_${frame}`, 0, 0, r * 2.9, r * 2.9)
+    }
 
     // 骑士挥剑半透明银弧刀光（Slash Arc 特效）
     if (this.type === 'knight' && this._swingT > 0) {
