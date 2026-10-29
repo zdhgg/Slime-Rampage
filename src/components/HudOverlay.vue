@@ -544,6 +544,7 @@ const digestTitle = computed(() => {
   position: absolute;
   inset: 0;
   pointer-events: none; /* 关键：UI 层不拦截游戏输入 */
+  color: var(--art-text, #f3ead5);
 }
 
 /* Runner 试玩模式：隐藏全部 Arena 专属信息（等级/生命/波次/提示/统计/Boss/事件/
@@ -572,8 +573,27 @@ const digestTitle = computed(() => {
   font-weight: 800;
   letter-spacing: 2px;
   line-height: 1;
-  color: #eaffdd;
+  color: var(--art-text, #eaffdd);
+  text-shadow: 0 1px 0 rgba(255, 240, 196, 0.18), 0 3px 12px rgba(0, 0, 0, 0.72);
   text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+}
+
+/* V1 visual system: quiet stone/glass surfaces, restrained gold focus states. */
+.hud-run-status,
+.boss-hud,
+.objective-hud,
+.hud-action,
+.hud-stats,
+.hud-elements,
+.hud-reactions {
+  border-color: var(--art-edge, rgba(225, 211, 170, 0.34));
+  background-color: var(--art-surface, rgba(19, 27, 23, 0.88));
+  box-shadow: inset 0 1px 0 rgba(255, 246, 214, 0.06), 0 8px 22px rgba(0, 0, 0, 0.2);
+}
+.hud-action.ready,
+.hud-action:hover,
+.hud-action:focus-visible {
+  border-color: var(--art-edge-strong, rgba(255, 231, 164, 0.72));
 }
 
 .hud-title span {

@@ -19,8 +19,17 @@ body,
 }
 
 body {
-  background: #0c120d;
-  color: #e8f5e0;
+  --art-bg: #0c120d;
+  --art-surface: rgba(19, 27, 23, 0.88);
+  --art-surface-strong: rgba(27, 36, 30, 0.96);
+  --art-edge: rgba(225, 211, 170, 0.34);
+  --art-edge-strong: rgba(255, 231, 164, 0.72);
+  --art-text: #f3ead5;
+  --art-muted: #a9b6a4;
+  --art-accent: #d7b86e;
+  --art-focus: #a9e8a0;
+  background: var(--art-bg);
+  color: var(--art-text);
   font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
   user-select: none;
   -webkit-user-select: none;
