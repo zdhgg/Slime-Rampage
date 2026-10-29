@@ -12,7 +12,10 @@
     { "key": "artV1EnemyMage", "file": "enemy-mage-v1.png", "role": "ordinary mage enemy", "fallback": "AssetManager char_mage_*", "source": "generated with Codex ImageGen after approval" },
     { "key": "artV1EnemyArcher", "file": "enemy-archer-v1.png", "role": "ordinary archer enemy", "fallback": "AssetManager char_archer_*", "source": "generated with Codex ImageGen after approval" },
     { "key": "artV1EnemyGolem", "file": "enemy-golem-v1.png", "role": "ordinary golem enemy", "fallback": "AssetManager char_golem_*", "source": "generated with Codex ImageGen after approval" },
-    { "key": "artV1BorderWarden", "file": "boss-border-warden-v1.png", "role": "Border Warden gun-shield Boss", "fallback": "Boss char_boss_knight_*", "source": "generated with Codex ImageGen after approval" }
+    { "key": "artV1BorderWarden", "file": "boss-border-warden-v1.png", "role": "Border Warden gun-shield Boss", "fallback": "Boss char_boss_knight_*", "source": "generated with Codex ImageGen after approval" },
+    { "key": "artV1GateMarshal", "file": "boss-gate-marshal-v1.png", "role": "Gate Marshal tower-shield and short-hammer Boss", "fallback": "Boss char_boss_knight_*", "source": "generated with Codex ImageGen after approval" },
+    { "key": "artV1AshPaladin", "file": "boss-ash-paladin-v1.png", "role": "Ash Paladin two-handed warhammer Boss", "fallback": "Boss char_boss_knight_*", "source": "generated with Codex ImageGen after approval" },
+    { "key": "artV1ThroneGuard", "file": "boss-throne-guard-v1.png", "role": "Throne Guard polearm axe Boss", "fallback": "Boss char_boss_knight_*", "source": "generated with Codex ImageGen after approval" }
   ],
   "anchors": {
     "player": "center at logical entity position",

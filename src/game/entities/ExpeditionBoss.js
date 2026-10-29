@@ -30,6 +30,14 @@ export class ExpeditionBoss extends Boss {
     this.skillData = {}
   }
 
+  get artKey() {
+    return {
+      gate_marshal: 'artV1GateMarshal',
+      ash_paladin: 'artV1AshPaladin',
+      throne_guard: 'artV1ThroneGuard',
+    }[this.stageBossId] || null
+  }
+
   get attackMove() {
     return Object.freeze({ id: this.encounter.mechanic, name: this.encounter.special })
   }
