@@ -9,6 +9,9 @@
     { "key": "artV1SlimeShadow", "file": "slime-shadow-v1.png", "role": "shadow slime", "fallback": "SlimeRenderer", "source": "generated with Codex ImageGen after approval" },
     { "key": "artV1SlimeSummoner", "file": "slime-summoner-v1.png", "role": "symbiosis slime", "fallback": "SlimeRenderer", "source": "generated with Codex ImageGen after approval" },
     { "key": "artV1EnemyKnight", "file": "enemy-knight-v1.png", "role": "ordinary knight enemy", "fallback": "AssetManager char_knight_*", "source": "generated with Codex ImageGen after approval" },
+    { "key": "artV1EnemyMage", "file": "enemy-mage-v1.png", "role": "ordinary mage enemy", "fallback": "AssetManager char_mage_*", "source": "generated with Codex ImageGen after approval" },
+    { "key": "artV1EnemyArcher", "file": "enemy-archer-v1.png", "role": "ordinary archer enemy", "fallback": "AssetManager char_archer_*", "source": "generated with Codex ImageGen after approval" },
+    { "key": "artV1EnemyGolem", "file": "enemy-golem-v1.png", "role": "ordinary golem enemy", "fallback": "AssetManager char_golem_*", "source": "generated with Codex ImageGen after approval" },
     { "key": "artV1BorderWarden", "file": "boss-border-warden-v1.png", "role": "Border Warden gun-shield Boss", "fallback": "Boss char_boss_knight_*", "source": "generated with Codex ImageGen after approval" }
   ],
   "anchors": {

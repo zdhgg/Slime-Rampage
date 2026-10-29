@@ -103,6 +103,9 @@ export class AssetManager {
       artV1SlimeShadow: '/assets/art/v1/slime-shadow-v1.png',
       artV1SlimeSummoner: '/assets/art/v1/slime-summoner-v1.png',
       artV1EnemyKnight: '/assets/art/v1/enemy-knight-v1.png',
+      artV1EnemyMage: '/assets/art/v1/enemy-mage-v1.png',
+      artV1EnemyArcher: '/assets/art/v1/enemy-archer-v1.png',
+      artV1EnemyGolem: '/assets/art/v1/enemy-golem-v1.png',
       artV1BorderWarden: '/assets/art/v1/boss-border-warden-v1.png',
     }
     for (const [key, path] of Object.entries(files)) {

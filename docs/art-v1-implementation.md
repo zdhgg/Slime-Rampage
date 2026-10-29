@@ -12,12 +12,14 @@
 - `public/assets/art/v1/slime-summoner-v1.png`：金色黏液、种子核心和近身共生种子的共生史莱姆。
 - `public/assets/art/v1/enemy-knight-v1.png`：普通近战敌人的磨损铁甲、圆盾和短枪样板。
 - `public/assets/art/v1/boss-border-warden-v1.png`：边防官枪盾样板，盾与枪管保持远距离轮廓。
+- `public/assets/art/v1/enemy-mage-v1.png`、`enemy-archer-v1.png`、`enemy-golem-v1.png`：法师、弓手和魔像三种普通敌人职业样板。
 - `public/assets/art/v1/manifest.json`：资源键、回退路径、锚点和来源记录。
 - `AssetManager._loadArtV1Images()`：异步加载样板资源；加载失败时继续使用现有程序化精灵。
 - `AssetManager.drawArt()`：以实体中心为锚点、保持宽高比绘制，不改变碰撞、位置或时间。
-- `Player`、`Enemy`、`Boss` 和 `BorderWarden`：仅在对应样板资源成功加载时使用新图；其他血统、职业和 Boss 继续走旧回退路径。
+- `Player`、`Enemy`、`Boss` 和 `BorderWarden`：仅在对应样板资源成功加载时使用新图；其他血统、职业和 Boss 继续走旧回退路径。普通敌人样板保留精英环、冻结滤镜和血条等现有层，证明精英信息可以叠加在厚涂主体上。
 - `docs/art-v1-sample/vertical-slice.png`：1280×800、第一阶段、残兵开启的实机样板截图。
 - `docs/art-v1-sample/slime-roster.png`：六种史莱姆的统一锚点和差异化轮廓对照。
+- 普通敌人职业样板沿用实机视口验收，法师、弓手和魔像会在下一张对照板中补齐。
 
 ## 接口与边界
 
