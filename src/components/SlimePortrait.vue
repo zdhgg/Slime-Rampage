@@ -16,6 +16,14 @@ const body = computed(() => SLIME_BODIES[props.strain] || SLIME_BODIES.origin)
 const art = computed(() => SLIME_ART[props.strain] || SLIME_ART.origin)
 const bodyMarkup = computed(() => slimeLayerMarkup(art.value.body, uid))
 const faceMarkup = computed(() => slimeLayerMarkup(art.value.face, uid))
+const artV1Src = computed(() => ({
+  origin: '/assets/art/v1/slime-origin-v1.png',
+  glutton: '/assets/art/v1/slime-glutton-v1.png',
+  ricochet: '/assets/art/v1/slime-ricochet-v1.png',
+  elemental: '/assets/art/v1/slime-elemental-v1.png',
+  shadow: '/assets/art/v1/slime-shadow-v1.png',
+  summoner: '/assets/art/v1/slime-summoner-v1.png',
+}[props.strain] || ''))
 </script>
 
 <template>
@@ -55,25 +63,35 @@ const faceMarkup = computed(() => slimeLayerMarkup(art.value.face, uid))
     </defs>
 
     <ellipse v-if="!compact" cx="200" cy="274" rx="134" ry="25" :fill="paint('shadow')" />
-    <g v-if="!compact" class="ambient-motes" :stroke="look.color" stroke-opacity=".5">
+    <g v-if="!compact && !artV1Src" class="ambient-motes" :stroke="look.color" stroke-opacity=".5">
       <circle cx="84" cy="145" r="3" /><circle cx="322" cy="155" r="2" />
       <path d="M300 94v8m-4-4h8M101 91v6m-3-3h6" />
     </g>
 
-    <g v-if="strain === 'elemental' && !compact" class="element-orbit" :stroke="look.color">
+    <g v-if="strain === 'elemental' && !compact && !artV1Src" class="element-orbit" :stroke="look.color">
       <ellipse cx="202" cy="173" rx="151" ry="53" transform="rotate(-22 202 173)" stroke-opacity=".3" stroke-dasharray="3 8" />
       <path d="m73 201 9-14 9 14-9 14Z" fill="#91e3e8" stroke="#d2fbff" />
       <path d="m304 103 8-13 9 13-9 13Z" fill="#e1ac6d" stroke="#ffdcaa" />
       <path d="m266 254 6-9 6 9-6 9Z" fill="#bca2fa" stroke="#eee2ff" />
     </g>
-    <g v-if="strain === 'ricochet' && !compact" class="ricochet-shards" :fill="look.color">
+    <g v-if="strain === 'ricochet' && !compact && !artV1Src" class="ricochet-shards" :fill="look.color">
       <path d="m73 172 9-7 14 2-11 8Z" opacity=".8" />
       <path d="m307 128 10-8 17 2-12 8Z" opacity=".7" />
       <path d="m306 205 11-8 16 2-12 8Z" opacity=".5" />
       <path d="m57 180 16-8m239-34 16-7" :stroke="look.color" stroke-opacity=".4" />
     </g>
 
-    <g class="slime-actor">
+    <image
+      v-if="artV1Src"
+      class="art-v1-portrait"
+      :href="artV1Src"
+      x="38"
+      y="22"
+      width="324"
+      height="276"
+      preserveAspectRatio="xMidYMid meet"
+    />
+    <g v-else class="slime-actor">
       <g v-if="strain === 'shadow' && !compact" class="shadow-echo">
         <path :d="body" :fill="look.color" opacity=".12" transform="translate(-21 0)" />
         <path :d="body" :fill="look.color" opacity=".06" transform="translate(-42 0)" />
@@ -130,6 +148,7 @@ const faceMarkup = computed(() => slimeLayerMarkup(art.value.face, uid))
 
 <style scoped>
 .slime-portrait { display: block; width: 100%; height: 100%; overflow: visible; }
+.art-v1-portrait { transform-box: fill-box; transform-origin: center bottom; animation: art-v1-breathe 3.8s ease-in-out infinite; }
 .slime-actor { transform-origin: 200px 262px; animation: slime-breathe 3.8s ease-in-out infinite; }
 .glutton .slime-actor { animation-duration: 3s; }
 .elemental .slime-actor { animation-name: slime-levitate; }
@@ -157,6 +176,7 @@ const faceMarkup = computed(() => slimeLayerMarkup(art.value.face, uid))
 .element-burst.second { animation-delay: .15s; }
 .shadow-slash { stroke-dasharray: 120; animation: slash-out 1s ease-out both; }
 @keyframes slime-breathe { 0%, 100% { transform: scale(1, 1); } 50% { transform: scale(1.025, .975); } }
+@keyframes art-v1-breathe { 0%, 100% { transform: translateY(0) scale(1, 1); } 50% { transform: translateY(-2px) scale(1.018, .982); } }
 @keyframes slime-levitate { 0%, 100% { transform: translateY(-2px); } 50% { transform: translateY(-9px) scale(.99, 1.015); } }
 @keyframes slime-blink { 0%, 43%, 47%, 100% { transform: scaleY(1); } 45% { transform: scaleY(.08); } }
 @keyframes bubble-drift { to { transform: translateY(-6px); } }

@@ -18,4 +18,8 @@ const assetManager = readFileSync(resolve('src/game/AssetManager.js'), 'utf8')
 assert.match(assetManager, /_loadArtV1Images/)
 assert.match(assetManager, /drawArt\(/)
 for (const key of manifest.assets.map(asset => asset.key)) assert.match(assetManager, new RegExp(key))
+const portrait = readFileSync(resolve('src/components/SlimePortrait.vue'), 'utf8')
+for (const file of manifest.assets.filter(asset => asset.role.includes('slime') || asset.role === 'player').map(asset => asset.file)) {
+  assert.match(portrait, new RegExp(file.replaceAll('.', '\\.')), `${file} missing from frontend portrait`)
+}
 console.log(`Art V1 sample: ${manifest.assets.length} RGBA assets, manifest and fallback hooks verified`)
