@@ -1,0 +1,91 @@
+{
+  "date": "2026-10-30",
+  "sourceCommit": "633d687796e4b4746cf2ccd942e36961dc87fda6",
+  "files": [
+    {
+      "name": "REPORT.md",
+      "bytes": 22452,
+      "sha256": "8dc38e07651ed471908f7e399d8d05c62a4a2886b6bf7cf61333f67dc2e8c8e6"
+    },
+    {
+      "name": "camera-resize-check.json",
+      "bytes": 341,
+      "sha256": "86b7f74320fe3b2eba8a3ffae3320fdb928ae81795adfbbefd35d1cc0becd962"
+    },
+    {
+      "name": "performance-summary.json",
+      "bytes": 8539,
+      "sha256": "07204ae759e8c3eb569777a6adddcb2f44f4f33f142e70c85b7e7c710a7c36c0"
+    },
+    {
+      "name": "production-dpr2.png",
+      "bytes": 2135379,
+      "sha256": "9c2b8a3e1b075e1612072c4d04abe6b1dff7c74acdd1de9d3dd9d8e931695f62"
+    },
+    {
+      "name": "production-smoke.json",
+      "bytes": 1823,
+      "sha256": "5a752a982a7bf5e21b5bab94c270f098968e2b843a2aba139541309501175ae5"
+    },
+    {
+      "name": "production-zoom125.png",
+      "bytes": 820265,
+      "sha256": "46b1e185acc7eb46acd9654df565522235f9f3fc5a0b49e4e7c1a99de0fb8b72"
+    },
+    {
+      "name": "real-battle.webm",
+      "bytes": 2820647,
+      "sha256": "6b3283ccdb267c318dbc0e150378368326c02bc9e5435a8047c55fa1655b32ea"
+    },
+    {
+      "name": "real-density-28-first.png",
+      "bytes": 1440233,
+      "sha256": "023d66a49a851e577db475e3359b64fc70bd23d2a3ff21b23d3d8cca1fee5c21"
+    },
+    {
+      "name": "real-dpr2.png",
+      "bytes": 1877362,
+      "sha256": "a881c5837c911b5ea6a1a921f8333ef91294953dc6c09cf5b4a64b3cbe54435d"
+    },
+    {
+      "name": "real-dpr3.png",
+      "bytes": 1857018,
+      "sha256": "251256c6819e77ab2c7b1a347a6d8ddadaa64c46d397539808a9475bc4dc6ab6"
+    },
+    {
+      "name": "real-knightAttack.png",
+      "bytes": 1358430,
+      "sha256": "2af05244c0692b421726d3d0b2c2581718acda42f563d40219790e01b2ad4d8c"
+    },
+    {
+      "name": "real-mageCast.png",
+      "bytes": 3695930,
+      "sha256": "03d8f02af934245d4efe6e43e5b13d8f751224eff434dbd7163cf56a75dfa5c7"
+    },
+    {
+      "name": "real-mixed.png",
+      "bytes": 1486806,
+      "sha256": "7b8ccb3a1e9a17a5116a1dce9c1dd1202be034aaae6d1a9dbacfb89e18ff0ff1"
+    },
+    {
+      "name": "real-normal.png",
+      "bytes": 741803,
+      "sha256": "f552f514c1414f4d9b4faf81290a0336a21ecfbb37ab1df68f6ffbda2a369a8a"
+    },
+    {
+      "name": "real-zoom125.png",
+      "bytes": 889050,
+      "sha256": "9dd4faf45a45f2335a27077eb619ee1e11dc249391e508777ebd0e6076d0b4f6"
+    },
+    {
+      "name": "runtime-first.json.gz",
+      "bytes": 102338,
+      "sha256": "8f9252d7224f68884551dbe1fec9dc6e45d3f58e8d204e350bb498186b221e32"
+    },
+    {
+      "name": "runtime.json.gz",
+      "bytes": 103430,
+      "sha256": "4c64667204630b33a1efcecd3ab235e132842189746ba1f6c3a1f072108a6190"
+    }
+  ]
+}

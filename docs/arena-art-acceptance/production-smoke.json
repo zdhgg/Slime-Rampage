@@ -1,0 +1,61 @@
+{
+  "browser": "151.0.7922.34",
+  "results": [
+    {
+      "name": "production-dpr2",
+      "errors": [],
+      "url": "http://127.0.0.1:18023/",
+      "dpr": 2,
+      "canvas": [
+        2880,
+        1800
+      ],
+      "css": [
+        1440,
+        900
+      ],
+      "scripts": [
+        "http://127.0.0.1:18023/assets/index-DGwEIf4z.js",
+        ""
+      ],
+      "text": "史莱姆大暴走\nSLIME RAMPAGE\nLv.1\n第 1 章害兽讨伐令\n王庭逆袭 · 简单\n第 1 / 6 章\n🔥\n💧\n☠️\n⚡\n第 1 章 · 史莱姆巢界\n2 / 60\n害兽讨伐令\n突破边防，击溃奉命而来的勇者先锋\nWASD / 方向键移动 · E 吸收元素核心 · 空格 黏液震荡 · Esc 暂停\n攻击 1\n击杀 2\n战利品 0\nSPACE\n黏液震荡"
+    },
+    {
+      "name": "production-zoom125",
+      "errors": [],
+      "url": "http://127.0.0.1:18023/",
+      "dpr": 1.25,
+      "canvas": [
+        1440,
+        900
+      ],
+      "css": [
+        1152,
+        720
+      ],
+      "scripts": [
+        "http://127.0.0.1:18023/assets/index-DGwEIf4z.js",
+        ""
+      ],
+      "text": "史莱姆大暴走\nLv.1\n第 1 章害兽讨伐令\n第 1 / 6 章\n🔥\n💧\n☠️\n⚡\n第 1 章 · 史莱姆巢界\n2 / 60\n害兽讨伐令\n突破边防，击溃奉命而来的勇者先锋\nWASD / 方向键移动 · E 吸收元素核心 · 空格 黏液震荡 · Esc 暂停\n攻击 1\n击杀 2\n战利品 0\nSPACE\n黏液震荡"
+    }
+  ],
+  "quality": {
+    "bounds": [
+      {
+        "name": "knight",
+        "minY": -33,
+        "maxY": 23,
+        "outside64SurfaceAlphaPixels": 2
+      },
+      {
+        "name": "mage",
+        "minY": -30,
+        "maxY": 17,
+        "outside64SurfaceAlphaPixels": 0
+      }
+    ],
+    "realtimeStepAtQuarterRadian": -0.4303012170000917,
+    "cachedQuarterCycleStep": 1
+  }
+}

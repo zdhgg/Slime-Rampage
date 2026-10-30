@@ -1,0 +1,25 @@
+{
+  "method": "unmodified GameEngine prototype; plain isolated fixture, no real session mutation",
+  "fixture": {
+    "player": [
+      100,
+      100
+    ],
+    "viewport": [
+      1440,
+      900
+    ],
+    "world": [
+      2400,
+      1800
+    ]
+  },
+  "first": {
+    "x": -620,
+    "y": -350
+  },
+  "next": {
+    "x": 0,
+    "y": 0
+  }
+}
