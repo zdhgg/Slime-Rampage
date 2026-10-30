@@ -19,7 +19,18 @@ assert.match(assetManager, /_loadArtV1Images/)
 assert.match(assetManager, /drawArt\(/)
 for (const key of manifest.assets.map(asset => asset.key)) assert.match(assetManager, new RegExp(key))
 const portrait = readFileSync(resolve('src/components/SlimePortrait.vue'), 'utf8')
-for (const file of manifest.assets.filter(asset => asset.role.includes('slime') || asset.role === 'player').map(asset => asset.file)) {
+// Arena origin now has a procedural body and live face. Its Art V1 PNG stays
+// in the manifest for historical assets/other modes, but must not be wired
+// into the portrait as the runtime art path.
+for (const file of manifest.assets
+  .filter(asset => (asset.role.includes('slime') || asset.role === 'player') && asset.key !== 'artV1SlimeOrigin')
+  .map(asset => asset.file)) {
   assert.match(portrait, new RegExp(file.replaceAll('.', '\\.')), `${file} missing from frontend portrait`)
 }
+assert.doesNotMatch(portrait, /slime-origin-v1\.png/, 'Arena origin must use the procedural portrait')
+const originArt = readFileSync(resolve('src/game/ArenaOriginSlimeArt.js'), 'utf8')
+assert.match(originArt, /renderArenaOriginBody/)
+assert.match(originArt, /renderArenaOriginFace/)
+const player = readFileSync(resolve('src/game/entities/Player.js'), 'utf8')
+assert.doesNotMatch(player, /artV1SlimeOrigin/, 'Arena origin must not retain an Art V1 runtime path')
 console.log(`Art V1 sample: ${manifest.assets.length} RGBA assets, manifest and fallback hooks verified`)

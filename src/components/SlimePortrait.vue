@@ -3,6 +3,8 @@ import { computed, useId } from 'vue'
 import { STRAIN_PRESENTATION } from './strainPresentation.js'
 import { SLIME_BODIES, SLIME_ART, slimeLayerMarkup } from '../game/SlimeAppearance.js'
 
+const ARENA_ORIGIN_BODY = 'M101 246C84 242 79 229 86 210L98 180C106 157 111 137 132 121C147 109 163 113 178 105C192 97 198 83 209 84C220 85 225 98 223 109C244 103 254 118 251 132C270 143 280 163 284 184C289 205 298 217 307 232C318 250 301 258 284 254C270 250 261 253 250 260C234 269 217 261 201 266C182 270 167 259 151 264C130 269 119 256 101 256Z'
+
 const props = defineProps({
   strain: { type: String, default: 'origin' },
   element: { type: String, default: 'fire' },
@@ -12,12 +14,11 @@ const props = defineProps({
 const uid = useId().replace(/:/g, '')
 const paint = (name) => `url(#${uid}-${name})`
 const look = computed(() => STRAIN_PRESENTATION[props.strain] || STRAIN_PRESENTATION.origin)
-const body = computed(() => SLIME_BODIES[props.strain] || SLIME_BODIES.origin)
+const body = computed(() => props.strain === 'origin' ? ARENA_ORIGIN_BODY : (SLIME_BODIES[props.strain] || SLIME_BODIES.origin))
 const art = computed(() => SLIME_ART[props.strain] || SLIME_ART.origin)
 const bodyMarkup = computed(() => slimeLayerMarkup(art.value.body, uid))
 const faceMarkup = computed(() => slimeLayerMarkup(art.value.face, uid))
 const artV1Src = computed(() => ({
-  origin: '/assets/art/v1/slime-origin-v1.png',
   glutton: '/assets/art/v1/slime-glutton-v1.png',
   ricochet: '/assets/art/v1/slime-ricochet-v1.png',
   elemental: '/assets/art/v1/slime-elemental-v1.png',
@@ -91,6 +92,24 @@ const artV1Src = computed(() => ({
       height="276"
       preserveAspectRatio="xMidYMid meet"
     />
+    <g v-else-if="strain === 'origin'" class="slime-actor origin-actor">
+      <path :d="ARENA_ORIGIN_BODY" fill="none" />
+      <path :d="ARENA_ORIGIN_BODY" :fill="paint('body')" :stroke="look.dark" stroke-width="5" stroke-linejoin="round" />
+      <g :clip-path="paint('clip')">
+        <ellipse cx="206" cy="229" rx="112" ry="42" fill="#18362c" opacity=".2" />
+        <ellipse cx="197" cy="218" rx="105" ry="51" :fill="paint('belly')" />
+        <path d="M82 222C117 243 153 245 190 250C227 255 269 242 309 226L319 248C291 264 264 255 245 264C224 273 205 264 188 268C165 273 148 261 128 264L96 257Z" :fill="look.dark" opacity=".2" />
+        <path d="M201 112C194 103 198 92 211 83C215 96 224 103 222 113Q212 121 201 112Z" :fill="look.mid" opacity=".78" />
+        <path d="M204 111Q208 100 216 93M209 102Q215 102 219 106" fill="none" :stroke="look.light" stroke-width="1.5" stroke-linecap="round" />
+        <ellipse cx="127" cy="202" rx="5" ry="3.5" :fill="look.light" fill-opacity=".14" :stroke="look.light" stroke-opacity=".38" />
+        <ellipse cx="263" cy="190" rx="5.5" ry="4" :fill="look.light" fill-opacity=".14" :stroke="look.light" stroke-opacity=".38" />
+        <ellipse cx="239" cy="230" rx="3.5" ry="2.5" :fill="look.light" fill-opacity=".14" :stroke="look.light" stroke-opacity=".38" />
+        <path d="M111 178C118 142 142 118 171 118C191 118 202 130 220 129C242 127 260 140 274 158C249 147 233 155 216 151C196 146 182 135 163 140C143 144 126 161 111 178Z" :fill="paint('sheen')" />
+      </g>
+      <path :d="ARENA_ORIGIN_BODY" fill="none" :stroke="paint('rim')" stroke-width="2.1" />
+      <path d="M112 160C121 138 139 121 158 117" fill="none" stroke="white" stroke-width="5" stroke-linecap="round" opacity=".56" />
+      <g class="slime-face" v-html="faceMarkup" />
+    </g>
     <g v-else class="slime-actor">
       <g v-if="strain === 'shadow' && !compact" class="shadow-echo">
         <path :d="body" :fill="look.color" opacity=".12" transform="translate(-21 0)" />

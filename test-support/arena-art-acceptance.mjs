@@ -23,11 +23,16 @@ try {
   await page.getByRole('textbox', { name: '账号名' }).fill(`art_${Date.now().toString(36)}`)
   await page.locator('input[type=password]').fill('isolated-art-acceptance-2026')
   await page.getByRole('button', { name: '创建账号', exact: true }).click()
+  await page.getByText(/^已登录：/).waitFor({ state: 'visible', timeout: 20000 })
   await page.getByText('选择战斗类型', { exact: true }).click()
   await page.getByText('进入设置', { exact: true }).click()
   await page.getByRole('button').filter({ hasText: '简单' }).first().click()
   await page.getByRole('button', { name: '开始行动', exact: true }).click()
-  await page.getByRole('button', { name: '确认出发', exact: true }).click()
+  // Older Arena builds opened a confirmation sheet after “开始行动”; the
+  // current flow starts directly. Keep the acceptance path compatible with
+  // both without changing game state or bypassing the real menu.
+  const confirmDeparture = page.getByRole('button', { name: '确认出发', exact: true })
+  try { await confirmDeparture.waitFor({ state: 'visible', timeout: 5000 }); await confirmDeparture.click() } catch {}
   await page.waitForFunction(() => document.querySelector('.game-canvas').__vueParentComponent.setupState.engine.running)
   await page.evaluate(async () => {
     const e = document.querySelector('.game-canvas').__vueParentComponent.setupState.engine
@@ -51,11 +56,22 @@ try {
       const enemies = this.enemyManager.enemies.filter(q => q.active), cam = this.camera
       const visible = enemies.filter(q => q.x > cam.x && q.x < cam.x + this.width && q.y > cam.y && q.y < cam.y + this.height)
       const byType = {}; enemies.forEach(q => { byType[q.type] = (byType[q.type] || 0) + 1 })
-      const sample = { t: this.elapsed, update: updateMs, render: end - t, interval: end - last, count: enemies.length, visible: visible.length, byType, hp: this.player.hp, dpr: this.dpr, mode: audit.mode, stage: this.expeditionStage, variant: this._mapVariant }
+      const player = this.player
+      const sample = { t: this.elapsed, update: updateMs, render: end - t, interval: end - last, count: enemies.length, visible: visible.length, byType, hp: player.hp, moveBlend: player.moveBlend, flash: player.flash, invincible: player.invincible, blink: player._blink, stopJitter: player._stopJitter, devourPulse: player._devourPulse, dpr: this.dpr, mode: audit.mode, stage: this.expeditionStage, variant: this._mapVariant }
       if (audit.samples.length < 20000) audit.samples.push(sample)
       last = end
+      let faceState = 'idle'
+      if (player.flash > 0 || (player.invincible > 0 && Math.floor(player.invincible * 10) % 2 === 0)) faceState = 'hurt'
+      else if (player._devourPulse > .03) faceState = 'devour'
+      else if (player.hp <= player.maxHp * .3) faceState = 'lowhp'
+      else if (player._blink > 0) faceState = 'blink'
+      else if (player.moveBlend > .65) faceState = 'angry'
+      sample.faceState = faceState
       const flags = { knightAttack: visible.some(q => q.type === 'knight' && q._swingT > 0), mageCast: visible.some(q => q.type === 'mage' && q._shootFlash > 0), mixed: visible.some(q => q.type === 'mage') && visible.some(q => q.type === 'knight') }
       for (const [key, value] of Object.entries(flags)) if (value && !audit.captures[key]) audit.captures[key] = { ...sample, image: this.canvas.toDataURL() }
+      if (player.moveBlend > .75 && !audit.captures['slime-moving']) audit.captures['slime-moving'] = { ...sample, image: this.canvas.toDataURL() }
+      if (player._stopJitter > .08 && player.moveBlend < .65 && !audit.captures['slime-stop']) audit.captures['slime-stop'] = { ...sample, image: this.canvas.toDataURL() }
+      if (faceState !== 'idle' && !audit.captures[`slime-face-${faceState}`]) audit.captures[`slime-face-${faceState}`] = { ...sample, image: this.canvas.toDataURL() }
       if (visible.length > (audit.peak?.visible || 0) && visible.length >= 20) audit.peak = { ...sample, image: this.canvas.toDataURL() }
       return result
     }
@@ -65,7 +81,7 @@ try {
         const cards = [...document.querySelectorAll('.skill-card')]
         const healing = cards.find(c => /再生|生命上限|最大生命/.test(c.textContent))
         const offense = cards.find(c => /弹数|飞弹|射速/.test(c.textContent)) || cards.find(c => /攻击/.test(c.textContent))
-        const card = (e.player.hp < 3 ? healing : offense) || offense || healing || cards[0]
+        const card = offense || healing || cards[0]
         const milestone = [...document.querySelectorAll('.milestone-card')].find(c => /机枪/.test(c.textContent)) || document.querySelector('.milestone-card')
         const reward = document.querySelector('.reward-options .rest')
         const choice = card || milestone || reward
@@ -82,7 +98,10 @@ try {
         if (score > best.score) best = { score, x: dx, y: dy }
       }
       const next = new Set()
-      if (best.x > .3) next.add('d'); if (best.x < -.3) next.add('a'); if (best.y > .3) next.add('s'); if (best.y < -.3) next.add('w')
+      const briefRest = e.elapsed % 12 > 10.5
+      if (!briefRest) {
+        if (best.x > .3) next.add('d'); if (best.x < -.3) next.add('a'); if (best.y > .3) next.add('s'); if (best.y < -.3) next.add('w')
+      }
       for (const key of held) if (!next.has(key)) window.dispatchEvent(new KeyboardEvent('keyup', { key, code: 'Key' + key.toUpperCase() }))
       for (const key of next) window.dispatchEvent(new KeyboardEvent('keydown', { key, code: 'Key' + key.toUpperCase() }))
       held = next
@@ -128,7 +147,7 @@ try {
       await page.evaluate(() => { acceptance.mode = 'zoom125-emulated'; window.dispatchEvent(new Event('resize')) })
       await save('real-zoom125.png', Buffer.from((await page.evaluate(() => acceptanceEngine.canvas.toDataURL())).split(',')[1], 'base64')); flags.add('zoom')
     }
-    if ((state.t > 162 && state.captures.includes('mageCast')) || Date.now() - started > 195000 || state.hp <= 0) break
+    if (state.result || (state.t > 162 && state.captures.includes('mageCast')) || Date.now() - started > 195000 || state.hp <= 0) break
   }
   const data = await page.evaluate(() => {
     clearInterval(acceptance.inputTimer)
