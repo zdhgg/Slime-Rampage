@@ -1,0 +1,362 @@
+{
+  "date": "2026-10-30",
+  "environment": "Chromium headless; full authenticated Arena on localhost Vite with isolated real backend",
+  "method": "performance.now around existing engine.update/render; interval between renders; no CPU/GPU isolation; exclude interval >=200ms; modes occur sequentially, not matched A/B",
+  "groups": {
+    "DPR1": {
+      "frames": 7070,
+      "active": [
+        0,
+        25
+      ],
+      "visible": [
+        0,
+        23
+      ],
+      "update": {
+        "mean": 0.204,
+        "p95": 0.3
+      },
+      "render": {
+        "mean": 0.882,
+        "p95": 1.2
+      },
+      "interval": {
+        "mean": 17.862,
+        "p95": 22.9
+      }
+    },
+    "DPR2": {
+      "frames": 239,
+      "active": [
+        16,
+        19
+      ],
+      "visible": [
+        2,
+        17
+      ],
+      "update": {
+        "mean": 0.267,
+        "p95": 0.5
+      },
+      "render": {
+        "mean": 0.903,
+        "p95": 1.1
+      },
+      "interval": {
+        "mean": 76.254,
+        "p95": 94.7
+      }
+    },
+    "DPR3-cap2": {
+      "frames": 241,
+      "active": [
+        13,
+        18
+      ],
+      "visible": [
+        3,
+        18
+      ],
+      "update": {
+        "mean": 0.302,
+        "p95": 0.5
+      },
+      "render": {
+        "mean": 0.936,
+        "p95": 1.1
+      },
+      "interval": {
+        "mean": 71.067,
+        "p95": 86.5
+      }
+    },
+    "zoom125-emulated": {
+      "frames": 581,
+      "active": [
+        15,
+        19
+      ],
+      "visible": [
+        1,
+        15
+      ],
+      "update": {
+        "mean": 0.249,
+        "p95": 0.4
+      },
+      "render": {
+        "mean": 0.737,
+        "p95": 1
+      },
+      "interval": {
+        "mean": 21.613,
+        "p95": 27.7
+      }
+    },
+    "dense-first-DPR1": {
+      "frames": 2355,
+      "active": [
+        23,
+        28
+      ],
+      "visible": [
+        20,
+        28
+      ],
+      "update": {
+        "mean": 0.187,
+        "p95": 0.3
+      },
+      "render": {
+        "mean": 0.934,
+        "p95": 1.2
+      },
+      "interval": {
+        "mean": 17.449,
+        "p95": 20.7
+      }
+    },
+    "mixed-DPR1": {
+      "frames": 754,
+      "active": [
+        3,
+        17
+      ],
+      "visible": [
+        0,
+        9
+      ],
+      "update": {
+        "mean": 0.231,
+        "p95": 0.4
+      },
+      "render": {
+        "mean": 0.732,
+        "p95": 1
+      },
+      "interval": {
+        "mean": 18.449,
+        "p95": 22.5
+      }
+    }
+  },
+  "runs": [
+    {
+      "frames": 8438,
+      "peak": {
+        "t": 59.06420000000134,
+        "update": 0.09999999403953552,
+        "render": 1.1000000089406967,
+        "interval": 16.200000002980232,
+        "count": 28,
+        "visible": 28,
+        "byType": {
+          "knight": 28
+        },
+        "hp": 7,
+        "dpr": 1,
+        "mode": "DPR1",
+        "stage": 1,
+        "variant": "nest-border"
+      },
+      "calls": {
+        "knight": 110681,
+        "mage": 0,
+        "art": {
+          "artV1SlimeOrigin": 8438,
+          "artV1BorderWarden": 1098
+        }
+      },
+      "captures": {
+        "knightAttack": {
+          "t": 61.097500000001446,
+          "update": 3.7000000029802322,
+          "render": 1.8999999910593033,
+          "interval": 21.299999997019768,
+          "count": 28,
+          "visible": 28,
+          "byType": {
+            "knight": 28
+          },
+          "hp": 6,
+          "dpr": 1,
+          "mode": "DPR1",
+          "stage": 1,
+          "variant": "nest-border"
+        }
+      },
+      "errors": []
+    },
+    {
+      "frames": 8143,
+      "peak": {
+        "t": 68.8141000000028,
+        "update": 0.09999999403953552,
+        "render": 0.9000000059604645,
+        "interval": 18.5,
+        "count": 23,
+        "visible": 23,
+        "byType": {
+          "knight": 23
+        },
+        "hp": 7,
+        "dpr": 1,
+        "mode": "DPR1",
+        "stage": 1,
+        "variant": "nest-border"
+      },
+      "calls": {
+        "knight": 67251,
+        "mage": 11376,
+        "art": {
+          "artV1SlimeOrigin": 8143,
+          "artV1BorderWarden": 1286
+        }
+      },
+      "captures": {
+        "knightAttack": {
+          "t": 77.84720000000473,
+          "update": 2.199999988079071,
+          "render": 1.800000011920929,
+          "interval": 20.5,
+          "count": 19,
+          "visible": 18,
+          "byType": {
+            "knight": 19
+          },
+          "hp": 6,
+          "dpr": 1,
+          "mode": "DPR1",
+          "stage": 1,
+          "variant": "nest-border"
+        },
+        "mixed": {
+          "t": 114.29564000001156,
+          "update": 0.20000000298023224,
+          "render": 0.7999999970197678,
+          "interval": 16.599999994039536,
+          "count": 7,
+          "visible": 7,
+          "byType": {
+            "mage": 5,
+            "hound": 1,
+            "knight": 1
+          },
+          "hp": 7,
+          "dpr": 1,
+          "mode": "DPR1",
+          "stage": 2,
+          "variant": "camp-road"
+        },
+        "mageCast": {
+          "t": 128.0450400000135,
+          "update": 0.19999998807907104,
+          "render": 0.7000000029802322,
+          "interval": 66.3999999910593,
+          "count": 18,
+          "visible": 10,
+          "byType": {
+            "mage": 11,
+            "knight": 6,
+            "hound": 1
+          },
+          "hp": 8,
+          "dpr": 2,
+          "mode": "DPR2",
+          "stage": 2,
+          "variant": "camp-road"
+        }
+      },
+      "errors": [],
+      "cache": [
+        {
+          "name": "knight",
+          "frameCount": 8,
+          "surfaceSize": 64,
+          "baseRadius": 21.28,
+          "initMs": 1.8999999910593033,
+          "estimatedBytes": 131072,
+          "keys": [
+            "idle",
+            "move0",
+            "move1",
+            "move2",
+            "move3",
+            "attack",
+            "hurt",
+            "dead"
+          ]
+        },
+        {
+          "name": "mage",
+          "frameCount": 7,
+          "surfaceSize": 64,
+          "baseRadius": 18.849999999999998,
+          "initMs": 1.5999999940395355,
+          "estimatedBytes": 114688,
+          "keys": [
+            "idle",
+            "move0",
+            "move1",
+            "move2",
+            "move3",
+            "cast",
+            "hurt"
+          ]
+        }
+      ],
+      "viewport": {
+        "css": [
+          1152,
+          720
+        ],
+        "canvas": [
+          1440,
+          900
+        ],
+        "browserDpr": 1.25,
+        "engineDpr": 1.25
+      }
+    }
+  ],
+  "choices": [
+    {
+      "t": 19.532499999999885,
+      "text": "🌱 自由变异尝试Lv.1/3🔱机枪·T1弹幕多重喷射腔额外喷射黏液飞弹，并缩短射击间隔弹数 1 → 2 · 射速 +15%"
+    },
+    {
+      "t": 28.665599999999717,
+      "text": "💚 通用生存Lv.1/3🌱通用自愈再生核心每 8 秒自动缓慢修复 1 点生命值自愈周期 8 秒"
+    },
+    {
+      "t": 56.04780000000122,
+      "text": "🌱 自由变异尝试Lv.1/3💨机枪·T1弹速喷射增压飞弹速度与伤害协同提升弹速 520 → 624 · 伤害 +15%"
+    },
+    {
+      "t": 94.92980000000797,
+      "text": "🌪️确立【机枪风暴】全屏弹幕 · 极速连射 · 有丝分裂⚡ 初始觉醒赋能👑 觉醒赋能：齐射飞弹 +1 · 基础射速 +15%🧬 分裂规则：分裂弹 100% 继承母弹的暴击率与状态附加概率（分裂不再稀释）📜 未来进阶与终极觉醒预览T1: 多重喷射腔 (齐射弹数) / 喷射增压 (弹速伤害)T2: 有丝分裂 (命中 100% 分裂 2 枚小弹)T3: 连锁弹射 (分裂微弹穿透弹射 2 次)🌟"
+    },
+    {
+      "t": 104.9628000000098,
+      "text": "✚黏液休整完全恢复生命。"
+    },
+    {
+      "t": 115.07884000001172,
+      "text": "🔥 主专精深潜Lv.2/3💨机枪·T1弹速喷射增压飞弹速度与伤害协同提升弹速 624 → 749 · 伤害 +15%"
+    },
+    {
+      "t": 115.22884000001172,
+      "text": "📜 BOSS职业秘典BOSS🔷BOSS秘典弹射·穿透弹道回响飞弹获得额外穿透，并提高分裂概率，形成持续弹射链。基础穿透 +2 · 分裂概率 +25%"
+    },
+    {
+      "t": 118.97864000001249,
+      "text": "💚 通用生存Lv.1/5❤️通用生命细胞增殖生命上限 +1 并立即回复 1 点生命生命上限 7 → 8"
+    },
+    {
+      "t": 145.74484000001755,
+      "text": "🔥 主专精深潜Lv.1/3💥机枪·T2分裂有丝分裂飞弹命中敌人后必定迸发分裂小弹追踪临近目标分裂概率 40%"
+    }
+  ]
+}

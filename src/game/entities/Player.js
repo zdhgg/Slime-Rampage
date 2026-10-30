@@ -3,10 +3,33 @@ import { Entity } from '../core/Entity.js'
 import { getActiveReactions, getElement } from '../ElementSystem.js'
 import { ENDLESS_FORMATION_BREAK_SPEED_MUL } from '../EndlessMode.js'
 import { AssetManager } from '../AssetManager.js'
+import { renderArenaOriginBody, renderArenaOriginFace, paintArenaOriginSilhouette } from '../ArenaOriginSlimeArt.js'
 import { renderSlimeBody, renderSlimeFace, paintSlimeSilhouette } from '../SlimeRenderer.js'
 import { SLIME_PALETTES } from '../SlimeAppearance.js'
 
 const TAU = Math.PI * 2
+let arenaOriginRenderErrorLogged = false
+
+function showArenaOriginRenderError(ctx, x, y, radius, error) {
+  if (!arenaOriginRenderErrorLogged) {
+    console.error('[Arena origin slime] Procedural rendering failed.', error)
+    arenaOriginRenderErrorLogged = true
+  }
+  ctx.save()
+  ctx.globalAlpha = 1
+  ctx.strokeStyle = '#ff2fc9'
+  ctx.lineWidth = 2.5
+  ctx.beginPath()
+  ctx.arc(x, y, radius * 1.18, 0, TAU)
+  ctx.moveTo(x - 8, y - 8); ctx.lineTo(x + 8, y + 8)
+  ctx.moveTo(x + 8, y - 8); ctx.lineTo(x - 8, y + 8)
+  ctx.stroke()
+  ctx.fillStyle = '#fff'
+  ctx.font = 'bold 10px sans-serif'
+  ctx.textAlign = 'center'
+  ctx.fillText('ART ERROR', x, y - radius * 1.28)
+  ctx.restore()
+}
 
 const clamp = (v, min, max) => (v < min ? min : v > max ? max : v)
 
@@ -114,6 +137,7 @@ export class Player extends Entity {
     this.y = 0
     this.facing = -Math.PI / 2 // 初始面朝上方
     this.moveBlend = 0 // 移动拉伸平滑系数 0~1（起步/刹车的缓冲）
+    this._wasMoving = false
     this.elapsed = 0
 
     // —— 等级与经验（阶段四） ——
@@ -828,8 +852,13 @@ export class Player extends Entity {
     // 拉伸系数缓动，让起步/急停有「果冻惯性」
     const prevBlend = this.moveBlend
     this.moveBlend += ((moving ? 1 : 0) - this.moveBlend) * Math.min(1, dt * 8)
-    // 急停抖动：拉伸系数骤降时触发过冲 wobble（软体反馈）
-    if (prevBlend - this.moveBlend > 0.35) this._stopJitter = 0.18
+    const arenaOrigin = this.strainId === 'origin' && this.game?.gameplayId === 'arena'
+    if (arenaOrigin) {
+      if (this._wasMoving && !moving) this._stopJitter = 0.18
+      this._wasMoving = moving
+    } else if (prevBlend - this.moveBlend > 0.35) {
+      this._stopJitter = 0.18
+    }
 
     // 拖尾液滴衰减
     for (let i = this._trail.length - 1; i >= 0; i--) {
@@ -847,6 +876,8 @@ export class Player extends Entity {
   render(ctx) {
     const r = this.radius
     const t = this.elapsed
+    const isArenaOrigin = this.strainId === 'origin' && this.game?.gameplayId === 'arena'
+    let originArtError = null
     const mut = this._mutation()
     const look = SLIME_PALETTES[this.strainId] || SLIME_PALETTES.origin
     let baseAlpha = mut.alpha ?? 1
@@ -940,6 +971,12 @@ export class Player extends Entity {
     const stretch = this.moveBlend * 0.14 // 移动拉伸
     let sx = 1 + stretch - idleSquash
     let sy = 1 - stretch * 0.55 + idleSquash * 1.2 // 与 sx 近似保体积
+    if (isArenaOrigin && this._ripple > 0) {
+      const progress = 1 - Math.min(1, this._ripple / 0.5)
+      const recoil = Math.cos(progress * TAU) * Math.exp(-progress * 4)
+      sx *= 1 - recoil * 0.055
+      sy *= 1 + recoil * 0.055
+    }
 
     const bite = this.game?.weaponSystem?.gluttonCombat.pose || shadowPose || this.game?.weaponSystem?.spellCombat?.pose
     if (bite) {
@@ -963,7 +1000,8 @@ export class Player extends Entity {
     }
 
     ctx.save()
-    ctx.translate(this.x, this.y)
+    const moveBounce = isArenaOrigin ? Math.sin(t * 11) * this.moveBlend * r * 0.035 : 0
+    ctx.translate(this.x, this.y - moveBounce)
     // Keep the portrait upright; facing drives a small lean and the attack lunge.
     ctx.rotate(Math.cos(bite?.angle ?? this.facing) * this.moveBlend * 0.06)
     if (bite) ctx.translate(Math.cos(bite.angle) * r * bite.offset, Math.sin(bite.angle) * r * bite.offset) // 纯动画前探，不改变碰撞位置和冲刺朝向。
@@ -972,14 +1010,13 @@ export class Player extends Entity {
     const assets = AssetManager.getInstance()
 
     const artV1Key = {
-      origin: 'artV1SlimeOrigin',
       glutton: 'artV1SlimeGlutton',
       ricochet: 'artV1SlimeRicochet',
       elemental: 'artV1SlimeElemental',
       shadow: 'artV1SlimeShadow',
       summoner: 'artV1SlimeSummoner',
     }[this.strainId]
-    const artV1 = artV1Key && assets.drawArt(ctx, artV1Key, 0, 0, r * 3.2, r * 3.2)
+    const artV1 = artV1Key && !isArenaOrigin && assets.drawArt(ctx, artV1Key, 0, 0, r * 3.2, r * 3.2)
     if (artV1) {
       ctx.restore()
       ctx.globalAlpha = 1
@@ -998,12 +1035,22 @@ export class Player extends Entity {
     }
 
     // The same layered vector artwork as the selection portrait, cached offscreen.
-    renderSlimeBody(ctx, this.strainId, r)
+    const paintSilhouette = options => {
+      if (!isArenaOrigin) return paintSlimeSilhouette(ctx, this.strainId, r, options)
+      try { paintArenaOriginSilhouette(ctx, r, options) } catch (error) { originArtError = error }
+    }
+    try {
+      if (isArenaOrigin) renderArenaOriginBody(ctx, r)
+      else renderSlimeBody(ctx, this.strainId, r)
+    } catch (error) {
+      if (isArenaOrigin) originArtError = error
+      else throw error
+    }
     // Evolution adds material and effects while retaining the selected character.
     if (mut.key !== 'base') {
       ctx.save()
       ctx.globalAlpha *= 0.28
-      paintSlimeSilhouette(ctx, this.strainId, r, { fill: mut.grad[1] })
+      paintSilhouette({ fill: mut.grad[1] })
       ctx.restore()
     }
 
@@ -1085,6 +1132,10 @@ export class Player extends Entity {
       faceState = 'hurt'
     } else if (this._devourPulse > 0.03) {
       faceState = 'devour'
+    } else if (isArenaOrigin && this.hp <= this.maxHp * 0.3) {
+      faceState = 'lowhp'
+    } else if (isArenaOrigin && this._blink > 0) {
+      faceState = 'blink'
     } else if (this.moveBlend > 0.65) {
       faceState = 'angry'
     } else if (this.hp <= this.maxHp * 0.3) {
@@ -1093,19 +1144,25 @@ export class Player extends Entity {
       faceState = 'blink'
     }
 
-    renderSlimeFace(ctx, this.strainId, r, {
-      bite, hurt: faceState === 'hurt', blink: faceState === 'blink',
-      swallowing: this._devourPulse > 0.03,
-    })
+    try {
+      if (isArenaOrigin) renderArenaOriginFace(ctx, r, faceState)
+      else renderSlimeFace(ctx, this.strainId, r, {
+        bite, hurt: faceState === 'hurt', blink: faceState === 'blink',
+        swallowing: this._devourPulse > 0.03,
+      })
+    } catch (error) {
+      if (isArenaOrigin) originArtError = error
+      else throw error
+    }
     if (chargePulse > 0) {
-      paintSlimeSilhouette(ctx, this.strainId, r, {
+      paintSilhouette({
         stroke: `rgba(229, 255, 169, ${chargePulse * 0.8})`, width: 2,
       })
     }
 
     // 受击红闪（叠在全身之上）
     if (this.flash > 0) {
-      paintSlimeSilhouette(ctx, this.strainId, r, {
+      paintSilhouette({
         fill: `rgba(255, 80, 80, ${((this.flash / 0.25) * 0.45).toFixed(2)})`,
       })
     }
@@ -1122,5 +1179,6 @@ export class Player extends Entity {
 
     ctx.restore()
     ctx.globalAlpha = 1 // 恢复透明度
+    if (originArtError) showArenaOriginRenderError(ctx, this.x, this.y, r, originArtError)
   }
 }

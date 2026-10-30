@@ -1,0 +1,11 @@
+<!doctype html><meta charset="utf-8"><title>Arena cache benchmark</title><pre id="out">running…</pre>
+<script type="module">
+import { drawArenaKnightA } from '/src/game/ArenaKnightPrototype.js'
+import { getArenaKnightFrameCache } from '/src/game/ArenaKnightFrameCache.js'
+import { drawArenaMageA } from '/src/game/ArenaMagePrototype.js'
+import { getArenaMageFrameCache } from '/src/game/ArenaMageFrameCache.js'
+const out=document.querySelector('#out'),cv=document.createElement('canvas');cv.width=cv.height=256;const ctx=cv.getContext('2d')
+function run(kind,n,mode,frames=60){const start=performance.now();for(let f=0;f<frames;f++){ctx.clearRect(0,0,256,256);for(let i=0;i<n;i++){const x=16+(i%16)*15,y=16+Math.floor(i/16)*15,s={moving:true,walkPhase:(f+i)*.13,attacking:f%37===0,casting:f%41===0,hurt:f%53===0};if(kind==='knight'){if(mode==='cache')getArenaKnightFrameCache().draw(ctx,x,y,10,s);else drawArenaKnightA(ctx,15.2,s)}else{if(mode==='cache')getArenaMageFrameCache().draw(ctx,x,y,10,s);else drawArenaMageA(ctx,14.5,s)}}}return (performance.now()-start)/frames}
+const rows=[];for(const kind of ['knight','mage'])for(const n of [100,250,500]){const realtime=run(kind,n,'realtime');const cache=run(kind,n,'cache');rows.push({kind,count:n,realtimeMs:+realtime.toFixed(3),cacheMs:+cache.toFixed(3),speedup:+(realtime/cache).toFixed(2)})}
+out.textContent=JSON.stringify({knightCache:getArenaKnightFrameCache().snapshot(),mageCache:getArenaMageFrameCache().snapshot(),rows},null,2);window.__BENCHMARK_DONE__=true
+</script>

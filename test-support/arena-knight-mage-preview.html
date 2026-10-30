@@ -1,0 +1,19 @@
+<!doctype html><meta charset="utf-8"><title>Arena Knight + Mage preview</title>
+<style>html,body{margin:0;background:#101b1b;color:#eee;font:14px system-ui}canvas{display:block;margin:0 auto;max-width:100%}</style>
+<canvas id="view" width="1280" height="900"></canvas>
+<script type="module">
+import { drawArenaKnightA } from '/src/game/ArenaKnightPrototype.js'
+import { getArenaKnightFrameCache } from '/src/game/ArenaKnightFrameCache.js'
+import { drawArenaMageA } from '/src/game/ArenaMagePrototype.js'
+import { getArenaMageFrameCache } from '/src/game/ArenaMageFrameCache.js'
+const c=document.querySelector('#view'),x=c.getContext('2d'),k=getArenaKnightFrameCache(),m=getArenaMageFrameCache()
+function forest(){x.fillStyle='#142a24';x.fillRect(0,0,c.width,c.height);for(let i=0;i<42;i++){const px=(i*173)%1280,py=100+(i*97)%680;x.fillStyle=i%3?'#284a35':'#396445';x.beginPath();x.arc(px,py,35+(i%4)*9,0,7);x.fill();x.fillStyle='#b28a5c';x.fillRect(px-3,py+18,6,20)}x.strokeStyle='#735f42';x.lineWidth=20;x.beginPath();x.moveTo(0,620);x.quadraticCurveTo(400,450,720,600);x.quadraticCurveTo(1000,760,1280,490);x.stroke()}
+function label(t,px,py){x.fillStyle='#f4e4bd';x.font='bold 19px system-ui';x.fillText(t,px,py)}
+function knight(px,py,mode,state,s=1){x.save();x.translate(px,py);if(mode==='cache')k.draw(x,0,0,16*s,state);else drawArenaKnightA(x,16*1.52*s,state);x.restore()}
+function mage(px,py,mode,state,s=1){x.save();x.translate(px,py);if(mode==='cache')m.draw(x,0,0,15*s,state);else drawArenaMageA(x,15*1.45*s,state);x.restore()}
+forest();label('Arena style validation · same forest / same scale',28,34);label('Realtime procedural A',35,92);label('Fixed frame cache',655,92)
+const rows=[['idle',{moving:false}],['move',{moving:true,walkPhase:.28}],['attack / cast',{moving:false,attacking:true,casting:true}],['hurt',{hurt:true}]]
+rows.forEach((r,i)=>{const y=145+i*120;label(r[0],30,y-33);knight(165,y,'a',r[1],1.2);mage(350,y,'a',r[1],1.2);knight(785,y,'cache',r[1],1.2);mage(970,y,'cache',r[1],1.2)})
+label('Dense same-condition row · 18 knights + 18 mages per side',28,650);for(let i=0;i<18;i++){const px=55+(i%9)*70,py=700+Math.floor(i/9)*80;knight(px,py,'a',{moving:true,walkPhase:i*.17},.75);mage(px+35,py+28,'a',{casting:i%5===0},.75);knight(690+px,py,'cache',{moving:true,walkPhase:i*.17},.75);mage(690+px+35,py+28,'cache',{casting:i%5===0},.75)}
+label('Realtime',300,860);label('Cache',930,860)
+</script>
