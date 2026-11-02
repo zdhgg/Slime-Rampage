@@ -4,7 +4,7 @@ import { Check, ChevronDown, Play, Sparkles } from 'lucide-vue-next'
 import { STRAINS, STRAIN_IDS, STRAIN_SKILLS } from '../game/Strains.js'
 import { GLUTTON_HEAVY_DAMAGE, GLUTTON_BOSS_HEAVY_DAMAGE } from '../game/GluttonCombat.js'
 import { STRAIN_PRESENTATION, strainTraits } from './strainPresentation.js'
-import SlimePortrait from './SlimePortrait.vue'
+import SlimeFamilyPortrait from './SlimeFamilyPortrait.vue'
 import { SPELL_ELEMENTS } from '../game/SpellRules.js'
 
 const props = defineProps({ modelValue: { type: String, default: 'origin' }, element: { type: String, default: 'fire' } })
@@ -87,7 +87,7 @@ onBeforeUnmount(() => clearTimeout(previewTimer))
         </svg>
         <div class="stage-light" aria-hidden="true"></div>
         <div :key="selected.id" class="portrait-entry">
-          <SlimePortrait :strain="selected.id" :element="element" :performing="performing" />
+          <SlimeFamilyPortrait :strain="selected.id" :element="element" :performing="performing" />
         </div>
         <div class="stage-baseline" aria-hidden="true"><span></span>{{ look.label }}<span></span></div>
       </div>
@@ -150,7 +150,7 @@ onBeforeUnmount(() => clearTimeout(previewTimer))
           @keydown="navigate($event, i)"
         >
           <span class="roster-number" aria-hidden="true">0{{ i + 1 }}</span>
-          <span class="roster-portrait"><SlimePortrait :strain="id" compact /></span>
+          <span class="roster-portrait"><SlimeFamilyPortrait :strain="id" compact /></span>
           <span class="roster-copy"><b>{{ STRAINS[id].name }}</b><span>{{ STRAIN_PRESENTATION[id].label }}</span></span>
           <span class="roster-check" aria-hidden="true"><Check :size="11" :stroke-width="3" /></span>
         </button>

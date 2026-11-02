@@ -729,7 +729,20 @@ export class TowerDefenseGameplay extends GameplayController {
       this._applyNovaStun(center, profile)
     } else if (target?.active) {
       this._applyDamage(target, profile.damage, profile)
-      if (target.active && ['slow', 'freeze'].includes(profile.fireKind)) this._applySlow(target, profile)
+      if (target.active && ['slow', 'freeze'].includes(profile.fireKind)) {
+        this._applySlow(target, profile)
+        // 寒气扩散是霜冻专精的特性：冰封弹命中时，主目标周围最近的少数敌人
+        // 受到轻微减速。目标数与时长受限——否则整支小队同步慢速、成团冲到
+        // 末段塔射程反而更难清。
+        if (profile.fireKind === 'freeze') {
+          const chillRadiusSq = 0.05 ** 2
+          const chillProfile = { ...profile, fireKind: 'chill',
+            slowRatio: (profile.slowRatio || 0) * 0.55, slowDuration: (profile.slowDuration || 0) * 0.6 }
+          this.enemies.filter(enemy => enemy.active && enemy !== target && distanceSquared(enemy, center) <= chillRadiusSq)
+            .sort((a, b) => distanceSquared(a, center) - distanceSquared(b, center)).slice(0, 3)
+            .forEach(enemy => this._applySlow(enemy, chillProfile))
+        }
+      }
     }
   }
 

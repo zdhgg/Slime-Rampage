@@ -348,22 +348,22 @@ export const TOWER_DEFENSE_TOWER_TYPES = Object.freeze({
     targeting: 'first',
     shape: 'frost',
     levels: [
-      { damage: 5, range: 0.22, fireInterval: 0.72, fireKind: 'slow', slowRatio: 0.46, slowDuration: 1.7 },
-      { damage: 8, range: 0.232, fireInterval: 0.64, fireKind: 'slow', slowRatio: 0.50, slowDuration: 2.0 },
+      { damage: 5, range: 0.22, fireInterval: 0.72, fireKind: 'slow', slowRatio: 0.60, slowDuration: 2.0 },
+      { damage: 8, range: 0.232, fireInterval: 0.64, fireKind: 'slow', slowRatio: 0.66, slowDuration: 2.4 },
     ],
     upgradeCosts: [65, 98, 186],
     branches: {
       'frost-field': {
         name: '霜雪领域',
         description: '叠加极寒霜晶，三层霜冻极速冰封',
-        level3: { damage: 10, range: 0.25, fireInterval: 0.58, fireKind: 'freeze', slowRatio: 0.56, slowDuration: 2.2, freezeDuration: 0.8 },
-        level4: { damage: 12, range: 0.27, fireInterval: 0.50, fireKind: 'freeze', slowRatio: 0.62, slowDuration: 2.5, freezeDuration: 1.1 },
+        level3: { damage: 10, range: 0.25, fireInterval: 0.58, fireKind: 'freeze', slowRatio: 0.66, slowDuration: 2.6, freezeDuration: 1.0 },
+        level4: { damage: 12, range: 0.27, fireInterval: 0.50, fireKind: 'freeze', slowRatio: 0.74, slowDuration: 3.0, freezeDuration: 1.35 },
       },
       'ice-chain': {
         name: '冰脉连锁',
         description: '寒流在多个邻近目标之间连锁跳转',
-        level3: { damage: 9, range: 0.25, fireInterval: 0.62, fireKind: 'chain', slowRatio: 0.42, slowDuration: 1.7, chainCount: 3, chainRange: 0.12, chainScale: 0.72 },
-        level4: { damage: 10, range: 0.27, fireInterval: 0.54, fireKind: 'chain', slowRatio: 0.46, slowDuration: 2.0, chainCount: 4, chainRange: 0.14, chainScale: 0.78 },
+        level3: { damage: 9, range: 0.25, fireInterval: 0.62, fireKind: 'chain', slowRatio: 0.52, slowDuration: 2.0, chainCount: 3, chainRange: 0.12, chainScale: 0.72 },
+        level4: { damage: 10, range: 0.27, fireInterval: 0.54, fireKind: 'chain', slowRatio: 0.58, slowDuration: 2.4, chainCount: 4, chainRange: 0.14, chainScale: 0.78 },
       },
     },
   }),

@@ -1,40 +1,40 @@
 import { STRAINS } from '../game/Strains.js'
-import { SLIME_PALETTES } from '../game/SlimeAppearance.js'
+import { SLIME_FAMILY_ART } from '../game/SlimeFamilyArt.js'
 
 // Presentation only. Numeric traits continue to come from the combat definitions.
 export const STRAIN_PRESENTATION = {
   summoner: {
-    ...SLIME_PALETTES.summoner,
+    ...SLIME_FAMILY_ART.summoner,
     label: '共生小队', epithet: '与你并肩的每一次成长',
     intro: '团团嘲讽、疾风减攻、孢云减速、甘露治疗，逐只招募伙伴保护本体。空格鼓舞全队，提高伙伴的攻击力、攻速与移速。',
     awakening: 'Lv.5 自动觉醒共生契约',
   },
   origin: {
-    ...SLIME_PALETTES.origin,
+    ...SLIME_FAMILY_ART.origin,
     label: '自由构筑', epithet: '一切进化的起点',
     intro: '用黏液震荡推开近敌，让每一次选择决定你的进化方向。',
     awakening: 'Lv.5 自由选择主专精',
   },
   glutton: {
-    ...SLIME_PALETTES.glutton,
+    ...SLIME_FAMILY_ART.glutton,
     label: '近身吞噬', epithet: '永不满足的猎食者',
     intro: '贴近猎物，咬击吞噬。以捕食积累猎食点，用重咬撕开包围，获得短时护甲。',
     awakening: 'Lv.5 自动觉醒暴食专精',
   },
   ricochet: {
-    ...SLIME_PALETTES.ricochet,
+    ...SLIME_FAMILY_ART.ricochet,
     label: '多弹齐射', epithet: '弹幕中的精确回响',
     intro: '让更多、更快的飞弹铺开火力，用连续齐射压制敌人，并借短时加速拉开距离。',
     awakening: 'Lv.5 自动觉醒弹射专精',
   },
   elemental: {
-    ...SLIME_PALETTES.elemental,
+    ...SLIME_FAMILY_ART.elemental,
     label: '双元素法师', epithet: '在体内孕育融合的法术',
       intro: '两系法术自动施放，空格释放融合爆发。自带自动重建的法术护盾，升级可强化本系威力与防御；法术核心改造当前双元素组合。',
     awakening: 'Lv.5 自动觉醒元素专精',
   },
   shadow: {
-    ...SLIME_PALETTES.shadow,
+    ...SLIME_FAMILY_ART.shadow,
     label: '暴击分身', epithet: '虚实之间的围猎者',
     intro: '闪避后短暂虚化，暴击凝出分身诱敌挡弹。学习影袭留身后，空格空放也能留下分身自保，命中可指挥群影夹击。',
     awakening: 'Lv.5 自动觉醒暗影专精',

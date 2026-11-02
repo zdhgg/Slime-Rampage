@@ -1,4 +1,4 @@
-import { paintSlimeSilhouette, renderSlimeFace } from '../SlimeRenderer.js'
+import { paintSlimeFamilySilhouette, renderSlimeFamilyFace } from '../SlimeFamilyArtRenderer.js'
 
 export function shadowPose(combat) {
   const a = combat.assault, s = combat.swing, f = combat.flash
@@ -32,8 +32,8 @@ export function renderShadowCombat(ctx, c) {
     ctx.globalAlpha = fade * (clone.birth > 0 ? 0.5 : 0.76)
     const stretch = clone.rush ? 1.12 : clone.attack ? 0.95 : 1
     ctx.scale(stretch, 1 / stretch)
-    paintSlimeSilhouette(ctx, 'shadow', clone.radius, { fill: '#57415f', stroke: '#cba5d9', width: 1.3 })
-    renderSlimeFace(ctx, 'shadow', clone.radius)
+    paintSlimeFamilySilhouette(ctx, 'shadow', clone.radius, { fill: '#57415f', stroke: '#cba5d9', width: 1.3 })
+    renderSlimeFamilyFace(ctx, 'shadow', clone.radius, { expr: 'idle' })
     ctx.restore()
     ctx.save(); ctx.globalAlpha = fade * 0.6; ctx.strokeStyle = '#cba5d9'; ctx.lineWidth = 1.5
     ctx.beginPath(); ctx.moveTo(clone.x - 12, clone.y + clone.radius + 7)
@@ -56,7 +56,7 @@ export function renderShadowCombat(ctx, c) {
   if (p.evasionFlash > 0) {
     for (const sign of [-1, 1]) {
       ctx.save(); ctx.translate(p.x + sign * 14, p.y - 3); ctx.globalAlpha = p.evasionFlash * 1.2
-      paintSlimeSilhouette(ctx, 'shadow', p.radius, { fill: '#c6a6dc' }); ctx.restore()
+      paintSlimeFamilySilhouette(ctx, 'shadow', p.radius, { fill: '#c6a6dc' }); ctx.restore()
     }
   }
   // The marker follows the same bounded path as F; it remains quiet outside a cast.
@@ -71,7 +71,7 @@ export function renderShadowCombat(ctx, c) {
   }
   for (const e of c.echoes) {
     ctx.save(); ctx.translate(e.x, e.y); ctx.globalAlpha = e.life / 0.18 * 0.22
-    paintSlimeSilhouette(ctx, 'shadow', p.radius, { fill: '#b15f7b' }); ctx.restore()
+    paintSlimeFamilySilhouette(ctx, 'shadow', p.radius, { fill: '#b15f7b' }); ctx.restore()
   }
   if (s) {
     const k = s.elapsed < s.windup ? 0.12 + s.elapsed / s.windup * 0.16 : 0.28 + (s.elapsed - s.windup) / s.strike * 0.72
@@ -98,8 +98,8 @@ export function renderShadowCombat(ctx, c) {
     ctx.moveTo(-size * 0.6, size * 0.7); ctx.lineTo(size * 0.6, -size * 0.7); ctx.stroke()
     if (i.clone) {
       ctx.globalAlpha *= 0.22
-      ctx.translate(-25, -18); paintSlimeSilhouette(ctx, 'shadow', p.radius * 0.75, { fill: '#dd91af' })
-      ctx.translate(50, 36); paintSlimeSilhouette(ctx, 'shadow', p.radius * 0.75, { fill: '#dd91af' })
+      ctx.translate(-25, -18); paintSlimeFamilySilhouette(ctx, 'shadow', p.radius * 0.75, { fill: '#dd91af' })
+      ctx.translate(50, 36); paintSlimeFamilySilhouette(ctx, 'shadow', p.radius * 0.75, { fill: '#dd91af' })
     }
     ctx.restore()
   }

@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>敌人美术评审板（读取正式运行时代码）</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0f0d0a; color: #ece6d8; font-family: "Microsoft YaHei", system-ui, sans-serif; padding: 22px 26px 40px; width: 1500px; }
+  h1 { font-size: 20px; } h1 small { color: #9a9282; font-size: 12px; margin-left: 10px; letter-spacing: 2px; }
+  section { margin: 18px 0 22px; }
+  h2 { font-size: 14px; color: #e2b268; margin-bottom: 4px; }
+  .note { color: #9a9282; font-size: 12px; margin-bottom: 8px; }
+  .strip { border: 1px solid rgba(255,255,255,.08); border-radius: 10px; overflow: hidden; display: block; width: fit-content; margin-bottom: 8px; }
+  canvas { display: block; }
+  .px canvas { image-rendering: pixelated; }
+  pre { font-size: 12px; color: #cfc8b6; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h1>敌人美术评审板<small>RUNTIME · enemy-art/* + EnemyArtRenderer.js</small></h1>
+<section id="s-portrait"><h2>① 立绘：每个职业的全部姿态</h2><div class="note">直接调用 cast.draw（大尺寸会开启嘴型等细节 LOD）。</div></section>
+<section id="s-compare"><h2>② 新旧对比 1:1（DPR 2 设备像素）与 3 倍像素放大</h2><div class="note">每行：旧精灵（游戏里原来实际绘制的 char_* / 厚涂 PNG）→ 新（EnemyArtRenderer 2× 档）的各姿态。</div></section>
+<section id="s-sil"><h2>③ 剪影 + 灰度：六只史莱姆 r26 与全部敌人（战斗 1:1 与 2 倍）</h2><div class="note">纯黑剪影在浅底；之后是原色放在森林地面色上转灰度，最后是原色。</div></section>
+<section id="s-scene"><h2>④ 实战 1:1：史莱姆 + 敌人混战（带地面阴影）</h2><div class="note">背景取自 Arena 实战截图。</div></section>
+<section id="s-frames"><h2>⑤ 缓存全部帧（2× 档 1:1 设备像素；每帧下方为受击白剪影孪生帧）</h2></section>
+<section id="s-crowd"><h2>⑦ 个体差异与精英：同职业不同种子（色相微调 + 体型 ±4% + 羽冠变体）与精英金边</h2><div class="note">每行骑士为不同 seed；右侧为各职业普通 vs 精英对照。</div></section>
+<section id="s-bounds"><h2>⑥ 画布安全边距检查</h2><pre id="bounds"></pre></section>
+<script type="module">
+import { drawSlimeFamily, slimePose } from '/src/game/slime-art/slime-cast.js'
+import { setScale } from '/src/game/slime-art/slime-painter.js'
+import { ENEMY_CAST, enemyFramePose } from '/src/game/enemy-art/enemy-cast.js'
+import { drawEnemyArt, drawEnemyShadow, enemyArtFeet, enemySizeMul, getEnemyFrameCache } from '/src/game/EnemyArtRenderer.js'
+import { AssetManager } from '/src/game/AssetManager.js'
+
+const DPR = 2
+const IDS = ['origin', 'glutton', 'ricochet', 'elemental', 'shadow', 'summoner']
+const TYPES = Object.keys(ENEMY_CAST)
+const mk = (w, h) => {
+  const c = document.createElement('canvas'); c.width = w * DPR; c.height = h * DPR; c.style.width = w + 'px'; c.style.height = h + 'px'
+  const x = c.getContext('2d'); x.setTransform(DPR, 0, 0, DPR, 0, 0); return [c, x]
+}
+const add = (sec, c, cls) => { const d = document.createElement('div'); d.className = 'strip ' + (cls || ''); d.appendChild(c); document.getElementById(sec).appendChild(d) }
+const stage = (x, w, h) => { const g = x.createRadialGradient(w / 2, h * .45, 10, w / 2, h * .5, h); g.addColorStop(0, '#2a241b'); g.addColorStop(1, '#100e0b'); x.fillStyle = g; x.fillRect(0, 0, w, h) }
+const label = (x, t, px, py) => { x.fillStyle = '#9a9282'; x.font = '12px Microsoft YaHei'; x.fillText(t, px, py) }
+await new Promise(r => setTimeout(r, 600))
+const assets = AssetManager.getInstance()
+
+function big(x, type, cx, feetY, r, key) {
+  const cast = ENEMY_CAST[type]
+  x.save(); x.translate(cx, feetY - cast.feetY * cast.scale * r / 100)
+  setScale(r * cast.scale); x.scale(r * cast.scale / 100, r * cast.scale / 100); cast.draw(x, enemyFramePose(type, key)); x.restore()
+}
+function slimeAt(x, id, cx, feetY, r) {
+  x.save(); x.translate(cx, feetY - r * .8)
+  drawSlimeFamily(x, id, r, { el: ['fire', 'water'], ...slimePose(id, 'idle', .6) })
+  x.restore()
+}
+const R = type => ENEMY_CAST[type].baseR
+function enemyAt(x, type, cx, cy, st = {}, flip = false, r = R(type)) {
+  x.save(); x.translate(cx, cy)
+  drawEnemyShadow(x, type, 0, 0, r, { lift: ENEMY_CAST[type].floats ? 3 : 0, scale: r / R(type) })
+  if (flip) x.scale(-1, 1)
+  drawEnemyArt(x, type, r, st, DPR)
+  x.restore()
+}
+function legacyAt(x, type, cx, cy, r = R(type)) {
+  x.save(); x.translate(cx, cy)
+  const art = { archer: 'artV1EnemyArcher', golem: 'artV1EnemyGolem' }[type]
+  if (!(art && assets.drawArt(x, art, 0, 0, r * 3.05, r * 3.05))) assets.draw(x, `char_${type}_0`, 0, 0, r * 2.9, r * 2.9)
+  x.restore()
+}
+/* game-like input states per type: [label, state] */
+const STATES = {
+  knight: [['待机', {}], ['移动A', { moving: true, walkT: 0 }], ['移动B', { moving: true, walkT: Math.PI }], ['前摇', { windup: true }], ['斩击', { swing: .2 }], ['受击', { hurt: 1 }]],
+  mage: [['待机', {}], ['移动', { moving: true, walkT: 0 }], ['蓄力', { casting: 'charge' }], ['发射', { casting: 'fire' }], ['受击', { hurt: 1 }]],
+  hound: [['待机', {}], ['奔跑A', { moving: true, walkT: 0 }], ['奔跑B', { moving: true, walkT: Math.PI / 2 / 1.6 }], ['前摇', { windup: true }], ['撕咬', { swing: .2 }], ['受击', { hurt: 1 }]],
+  assassin: [['潜行', { moving: true, walkT: 0, stance: 'stalking' }], ['潜行B', { moving: true, walkT: Math.PI / 2 / 1.4, stance: 'stalking' }], ['蓄力', { stance: 'charging' }], ['突刺', { moving: true, stance: 'dashing' }], ['硬直', { stance: 'cooldown' }], ['受击', { hurt: 1, stance: 'stalking' }]],
+  archer: [['待机', {}], ['移动', { moving: true, walkT: 0 }], ['拉弓', { casting: 'charge' }], ['放箭', { casting: 'fire' }], ['受击', { hurt: 1 }]],
+  priest: [['待机', {}], ['漂浮', { moving: true, walkT: 0 }], ['治疗', { casting: 'heal' }], ['受击', { hurt: 1 }]],
+  berserker: [['待机', {}], ['移动', { moving: true, walkT: 0 }], ['重劈', { swing: .3 }], ['狂暴', { enraged: true }], ['狂暴劈', { enraged: true, swing: .3 }], ['受击', { hurt: 1 }]],
+  golem: [['待机', {}], ['移动', { moving: true, walkT: 0 }], ['举拳', { swing: .3 }], ['砸地', { swing: .8 }], ['受击', { hurt: 1 }]],
+  wraith: [['待机', {}], ['飘移', { moving: true, walkT: 0 }], ['索命', { swing: .4 }], ['受击', { hurt: 1 }]],
+}
+
+/* ① portraits */
+{
+  const W = 1440, rowH = 270, [c, x] = mk(W, rowH * TYPES.length); stage(x, W, rowH * TYPES.length)
+  TYPES.forEach((type, row) => {
+    const cast = ENEMY_CAST[type], r = type === 'hound' ? 46 : 58, n = cast.frames.length, cell = W / n
+    cast.frames.forEach(([key], i) => { big(x, type, cell * (i + .5), row * rowH + 236, r, key); label(x, `${type}/${key}`, cell * i + 10, row * rowH + 18) })
+  })
+  add('s-portrait', c)
+}
+
+/* ② legacy vs new */
+{
+  for (const type of TYPES) {
+    const states = STATES[type], W = 120 + states.length * 76 * 2 / 2 + 20, H = 124
+    const [c, x] = mk(Math.max(W, 620), H); stage(x, Math.max(W, 620), H)
+    label(x, '旧', 12, 16); legacyAt(x, type, 46, 72)
+    label(x, '新 ' + type, 100, 16)
+    states.forEach(([name, st], i) => { const px = 150 + i * 78; enemyAt(x, type, px, 70, st); label(x, name, px - 14, 116) })
+    add('s-compare', c)
+    const z = document.createElement('canvas'); z.width = c.width; z.height = c.height
+    z.getContext('2d').drawImage(c, 0, 0)
+    z.style.width = (c.width / DPR * 2) + 'px'; z.style.height = (c.height / DPR * 2) + 'px'
+    add('s-compare', z, 'px')
+  }
+}
+
+/* ③ silhouette + gray */
+{
+  const W = 1440, H = 130
+  const row = (x, scale) => {
+    const step = scale >= 2 ? 46 : 70 // 2x tightens the pitch so all nine roles still fit the strip
+    IDS.forEach((id, i) => slimeAt(x, id, (40 + i * step) * scale, 100 * scale, 26 * scale))
+    TYPES.forEach((type, i) => enemyAt(x, type, (40 + (6 + i) * step + (type === 'hound' ? 14 : 0)) * scale, 100 * scale - enemyArtFeet(type, R(type) * scale), { moving: false }, false, R(type) * scale))
+  }
+  for (const scale of [1, 2]) {
+    const [c, x] = mk(W, H * scale); x.fillStyle = '#ebe6da'; x.fillRect(0, 0, W, H * scale)
+    const [oc, ox] = mk(W, H * scale)
+    row(ox, scale)
+    ox.setTransform(1, 0, 0, 1, 0, 0); ox.globalCompositeOperation = 'source-in'; ox.fillStyle = '#111'; ox.fillRect(0, 0, oc.width, oc.height)
+    x.setTransform(1, 0, 0, 1, 0, 0); x.drawImage(oc, 0, 0); x.setTransform(DPR, 0, 0, DPR, 0, 0)
+    add('s-sil', c)
+    const [g, gx] = mk(W, H * scale); gx.fillStyle = '#324739'; gx.fillRect(0, 0, W, H * scale)
+    row(gx, scale)
+    g.style.filter = 'grayscale(1)'; add('s-sil', g)
+    const [col, cx2] = mk(W, H * scale); cx2.fillStyle = '#324739'; cx2.fillRect(0, 0, W, H * scale)
+    row(cx2, scale); add('s-sil', col)
+  }
+}
+
+/* ④ scene */
+const loadImg = src => new Promise(r => { const i = new Image(); i.onload = () => r(i); i.onerror = () => r(null); i.src = src })
+{
+  const img = await loadImg('/docs/arena-art-acceptance/real-normal.png')
+  const [c, x] = mk(900, 460)
+  if (img) x.drawImage(img, 480, 260, 900, 460, 0, 0, 900, 460)
+  else { x.fillStyle = '#2d4a3a'; x.fillRect(0, 0, 900, 460) }
+  IDS.forEach((id, i) => slimeAt(x, id, 50 + i * 62, 420 - (i % 2) * 12, 26))
+  const mix = [
+    ['knight', 120, 130], ['knight', 160, 160], ['archer', 230, 90], ['knight', 280, 140], ['hound', 340, 190], ['assassin', 400, 130], ['mage', 450, 80],
+    ['knight', 510, 160], ['hound', 570, 120], ['archer', 640, 200], ['knight', 700, 140], ['assassin', 760, 90], ['knight', 820, 180], ['mage', 840, 260],
+    ['hound', 220, 250], ['knight', 330, 290], ['archer', 470, 270], ['assassin', 600, 300], ['knight', 700, 330], ['hound', 120, 330], ['mage', 250, 350],
+    ['priest', 170, 395], ['berserker', 420, 370], ['golem', 560, 390], ['wraith', 700, 385], ['golem', 60, 240], ['wraith', 830, 340],
+  ]
+  mix.sort((a, b) => a[2] - b[2])
+  mix.forEach(([type, px, py], i) => {
+    const st = { moving: i % 3 !== 0, walkT: i * 1.7, time: i, seed: i * .83, stance: type === 'assassin' ? ['stalking', 'stalking', 'charging', 'dashing', 'cooldown'][i % 5] : undefined }
+    if (i === 7 || i === 22) st.elite = true // 混入两只精英，检查金边在实际场景中是否显眼
+    st.sizeMul = enemySizeMul(st.seed, st.elite)
+    if (i === 5 && type === 'knight') st.swing = .3
+    if (type === 'archer' && i % 2) st.casting = i % 4 === 1 ? 'charge' : 'fire'
+    if (type === 'mage') st.casting = i % 2 ? 'fire' : 'charge'
+    if (type === 'hound' && i % 2) st.swing = .25
+    if (type === 'priest' && i % 2) st.casting = 'heal'
+    if (type === 'berserker' && i % 2) st.enraged = true
+    if (type === 'golem') st.swing = i % 2 ? .75 : null
+    if (type === 'wraith' && i % 2) st.swing = .4
+    enemyAt(x, type, px, py, st, i % 2 === 1)
+  })
+  add('s-scene', c)
+}
+
+/* ⑤ frames */
+{
+  for (const type of TYPES) {
+    const cast = ENEMY_CAST[type], set = getEnemyFrameCache(type).build(2)
+    const keys = [...set.keys()], cell = cast.variants > 1 ? 62 : 100, W = 20 + keys.length * cell, H = 200
+    const [c, x] = mk(W, H); stage(x, W, H)
+    keys.forEach((key, i) => {
+      const f = set.get(key); if (!f) return
+      const s = cell - 4
+      x.drawImage(f.img, 10 + i * cell - (s - cell) / 2 - 8, 10 - 8, s, s)
+      x.drawImage(f.flash, 10 + i * cell - (s - cell) / 2 - 8, 10 - 8 + s + 2, s, s)
+      label(x, key, 10 + i * cell, 196)
+    })
+    add('s-frames', c)
+  }
+}
+
+/* ⑦ crowd variety + elite rim */
+{
+  const [c, x] = mk(1440, 200); stage(x, 1440, 200)
+  for (let i = 0; i < 10; i++) {
+    const seed = i * .83 + .1
+    enemyAt(x, 'knight', 70 + i * 92, 140, { seed, sizeMul: enemySizeMul(seed), walkT: i * 1.9, moving: i % 4 !== 0 })
+  }
+  label(x, '同一职业 10 个不同 seed（羽冠/色相/体型应有差异）', 30, 24)
+  add('s-crowd', c)
+  const W2 = 1440, rows = Math.ceil(TYPES.length / 5)
+  const [c2, x2] = mk(W2, 120 * rows); stage(x2, W2, 120 * rows)
+  TYPES.forEach((type, i) => {
+    const col = i % 5, row = Math.floor(i / 5), px = 80 + col * 280, py = 80 + row * 120
+    enemyAt(x2, type, px - 46, py, { seed: .5, sizeMul: enemySizeMul(.5) })
+    enemyAt(x2, type, px + 66, py, { seed: .5, sizeMul: enemySizeMul(.5, true), elite: true })
+    label(x2, `${type} 普/精`, px - 70, py + 40)
+  })
+  add('s-crowd', c2)
+}
+
+/* ⑥ bounds */
+{
+  const out = {}, lines = []
+  for (const type of TYPES) {
+    const cast = ENEMY_CAST[type]
+    for (const tier of [1, 2]) {
+      const S = cast.surface * 3, px = S * tier
+      let minMargin = Infinity, worst = ''
+      for (const [key, st] of cast.frames) for (let v = 0; v < (cast.variants || 1); v++) {
+        const cv = document.createElement('canvas'); cv.width = px; cv.height = px
+        const g = cv.getContext('2d', { willReadFrequently: true })
+        g.translate(px / 2, px / 2); g.scale(tier, tier); setScale(cast.baseR * cast.scale); g.scale(cast.baseR * cast.scale / 100, cast.baseR * cast.scale / 100)
+        cast.draw(g, { ...st, variant: v })
+        const d = g.getImageData(0, 0, px, px).data
+        let x0 = px, y0 = px, x1 = -1, y1 = -1
+        for (let y = 0; y < px; y++) for (let xx = 0; xx < px; xx++) if (d[(y * px + xx) * 4 + 3] > 8) { if (xx < x0) x0 = xx; if (xx > x1) x1 = xx; if (y < y0) y0 = y; if (y > y1) y1 = y }
+        const half = cast.surface / 2
+        const l = (px / 2 - x0) / tier, r = (x1 + 1 - px / 2) / tier, t = (px / 2 - y0) / tier, b = (y1 + 1 - px / 2) / tier
+        const margin = Math.min(half - l, half - r, half - t, half - b)
+        out[`${type}/${key}${v ? `#v${v}` : ''}/x${tier}`] = { left: +l.toFixed(1), right: +r.toFixed(1), top: +t.toFixed(1), bottom: +b.toFixed(1), margin: +margin.toFixed(1) }
+        if (margin < minMargin) { minMargin = margin; worst = key }
+      }
+      lines.push(`${type} x${tier}: surface ${cast.surface}px, min margin ${minMargin.toFixed(1)}px (${worst})`)
+    }
+  }
+  // cache cost per type: both tiers built (1x = DPR <= 1.1, 2x = high DPI); a player only ever builds one tier
+  const mem = {}
+  for (const type of TYPES) {
+    const c = getEnemyFrameCache(type); c.build(1); c.build(2)
+    const tierBytes = tier => c.tiers.get(tier).size * 2 * (ENEMY_CAST[type].surface * tier) ** 2 * 4
+    mem[type] = { frames: c.tiers.get(1).size, kb1x: Math.round(tierBytes(1) / 1024), kb2x: Math.round(tierBytes(2) / 1024), buildMs: +c.initMs.toFixed(1) }
+  }
+  const total = (key) => Object.values(mem).reduce((n, m) => n + m[key], 0)
+  lines.push('', 'cache memory (frames incl. white twins): ' + TYPES.map(t => `${t} ${mem[t].frames}f ${mem[t].kb1x}KB/${mem[t].kb2x}KB`).join(' | '), `total 1x ${total('kb1x')} KB, 2x ${total('kb2x')} KB, build ${total('buildMs').toFixed(1)} ms (both tiers, all types)`)
+  out.memory = mem
+  window.__bounds = out
+  document.getElementById('bounds').textContent = lines.join('\n')
+}
+window.__ready = true
+</script>
+</body>
+</html>

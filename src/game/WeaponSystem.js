@@ -155,6 +155,10 @@ export class WeaponSystem extends Entity {
     this.berserkBuffTimer = Math.max(this.berserkBuffTimer, duration)
   }
 
+  /** 0..1 right after each volley (decays in 0.08s); art layers use it for recoil and gaze. */
+  get muzzleKick() { return this._muzzleT > 0 ? this._muzzleT / 0.08 : 0 }
+  get muzzleAngle() { return this._muzzleAngle }
+
   get attackInterval() {
     const formationMul = this.game?.endlessFormationBreakTimer > 0 ? ENDLESS_FORMATION_BREAK_ATTACK_INTERVAL_MUL : 1
     return this.fireInterval * (this.berserkBuffTimer > 0 ? 0.6 : 1) * formationMul

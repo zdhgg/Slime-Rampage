@@ -1803,7 +1803,10 @@ export class GameEngine {
     ctx.save()
     ctx.translate(-camX, -camY)
     for (const e of this.entities) {
-      if (e.active && e !== this.dialogue) e.render(ctx)
+      if (!e.active || e === this.dialogue) continue
+      // 玩家与敌人按脚点 y 合并排序绘制：站在敌人南侧盖住它，北侧被它盖住
+      if (e === this.player && this.enemyManager) this.enemyManager.renderBodies(ctx, e)
+      else e.render(ctx)
     }
 
     // 前景装饰：树冠/高草绘制在角色上方，形成遮挡景深（世界坐标系）

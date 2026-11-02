@@ -1,6 +1,7 @@
 import { createTowerScenery, paintTowerScenery, drawTowerAtmosphere } from './TowerDefenseScenery.js'
 import { getTowerDefenseLayout, fitTowerDefensePresentation, projectTowerDefensePoint, unprojectTowerDefensePoint } from './TowerDefenseLayout.js'
 import { AssetManager } from '../../AssetManager.js'
+import { drawEnemyArt, drawEnemyShadow, enemyArtTop, enemyArtUnique, enemySizeMul, hasEnemyArt } from '../../EnemyArtRenderer.js'
 import {
   TOWER_DEFENSE_BUILD_SLOTS,
   TOWER_DEFENSE_LEYLINE_TYPES,
@@ -15,8 +16,10 @@ import {
 const TAU = Math.PI * 2
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value))
 
-const ENEMY_ROLE_MAP = {
-  regenerator: 'golem', sprinter: 'hound', warder: 'mage', berserker: 'berserker', broodmother: 'golem', stalker: 'assassin', siege: 'boss_knight', emp: 'mage',
+// typeId -> art role. siege/boss resolve to unique boss casts (塔盾墙 / 王庭加冕);
+// the legacy char_* fallback still keys off `boss_knight` for them (see _drawEnemyCharacter).
+export const ENEMY_ROLE_MAP = {
+  regenerator: 'golem', sprinter: 'hound', warder: 'mage', berserker: 'berserker', broodmother: 'golem', stalker: 'assassin', siege: 'boss:gate_marshal', emp: 'mage',
   grunt: 'knight',
   runner: 'assassin',
   tank: 'berserker',
@@ -24,7 +27,7 @@ const ENEMY_ROLE_MAP = {
   shield: 'mage',
   support: 'priest',
   splitter: 'golem',
-  boss: 'boss_knight',
+  boss: 'boss:knight',
 }
 
 export class TowerDefenseRenderer {
@@ -835,7 +838,10 @@ export class TowerDefenseRenderer {
   }
 
   _drawEnemyCharacter(ctx, enemy, radius, elapsed) {
-    const role = ENEMY_ROLE_MAP[enemy.typeId] || 'knight'
+    const artRole = ENEMY_ROLE_MAP[enemy.typeId] || 'knight'
+    // boss:* cast ids are art roles, not sprite keys: both boss typeIds share
+    // the old 王庭 knight sprite chain when the frame cache can't draw them.
+    const role = artRole.startsWith('boss:') ? 'boss_knight' : artRole
     if (enemy.miniBoss) {
       ctx.save()
       ctx.strokeStyle = enemy.color; ctx.lineWidth = 2.5
@@ -908,10 +914,24 @@ export class TowerDefenseRenderer {
       ctx.filter = 'drop-shadow(0 0 6px #7cd8f5)'
     }
 
-    const spriteSize = radius * (enemy.boss ? 3.6 : 3.0)
-    const drawn = this.assets.draw(ctx, spriteKey, 0, 0, spriteSize, spriteSize)
+    // Migrated roles draw through the shared enemy art (fixed frame cache + flash twin);
+    // the rest keep the legacy char_* sprites. walkTime counts quarter-cycles -> radians.
+    let drawn = false
+    if (hasEnemyArt(artRole)) {
+      const eseed = typeof enemy.id === 'number' ? enemy.id : 0
+      const mul = enemySizeMul(eseed, !!enemy.elite)
+      drawEnemyShadow(ctx, artRole, 0, 0, radius, { sizeMul: mul })
+      drawn = drawEnemyArt(ctx, artRole, radius, {
+        walkT: (walkTime + eseed * .7) * TAU / 4, moving: true, time: elapsed, seed: eseed,
+        swing: -1, elite: !!enemy.elite, sizeMul: mul,
+        hurt: Math.min(1, (enemy.hitFlash || 0) / .12),
+      }, this.gameplay.game?.dpr || 1)
+    }
     if (!drawn) {
-      this._drawEnemyShapeFallback(ctx, enemy, radius)
+      const spriteSize = radius * (enemy.boss ? 3.6 : 3.0)
+      if (!this.assets.draw(ctx, spriteKey, 0, 0, spriteSize, spriteSize)) {
+        this._drawEnemyShapeFallback(ctx, enemy, radius)
+      }
     }
     ctx.restore()
   }
@@ -1017,7 +1037,10 @@ export class TowerDefenseRenderer {
 
   _drawEnemyBars(ctx, enemy, point, radius) {
     const width = radius * (enemy.boss ? 2.4 : 2.0)
-    const top = point.y - radius - (enemy.shield > 0 ? 14 : 10)
+    // unique boss casts stand far taller than the collision circle: stack above the drawn head top
+    const artRole = ENEMY_ROLE_MAP[enemy.typeId] || 'knight'
+    const headroom = enemyArtUnique(artRole) ? enemyArtTop(artRole, radius) : radius
+    const top = point.y - headroom - (enemy.shield > 0 ? 14 : 10)
     const barH = enemy.boss ? 7 : 5
     const ratio = clamp(enemy.hp / enemy.maxHp, 0, 1)
     ctx.fillStyle = 'rgba(8, 12, 14, 0.82)'
@@ -1142,7 +1165,8 @@ export class TowerDefenseRenderer {
   }
 
   _drawSpecialGuardian(ctx, tower, type) {
-    const r = this.unit * .42
+    const level = tower.level || 1
+    const r = this.unit * (level >= 4 ? .50 : level >= 3 ? .46 : level >= 2 ? .44 : .42)
     ctx.save()
     ctx.fillStyle = '#17251e'; ctx.strokeStyle = type.color; ctx.lineWidth = 2
     ctx.beginPath(); ctx.ellipse(0, r * .6, r * 1.1, r * .42, 0, 0, TAU); ctx.fill(); ctx.stroke()
@@ -1261,10 +1285,11 @@ export class TowerDefenseRenderer {
 
     if (isGatling) {
       // Tri-Slime Stack (三头叠罗汉暴走形态 - 纯萌态三兄弟)
+      const grow = level >= 4 ? 1.12 : 1
       const stack = [
-        { y: u * 0.18, r: u * 0.40, color0: '#abebc6', color1: '#27ae60' },
-        { y: -u * 0.15, r: u * 0.30, color0: '#d5f5e3', color1: '#2ecc71' },
-        { y: -u * 0.45, r: u * 0.22, color0: '#e8f8f5', color1: '#58d68d' },
+        { y: u * 0.18, r: u * 0.40 * grow, color0: '#abebc6', color1: '#27ae60' },
+        { y: -u * 0.15, r: u * 0.30 * grow, color0: '#d5f5e3', color1: '#2ecc71' },
+        { y: -u * 0.45, r: u * 0.22 * grow, color0: '#e8f8f5', color1: '#58d68d' },
       ]
       for (let i = 0; i < stack.length; i++) {
         const s = stack[i]
@@ -1386,7 +1411,7 @@ export class TowerDefenseRenderer {
       }
     } else {
       // Standard Acid Spore Slime (标准强酸史莱姆 - 纯嘴巴喷射，无机械管)
-      const r = u * (level >= 2 ? 0.44 : 0.40)
+      const r = u * (level >= 4 ? 0.50 : level >= 3 ? 0.47 : level >= 2 ? 0.44 : 0.40)
       const grad = ctx.createRadialGradient(0, -r * 0.3 + bob, r * 0.1, 0, bob, r)
       grad.addColorStop(0, '#abebc6')
       grad.addColorStop(0.55, '#2ecc71')
@@ -1474,7 +1499,7 @@ export class TowerDefenseRenderer {
     const pulse = tower.pulseTime || 0
     const recoil = tower.recoil || 0
     const floatBob = Math.sin(pulse * 3.5) * u * 0.08
-    const r = u * (level >= 4 ? 0.46 : level >= 2 ? 0.42 : 0.38)
+    const r = u * (level >= 4 ? 0.46 : level >= 3 ? 0.44 : level >= 2 ? 0.42 : 0.38)
 
     ctx.save()
     ctx.translate(0, floatBob)
@@ -1598,7 +1623,7 @@ export class TowerDefenseRenderer {
     const pulse = tower.pulseTime || 0
     const recoil = tower.recoil || 0
     const bob = Math.sin(pulse * 4) * u * 0.03
-    const r = u * (level >= 4 ? 0.50 : level >= 2 ? 0.46 : 0.42)
+    const r = u * (level >= 4 ? 0.50 : level >= 3 ? 0.48 : level >= 2 ? 0.46 : 0.42)
 
     // Squish & expansion when coughing/spitting lava ball
     const sx = 1 + recoil * 0.28
@@ -2001,10 +2026,12 @@ export class TowerDefenseRenderer {
 
   _drawShockSlime(ctx, tower, type, lookX, lookY) {
     const u = this.unit
+    const level = tower.level || 1
     const recoil = tower.recoil || 0
     const elapsed = this.gameplay.elapsedTime || 0
-    const rx = u * (0.46 - recoil * 0.08)
-    const ry = u * (0.42 + recoil * 0.1)
+    const grow = level >= 4 ? 1.15 : level >= 3 ? 1.08 : level >= 2 ? 1.0 : 0.92
+    const rx = u * (0.46 - recoil * 0.08) * grow
+    const ry = u * (0.42 + recoil * 0.1) * grow
 
     // Lightning Slime Body
     const g = ctx.createRadialGradient(-rx * 0.25, -ry * 0.35, rx * 0.1, 0, 0, rx)
@@ -2036,10 +2063,12 @@ export class TowerDefenseRenderer {
 
   _drawArcaneSlime(ctx, tower, type, lookX, lookY) {
     const u = this.unit
+    const level = tower.level || 1
     const recoil = tower.recoil || 0
-    const elapsed = this.gameplay.elapsed || 0
-    const rx = u * (0.48 - recoil * 0.06)
-    const ry = u * (0.44 + recoil * 0.08)
+    const elapsed = this.gameplay.elapsedTime || 0
+    const grow = level >= 4 ? 1.15 : level >= 3 ? 1.08 : level >= 2 ? 1.0 : 0.92
+    const rx = u * (0.48 - recoil * 0.06) * grow
+    const ry = u * (0.44 + recoil * 0.08) * grow
 
     // Dark Gravity Void Body
     const g = ctx.createRadialGradient(-rx * 0.2, -ry * 0.3, rx * 0.1, 0, 0, rx)
@@ -2071,10 +2100,12 @@ export class TowerDefenseRenderer {
 
   _drawRadiantSlime(ctx, tower, type, lookX, lookY) {
     const u = this.unit
+    const level = tower.level || 1
     const recoil = tower.recoil || 0
-    const elapsed = this.gameplay.elapsed || 0
-    const rx = u * (0.46 - recoil * 0.07)
-    const ry = u * (0.42 + recoil * 0.09)
+    const elapsed = this.gameplay.elapsedTime || 0
+    const grow = level >= 4 ? 1.15 : level >= 3 ? 1.08 : level >= 2 ? 1.0 : 0.92
+    const rx = u * (0.46 - recoil * 0.07) * grow
+    const ry = u * (0.42 + recoil * 0.09) * grow
 
     // Radiant Holy Golden Body
     const g = ctx.createRadialGradient(-rx * 0.25, -ry * 0.35, rx * 0.1, 0, 0, rx)

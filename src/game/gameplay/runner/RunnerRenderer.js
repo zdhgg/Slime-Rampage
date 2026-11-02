@@ -1,5 +1,6 @@
 import { AssetManager } from '../../AssetManager.js'
-import { renderSlimeBody, renderSlimeFace, paintSlimeSilhouette } from '../../SlimeRenderer.js'
+import { drawEnemyArt, enemyArtFeet, enemyArtUnique, enemySizeMul, hasEnemyArt } from '../../EnemyArtRenderer.js'
+import { renderSlimeFamilyBody, renderSlimeFamilyFace, paintSlimeFamilySilhouette, slimeFamilyBodyState, slimeFamilyFaceState } from '../../SlimeFamilyArtRenderer.js'
 import {
   RUNNER_COLLISION_DEPTH,
   RUNNER_DURATION,
@@ -722,10 +723,25 @@ export class RunnerRenderer {
     const bob = this.gameplay.reducedMotion ? 0 : Math.sin(this.gameplay.visualTime * 8 + entity.id) * size * 0.035
     ctx.translate(0, bob)
     const walkFrame = entity.hitFlash > 0 ? 4 : Math.floor(this.motionTime * 8 + entity.id) % 4
-    const role = entity.type === 'carrier_boss' ? 'boss_knight'
+    const artRole = entity.type === 'carrier_boss' ? 'boss:knight'
       : entity.sprite?.replace(/^char_/, '').replace(/_\d+$/, '').replace(/^ranger$/, 'archer')
+    // boss:* cast ids are art roles, not sprite keys: the old 王庭 knight sprite chain stays the fallback
+    const role = artRole?.startsWith('boss:') ? 'boss_knight' : artRole
     const sprite = role ? `cyber_${role}_${walkFrame}` : null
-    if (!sprite || !this.assets.draw(ctx, sprite, 0, 0, size * 1.55, size * 1.55)) {
+    if (artRole && hasEnemyArt(artRole)) {
+      // Shared enemy art: stand the frame's feet where the billboard's shadow sits.
+      // unique casts draw at r unjittered (drawEnemyArt forces mul 1), so the foot line must not jitter either
+      const mul = enemySizeMul(entity.id, !!entity.elite), r2 = size * 0.45
+      ctx.save()
+      ctx.translate(0, size * 0.45 - enemyArtFeet(artRole, r2 * (enemyArtUnique(artRole) ? 1 : mul)))
+      drawEnemyArt(ctx, artRole, r2, {
+        walkT: (this.motionTime * 8 + entity.id) * TAU / 4, moving: true,
+        time: this.gameplay.visualTime, seed: entity.id, swing: -1,
+        elite: !!entity.elite, sizeMul: mul,
+        hurt: Math.min(1, (entity.hitFlash || 0) / .12),
+      }, this.gameplay.game?.dpr || 1)
+      ctx.restore()
+    } else if (!sprite || !this.assets.draw(ctx, sprite, 0, 0, size * 1.55, size * 1.55)) {
       // Fallback enemies retain a head, torso, feet and eyes, never a coin.
       ctx.fillStyle = entity.color || '#b67e92'
       ctx.strokeStyle = '#17202d'
@@ -1419,13 +1435,14 @@ export class RunnerRenderer {
     const strainId = gameplay.game?.player?.strainId || gameplay.strainId || 'origin'
     // Share the selection portrait and arena actor, including glutton's face.
     const actorRadius = r * 0.8
-    renderSlimeBody(ctx, strainId, actorRadius)
+    const artTime = gameplay.visualTime || 0
+    renderSlimeFamilyBody(ctx, strainId, actorRadius, slimeFamilyBodyState(artTime))
     if (gameplay.isFeverActive) {
-      paintSlimeSilhouette(ctx, strainId, actorRadius, { fill: 'rgba(255, 183, 3, 0.35)', stroke: '#ffe066', width: 2 })
+      paintSlimeFamilySilhouette(ctx, strainId, actorRadius, { fill: 'rgba(255, 183, 3, 0.35)', stroke: '#ffe066', width: 2 })
     } else if (gameplay.weaponDefinition?.color) {
-      paintSlimeSilhouette(ctx, strainId, actorRadius, { stroke: gameplay.weaponDefinition.color, width: 1.4 })
+      paintSlimeFamilySilhouette(ctx, strainId, actorRadius, { stroke: gameplay.weaponDefinition.color, width: 1.4 })
     }
-    renderSlimeFace(ctx, strainId, actorRadius, { hurt: gameplay.damageFlash > 0.4 })
+    renderSlimeFamilyFace(ctx, strainId, actorRadius, slimeFamilyFaceState(artTime, { hurt: gameplay.damageFlash > 0.4 }))
 
     if (gameplay.shield > 0 || gameplay.shieldFlash > 0) {
       const alpha = gameplay.shield > 0 ? 0.52 + gameplay.shield * 0.08 : gameplay.shieldFlash * 0.5

@@ -12,7 +12,10 @@ export const canvas = {
   getContext: () => ctx2d,
 }
 globalThis.window = { addEventListener() {}, removeEventListener() {}, devicePixelRatio: 1 }
-globalThis.document = { createElement: () => canvas, addEventListener() {}, removeEventListener() {}, hidden: false }
+// createElement returns a fresh stub per call: runtime code (frame caches,
+// scenery canvases) sets width/height on it, and sharing the game canvas let
+// those sizes leak into the engine's canvas.
+globalThis.document = { createElement: () => ({ width: 0, height: 0, getContext: () => ctx2d }), addEventListener() {}, removeEventListener() {}, hidden: false }
 globalThis.requestAnimationFrame = () => 0
 globalThis.cancelAnimationFrame = () => {}
 

@@ -3,33 +3,10 @@ import { Entity } from '../core/Entity.js'
 import { getActiveReactions, getElement } from '../ElementSystem.js'
 import { ENDLESS_FORMATION_BREAK_SPEED_MUL } from '../EndlessMode.js'
 import { AssetManager } from '../AssetManager.js'
-import { renderArenaOriginBody, renderArenaOriginFace, paintArenaOriginSilhouette } from '../ArenaOriginSlimeArt.js'
-import { renderSlimeBody, renderSlimeFace, paintSlimeSilhouette } from '../SlimeRenderer.js'
-import { SLIME_PALETTES } from '../SlimeAppearance.js'
+import { renderSlimeFamilyBody, renderSlimeFamilyFace, paintSlimeFamilySilhouette, slimeFamilyBodyState, slimeFamilyFaceState } from '../SlimeFamilyArtRenderer.js'
+import { getSlimeFamilyArt } from '../SlimeFamilyArt.js'
 
 const TAU = Math.PI * 2
-let arenaOriginRenderErrorLogged = false
-
-function showArenaOriginRenderError(ctx, x, y, radius, error) {
-  if (!arenaOriginRenderErrorLogged) {
-    console.error('[Arena origin slime] Procedural rendering failed.', error)
-    arenaOriginRenderErrorLogged = true
-  }
-  ctx.save()
-  ctx.globalAlpha = 1
-  ctx.strokeStyle = '#ff2fc9'
-  ctx.lineWidth = 2.5
-  ctx.beginPath()
-  ctx.arc(x, y, radius * 1.18, 0, TAU)
-  ctx.moveTo(x - 8, y - 8); ctx.lineTo(x + 8, y + 8)
-  ctx.moveTo(x + 8, y - 8); ctx.lineTo(x - 8, y + 8)
-  ctx.stroke()
-  ctx.fillStyle = '#fff'
-  ctx.font = 'bold 10px sans-serif'
-  ctx.textAlign = 'center'
-  ctx.fillText('ART ERROR', x, y - radius * 1.28)
-  ctx.restore()
-}
 
 const clamp = (v, min, max) => (v < min ? min : v > max ? max : v)
 
@@ -186,6 +163,9 @@ export class Player extends Entity {
 
     // —— 本体异变与软体反馈（评审改造） ——
     this._devourPulse = 0 // 吞噬膨胀脉冲（衰减）
+    this._fireKick = 0 // 齐射后坐力（美术层用，0.2s 衰减）
+    this._gazeAngle = 0 // 最近一次开火方向，开火后短暂看向目标
+    this._gazeTimer = 0
     this._ripple = 0 // 受击内部波纹（扩散衰减）
     this._stopJitter = 0 // 急停抖动（过冲衰减）
     this._trail = [] // 酸液拖尾液滴（火+毒 / 水+毒 组合）
@@ -343,6 +323,8 @@ export class Player extends Entity {
     this.shadowCloneLord = false
     this.shadowAssaultClone = false
     this.evasionFlash = 0
+    this._fireKick = 0
+    this._gazeTimer = 0
     this.evasionCount = 0
     this._dodgedAttacks = new WeakSet()
     this.shadowCleaveLevel = 0
@@ -776,6 +758,10 @@ export class Player extends Entity {
 
     // 软体反馈计时衰减
     this._devourPulse = Math.max(0, this._devourPulse - dt * 1.2)
+    const ws = this.game.weaponSystem
+    const kick = ws?.muzzleKick || 0
+    this._fireKick = Math.max(kick, this._fireKick - dt * 5)
+    if (kick > 0) { this._gazeAngle = ws.muzzleAngle; this._gazeTimer = 0.45 } else this._gazeTimer = Math.max(0, this._gazeTimer - dt)
     this._ripple = Math.max(0, this._ripple - dt * 2.2)
     this._stopJitter = Math.max(0, (this._stopJitter || 0) - dt)
 
@@ -877,9 +863,10 @@ export class Player extends Entity {
     const r = this.radius
     const t = this.elapsed
     const isArenaOrigin = this.strainId === 'origin' && this.game?.gameplayId === 'arena'
-    let originArtError = null
     const mut = this._mutation()
-    const look = SLIME_PALETTES[this.strainId] || SLIME_PALETTES.origin
+    const look = getSlimeFamilyArt(this.strainId)
+    // Elemental wears its chosen elements as orbs and body tint; other strains ignore this.
+    const familyElements = this.strainId === 'elemental' && this.elements ? [...this.elements.keys()] : []
     let baseAlpha = mut.alpha ?? 1
     const shadowPose = this.game?.weaponSystem?.shadowCombat?.pose
     if (shadowPose) baseAlpha *= shadowPose.alpha
@@ -932,7 +919,7 @@ export class Player extends Entity {
     // ---- 酸液拖尾（世界空间，半透明液滴；dash 为冲刺白色残影） ----
     for (const p of this._trail) {
       ctx.globalAlpha = (p.life / 0.5) * 0.4
-      ctx.fillStyle = p.dash ? 'rgba(255, 255, 255, 0.45)' : look.color
+      ctx.fillStyle = p.dash ? 'rgba(255, 255, 255, 0.45)' : look.body
       ctx.beginPath()
       ctx.arc(p.x, p.y, p.r, 0, TAU)
       ctx.fill()
@@ -999,6 +986,14 @@ export class Player extends Entity {
       sy /= wob
     }
 
+    // 当前软体受击弹簧：冲击压缩 -> 弹性回弹 -> 稳定，复用 flash 计时器（0.25s）
+    if (this.flash > 0) {
+      const hp = 1 - this.flash / 0.25
+      const spring = Math.exp(-hp * 5.5) * Math.cos(hp * Math.PI * 4)
+      sx *= 1 + spring * 0.18
+      sy *= 1 - spring * 0.2
+    }
+
     ctx.save()
     const moveBounce = isArenaOrigin ? Math.sin(t * 11) * this.moveBlend * r * 0.035 : 0
     ctx.translate(this.x, this.y - moveBounce)
@@ -1009,43 +1004,38 @@ export class Player extends Entity {
 
     const assets = AssetManager.getInstance()
 
-    const artV1Key = {
-      glutton: 'artV1SlimeGlutton',
-      ricochet: 'artV1SlimeRicochet',
-      elemental: 'artV1SlimeElemental',
-      shadow: 'artV1SlimeShadow',
-      summoner: 'artV1SlimeSummoner',
-    }[this.strainId]
-    const artV1 = artV1Key && !isArenaOrigin && assets.drawArt(ctx, artV1Key, 0, 0, r * 3.2, r * 3.2)
-    if (artV1) {
-      ctx.restore()
-      ctx.globalAlpha = 1
-      return
-    }
-
-    // 进化外显配件（背面层：角/甲壳）
-    if (this.elements.has('lightning') || mut.arcs) {
+    // 进化外显配件（背面层：角/甲壳）；元素史莱姆用自身的元素球表达元素，不再叠加配件
+    const elementProps = this.strainId !== 'elemental'
+    if ((elementProps && this.elements.has('lightning')) || mut.arcs) {
       assets.draw(ctx, 'prop_lightning_horns', 0, -r * 0.5, r * 1.8, r * 1.8)
     }
-    if (this.elements.has('fire') || mut.inner === 'fire' || mut.key === 'acid') {
+    if ((elementProps && this.elements.has('fire')) || mut.inner === 'fire' || mut.key === 'acid') {
       assets.draw(ctx, 'prop_magma_plates', 0, -r * 0.4, r * 1.6, r * 1.6)
     }
-    if (this.elements.has('poison') || mut.inner === 'poison') {
+    if ((elementProps && this.elements.has('poison')) || mut.inner === 'poison') {
       assets.draw(ctx, 'prop_poison_bubbles', 0, -r * 0.4, r * 1.6, r * 1.6)
     }
 
     // The same layered vector artwork as the selection portrait, cached offscreen.
-    const paintSilhouette = options => {
-      if (!isArenaOrigin) return paintSlimeSilhouette(ctx, this.strainId, r, options)
-      try { paintArenaOriginSilhouette(ctx, r, options) } catch (error) { originArtError = error }
-    }
-    try {
-      if (isArenaOrigin) renderArenaOriginBody(ctx, r)
-      else renderSlimeBody(ctx, this.strainId, r)
-    } catch (error) {
-      if (isArenaOrigin) originArtError = error
-      else throw error
-    }
+    const paintSilhouette = options => paintSlimeFamilySilhouette(ctx, this.strainId, r, options)
+
+    // 面部朝向：攻击/开火时看向目标，移动时看向前进方向，静止回中；按游戏时间平滑，避免跳变
+    const gazing = !!bite || this._gazeTimer > 0
+    const gazeAngle = bite ? bite.angle : gazing ? this._gazeAngle : this.facing
+    const gazeAmount = gazing ? 1 : this.moveBlend
+    const gazeK = Math.min(1, Math.max(0, t - (this._lookT ?? t)) * 14)
+    this._lookT = t
+    this._lookX = (this._lookX || 0) + (Math.cos(gazeAngle) * gazeAmount - (this._lookX || 0)) * gazeK
+    this._lookY = (this._lookY || 0) + (Math.sin(gazeAngle) * gazeAmount - (this._lookY || 0)) * gazeK
+
+    renderSlimeFamilyBody(ctx, this.strainId, r, slimeFamilyBodyState(t, {
+      bite: bite ? 1 : 0,
+      swallowing: this._devourPulse > 0.03 ? 1 : 0,
+      elements: familyElements,
+      hitJolt: Math.max(0, this.flash / 0.25),
+      recoil: this.strainId === 'ricochet' ? this._fireKick : 0,
+      coreGlow: this.strainId === 'elemental' ? Math.min(1, (this.game?.weaponSystem?.spellCombat?.castPulse || 0) / 0.25) : 0,
+    }))
     // Evolution adds material and effects while retaining the selected character.
     if (mut.key !== 'base') {
       ctx.save()
@@ -1144,19 +1134,15 @@ export class Player extends Entity {
       faceState = 'blink'
     }
 
-    try {
-      if (isArenaOrigin) renderArenaOriginFace(ctx, r, faceState)
-      else renderSlimeFace(ctx, this.strainId, r, {
-        bite, hurt: faceState === 'hurt', blink: faceState === 'blink',
-        swallowing: this._devourPulse > 0.03,
-      })
-    } catch (error) {
-      if (isArenaOrigin) originArtError = error
-      else throw error
-    }
+    renderSlimeFamilyFace(ctx, this.strainId, r, slimeFamilyFaceState(t, {
+      hurt: faceState === 'hurt', blink: faceState === 'blink',
+      devour: faceState === 'devour', angry: faceState === 'angry',
+      lowhp: faceState === 'lowhp', bite: !!this.game?.weaponSystem?.gluttonCombat.pose,
+      elements: familyElements, lookX: this._lookX, lookY: this._lookY,
+    }))
     if (chargePulse > 0) {
       paintSilhouette({
-        stroke: `rgba(229, 255, 169, ${chargePulse * 0.8})`, width: 2,
+        stroke: `rgba(255, 214, 190, ${chargePulse * 0.8})`, width: 2,
       })
     }
 
@@ -1179,6 +1165,5 @@ export class Player extends Entity {
 
     ctx.restore()
     ctx.globalAlpha = 1 // 恢复透明度
-    if (originArtError) showArenaOriginRenderError(ctx, this.x, this.y, r, originArtError)
   }
 }

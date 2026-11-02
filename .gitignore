@@ -26,3 +26,12 @@ backups/
 
 # 外部绘图工具的调用参数，含一次性签名 URL
 concept_args.json
+
+# 美术迭代的本地临时产物（看板截图、边界测量、测试数据库等）
+.tmp-*/
+
+# 本地 Devin/MCP 配置
+.devin/mcp_config.local.json
+
+# Windows 重定向误产物
+nul

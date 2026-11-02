@@ -36,12 +36,11 @@ try {
   await page.waitForFunction(() => document.querySelector('.game-canvas').__vueParentComponent.setupState.engine.running)
   await page.evaluate(async () => {
     const e = document.querySelector('.game-canvas').__vueParentComponent.setupState.engine
-    const { getArenaKnightFrameCache } = await import('/src/game/ArenaKnightFrameCache.js')
-    const { getArenaMageFrameCache } = await import('/src/game/ArenaMageFrameCache.js')
+    const { getEnemyFrameCache } = await import('/src/game/EnemyArtRenderer.js')
     const { AssetManager } = await import('/src/game/AssetManager.js')
     window.acceptance = { samples: [], captures: {}, calls: { knight: 0, mage: 0, art: {} }, choices: [], mode: 'DPR1', cache: [] }
     const audit = window.acceptance
-    for (const [name, cache] of [['knight', getArenaKnightFrameCache()], ['mage', getArenaMageFrameCache()]]) {
+    for (const [name, cache] of [['knight', getEnemyFrameCache('knight')], ['mage', getEnemyFrameCache('mage')]]) {
       const draw = cache.draw
       cache.draw = function (...args) { audit.calls[name]++; return draw.apply(this, args) }
       audit.cache.push({ name, ...cache.snapshot() })
@@ -154,21 +153,26 @@ try {
     return { ...acceptance, inputTimer: undefined, viewport: { css: [acceptanceEngine.width, acceptanceEngine.height], canvas: [acceptanceEngine.canvas.width, acceptanceEngine.canvas.height], browserDpr: devicePixelRatio, engineDpr: acceptanceEngine.dpr }, url: location.href, strain: acceptanceEngine.player.strainId }
   })
   data.quality = await page.evaluate(async () => {
-    const { drawArenaKnightA } = await import('/src/game/ArenaKnightPrototype.js')
-    const { drawArenaMageA } = await import('/src/game/ArenaMagePrototype.js')
+    const { ENEMY_CAST } = await import('/src/game/enemy-art/enemy-cast.js')
+    const { setScale } = await import('/src/game/slime-art/slime-painter.js')
     const results = []
-    for (const [name, draw, radius] of [['knight', drawArenaKnightA, 14 * 1.52], ['mage', drawArenaMageA, 13 * 1.45]]) {
-      const c = document.createElement('canvas'); c.width = c.height = 128
-      const x = c.getContext('2d'); x.translate(64, 64); draw(x, radius)
-      const pixels = x.getImageData(0, 0, 128, 128).data
-      let outsideAlphaPixels = 0, minX = 128, minY = 128, maxX = -1, maxY = -1
-      for (let py = 0; py < 128; py++) for (let px = 0; px < 128; px++) if (pixels[(py * 128 + px) * 4 + 3] > 0) {
-        minX = Math.min(minX, px); minY = Math.min(minY, py); maxX = Math.max(maxX, px); maxY = Math.max(maxY, py)
-        if (px < 32 || px >= 96 || py < 32 || py >= 96) outsideAlphaPixels++
+    for (const [name, cast] of Object.entries(ENEMY_CAST)) {
+      // Draw every frame on a 3x oversized surface and report how far the art reaches past the cache surface.
+      const px = cast.surface * 3
+      let minMargin = Infinity
+      for (const [, state] of cast.frames) {
+        const c = document.createElement('canvas'); c.width = c.height = px
+        const x = c.getContext('2d', { willReadFrequently: true }); x.translate(px / 2, px / 2)
+        setScale(cast.baseR * cast.scale); x.scale(cast.baseR * cast.scale / 100, cast.baseR * cast.scale / 100); cast.draw(x, state)
+        const pixels = x.getImageData(0, 0, px, px).data
+        let minX = px, minY = px, maxX = -1, maxY = -1
+        for (let py = 0; py < px; py++) for (let qx = 0; qx < px; qx++) if (pixels[(py * px + qx) * 4 + 3] > 8) { minX = Math.min(minX, qx); minY = Math.min(minY, py); maxX = Math.max(maxX, qx); maxY = Math.max(maxY, py) }
+        const half = cast.surface / 2
+        minMargin = Math.min(minMargin, half - (px / 2 - minX), half - (maxX + 1 - px / 2), half - (px / 2 - minY), half - (maxY + 1 - px / 2))
       }
-      results.push({ name, bboxRelative: [minX - 64, minY - 64, maxX - 64, maxY - 64], outside64SurfaceAlphaPixels: outsideAlphaPixels })
+      results.push({ name, surface: cast.surface, minMarginPx: minMargin })
     }
-    return { bounds: results, quarterRadianPhase: Math.PI / 2, realtimeStepAtQuarterRadian: Math.sin(Math.PI / 2 * Math.PI * 2), cachedQuarterCycleStep: 1 }
+    return { bounds: results }
   })
   for (const [name, capture] of Object.entries(data.captures)) { await save(`real-${name}.png`, Buffer.from(capture.image.split(',')[1], 'base64')); delete capture.image }
   if (data.peak) { await save('real-peak-density.png', Buffer.from(data.peak.image.split(',')[1], 'base64')); delete data.peak.image }

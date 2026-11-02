@@ -74,15 +74,20 @@ const chapterFodder = [ ['grunt', 'runner', 'swarm'], ['grunt', 'sprinter', 'shi
 
 function stageEnvelope(stage, chapter) {
   // Absolute chapter anchors avoid exponential growth over 99 stages.
+  // The stage-6 anchor continues the scripted stage 1-5 finale load (~900)
+  // instead of dropping back to a trivial reset.
   if (stage <= 10) {
-    return { opening: [95, 145, 200, 245, 310][stage - 6], final: [410, 780, 1100, 1550, 2300][stage - 6] }
+    return { opening: [170, 225, 285, 345, 400][stage - 6], final: [850, 1200, 1600, 2050, 2500][stage - 6] }
   }
   const progress = ((stage - 1) % 20) / 19
-  if (chapter === 1) return { opening: 320 + (stage - 11) * 12, final: 2500 + (stage - 11) * 205 }
-  const opening = [0, 0, 480, 540, 580, 580][chapter] + progress * 110
-  const final = [0, 0, 4400, 5400, 6400, 7300][chapter] + progress * [0, 0, 1050, 1350, 1500, 1900][chapter]
+  if (chapter === 1) return { opening: 350 + (stage - 11) * 15, final: 2550 + (stage - 11) * 235 }
+  // Later chapters must outgrow a saturating roster: more slots, more branch
+  // types and level-4 towers multiply board DPS far faster than a flat slope.
+  // Chapter pressureGain multiplies these anchors again, so keep them modest.
+  const opening = [0, 0, 500, 540, 575, 610][chapter] + progress * 110
+  const final = [0, 0, 4200, 4950, 6000, 8000][chapter] + progress * [0, 0, 950, 1200, 1700, 2400][chapter]
   const position = (stage - 1) % 5
-  const block = [.95, .98, 1, 1.02, 1.06][position]
+  const block = [.95, .98, .96, 1.02, 1.06][position]
   return { opening: opening * block, final: final * block }
 }
 
@@ -90,10 +95,10 @@ function stageEnvelope(stage, chapter) {
 // defenses. Teaching openings stay fixed while later waves test reinvestment.
 function pressureGain(stage, chapter) {
   if (stage <= 12) return 1
-  if (stage === 15) return 1.5
-  if (chapter === 1) return 1.3
-  if (stage === 99) return 1.6
-  return [1, 1, 1.25, 1.35, 1.18, 1.25][chapter]
+  if (stage === 15) return 1.45
+  if (chapter === 1) return 1.24
+  if (stage === 99) return 1.1
+  return [1, 1, 1.19, 1.35, 1.18, 1.25][chapter]
 }
 
 export function shapeCampaignWaves(stage, chapter, source) {
@@ -106,29 +111,54 @@ export function shapeCampaignWaves(stage, chapter, source) {
     const wave = source[index], role = roles[index], final = role === 'finale'
     const recovery = role === 'recovery', opening = index < 2
     const progress = index / (source.length - 1)
-    let target = (envelope.opening + (envelope.final - envelope.opening) * progress ** 1.65)
-      * (index < 2 ? 1 : pressureGain(stage, chapter))
-    if (recovery) target = waves[index - 1].pacing.targetBudget * .82
+    let target = (envelope.opening + (envelope.final - envelope.opening) * progress ** 1.58)
+      * (index < 2 ? 1 + (pressureGain(stage, chapter) - 1) * .5 : pressureGain(stage, chapter))
+    // Boards are thinnest mid-stage: ease the danger band without flattening the climb.
+    if (!final && progress > .3 && progress < .65) target *= .90
+    if (recovery) target = waves[index - 1].pacing.targetBudget * .80
+    // Mini-boss and chapter-boss finales peak above the trend line.
+    if (final) target *= stage % 20 === 0 ? 1.08 : stage === 99 ? 1.15 : stage % 5 === 0 ? 1.06 : 1
     const groups = wave.groups.map(g => ({ ...g }))
     const leaderIndex = groups.findIndex(g => g.miniBoss)
     const escorts = new Set(leaderIndex < 0 ? [] : groups[leaderIndex].miniBoss.escorts.map((_, i) => leaderIndex + 1 + i))
     const reservedSupport = [...escorts].filter(i => isSupport(groups[i]?.type)).length
     // Limit overlapping support instead of stacking healing, shielding and EMP.
     const supportLimit = Math.max(0, (opening || recovery ? 0 : chapter === 1 ? 2 : 3) - reservedSupport)
-    const heavyLimit = Math.floor(groups.length * (opening ? .2 : recovery ? .15 : .4))
-    let supports = 0, heavies = 0, lastSupport = -10
+    // Armor walls are hardest for thin early boards: cap heavies tighter until
+    // the back half of a stage, when more towers and penetration are online.
+    const heavyLimit = Math.floor(groups.length * (opening ? .2 : recovery ? .15 : progress < .6 ? .25 : final ? .28 : .33))
+    // Counter-check types (cloaking, spawning, splitting, sprint) need their own
+    // caps: a wave that is mostly one mechanic is only beatable by its counter.
+    const ambushLimit = Math.ceil(groups.length * .25)
+    const spawnLimit = Math.ceil(groups.length * .22)
+    const sprintLimit = Math.ceil(groups.length * .35)
+    let supports = 0, heavies = 0, lastSupport = -10, ambushers = 0, spawners = 0, sprinters = 0
     for (let n = 0; n < groups.length; n++) {
       const g = groups[n]
       if (g.type === 'boss' || g.miniBoss || escorts.has(n)) continue
       const firstExample = index === 2 && g.type === newEnemy
       const tooHeavy = isHeavy(g.type) && heavies >= heavyLimit
       const tooMuchSupport = isSupport(g.type) && (supports >= supportLimit || n - lastSupport < 4)
-      if (!firstExample && (tooHeavy || tooMuchSupport || (recovery && ['splitter', 'broodmother', 'stalker'].includes(g.type)))) {
-        g.type = available[n % available.length] || 'grunt'
+      const tooAmbush = g.type === 'stalker' && ambushers >= ambushLimit
+      const tooSpawner = ['broodmother', 'splitter'].includes(g.type) && spawners >= spawnLimit
+      const tooSprint = ['sprinter', 'runner'].includes(g.type) && sprinters >= sprintLimit
+      if (!firstExample && (tooHeavy || tooMuchSupport || tooAmbush || tooSpawner || tooSprint || (recovery && ['splitter', 'broodmother', 'stalker'].includes(g.type)))) {
+        // The replacement must respect every cap too — fodder picks can
+        // otherwise refill the very mechanic slots being limited.
+        const options = available.filter(t =>
+          !(isHeavy(t) && heavies >= heavyLimit)
+          && !(isSupport(t) && supports >= supportLimit)
+          && !(t === 'stalker' && ambushers >= ambushLimit)
+          && !(['broodmother', 'splitter'].includes(t) && spawners >= spawnLimit)
+          && !(['sprinter', 'runner'].includes(t) && sprinters >= sprintLimit))
+        g.type = options[n % (options.length || 1)] || 'grunt'
         if (isHeavy(g.type) && heavies >= heavyLimit) g.type = 'grunt'
       }
       if (isSupport(g.type)) { supports++; lastSupport = n }
       if (isHeavy(g.type)) heavies++
+      if (g.type === 'stalker') ambushers++
+      if (['broodmother', 'splitter'].includes(g.type)) spawners++
+      if (['sprinter', 'runner'].includes(g.type)) sprinters++
       if (recovery) g.interval *= chapter === 5 ? 1.5 : 1.25
       if (isSupport(g.type)) g.gap = Math.max(g.gap || 0, 1.2)
     }

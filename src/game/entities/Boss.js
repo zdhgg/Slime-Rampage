@@ -1,5 +1,7 @@
 import { Enemy } from './Enemy.js'
 import { AssetManager } from '../AssetManager.js'
+import { drawEnemyArt, drawEnemyShadow, enemyArtFeet, enemyArtTop, hasEnemyArt } from '../EnemyArtRenderer.js'
+import { BOSS_CAST, bossArtId } from '../enemy-art/boss-cast.js'
 
 const TAU = Math.PI * 2
 
@@ -130,7 +132,6 @@ export class Boss extends Enemy {
     this._walkT = Math.random() * 10
     this._moving = false
     this._spawnT = 0.35
-    this._shadowGrad = null
     this._animClock = 0
     this._attackAnim = 0
     this._recoveryDuration = 0
@@ -141,10 +142,9 @@ export class Boss extends Enemy {
     return Object.freeze({ id: this.specialPattern, name: cfg.special })
   }
 
-  get artKey() {
-    return this.type === 'boss-mage' ? 'artV1BossMage'
-      : this.type === 'boss-archer' ? 'artV1BossArcher'
-      : null
+  /** 首领美术 cast 键（`boss:*`）；未注册的 id 渲染时回退旧精灵。 */
+  get artId() {
+    return bossArtId(this)
   }
 
   /** Read-only presentation snapshot. Never advances combat or exposes mutable hit geometry. */
@@ -620,48 +620,105 @@ export class Boss extends Enemy {
     ctx.restore()
   }
 
+  /**
+   * 首领美术姿态输入：全部来自已有战斗时钟与 attackPresentation（冻结只读快照），
+   * 渲染不得写入任何战斗状态。
+   */
+  _artState() {
+    const attack = this.attackPresentation
+    const ranged = this.type === 'boss-mage' || this.type === 'boss-archer'
+    const st = {
+      walkT: this._walkT + this._artSeed, // 弧度；+种子相位错开同屏步伐
+      moving: this._moving,
+      time: this.game.elapsed,
+      seed: this._artSeed,
+      sizeMul: 1, // 首领是独一无二个体：不要体型抖动
+      enraged: this.enraged,
+      hurt: this.flash > 0 ? Math.min(1, this.flash / 0.12) : 0,
+      swing: -1,
+    }
+    if (this.phaseShift > 0) st.stance = 'roar'
+    else if (attack.stage === 'recover') st.stance = 'recover'
+    else if (attack.stage === 'telegraph' || attack.stage === 'chain') {
+      st.windup = true
+      if (ranged) st.casting = 'charge'
+    } else if (attack.stage === 'dash' || attack.stage === 'step') {
+      st.swing = attack.progress
+      if (attack.stage === 'dash') st.stance = 'dashing'
+      if (ranged) st.casting = 'fire'
+    }
+    // 边防官出手即闪（_attackAnim 结算后 0.48s 的释放帧）
+    if (attack.attackRemaining > 0 && attack.stage !== 'telegraph') st.swing = 1 - attack.attackRemaining / 0.48
+    // 普攻窗口（站定才递减冷却）：临近出手抬武器、刚出手跟斩击帧
+    if (st.swing < 0 && !st.windup && !this._moving && this.attackCd > 0) {
+      const since = this.attackInterval - this.attackCd
+      if (since >= 0 && since < 0.18) {
+        st.swing = since / 0.18
+        if (ranged) st.casting = 'fire'
+      } else if (this.attackCd < (this.type === 'boss-knight' ? 0.3 : 0.4)) {
+        st.windup = true
+        if (ranged) st.casting = 'charge'
+      }
+    }
+    return st
+  }
+
   render(ctx) {
     if (!this.active || this.hp <= 0) return
     const r = this.radius
     const t = this.game.elapsed
     const assets = AssetManager.getInstance()
+    const artId = this.artId
+    const hasArt = !!artId && hasEnemyArt(artId)
+    const cast = hasArt ? BOSS_CAST[artId] : null
+    const top = hasArt ? enemyArtTop(artId, r) : r
     this._renderTelegraph(ctx)
 
     const auraPulse = 0.5 + 0.5 * Math.sin(t * 2.5)
+    const feet = hasArt ? enemyArtFeet(artId, r) : r * 0.85
+
+    // 王者气场与狂暴红环：压成贴地椭圆铺在脚线上，不再盖住身体
+    const auraRx = r * (1.7 + auraPulse * 0.3)
     ctx.fillStyle = this.enraged
       ? `rgba(255, 70, 50, ${0.12 + auraPulse * 0.1})`
       : `rgba(255, 209, 102, ${0.08 + auraPulse * 0.08})`
     ctx.beginPath()
-    ctx.arc(this.x, this.y, r * (1.6 + auraPulse * 0.25), 0, TAU)
+    ctx.ellipse(this.x, this.y + feet, auraRx, auraRx * 0.42, 0, 0, TAU)
     ctx.fill()
-
-    ctx.save()
-    ctx.translate(this.x, this.y + r * 0.85)
-    ctx.scale(1, 0.3)
-    if (!this._shadowGrad) {
-      const shadow = ctx.createRadialGradient(0, 0, r * 0.1, 0, 0, r)
-      shadow.addColorStop(0, 'rgba(0, 0, 0, 0.38)')
-      shadow.addColorStop(1, 'rgba(0, 0, 0, 0)')
-      this._shadowGrad = shadow
+    if (this.enraged) {
+      const ringRx = auraRx + 4 + auraPulse * 3
+      ctx.strokeStyle = `rgba(255, 60, 40, ${0.4 + auraPulse * 0.4})`
+      ctx.lineWidth = 3
+      ctx.beginPath()
+      ctx.ellipse(this.x, this.y + feet, ringRx, ringRx * 0.42, 0, 0, TAU)
+      ctx.stroke()
     }
-    ctx.fillStyle = this._shadowGrad
-    ctx.beginPath()
-    ctx.arc(0, 0, r, 0, TAU)
-    ctx.fill()
-    ctx.restore()
 
-    ctx.save()
-    const bob = this._moving ? Math.sin(this._walkT * 1.6) * 2 : 0
-    ctx.translate(this.x, this.y + bob)
-    if (Math.cos(this.facing) < 0) ctx.scale(-1, 1)
-
+    // 出生弹入缩放（easeOutBack），地面阴影同步缩放
+    let spawnScale = 1
     if (this._spawnT > 0) {
       const k = 1 - this._spawnT / 0.35
       const c1 = 1.70158
       const c3 = c1 + 1
-      const scale = 1 + c3 * Math.pow(k - 1, 3) + c1 * Math.pow(k - 1, 2)
-      ctx.scale(scale, scale)
+      spawnScale = 1 + c3 * Math.pow(k - 1, 3) + c1 * Math.pow(k - 1, 2)
     }
+
+    // 悬浮首领离地漂浮（信标术士等），影子随之缩小
+    const floating = !!cast?.floats
+    const hover = floating ? (0.12 + 0.06 * Math.sin(t * 3 + this._walkT + this._artSeed)) * r : 0
+
+    if (hasArt) drawEnemyShadow(ctx, artId, this.x, this.y, r, { lift: hover, scale: spawnScale })
+    else {
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.26)'
+      ctx.beginPath()
+      ctx.ellipse(this.x, this.y + feet + 1, r, r * 0.26, 0, 0, TAU)
+      ctx.fill()
+    }
+
+    ctx.save()
+    ctx.translate(this.x, this.y - hover)
+    if (Math.cos(this.facing) < 0) ctx.scale(-1, 1)
+    if (spawnScale !== 1) ctx.scale(spawnScale, spawnScale)
 
     const roleKey = this.type === 'boss-mage' ? 'boss_mage' : this.type === 'boss-archer' ? 'boss_archer' : 'boss_knight'
     let frame = Math.floor(((this._walkT % (TAU * 1.5)) / (TAU * 1.5)) * 4) % 4
@@ -674,8 +731,25 @@ export class Boss extends Enemy {
       assets.draw(ctx, 'vfx_magic_circle', 0, 0, r * 3.2, r * 3.2)
       ctx.restore()
     }
-    const artV1 = this.artKey && assets.drawArt(ctx, this.artKey, 0, 0, r * 3.0, r * 3.0)
-    if (!artV1) assets.draw(ctx, `char_${roleKey}_${frame}`, 0, 0, r * 2.6, r * 2.6)
+
+    let artMode = false
+    if (hasArt) artMode = drawEnemyArt(ctx, artId, r, this._artState(), this.game.dpr)
+    if (!artMode) assets.draw(ctx, `char_${roleKey}_${frame}`, 0, 0, r * 2.6, r * 2.6)
+
+    // 狂怒受击余烬：白闪（缓存白剪影或旧圆斑）会盖住 r_* 狂怒读法，
+    // 在头肩线上补三点活火让二阶段仍然可读；白闪本身仍是主反馈
+    if (this.enraged && this.flash > 0) {
+      for (const [fx, fy, s] of [[-.3, .8, .7], [.34, .6, 1], [.02, .97, .55]]) {
+        const ex = fx * r, ey = -top * fy, gr = r * .22 * s
+        const ember = ctx.createRadialGradient(ex, ey, 0, ex, ey, gr)
+        ember.addColorStop(0, 'rgba(255, 122, 60, .85)')
+        ember.addColorStop(1, 'rgba(255, 60, 30, 0)')
+        ctx.fillStyle = ember
+        ctx.beginPath(); ctx.arc(ex, ey, gr, 0, TAU); ctx.fill()
+        ctx.fillStyle = '#ffc890'
+        ctx.beginPath(); ctx.arc(ex, ey, gr * .36, 0, TAU); ctx.fill()
+      }
+    }
 
     if (this.type === 'boss-knight' && ((this.attackCd > 0 && this.attackCd < 0.3) || this.specialState === 'dash')) {
       ctx.save()
@@ -684,15 +758,8 @@ export class Boss extends Enemy {
       ctx.restore()
     }
 
-    if (this.enraged) {
-      ctx.strokeStyle = `rgba(255, 60, 40, ${0.4 + auraPulse * 0.4})`
-      ctx.lineWidth = 3
-      ctx.beginPath()
-      ctx.ellipse(0, 0, r + 4 + auraPulse * 3, r + 4 + auraPulse * 3, 0, 0, TAU)
-      ctx.stroke()
-    }
-
-    if (this.flash > 0) {
+    // 受击白闪（新美术的缓存帧自带白剪影叠层，无需再盖圆斑）
+    if (this.flash > 0 && artMode !== 'cache') {
       ctx.fillStyle = `rgba(255, 255, 255, ${((this.flash / 0.12) * 0.75).toFixed(2)})`
       ctx.beginPath()
       ctx.ellipse(0, 0, r * 1.1, r * 1.1, 0, 0, TAU)
@@ -728,7 +795,7 @@ export class Boss extends Enemy {
       ctx.fillStyle = '#ffe3a2'
       ctx.font = 'bold 12px sans-serif'
       ctx.textAlign = 'center'
-      ctx.fillText('破绽', this.x, this.y - r - 24)
+      ctx.fillText('破绽', this.x, this.y - top - 24)
       ctx.restore()
     }
 
@@ -750,14 +817,14 @@ export class Boss extends Enemy {
     if (statusIcon) {
       ctx.font = '13px sans-serif'
       ctx.textAlign = 'center'
-      ctx.fillText(statusIcon, this.x, this.y - r - (this.vulnerableTimer > 0 ? 42 : 20))
+      ctx.fillText(statusIcon, this.x, this.y - top - (this.vulnerableTimer > 0 ? 42 : 20))
     }
 
     const barWidth = 68
     const barHeight = 7
     const ratio = Math.max(0, this.hp / this.maxHp)
     const barX = this.x - barWidth / 2
-    const barY = this.y - r - 18
+    const barY = this.y - top - 14
     ctx.fillStyle = 'rgba(0, 0, 0, 0.65)'
     ctx.fillRect(barX - 1, barY - 1, barWidth + 2, barHeight + 2)
     ctx.fillStyle = ratio > 0.5 ? '#6fce4a' : ratio > 0.25 ? '#f0b83c' : '#e04444'

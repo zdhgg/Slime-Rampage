@@ -72,8 +72,11 @@ export function fitTowerDefenseSlots(slots, path, traps = [], layout = getTowerD
   const spacing = u * 2.5
   const placed = []
   let candidates
+  // Slots beyond reach of every tower are dead ground; relocate them inside useful range.
+  const maxUsefulDistance = 0.30
   const validGround = p => p.x >= margin && p.x <= w - margin && p.y >= margin && p.y <= h - margin
     && distanceToTowerDefensePath(p, pixelPath) >= clearance
+    && distanceToTowerDefensePath({ x: p.x / w, y: p.y / h }, path) <= maxUsefulDistance
     && trapPoints.every(t => Math.hypot(p.x - t.x, p.y - t.y) >= u * 2.25)
   const free = p => placed.every(t => Math.hypot(p.x - t.x, p.y - t.y) >= spacing)
 

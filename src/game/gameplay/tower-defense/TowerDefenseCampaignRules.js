@@ -128,11 +128,11 @@ export const TOPOLOGY_PRESETS = Object.freeze({
       { x: 0.13, y: 0.37, leyline: 'acid' },
       { x: 0.42, y: 0.16, leyline: 'frost' },
       { x: 0.45, y: 0.34, leyline: 'magma' },
-      { x: 0.14, y: 0.66, leyline: 'acid' },
-      { x: 0.43, y: 0.68, leyline: 'frost' },
+      { x: 0.15, y: 0.57, leyline: 'acid' },
+      { x: 0.47, y: 0.64, leyline: 'frost' },
       { x: 0.79, y: 0.40, leyline: 'magma' },
       { x: 0.79, y: 0.62, leyline: 'acid' },
-      { x: 0.43, y: 0.86, leyline: 'magma' },
+      { x: 0.50, y: 0.84, leyline: 'magma' },
       { x: 0.28, y: 0.32, locked: true, cost: 40, reward: 60, leyline: 'amplified' },
       { x: 0.63, y: 0.62, locked: true, cost: 40, reward: 60, leyline: 'amplified' },
     ],
@@ -246,8 +246,8 @@ export const TOPOLOGY_PRESETS = Object.freeze({
       { x: 0.20, y: 0.38, leyline: 'frost' },
       { x: 0.55, y: 0.42, leyline: 'magma' },
       { x: 0.55, y: 0.78, leyline: 'frost' },
-      { x: 0.20, y: 0.75, leyline: 'acid' },
-      { x: 0.85, y: 0.48, leyline: 'acid' },
+      { x: 0.28, y: 0.68, leyline: 'acid' },
+      { x: 0.84, y: 0.44, leyline: 'acid' },
       { x: 0.85, y: 0.14, leyline: 'magma' },
       { x: 0.40, y: 0.08, leyline: 'frost' },
       { x: 0.70, y: 0.78, leyline: 'magma' },
@@ -281,7 +281,7 @@ export const TOPOLOGY_PRESETS = Object.freeze({
       { x: 0.55, y: 0.62, leyline: 'amplified' },
       { x: 0.90, y: 0.34, leyline: 'magma' },
       { x: 0.55, y: 0.86, leyline: 'acid' },
-      { x: 0.20, y: 0.86, leyline: 'frost' },
+      { x: 0.26, y: 0.82, leyline: 'frost' },
       { x: 0.45, y: 0.22, locked: true, cost: 50, reward: 75, leyline: 'amplified' },
       { x: 0.35, y: 0.62, locked: true, cost: 50, reward: 75, leyline: 'amplified' },
     ],
@@ -308,7 +308,7 @@ export const TOPOLOGY_PRESETS = Object.freeze({
       { x: 0.38, y: 0.68, leyline: 'frost' },
       { x: 0.75, y: 0.68, leyline: 'acid' },
       { x: 0.08, y: 0.35, leyline: 'acid' },
-      { x: 0.90, y: 0.65, leyline: 'magma' },
+      { x: 0.84, y: 0.64, leyline: 'magma' },
       { x: 0.55, y: 0.92, leyline: 'frost' },
       { x: 0.40, y: 0.08, leyline: 'magma' },
       { x: 0.60, y: 0.35, locked: true, cost: 50, reward: 75, leyline: 'amplified' },
@@ -335,9 +335,9 @@ export const TOPOLOGY_PRESETS = Object.freeze({
       { x: 0.18, y: 0.40, leyline: 'amplified' },
       { x: 0.50, y: 0.42, leyline: 'magma' },
       { x: 0.82, y: 0.40, leyline: 'frost' },
-      { x: 0.18, y: 0.80, leyline: 'acid' },
+      { x: 0.22, y: 0.72, leyline: 'acid' },
       { x: 0.50, y: 0.80, leyline: 'amplified' },
-      { x: 0.82, y: 0.80, leyline: 'magma' },
+      { x: 0.78, y: 0.72, leyline: 'magma' },
       { x: 0.35, y: 0.08, leyline: 'frost' },
       { x: 0.65, y: 0.08, leyline: 'acid' },
       { x: 0.35, y: 0.44, locked: true, cost: 50, reward: 80, leyline: 'amplified' },
@@ -365,8 +365,8 @@ export const TOPOLOGY_PRESETS = Object.freeze({
       { x: 0.38, y: 0.36, leyline: 'frost' },
       { x: 0.64, y: 0.34, leyline: 'magma' },
       { x: 0.64, y: 0.62, leyline: 'amplified' },
-      { x: 0.35, y: 0.62, leyline: 'acid' },
-      { x: 0.20, y: 0.80, leyline: 'magma' },
+      { x: 0.38, y: 0.62, leyline: 'acid' },
+      { x: 0.88, y: 0.60, leyline: 'magma' },
       { x: 0.60, y: 0.80, leyline: 'frost' },
       { x: 0.88, y: 0.36, leyline: 'acid' },
       { x: 0.50, y: 0.36, locked: true, cost: 50, reward: 80, leyline: 'amplified' },
@@ -398,7 +398,7 @@ export const TOPOLOGY_PRESETS = Object.freeze({
       { x: 0.88, y: 0.28, leyline: 'acid' },
       { x: 0.38, y: 0.60, leyline: 'amplified' },
       { x: 0.62, y: 0.60, leyline: 'amplified' },
-      { x: 0.25, y: 0.75, leyline: 'magma' },
+      { x: 0.33, y: 0.68, leyline: 'magma' },
       { x: 0.75, y: 0.75, leyline: 'frost' },
       { x: 0.50, y: 0.30, locked: true, cost: 60, reward: 100, leyline: 'amplified' },
       { x: 0.50, y: 0.60, locked: true, cost: 60, reward: 100, leyline: 'amplified' },
@@ -592,7 +592,7 @@ export function getStageConfig(stageId, { endless = false } = {}) {
   const traps = getStageSpecificTraps(topology.traps, clampedStage, stageInChapter, topology.path)
     .filter(trap => progression[trapFeatures[trap.id]]);
   let slotSeeds = clampedStage <= 5 && !endless
-    ? [{ x: 0.20, y: 0.33 }, { x: 0.38, y: 0.31 }, { x: 0.53, y: 0.62 }, { x: 0.76, y: 0.61 }, { x: 0.85, y: 0.34 }, { x: 0.12, y: 0.60 }]
+    ? [{ x: 0.20, y: 0.33 }, { x: 0.38, y: 0.31 }, { x: 0.53, y: 0.62 }, { x: 0.76, y: 0.61 }, { x: 0.80, y: 0.40 }, { x: 0.16, y: 0.56 }]
       .slice(0, clampedStage === 1 ? 4 : clampedStage <= 3 ? 5 : 6)
       .map((slot, slotIndex) => ({ ...slot, slotIndex, leyline: 'none', locked: false, cost: 0, reward: 0 }))
     : getStageSpecificSlots(topology.buildSlots, clampedStage, stageInChapter, chapter.id);
@@ -772,10 +772,12 @@ function generateStageWaves(stageId, chapterId, waveCount, isBossStage) {
         if (w <= 2 || (introducedCounts[type] || 0) >= limit) type = 'grunt';
         else introducedCounts[type] = (introducedCounts[type] || 0) + 1;
       }
-      groups.push({ type, count: 1, interval: interval * (['tank', 'siege', 'broodmother'].includes(type) ? 1.5 : 1), gap: 0, scale, rewardScale: .80 });
+      // Kill income decays with stage: flat rewards otherwise overflow late
+      // boards, leaving hundreds of unspent gold after every clear.
+      groups.push({ type, count: 1, interval: interval * (['tank', 'siege', 'broodmother'].includes(type) ? 1.5 : 1), gap: 0, scale, rewardScale: Math.max(.62, .85 - stageId * .0025) });
     }
     if (final && (isBossStage || stageId % 5 === 0)) {
-      if (isBossStage) groups.splice(Math.floor(count / 2), 0, { type: 'boss', count: stageId === 99 ? 2 : 1, interval: 1.8, scale: scale * .40, rewardScale: .5, bossChapter: chapterId, bossName: CHAPTERS_META[chapterId - 1].bossName, coreDamage: 20 });
+      if (isBossStage) groups.splice(Math.floor(count / 2), 0, { type: 'boss', count: stageId === 99 ? 2 : 1, interval: 1.8, scale: scale * (stageId === 99 ? .34 : .40), rewardScale: .5, bossChapter: chapterId, bossName: CHAPTERS_META[chapterId - 1].bossName, coreDamage: 20 });
       else if (miniBoss) {
         // Replace part of the ordinary final wave; do not append a full boss encounter on top.
         const cutAt = Math.floor(count / 3);

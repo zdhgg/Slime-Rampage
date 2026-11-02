@@ -7,6 +7,7 @@ import { ExpeditionBoss } from './entities/ExpeditionBoss.js'
 import { BorderWarden } from './entities/BorderWarden.js'
 import { FloatingText } from './effects/FloatingText.js'
 import { AssetManager } from './AssetManager.js'
+import { drawEnemyArt, enemyArtFeet, enemySizeMul, hasEnemyArt } from './EnemyArtRenderer.js'
 import {
   applyEnemyBias,
   getBossWavePlan,
@@ -1307,7 +1308,29 @@ export class EnemyManager extends Entity {
     }
   }
 
-  render(ctx) {
+  /** 溃散/吞噬通道的敌人外形：已迁移职业与战斗中同一套新美术（待机帧、按朝向翻转），其余仍用旧精灵。 */
+  _drawDissolving(ctx, assets, e) {
+    const id = e.artId || e.type
+    if (!hasEnemyArt(id)) {
+      assets.draw(ctx, `char_${e.type}_0`, 0, 0, e.radius * 2.8, e.radius * 2.8)
+      return
+    }
+    if (Math.cos(e.facing) < 0) ctx.scale(-1, 1)
+    drawEnemyArt(ctx, id, e.radius, {
+      time: this.game.elapsed,
+      seed: e._artSeed,
+      sizeMul: e.isBoss ? 1 : enemySizeMul(e._artSeed, e.isElite),
+      elite: e.isElite,
+    }, this.game.dpr)
+  }
+
+  /**
+   * 实体本体绘制（脚点 y 排序）：敌人与玩家合成一条由远及近的序列，
+   * 靠南（脚点 y 大）的后画压住靠北的。GameEngine 在 player 槽位调用本方法，
+   * 这样玩家不再恒定画在敌人之下；溶解/吞噬通道的敌人仍走覆盖层。
+   */
+  renderBodies(ctx, player = null) {
+    this._bodiesMerged = true
     const cam = this.game.camera
     const { width, height } = this.game
     // 视口剔除：可见范围（80px 余量，覆盖 Boss 体型与武器伸出）之外的敌人不绘制
@@ -1315,13 +1338,25 @@ export class EnemyManager extends Entity {
     const vy0 = cam.y - 80
     const vx1 = cam.x + width + 80
     const vy1 = cam.y + height + 80
+    const bodies = []
     for (const e of this._enemies) {
       const outsideView = e.x < vx0 || e.x > vx1 || e.y < vy0 || e.y > vy1
       // Boss 本体可在视口外读招，但危险几何可能延伸进视口，蓄力/冲锋期间不能剔除。
       if (outsideView && !e.positionLocked) continue
       if (e.devouring) continue // 吸入/溃散中的敌人由各自的溶解通道绘制
-      e.render(ctx)
+      bodies.push(e)
     }
+    if (player?.active) bodies.push(player)
+    // 地面接触线：新美术职业的脚点在 e.y + enemyArtFeet，其余近似 r*0.85
+    const footY = b => { const id = b.artId || b.type; return b.y + (hasEnemyArt(id) ? enemyArtFeet(id, b.radius) : (b.radius || 14) * .85) }
+    bodies.sort((a, b) => footY(a) - footY(b))
+    for (const b of bodies) b.render(ctx)
+  }
+
+  render(ctx) {
+    // GameEngine 在 player 槽位已经把本体画过；独立调用（无玩家合并）时才在这里补画
+    if (!this._bodiesMerged) this.renderBodies(ctx)
+    this._bodiesMerged = false
     // 弹幕绘制在敌人之上，清晰可见
     for (const b of this._bullets) {
       if (b.active) b.render(ctx)
@@ -1336,7 +1371,7 @@ export class EnemyManager extends Entity {
       ctx.globalAlpha = Math.max(0, 1 - k * 1.15)
       const s = 1 - k * 0.9
       ctx.scale(s, s)
-      assets.draw(ctx, `char_${e.type}_0`, 0, 0, e.radius * 2.8, e.radius * 2.8)
+      this._drawDissolving(ctx, assets, e)
       ctx.restore()
     }
     for (const e of this._devouring) {
@@ -1345,7 +1380,7 @@ export class EnemyManager extends Entity {
       ctx.translate(e.x, e.y)
       ctx.globalAlpha = Math.min(1, s * 1.6)
       ctx.scale(s, s * 1.25)
-      assets.draw(ctx, `char_${e.type}_0`, 0, 0, e.radius * 2.8, e.radius * 2.8)
+      this._drawDissolving(ctx, assets, e)
       ctx.restore()
     }
     // 浮动文本（吞噬提示等）在最上层

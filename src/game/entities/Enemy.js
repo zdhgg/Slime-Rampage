@@ -1,9 +1,6 @@
 import { Entity } from '../core/Entity.js'
 import { AssetManager } from '../AssetManager.js'
-import { drawArenaKnightA, getArenaKnightArtMode } from '../ArenaKnightPrototype.js'
-import { getArenaKnightFrameCache } from '../ArenaKnightFrameCache.js'
-import { drawArenaMageA, getArenaMageArtMode } from '../ArenaMagePrototype.js'
-import { getArenaMageFrameCache } from '../ArenaMageFrameCache.js'
+import { drawEnemyArt, drawEnemyShadow, enemySizeMul, hasEnemyArt } from '../EnemyArtRenderer.js'
 
 const TAU = Math.PI * 2
 
@@ -167,7 +164,8 @@ export class Enemy extends Entity {
     this.isEnraged = false
 
     // —— 视觉增强（阶段十五美化） ——
-    this._walkT = Math.random() * 10 // 走路相位（随机错开，弹跳不齐步）
+    this._walkT = Math.random() * 10 // 走路相位（弧度，随机错开，弹跳不齐步）
+    this._artSeed = Math.random() * TAU // 待机呼吸相位（只用于表现）
     this._moving = false // 本帧是否移动（驱动弹跳/摇摆）
     this._spawnT = 0.28 // 出生弹入动画（easeOutBack）
     this._swingT = 0 // 骑士/狂战挥砍动画计时
@@ -176,6 +174,11 @@ export class Enemy extends Entity {
 
   hasAffix(id) {
     return this.affixes.includes(id)
+  }
+
+  /** 美术注册表键：普通敌人就是自身职业；Boss 子类覆盖为 `boss:*` 首领 cast。 */
+  get artId() {
+    return this.type
   }
 
   /**
@@ -524,13 +527,55 @@ export class Enemy extends Entity {
     if (this._moving) this._walkT += dt * 9 * slowMul
   }
 
+  /** 出生弹入缩放（easeOutBack）；出生结束后恒为 1。 */
+  _spawnScale() {
+    if (this._spawnT <= 0) return 1
+    const t = 1 - this._spawnT / 0.28
+    const c1 = 1.70158
+    const c3 = c1 + 1
+    return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2)
+  }
+
+  /** 新美术的姿态输入：全部来自已有的战斗时钟，只读，不产生任何新的战斗状态。 */
+  _artState() {
+    const type = this.type
+    const idle = !this._moving
+    const chargeWindow = type === 'mage' ? 0.5 : type === 'archer' ? 0.45 : 0 // 与原蓄力帧窗口一致
+    const charging = chargeWindow > 0 && idle && this.attackCd > 0 && this.attackCd < chargeWindow
+    const swingDur = type === 'golem' ? 0.3 : 0.22 // 魔像重砸前摇更长（update 里同步设定）
+    return {
+      walkT: this._walkT + this._artSeed, // 弧度；+种子相位让同屏步伐错开
+      moving: this._moving,
+      time: this.game.elapsed,
+      seed: this._artSeed,
+      sizeMul: enemySizeMul(this._artSeed, this.isElite), // 视觉 ±4% 体型抖动 + 精英 ×1.08，不动碰撞半径
+      elite: this.isElite,
+      swing: this._swingT > 0 ? 1 - this._swingT / swingDur : -1,
+      windup: (type === 'knight' || type === 'hound') && idle && this._swingT <= 0 && this.attackCd > 0 && this.attackCd < 0.28,
+      casting: type === 'priest' ? (this._healBeamTimer > 0 ? 'heal' : null)
+        : chargeWindow ? (this._shootFlash > 0 ? 'fire' : charging ? 'charge' : null) : null,
+      stance: type === 'assassin' ? this.assassinState : null,
+      enraged: type === 'berserker' ? !!this.isEnraged : false,
+      hurt: this.flash > 0 ? Math.min(1, this.flash / 0.12) : 0,
+      elite: this.isElite,
+      sizeMul: enemySizeMul(this._artSeed, this.isElite), // 视觉体型抖动+精英增体；碰撞半径不变
+    }
+  }
+
   render(ctx) {
     const r = this.radius
     const assets = AssetManager.getInstance()
+    const hasArt = hasEnemyArt(this.type)
+    const phase = this._walkT + this._artSeed // 装饰相位加个体偏移，同屏不再齐步
 
     // 地面软阴影（悬浮单位更淡更散）
     const floating = this.type === 'mage' || this.type === 'priest' || this.type === 'wraith'
     ctx.fillStyle = floating ? 'rgba(0, 0, 0, 0.16)' : 'rgba(0, 0, 0, 0.26)'
+    // 已迁移到新美术的职业：影子钉在地面接触线上，不随弹跳/悬浮或朝向翻转移动
+    if (hasArt) {
+      const lift = floating ? 2.5 - Math.sin(this.game.elapsed * 3 + phase) * 2 : 0
+      drawEnemyShadow(ctx, this.type, this.x, this.y, r, { lift, scale: this._spawnScale(), sizeMul: enemySizeMul(this._artSeed, this.isElite) })
+    }
 
     // 牧师圣光治疗光束（世界空间）
     if (this.type === 'priest' && this._healBeamTimer > 0 && this._healingTarget && this._healingTarget.active) {
@@ -629,10 +674,10 @@ export class Enemy extends Entity {
 
     ctx.save()
     // 走路弹跳与悬浮（法师/牧师/怨灵离地漂浮）
-    const bob = this._moving ? Math.sin(this._walkT * 2) * 1.4 : 0
+    const bob = this._moving && !hasArt ? Math.sin(phase * 2) * 1.4 : 0
     const float =
       this.type === 'mage' || this.type === 'priest' || this.type === 'wraith'
-        ? Math.sin(this.game.elapsed * 3 + this._walkT) * 2 - 2.5
+        ? Math.sin(this.game.elapsed * 3 + phase) * 2 - 2.5
         : 0
     const biteJolt = this.gluttonStagger > 0 ? Math.sin(this.gluttonStagger * 100) * 2.5 * Math.min(1, this.gluttonStagger / 0.14) : 0
     ctx.translate(this.x + Math.cos(this.facing) * biteJolt, this.y + bob + float + Math.sin(this.facing) * biteJolt)
@@ -641,7 +686,7 @@ export class Enemy extends Entity {
     if (this.type === 'assassin') {
       if (this.assassinState === 'stalking') {
         ctx.globalAlpha = 0.9
-        const auraPulse = 0.5 + 0.5 * Math.sin(this.game.elapsed * 8 + this._walkT)
+        const auraPulse = 0.5 + 0.5 * Math.sin(this.game.elapsed * 8 + phase)
         ctx.strokeStyle = `rgba(224, 86, 253, ${0.5 + auraPulse * 0.5})`
         ctx.lineWidth = 2
         ctx.beginPath()
@@ -660,7 +705,7 @@ export class Enemy extends Entity {
       }
     } else if (this.type === 'berserker' && this.isEnraged) {
       // 狂战士狂暴暗红烈焰气场
-      const rageP = 0.5 + 0.5 * Math.sin(this.game.elapsed * 12 + this._walkT)
+      const rageP = 0.5 + 0.5 * Math.sin(this.game.elapsed * 12 + phase)
       ctx.strokeStyle = `rgba(235, 47, 6, ${0.6 + rageP * 0.4})`
       ctx.lineWidth = 2.5
       ctx.beginPath()
@@ -682,16 +727,11 @@ export class Enemy extends Entity {
     }
 
     // 出生弹入动画（easeOutBack）
-    if (this._spawnT > 0) {
-      const t = 1 - this._spawnT / 0.28
-      const c1 = 1.70158
-      const c3 = c1 + 1
-      const s = 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2)
-      ctx.scale(s, s)
-    }
+    const spawnScale = this._spawnScale()
+    if (spawnScale !== 1) ctx.scale(spawnScale, spawnScale)
 
     // 精灵帧与动作判定
-    let frame = Math.floor(((this._walkT % (TAU * 1.2)) / (TAU * 1.2)) * 4) % 4
+    let frame = Math.floor(((phase % (TAU * 1.2)) / (TAU * 1.2)) * 4) % 4
     if (this.type === 'knight' && this._swingT > 0) {
       frame = 4 // 攻击斩击帧
     } else if (this.type === 'berserker' && this._swingT > 0) {
@@ -706,8 +746,12 @@ export class Enemy extends Entity {
       frame = 4 // 拉弓蓄力帧
     }
 
+    // 已迁移职业（骑士/法师）走 current-r2 敌人美术：固定帧缓存 + 运动叠层 + 白剪影受击；
+    // 其余职业仍用旧渲染，逐职业迁移。
+    const artState = hasArt ? this._artState() : null
+
     // 法师脚下奥术法阵（施法蓄力与开火时旋转展开）
-    if (this.type === 'mage' && (this._shootFlash > 0 || (this.attackCd > 0 && this.attackCd < 0.5))) {
+    if (this.type === 'mage' && artState.casting) {
       ctx.save()
       ctx.scale(1, 0.45)
       ctx.rotate(this.game.elapsed * 4)
@@ -715,37 +759,9 @@ export class Enemy extends Entity {
       ctx.restore()
     }
 
-    // Arena ordinary knight/mage use the approved procedural style. Cache is
-    // the production path; query/forced mode A keeps the realtime renderer as
-    // a visual fallback for regression comparison. Other roles retain their
-    // existing renderer and combat presentation.
-    let arenaArtDrawn = false
-    if (this.type === 'knight') {
-      const state = {
-        walkPhase: this._walkT,
-        moving: this._moving,
-        attacking: this._swingT > 0,
-        hurt: this.flash > 0,
-      }
-      if (getArenaKnightArtMode() === 'cache') {
-        arenaArtDrawn = getArenaKnightFrameCache().draw(ctx, 0, 0, r, state)
-      }
-      if (!arenaArtDrawn) {
-        drawArenaKnightA(ctx, r * 1.52, state)
-        arenaArtDrawn = true
-      }
-    } else if (this.type === 'mage') {
-      const casting = this._shootFlash > 0 || (this.attackCd > 0 && this.attackCd < 0.5)
-      const state = { walkPhase: this._walkT, moving: this._moving, casting, hurt: this.flash > 0 }
-      if (getArenaMageArtMode() === 'cache') {
-        arenaArtDrawn = getArenaMageFrameCache().draw(ctx, 0, 0, r, state)
-      }
-      if (!arenaArtDrawn) {
-        drawArenaMageA(ctx, r * 1.45, state)
-        arenaArtDrawn = true
-      }
-    }
-    if (!arenaArtDrawn) {
+    let artMode = false
+    if (hasArt) artMode = drawEnemyArt(ctx, this.type, r, artState, this.game.dpr)
+    if (!artMode) {
       const artV1Key = { archer: 'artV1EnemyArcher', golem: 'artV1EnemyGolem' }[this.type]
       const artV1 = artV1Key && assets.drawArt(ctx, artV1Key, 0, 0, r * 3.05, r * 3.05)
       if (!artV1) assets.draw(ctx, `char_${this.type}_${frame}`, 0, 0, r * 2.9, r * 2.9)
@@ -763,7 +779,7 @@ export class Enemy extends Entity {
 
     // 精英怪：金色光环脉动
     if (this.isElite) {
-      const ep = 0.5 + 0.5 * Math.sin(this.game.elapsed * 4 + this._walkT)
+      const ep = 0.5 + 0.5 * Math.sin(this.game.elapsed * 4 + phase)
       ctx.strokeStyle = `rgba(255, 209, 102, ${0.5 + ep * 0.4})`
       ctx.lineWidth = 2.5
       ctx.beginPath()
@@ -805,7 +821,7 @@ export class Enemy extends Entity {
       ctx.moveTo(r * 0.2, -r * 0.5)
       ctx.lineTo(r * 0.2, poleTop)
       ctx.stroke()
-      const wave = Math.sin(this.game.elapsed * 8 + this._walkT) * 1.5
+      const wave = Math.sin(this.game.elapsed * 8 + phase) * 1.5
       ctx.fillStyle = gold ? 'rgba(255, 209, 102, 0.95)' : 'rgba(255, 255, 255, 0.92)'
       ctx.beginPath()
       ctx.moveTo(r * 0.2, poleTop)
@@ -851,8 +867,8 @@ export class Enemy extends Entity {
       ctx.restore()
     }
 
-    // 受击白闪
-    if (this.flash > 0) {
+    // 受击白闪（新美术的缓存帧自带白剪影叠层，无需再盖圆斑）
+    if (this.flash > 0 && artMode !== 'cache') {
       ctx.fillStyle = `rgba(255, 255, 255, ${((this.flash / 0.12) * 0.75).toFixed(2)})`
       ctx.beginPath()
       ctx.ellipse(0, 0, r * 1.1, r * 1.1, 0, 0, TAU)

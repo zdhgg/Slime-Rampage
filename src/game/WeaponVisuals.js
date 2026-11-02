@@ -3,11 +3,11 @@ const TINT_CACHE = new Map()
 
 const MATERIALS = {
   base: { shape: 'orb', color: '#8cffc8', core: '#effff7', impact: '#8cffc8', radius: 6, sound: 'base' },
-  // 共生史莱姆的契约色：与本体金（SLIME_PALETTES.summoner.color）同源。
+  // 共生史莱姆的契约色：与本体玫瑰粉（SLIME_FAMILY_ART.summoner.body）同源。
   // 共生没有元素权限（canUseElements 恒 false），若不显式给材质，
   // 它打出的弹体、出膛火花与命中音色会和所有非元素角色一样是薄荷绿——
   // 玩家无法把这一发认成"我的"。这一条只改共生身份的观感，不动数值。
-  symbiote: { shape: 'orb', color: '#edc479', core: '#fff1cc', impact: '#f0cf8a', radius: 6, sound: 'base' },
+  symbiote: { shape: 'orb', color: '#f6a3c4', core: '#ffe6f0', impact: '#f08ab5', radius: 6, sound: 'base' },
   fire: { shape: 'ember', color: '#ffad66', core: '#fff1c7', impact: '#ff9854', radius: 6.2, sound: 'ember' },
   water: { shape: 'drop', color: '#80d8ed', core: '#eefcff', impact: '#71cce2', radius: 6.2, sound: 'fluid' },
   poison: { shape: 'glob', color: '#91dc6a', core: '#eaffc9', impact: '#83cf62', radius: 6.4, sound: 'fluid' },

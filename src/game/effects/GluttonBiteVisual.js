@@ -149,7 +149,7 @@ export function renderBiteMotion(ctx, player, swing, flash) {
   // 口腔：张开时露出深色喉部，闭合时自然消失。
   if (gape > r * 0.05) {
     ctx.globalAlpha = 0.88 * alpha
-    ctx.fillStyle = '#14301a'
+    ctx.fillStyle = '#2a0a10'
     ctx.beginPath()
     ctx.moveTo(root.x, root.y - root.half * 0.65)
     ctx.quadraticCurveTo(root.x + (length - root.x) * 0.55, root.y - gape * 0.82,
@@ -161,7 +161,7 @@ export function renderBiteMotion(ctx, player, swing, flash) {
     ctx.fill()
     // 喉部与舌面只作为一点点生命感，不抢牙齿和咬合轮廓。
     ctx.globalAlpha = 0.7 * alpha
-    ctx.fillStyle = '#3b6a2b'
+    ctx.fillStyle = '#6b1c22'
     ctx.beginPath()
     ctx.ellipse(root.x + (length - root.x) * 0.22, root.y,
       Math.max(1.6, (length - root.x) * 0.13), Math.max(1.2, gape * 0.42), 0, 0, TAU)
@@ -183,7 +183,7 @@ export function renderBiteMotion(ctx, player, swing, flash) {
     const midX = root.x + (length - root.x) * 0.55
     const innerMidX = root.x + (length - root.x) * 0.72
     ctx.globalAlpha = 0.94 * alpha
-    ctx.fillStyle = heavy ? '#365f24' : '#3f7029'
+    ctx.fillStyle = heavy ? '#9c2e26' : '#b93a30'
     ctx.beginPath()
     ctx.moveTo(root.x, rootOuter)
     ctx.quadraticCurveTo(midX, root.y + side * (gape * 0.95 + thick), length, tipOuter)
@@ -191,7 +191,7 @@ export function renderBiteMotion(ctx, player, swing, flash) {
     ctx.quadraticCurveTo(innerMidX, root.y + side * (gape * 0.66), root.x, rootInner)
     ctx.closePath()
     ctx.fill()
-    ctx.strokeStyle = heavy ? '#f3e0a1' : '#d6f0ae'
+    ctx.strokeStyle = heavy ? '#ffe9ae' : '#ffd6c2'
     ctx.lineWidth = heavy ? 2.8 : 2.2
     ctx.stroke()
     // 圆润的唇尖：避免长颌被读成针管或机械钳。
@@ -222,7 +222,7 @@ export function renderBiteMotion(ctx, player, swing, flash) {
 
   // 根部封口，避免口器与身体之间露出缝隙（尤其上下与斜向）。
   ctx.globalAlpha = 0.95 * alpha
-  ctx.fillStyle = '#2a4d20'
+  ctx.fillStyle = '#7a2420'
   ctx.beginPath()
   ctx.ellipse(root.x, root.y, r * 0.14, root.half * 0.9, 0, 0, TAU)
   ctx.fill()

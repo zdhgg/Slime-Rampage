@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>首领美术评审板（读取正式运行时代码）</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0f0d0a; color: #ece6d8; font-family: "Microsoft YaHei", system-ui, sans-serif; padding: 22px 26px 40px; width: 1560px; }
+  h1 { font-size: 20px; } h1 small { color: #9a9282; font-size: 12px; margin-left: 10px; letter-spacing: 2px; }
+  section { margin: 18px 0 22px; }
+  h2 { font-size: 14px; color: #e2b268; margin-bottom: 4px; }
+  .note { color: #9a9282; font-size: 12px; margin-bottom: 8px; }
+  .strip { border: 1px solid rgba(255,255,255,.08); border-radius: 10px; overflow: hidden; display: block; width: fit-content; margin-bottom: 8px; }
+  canvas { display: block; }
+  .px canvas { image-rendering: pixelated; }
+  pre { font-size: 12px; color: #cfc8b6; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h1>首领美术评审板<small>RUNTIME · enemy-art/boss-* + EnemyArtRenderer.js</small></h1>
+<section id="s-portrait"><h2>① 立绘：每位首领的全部 17 帧（常态 + 狂暴 r_* + 咆哮）</h2><div class="note">直接调用 cast.draw（大尺寸会开启嘴型等细节 LOD）。</div></section>
+<section id="s-sil"><h2>② 剪影 + 灰度：六只史莱姆 r26、骑士/法师/弓手与全部十六名首领（战斗 1:1 全阵容 + 2 倍抽选）</h2><div class="note">纯黑剪影在浅底；之后是原色放在森林地面色上转灰度，最后是原色。首领应明显大于小怪、剪影互不混淆。</div></section>
+<section id="s-scene"><h2>③ 实战 1:1（DPR 2）：史莱姆 + 小怪 + 首领混战（带地面阴影）</h2><div class="note">背景取自 Arena 实战截图；首领姿态覆盖待机/前摇/出手/破绽/咆哮/狂暴，含一只受击白闪。</div></section>
+<section id="s-frames"><h2>④ 缓存全部帧（2× 档 1:1 设备像素；每帧下方为受击白剪影孪生帧）</h2></section>
+<section id="s-bounds"><h2>⑤ 画布安全边距与缓存开销</h2><pre id="bounds"></pre></section>
+<script type="module">
+import { drawSlimeFamily, slimePose } from '/src/game/slime-art/slime-cast.js'
+import { setScale } from '/src/game/slime-art/slime-painter.js'
+import { ENEMY_CAST } from '/src/game/enemy-art/enemy-cast.js'
+import { BOSS_CAST, bossFramePose } from '/src/game/enemy-art/boss-cast.js'
+import { drawEnemyArt, drawEnemyShadow, enemyArtFeet, getEnemyFrameCache } from '/src/game/EnemyArtRenderer.js'
+
+const DPR = 2
+const SLIMES = ['origin', 'glutton', 'ricochet', 'elemental', 'shadow', 'summoner']
+const ENEMIES = ['knight', 'mage', 'archer']
+const BOSSES = Object.keys(BOSS_CAST)
+const mk = (w, h) => {
+  const c = document.createElement('canvas'); c.width = w * DPR; c.height = h * DPR; c.style.width = w + 'px'; c.style.height = h + 'px'
+  const x = c.getContext('2d'); x.setTransform(DPR, 0, 0, DPR, 0, 0); return [c, x]
+}
+const add = (sec, c, cls) => { const d = document.createElement('div'); d.className = 'strip ' + (cls || ''); d.appendChild(c); document.getElementById(sec).appendChild(d) }
+const stage = (x, w, h) => { const g = x.createRadialGradient(w / 2, h * .45, 10, w / 2, h * .5, h); g.addColorStop(0, '#2a241b'); g.addColorStop(1, '#100e0b'); x.fillStyle = g; x.fillRect(0, 0, w, h) }
+const label = (x, t, px, py) => { x.fillStyle = '#9a9282'; x.font = '12px Microsoft YaHei'; x.fillText(t, px, py) }
+await new Promise(r => setTimeout(r, 600))
+
+function big(x, id, cx, feetY, r, key) {
+  const cast = BOSS_CAST[id]
+  x.save(); x.translate(cx, feetY - cast.feetY * cast.scale * r / 100)
+  setScale(r * cast.scale); x.scale(r * cast.scale / 100, r * cast.scale / 100); cast.draw(x, bossFramePose(id, key)); x.restore()
+}
+function slimeAt(x, id, cx, feetY, r) {
+  x.save(); x.translate(cx, feetY - r * .8)
+  drawSlimeFamily(x, id, r, { el: ['fire', 'water'], ...slimePose(id, 'idle', .6) })
+  x.restore()
+}
+function enemyAt(x, type, cx, feetY, r) {
+  const cast = ENEMY_CAST[type]
+  x.save(); x.translate(cx, feetY - enemyArtFeet(type, r))
+  drawEnemyArt(x, type, r, { time: 1, seed: .4 }, DPR); x.restore()
+}
+function bossAt(x, id, cx, feetY, st = {}, flip = false, r = BOSS_CAST[id].baseR) {
+  const cast = BOSS_CAST[id]
+  x.save(); x.translate(cx, feetY)
+  drawEnemyShadow(x, id, 0, -enemyArtFeet(id, r), r, { lift: cast.floats ? 5 : 0 })
+  if (flip) x.scale(-1, 1)
+  drawEnemyArt(x, id, r, st, DPR)
+  x.restore()
+}
+
+/* ① portraits */
+{
+  const W = 1520, rowH = 330, [c, x] = mk(W, rowH * BOSSES.length); stage(x, W, rowH * BOSSES.length)
+  BOSSES.forEach((id, row) => {
+    const cast = BOSS_CAST[id], n = cast.frames.length, cell = W / n
+    cast.frames.forEach(([key], i) => { big(x, id, cell * (i + .5), row * rowH + 300, 62, key); label(x, key, cell * i + 8, row * rowH + 18) })
+    label(x, `${id} · baseR ${cast.baseR} · surface ${cast.surface}`, 10, row * rowH + 320)
+  })
+  add('s-portrait', c)
+}
+
+/* ② silhouette + gray: small units row, then the full boss roster in two rows
+ * at 1x; a six-boss selection at 2x (the 16 at 2x would overflow the board). */
+{
+  const W = 1520
+  const smallRow = (x, yBase, scale) => {
+    let px = 40
+    SLIMES.forEach(id => { slimeAt(x, id, px * scale, yBase + 130 * scale, 26 * scale); px += 62 })
+    ENEMIES.forEach(type => { enemyAt(x, type, px * scale, yBase + 130 * scale, ENEMY_CAST[type].baseR * scale); px += 70 })
+  }
+  const bossRow = (x, ids, yBase, scale) => {
+    let px = 60
+    ids.forEach(id => { bossAt(x, id, px * scale, yBase + 132 * scale, { moving: false }, false, BOSS_CAST[id].baseR * scale); px += 130 })
+  }
+  const H = 500
+  const paint1 = g => { smallRow(g, 0, 1); bossRow(g, BOSSES.slice(0, 8), 150, 1); bossRow(g, BOSSES.slice(8), 320, 1) }
+  const PICK2 = ['boss:gate_marshal', 'boss:knight', 'boss:relic_keeper', 'boss:tomb_regent', 'boss:last_marshal', 'boss:archer', 'boss:final']
+  const H2 = 330
+  const paint2 = g => { let px = 55; PICK2.forEach(id => { bossAt(g, id, px * 2, 300, { moving: false }, false, BOSS_CAST[id].baseR * 2); px += 208 }) }
+  for (const [ch, paint] of [[H, paint1], [H2, paint2]]) {
+    const [c, x] = mk(W, ch); x.fillStyle = '#ebe6da'; x.fillRect(0, 0, W, ch)
+    const [oc, ox] = mk(W, ch)
+    paint(ox)
+    ox.setTransform(1, 0, 0, 1, 0, 0); ox.globalCompositeOperation = 'source-in'; ox.fillStyle = '#111'; ox.fillRect(0, 0, oc.width, oc.height)
+    x.setTransform(1, 0, 0, 1, 0, 0); x.drawImage(oc, 0, 0); x.setTransform(DPR, 0, 0, DPR, 0, 0)
+    add('s-sil', c)
+    const [g, gx] = mk(W, ch); gx.fillStyle = '#324739'; gx.fillRect(0, 0, W, ch)
+    paint(gx)
+    g.style.filter = 'grayscale(1)'; add('s-sil', g)
+    const [col, cx2] = mk(W, ch); cx2.fillStyle = '#324739'; cx2.fillRect(0, 0, W, ch)
+    paint(cx2); add('s-sil', col)
+  }
+}
+
+/* ③ scene 1:1 */
+const loadImg = src => new Promise(r => { const i = new Image(); i.onload = () => r(i); i.onerror = () => r(null); i.src = src })
+{
+  const img = await loadImg('/docs/arena-art-acceptance/real-normal.png')
+  const [c, x] = mk(900, 460)
+  if (img) x.drawImage(img, 480, 260, 900, 460, 0, 0, 900, 460)
+  else { x.fillStyle = '#2d4a3a'; x.fillRect(0, 0, 900, 460) }
+  const feetY = (id, y) => y - enemyArtFeet(id, BOSS_CAST[id]?.baseR || ENEMY_CAST[id]?.baseR || 13)
+  SLIMES.forEach((id, i) => slimeAt(x, id, 50 + i * 62, 420 - (i % 2) * 12, 26))
+  const mix = [
+    ['knight', 120, 150], ['knight', 170, 185], ['archer', 250, 120], ['hound', 300, 210], ['mage', 420, 110],
+    ['knight', 90, 300], ['archer', 200, 330], ['hound', 460, 350], ['mage', 620, 330], ['knight', 705, 255],
+  ]
+  // 三名首领各代表一个攻击族系：骑士系前摇（受击白闪）、法师系咆哮、弓手系出手
+  const bossRows = [
+    ['boss:gate_marshal', 380, 170, { windup: true, hurt: .8 }],
+    ['boss:mage', 610, 340, { stance: 'roar', enraged: true }],
+    ['boss:archer', 790, 180, { swing: .4 }],
+  ]
+  mix.forEach(([type, px, py], i) => enemyAt(x, type, px, py, ENEMY_CAST[type].baseR))
+  bossRows.forEach(([id, px, py, st], i) => {
+    const s = { ...st, time: i, seed: i }
+    bossAt(x, id, px, py, s, i === 1)
+  })
+  add('s-scene', c)
+}
+
+/* ④ frames */
+{
+  for (const id of BOSSES) {
+    const cast = BOSS_CAST[id], set = getEnemyFrameCache(id).build(2)
+    const keys = [...set.keys()], cell = 120, perRow = 9
+    const W = 20 + perRow * cell, H = 260 * Math.ceil(keys.length / perRow)
+    const [c, x] = mk(W, H); stage(x, W, H)
+    keys.forEach((key, i) => {
+      const f = set.get(key); if (!f) return
+      const s = cell - 8, col = i % perRow, rw = (i - col) / perRow
+      x.drawImage(f.img, 10 + col * cell - (s - cell) / 2 - 8, 12 - 8 + rw * 260, s, s)
+      x.drawImage(f.flash, 10 + col * cell - (s - cell) / 2 - 8, 12 - 8 + rw * 260 + s + 6, s, s)
+      label(x, key, 10 + col * cell, rw * 260 + 252)
+    })
+    add('s-frames', c)
+  }
+}
+
+/* ⑤ bounds */
+{
+  const out = {}, lines = []
+  for (const id of BOSSES) {
+    const cast = BOSS_CAST[id]
+    for (const tier of [1, 2]) {
+      const S = cast.surface * 3, px = S * tier
+      let minMargin = Infinity, worst = ''
+      for (const [key, st] of cast.frames) {
+        const cv = document.createElement('canvas'); cv.width = px; cv.height = px
+        const g = cv.getContext('2d', { willReadFrequently: true })
+        g.translate(px / 2, px / 2); g.scale(tier, tier); setScale(cast.baseR * cast.scale); g.scale(cast.baseR * cast.scale / 100, cast.baseR * cast.scale / 100)
+        cast.draw(g, st)
+        const d = g.getImageData(0, 0, px, px).data
+        let x0 = px, y0 = px, x1 = -1, y1 = -1
+        for (let y = 0; y < px; y++) for (let xx = 0; xx < px; xx++) if (d[(y * px + xx) * 4 + 3] > 8) { if (xx < x0) x0 = xx; if (xx > x1) x1 = xx; if (y < y0) y0 = y; if (y > y1) y1 = y }
+        const half = cast.surface / 2
+        const l = (px / 2 - x0) / tier, r = (x1 + 1 - px / 2) / tier, t = (px / 2 - y0) / tier, b = (y1 + 1 - px / 2) / tier
+        const margin = Math.min(half - l, half - r, half - t, half - b)
+        out[`${id}/${key}/x${tier}`] = { left: +l.toFixed(1), right: +r.toFixed(1), top: +t.toFixed(1), bottom: +b.toFixed(1), margin: +margin.toFixed(1) }
+        if (margin < minMargin) { minMargin = margin; worst = key }
+      }
+      lines.push(`${id} x${tier}: surface ${cast.surface}px, min margin ${minMargin.toFixed(1)}px (${worst})`)
+    }
+  }
+  const mem = {}
+  for (const id of BOSSES) {
+    const c = getEnemyFrameCache(id); c.build(1); c.build(2)
+    const tierBytes = tier => c.tiers.get(tier).size * 2 * (BOSS_CAST[id].surface * tier) ** 2 * 4
+    mem[id] = { frames: c.tiers.get(1).size, kb1x: Math.round(tierBytes(1) / 1024), kb2x: Math.round(tierBytes(2) / 1024), initMs: +c.initMs.toFixed(1) }
+  }
+  lines.push('', 'cache memory (frames incl. white twins): ' + BOSSES.map(id => `${id} ${mem[id].frames}f ${mem[id].kb1x}KB/${mem[id].kb2x}KB ${mem[id].initMs}ms`).join(' | '))
+  out.memory = mem
+  window.__bounds = out
+  document.getElementById('bounds').textContent = lines.join('\n')
+}
+window.__ready = true
+</script>
+</body>
+</html>

@@ -1,5 +1,7 @@
 # Arena 真实战斗美术验收与原始史莱姆优化准备报告
 
+> 2026-10-31 退役说明：报告中的 `ArenaKnightPrototype.js`、`ArenaMagePrototype.js` 及其帧缓存已被 `enemy-art/` + `EnemyArtRenderer.js` 取代并删除；步态相位单位、接地阴影、缓存边距、退场通道等问题已在新方案中处理，见 [enemy-art-direction-current.md](../enemy-art-direction-current.md)。下文保留为当时的验收记录。
+
 验收日期：2026 年 10 月 30 日。
 
 骑士、法师已在正常登录后的 Arena 中默认使用程序化缓存，没有被 Art V1 图片覆盖。两者的职业轮廓和色块语言基本统一，但当前整体美术尚不能判定为全面通过：原始史莱姆仍采用高细节图片；步态相位、接地阴影、特殊退场绘制与高 DPR 流畅度存在需要后续处理的问题。本阶段没有改动游戏运行代码、角色素材、战斗数据或动画时序。
