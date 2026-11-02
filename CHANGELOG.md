@@ -2,6 +2,39 @@
 
 本项目遵循语义化版本号。
 
+## [0.7.0] - 2026-11-02
+
+本次聚焦「全员程序化美术」与「首领近战可读性」：六种史莱姆、九种普通敌人与十六名首领全部改由代码实时绘制，统一执行「轮廓 → 外部身份锚点 → 表情 → 材质」的美术规则并共用同一套扁平+三色阶材质管线，彻底替换掉占位精灵与 ImageGen PNG 方案；暴食近战改为面向优先的可读前摇，边防官获得有界追击与可拆解的近战连击，全部首领强招预警改走统一的几何预警与只读动作快照。
+
+### Added
+
+- 程序化美术 `current-r2`：正式绘制只从 `src/game/slime-art/`（`slime-painter.js` 材质与五官工具 + `slime-cast.js` 六角色姿态表）与 `src/game/enemy-art/`（`enemy-kit.js` 共享调色板 + 各职业/Boss `cast-*.js` + `enemy-cast.js`/`boss-cast.js` 汇总）读取；轮廓、身份锚点、表情、材质四层顺序固定，不用换色代替轮廓差异，描边按屏幕像素恒定，`r < 40` 自动进入隐藏细节的战斗 LOD。
+- 六种史莱姆新造型：原生（嫩叶芽/亮黄绿）、暴食（獠牙巨口/番茄红）、弹射（三联炮管/天蓝，开火后坐闪炮口光）、元素（果冻尖帽 + 双元素染色/珍珠白）、暗影（墨滴 + 影尾/墨黑紫）、共生（三颗伙伴色圆芽/玫瑰粉），色相与明度同时拉开，登记于 `SlimeFamilyArt.js`。
+- 九种敌人新造型：骑士、法师、战獒、刺客、弓手、牧师、狂战士、魔像、怨灵，2–2.5 头身 Q 版、圆润身体配棱角装备，人类敌人共用金色王国徽记菱形并统一「敌意」表情（斜眉 + 点状/狭缝/发光眼）与史莱姆区分；法师、牧师、怨灵等悬浮单位带离地漂浮与缩小投影，战獒为唯一侧身四足剪影。
+- 十六名首领 cast：远征十二人（边防官、信标工程师、猎手统领、城门元帅、灰烬圣骑、王座禁卫、王庭指挥、巢群审判官、遗器看守、陵墓摄政、封印大主教、终末元帅）加三名普通 Boss 与最终 Boss 各自的轮廓、持械与身份锚点；读取 `attackPresentation` 只读快照驱动上弦/挥击/冲锋/破绽姿态，渲染不写战斗状态。
+- 渲染管线 `EnemyArtRenderer.js`：DPR 感知缓存帧、按 `feetY` 地面接触线与 `shadowRx` 贴地椭圆投影排序绘制，未注册 cast 自动回退旧精灵。
+- 前端立绘 `SlimeFamilyPortrait.vue`：血统选择页与 `strainPresentation.js` 改读新立绘体系，六角色姿态与游戏内一致。
+- 美术验收工具链：敌人看板 `enemy-art-board`、Boss 看板 `boss-art-board`、截图采集 `enemy-art-capture` / `boss-art-capture` / `td-runner-boss-capture`、剪影 ASCII `boss-sil-ascii`、`verify-boss-art.mjs` 十六首领断言；新增 `test:boss-art` 脚本与 `playwright-core` 开发依赖。
+- 美术方向文档：`docs/slime-family-art-direction-current.md` 与 `docs/enemy-art-direction-current.md` 为后续造型、姿态与战斗表现的唯一入口；`docs/boss-unified-design-baseline-v1.md` 收录 Boss 统一设计基准 V1（待审阅设计稿）。
+- 暴食近战可读性：普攻偏向面向 ±100° 内目标并保留 22% 目标粘性，大角度转向先行预瞄；普通咬前摇 0.17 秒、重咬 0.25 秒，口器、重咬蓄力对比、咬痕与不规则酸爆特效由同一挥击状态重建。
+- 边防官近战重做：独立 `BorderWarden` AI 有界追击与可拆解近战连击，配套验收报告 `docs/border-warden-combat.md` 与浏览器试玩页；首领近战强招预警改为几何形状（锁定直线车道、定点环爆、扇形齐射），远征 Boss 招式层数、预警与破绽期统一走 `attackPresentation` 快照。
+
+### Changed
+
+- 退役全部生成式与旧程序化美术：删除 ImageGen art v1 史莱姆/Boss PNG 与 `docs/art-v1-*` 方案文档、`SlimeRenderer`/`SlimeAppearance`/`ArenaOriginSlimeArt`、`ArenaKnight*`/`ArenaMage*` 原型与帧缓存；`AssetManager` 仅保留四张敌人 PNG 兜底，`manifest.json` 同步收口。
+- `EnemyManager` 实体排序改用美术脚点（`enemyArtFeet`），敌人与首领溶解、溃散通道同样走新美术；塔防与跑酷渲染同步接入新敌我绘制。
+- `verify-arena-knight-mage.mjs` 重写为九职业新美术断言并检查旧原型文件保持退役，`verify-art-v1.mjs` 断言 `SlimeRenderer`/`SlimeAppearance`/`ArenaOriginSlimeArt` 不再复活。
+- Boss 动画状态机稳定化：`cancelAttack` 统一中断入口，阶段转换、死亡与管理器复位共享；`positionLocked` 使蓄力/冲锋期间的视口外 Boss 不被剔除。
+
+### Fixed
+
+- 无头渲染冒烟测试：视口外 Boss 入屏预警断言固定使用骑士王，避免悬浮 cast 的离地偏移（`y - hover`）在随机选角下触发误判。
+
+### Verified
+
+- `npm test`（42 个脚本）全部通过，含新增 `verify-boss-art`（16 首领 cast）、`verify-arena-knight-mage`（9 敌人 cast）与 Boss 动画兼容 104 场景。
+- `npm run build` 通过；敌人/Boss 美术经看板截图与峰值密度实机画面验收（`docs/arena-art-acceptance/`）。
+
 ## [0.6.0] - 2026-10-15
 
 本次聚焦「元素史莱姆 · 双元素法术」与「统一账号服务」：元素血统从自由元素构筑改为开局选定起始法术、首领核心确定第二系，六种融合反应、法术护盾与有限代数传染接管旧的元素点与副反应槽体系；共生史莱姆伙伴扩编为最多四人的小队，空格技能重做为「共生鼓舞」。游玩接入统一账号服务，三种玩法的成绩、记录与排行榜由服务器保存，开局先领行动票据、结算幂等提交，断网暂存后可补交三十天；首页新增「关于游戏」指南与更新日志，门户前端改为直接提供打包资源。
