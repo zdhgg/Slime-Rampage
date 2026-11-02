@@ -119,9 +119,11 @@ export class WeaponSystem extends Entity {
     // 与飞弹自带的 freeze/burn/poisonChance 状态附加概率是两套东西。
     this.critGuaranteesElement = false
     // —— 吞噬 → 元素联动：消化进度（吞噬累积 → 元素等级爆发） ——
-    // 第三批角色化：暴食已退出元素链，消化链不再被任何角色触达（见 addDigestCharge 的
-    // 权限闸门）。字段与 _digestDevour / DIGEST_EFFECTS 作为不可达路径暂时保留，
-    // 不在本批删除；digestGainMul 随「暴食消化效率 +50%」赋能一并移除（已无消费方）。
+    // 归属（P2 收口）：消化链是「暴食拟态的元素词缀层」——只有 origin 在 Lv.5
+    // 拟态暴食后，canDevour（拟态授予）× canUseElements（origin 保留）双闸门同时
+    // 成立才能触达；暴食血统本身无元素权限，永远走不进这条链，
+    // 非暴食拟态的 origin 有元素权限但没有吞噬，同样触达不到（无悬空收益）。
+    // digestGainMul 随「暴食消化效率 +50%」赋能一并移除（已无消费方）。
     this.digestCharge = 0 // 当前消化能量（0 ~ digestChargeMax）
     this.digestChargeMax = DIGEST_CHARGE_MAX
     this.digestBursts = 0 // 消化爆发次数（物种档案统计）
@@ -1068,9 +1070,9 @@ export class WeaponSystem extends Entity {
       coreType = this._spawnElementCore(e.x, e.y, picked) ? picked : null
     }
 
-    // 消化进度（吞噬 → 元素联动）：猎物血肉转化为元素养分，满槽爆发元素成长
-    // 第三批角色化：暴食已退出元素链——只在有元素权限时累积，
-    // 因此 addDigestCharge → absorbElement → _digestDevour 整条链对暴食不可达。
+    // 消化进度（吞噬 → 元素联动）：猎物血肉转化为元素养分，满槽爆发元素成长。
+    // 归属暴食拟态：本函数只随吞噬触发（canDevour），addDigestCharge 再要求元素权限——
+    // 两个闸门的交集恰好只有「origin 拟态暴食」；暴食血统无元素权限，进不了这条链。
     if (this.game.canUseElements) {
       this.addDigestCharge(e.isElite ? DIGEST_GAIN_ELITE : DIGEST_GAIN_NORMAL)
     }
@@ -1124,9 +1126,11 @@ export class WeaponSystem extends Entity {
   }
 
   /**
-   * 元素消化（元素等级 → 吞噬联动）：吞噬按已吸收元素等级产生差异化即时效果。
+   * 元素消化（暴食拟态的元素词缀层）：吞噬按已吸收元素等级产生差异化即时效果。
    * 这是「元素」与「吞噬」两条成长轴的咬合点——同一次吞噬，
    * 火系胃囊炸开缺口、水系胃囊冻住追兵、毒系留下酸池、雷系电弧跳向人群。
+   * 机制上仅 origin 拟态暴食可达（吞噬权限 × 元素权限的交集）；
+   * 无元素权限的角色 elements 恒为空，此处自然空转返回。
    * 伤害与飞弹同口径（基础 × 等级成长 × 捕食原核），保证后期不衰减成废效果。
    * @returns {string} 本次触发的消化摘要（供飘字第二行；无触发时为空串）
    */
@@ -1190,8 +1194,9 @@ export class WeaponSystem extends Entity {
    * @returns {boolean} 本次是否触发了消化爆发
    */
   addDigestCharge(amount) {
-    // 权限闸门（第三批角色化）：消化链会经 absorbElement 授予元素等级，
-    // 因此只对有元素权限的角色开放。暴食不再通过吞噬累计/转化元素。
+    // 权限闸门（暴食拟态的元素词缀层）：消化链会经 absorbElement 授予元素等级，
+    // 因此只对有元素权限的角色开放。暴食血统无元素权限，不通过吞噬累计/转化元素；
+    // 叠加本函数的吞噬触发前提，整条链实际只对「origin 拟态暴食」可达。
     if (!this.game.canUseElements || this.spellCombat.enabled) return false
     this.digestCharge = Math.min(
       this.digestChargeMax,

@@ -38,6 +38,8 @@ const props = defineProps({
   roleSpec: { type: String, default: null },
   // 元素权限（第四批）：无权限角色的槽位里程碑是空承诺，需隐藏
   canUseElements: { type: Boolean, default: true },
+  // 当前实际副反应槽数（P2 统一口径：基础 + 基因 + 等级里程碑，由 Player 单点汇总）
+  secondarySlots: { type: Number, default: 0 },
 })
 const emit = defineEmits(['select'])
 
@@ -53,7 +55,9 @@ const slotMilestone = computed(() => {
   if (!props.canUseElements || props.roleSpec === 'elemental') return null
   const level = props.level || 1
   if (REACTION_SLOT_LEVELS.includes(level)) {
-    return { hit: true, text: `🎉 副反应槽 +1（现 ${2 + getReactionSlotLevelBonus(level)} 个基础槽，已自动接入可用反应）` }
+    // 优先用引擎汇总后的实际槽数（含基因加成）；无该数据时退回「基础 2 + 等级加成」口径
+    const total = props.secondarySlots || 2 + getReactionSlotLevelBonus(level)
+    return { hit: true, text: `🎉 副反应槽 +1（现 ${total} 个槽位，已自动接入可用反应）` }
   }
   const next = REACTION_SLOT_LEVELS.find((milestone) => level < milestone)
   return next ? { hit: false, text: `⬡ 下一槽位里程碑：Lv.${next}（副反应槽 +1）` } : null

@@ -87,9 +87,13 @@ export const hasReaction = (elements, id) => getActiveReactions(elements).some((
 export const getElement = (id) => ELEMENTS[id] || null
 
 /**
- * 元素消化表（元素等级 → 吞噬联动）：
+ * 元素消化表（元素等级 → 吞噬联动）——暴食拟态的元素词缀层：
  * 吞噬是四条成长轴的天然交汇点——这里把「已吸收元素的等级」翻译成吞噬时的即时效果，
  * 让重复核心的积累第一次产生行为质变，而不只是附魔概率的线性上涨。
+ *
+ * 归属（P2 收口）：本表效果只在「origin 拟态暴食」下可达
+ * （吞噬权限 canDevour × 元素权限 canUseElements 的交集，见 WeaponSystem.addDigestCharge）；
+ * 非暴食拟态没有吞噬触发，暴食血统没有元素权限，都不会有悬空的元素消化收益。
  *
  * 两档解锁：Lv2 基础消化、Lv4 强化消化（刻意错开 Lv4 / Lv8 的槽位里程碑，
  * 让升级点的收益分散在不同系统上）。damageMul 相对当前武器伤害换算。

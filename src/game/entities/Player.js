@@ -21,10 +21,15 @@ const ELEMENT_PROC_CHANCE_CAP = 0.6
 export const ELEMENTAL_SPEC_PROC_CAP = 0.85
 
 /**
- * 副反应槽的等级里程碑（等级 → 元素联动）：每次到达 +1 槽，上限 2 级加成。
- * 槽位 = 局外基因基础值 + 等级加成，最终封顶 MAX_REACTION_SLOTS——
- * 反应表 6 种组合去掉主形态后恰好 5 种副反应，再多也无槽可填。
+ * 副反应槽统一口径（P2 收口，单一计算入口 refreshReactionSlots）：
+ *   槽位 = BASE_SECONDARY_SLOTS(2) + geneSlotBonus（局外基因） + 等级里程碑加成（Lv.4/Lv.8 各 +1），
+ *   最终封顶 MAX_REACTION_SLOTS——反应表 6 种组合去掉主形态后恰好 5 种副反应，再多也无槽可填。
+ * 叠加规则：两个来源加法叠加、无优先级冲突——基因加成由 applyGenes 幂等写入
+ * geneSlotBonus（共鸣基因每级 +1、共鸣原核 +1，重开重算不累加）；等级加成由
+ * getReactionSlotLevelBonus 按当前等级纯函数推导。baseSecondarySlots 只是
+ * 「基础 + 基因」的派生展示值（黑市收益预览读取），不再是独立写入点。
  */
+export const BASE_SECONDARY_SLOTS = 2
 export const REACTION_SLOT_LEVELS = [4, 8]
 export const MAX_REACTION_SLOTS = 5
 
@@ -148,9 +153,11 @@ export class Player extends Entity {
     this._primaryReaction = null
     // 副反应槽位（阶段十六设计改造）：默认 2 个，黑市「共鸣基因」每级 +1；
     // 槽满后新组合触发替换面板——稀缺掉落 + 有限槽位 = 硬决策。
-    // 基础值由局外基因写入（applyGenes），等级加成在 refreshReactionSlots 里叠加。
-    this.baseSecondarySlots = 2
-    this.secondarySlots = 2
+    // 基因加成唯一写入点是 geneSlotBonus（applyGenes 幂等维护）；
+    // baseSecondarySlots 为派生展示值，最终槽位由 refreshReactionSlots 单点汇总。
+    this.geneSlotBonus = 0
+    this.baseSecondarySlots = BASE_SECONDARY_SLOTS
+    this.secondarySlots = BASE_SECONDARY_SLOTS
     this._secondaryIds = new Set()
     this._refreshElements()
 
@@ -511,18 +518,29 @@ export class Player extends Entity {
   }
 
   /**
-   * 重算副反应槽位（等级 → 元素联动）：
-   *  - 槽位 = 局外基因基础值 + 等级里程碑加成（Lv.4 / Lv.8 各 +1，封顶 MAX_REACTION_SLOTS）；
+   * 重算副反应槽位（等级 → 元素联动）——全项目唯一的槽位计算入口：
+   *  - 槽位 = BASE_SECONDARY_SLOTS + geneSlotBonus + 等级里程碑加成（Lv.4 / Lv.8 各 +1），
+   *    封顶 MAX_REACTION_SLOTS；
+   *  - 旧字段读取路径：若基因加成只存在于旧字段 baseSecondarySlots（旧档/旧代码写入，
+   *    geneSlotBonus 未设置），按旧规则（base − 2）折算并入——已获得的槽位不静默丢失；
    *  - 槽位扩张时，把「元素已经满足但当初因满槽被挤掉」的反应自动接入——
    *    升级本身就成为一次元素构筑的兑现，而不是只加数值。
    * @returns {Array} 本次自动接入的反应（供调用方播放提示；无变化时为空数组）
    */
   refreshReactionSlots() {
     if (this.game?.weaponSystem?.spellCombat?.enabled) { this.secondarySlots = 0; return [] }
-    const base = this.baseSecondarySlots ?? 2
+    const geneBonus = Math.max(
+      this.geneSlotBonus ?? 0,
+      // 旧档兜底：基因加成只存在于旧字段 baseSecondarySlots 时按旧规则折算并入。
+      // 取大者而非 ?? 短路——构造函数把 geneSlotBonus 初始化为 0，?? 会让旧档
+      // （只有 baseSecondarySlots=4）永远进不了折算分支；新档两处同值，取大者不双算。
+      Math.max(0, (this.baseSecondarySlots ?? BASE_SECONDARY_SLOTS) - BASE_SECONDARY_SLOTS)
+    )
+    this.geneSlotBonus = geneBonus
+    this.baseSecondarySlots = BASE_SECONDARY_SLOTS + geneBonus
     this.secondarySlots = Math.min(
       MAX_REACTION_SLOTS,
-      base + getReactionSlotLevelBonus(this.level)
+      this.baseSecondarySlots + getReactionSlotLevelBonus(this.level)
     )
     const equipped = []
     if (this._secondaryIds.size < this.secondarySlots) {

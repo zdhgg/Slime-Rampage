@@ -1089,7 +1089,7 @@ onUnmounted(() => {
 
     <!-- 升级面板：覆盖层之上，点击卡片应用技能并恢复游戏 -->
     <Transition name="modal-fade">
-      <LevelUpModal v-if="levelUpOptions" :options="levelUpOptions" :level="stats.level" :role-spec="stats.roleSpec" :can-use-elements="stats.canUseElements" @select="onSelectSkill" />
+      <LevelUpModal v-if="levelUpOptions" :options="levelUpOptions" :level="stats.level" :role-spec="stats.roleSpec" :can-use-elements="stats.canUseElements" :secondary-slots="stats.secondarySlots" @select="onSelectSkill" />
     </Transition>
     <Transition name="modal-fade" mode="out-in">
       <SpellCoreModal v-if="spellCoreReward" :key="stats.spells?.cores" :info="spellCoreReward" @select="onSelectSpellCore" />

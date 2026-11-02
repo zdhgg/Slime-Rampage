@@ -763,4 +763,34 @@ check('已有毒雾和传染在融合后切换配色，雷暴形态继承当前�
   s.render(ctx2d)
 }, 'poison')
 
+// —— 副反应槽统一口径（P2）：基础 + 基因加成 + 等级里程碑，单点汇总、幂等、旧字段折算不丢槽 ——
+{
+  const g = createArena('origin')
+  try {
+    const genes = { lore: 4, resonance: 3, element_origin: 1 }
+    applyGenes(g, genes)
+    assert.equal(g.player.geneSlotBonus, 4, '共鸣基因 Lv.3 + 共鸣原核 = +4 基因槽位加成')
+    assert.equal(g.player.baseSecondarySlots, 6, '派生展示值 = 基础 2 + 基因 4')
+    assert.equal(g.player.secondarySlots, 5, 'Lv.1 无等级加成，封顶 MAX_REACTION_SLOTS = 5')
+    applyGenes(g, genes) // 幂等：重复应用不累加
+    assert.equal(g.player.geneSlotBonus, 4); assert.equal(g.player.secondarySlots, 5)
+
+    applyGenes(g, {})
+    assert.equal(g.player.geneSlotBonus, 0); assert.equal(g.player.secondarySlots, 2, '无基因：Lv.1 基础 2 槽')
+    g.player.level = 4; g.player.refreshReactionSlots()
+    assert.equal(g.player.secondarySlots, 3, 'Lv.4 里程碑 +1')
+    g.player.level = 8; g.player.refreshReactionSlots()
+    assert.equal(g.player.secondarySlots, 4, 'Lv.8 里程碑再 +1')
+
+    // 旧字段读取路径：遗留对象只有 baseSecondarySlots（旧规则写入），折算后不丢槽
+    g.player.level = 1
+    delete g.player.geneSlotBonus
+    g.player.baseSecondarySlots = 5 // 旧规则：基础 2 + 共鸣基因 Lv.3
+    g.player.refreshReactionSlots()
+    assert.equal(g.player.geneSlotBonus, 3, '旧字段按 base − 2 折算为基因加成')
+    assert.equal(g.player.secondarySlots, 5, '旧档已获得的槽位不静默丢失')
+  } finally { dispose(g) }
+  console.log(`✓ ${++checks}. 副反应槽统一口径：基因/等级叠加、封顶、幂等与旧字段折算`)
+}
+
 console.log(`\n双元素法术验证通过：${checks} 组机制与回归检查`)
