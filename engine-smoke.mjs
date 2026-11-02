@@ -153,7 +153,7 @@ console.log('✓ 地图事件地标进入世界渲染层')
 
 // Boss 强招预警必须可进入世界渲染层，战斗意图同时供 HUD 读取。
 em.wave = 5
-em.spawnBoss()
+em.spawnBoss({ type: 'boss-knight' })
 const boss = em._boss
 assert.equal(engine.dialogue.current?.kind, 'boss')
 assert.equal(engine.dialogue.current?.event, 'spawn')
