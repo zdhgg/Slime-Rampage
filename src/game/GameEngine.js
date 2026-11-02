@@ -557,7 +557,7 @@ export class GameEngine {
     const p = this.player
     const skill = this.strainSkill
     if (!skill) {
-      p.strainSkillCd = 0 // 无角色身份（origin）：空格 不响应，冷却恒为 0
+      p.strainSkillCd = 0 // 无空格技（未知血统 id）：空格 不响应，冷却恒为 0；origin 自身持有黏液震荡，不走此分支
       p.strainSkillReadyPulse = 0
       return
     }

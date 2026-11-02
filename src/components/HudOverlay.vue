@@ -169,6 +169,9 @@ function elementTitle(id) {
   const lv = elementLevel(id)
   const digest = DIGEST_EFFECTS[id]
   if (!digest) return `${base.effect} | ${base.combo}`
+  // 消化档位挂吞噬触发：不能吞噬的角色（origin 未拟态暴食时）只标注解锁条件，
+  // 不承诺当前可用——避免「文案承诺了却永远触发不了」。
+  if (!props.stats.canDevour) return `${base.effect} | ${base.combo} | 吞噬消化：需暴食血统或暴食拟态`
   const tier = lv >= 4 ? 'Lv.4 已解锁' : lv >= 2 ? 'Lv.4' : 'Lv.2'
   const detail = lv >= 4 ? digest.lv4 : digest.lv2
   return `${base.effect} | ${base.combo} | 吞噬消化（${tier}）：${detail.name}（当前 ${lv} 级）`

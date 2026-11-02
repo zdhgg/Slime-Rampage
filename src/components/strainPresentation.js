@@ -13,7 +13,7 @@ export const STRAIN_PRESENTATION = {
     ...SLIME_FAMILY_ART.origin,
     label: '自由构筑', epithet: '一切进化的起点',
     intro: '用黏液震荡推开近敌，让每一次选择决定你的进化方向。',
-    awakening: 'Lv.5 自由选择主专精',
+    awakening: 'Lv.5 五系拟态觉醒 · Lv.9 副专精共鸣 · Lv.14 终极觉醒（第 10 波后）',
   },
   glutton: {
     ...SLIME_FAMILY_ART.glutton,
