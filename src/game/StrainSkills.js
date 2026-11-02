@@ -97,15 +97,16 @@ function repel(engine, radius, distance, slow = 0) {
 }
 
 export const ORIGIN_SKILL = {
-  id: 'slime_shock', name: '黏液震荡', icon: '🫧', cooldown: 8,
+  id: 'slime_shock', name: '黏液震荡', icon: '🫧', cooldown: 7,
   desc: '周围 120px 造成 1.5 倍攻击伤害并击退普通敌人；觉醒后保留；震荡扩能可逐级提升伤害与范围',
   use(engine) {
     const ws = engine.weaponSystem, p = engine.player
     if (!ws) return false
     // 震荡扩能（com_shock）：每级伤害 +10%、范围 +8px，满级合计伤害约 +30%
+    // （成长轨不变；基础倍率 1.9 是早期补强，与成长轨乘算后满级 2.47 倍）
     const shockLv = engine.skillLevels?.com_shock || 0
     const radius = 120 + 8 * shockLv
-    ws._explode(p.x, p.y, ws.damage * ws.levelMul * 1.5 * (1 + 0.1 * shockLv), null, radius)
+    ws._explode(p.x, p.y, ws.damage * ws.levelMul * 1.9 * (1 + 0.1 * shockLv), null, radius)
     if (p.dead || engine.runFinished) return true
     repel(engine, radius, 36)
     engine.mapFeatures?.attackBarricades(p.x, p.y, radius)

@@ -244,7 +244,7 @@ engine.reset()
 assert.equal(engine.strainSkill.id, 'slime_shock', '原生拥有黏液震荡')
 engine.input.queueFever()
 engine._updateStrainSkill(0.016)
-assert.equal(engine.player.strainSkillCd, 8, '原生空格释放黏液震荡')
+assert.equal(engine.player.strainSkillCd, 7, '原生空格释放黏液震荡（早期补强：冷却 8→7）')
 
 // 冷却不得跨局残留
 engine.applyStartingStrain('elemental')

@@ -78,7 +78,7 @@ engine._updateStrainSkill(0)
 engine.player.strainSkillCd = 0.3
 engine._pushCooldown()
 assert.ok(lastCd && typeof lastCd.skillCd === 'number' && typeof lastCd.cast === 'number')
-assert.equal(lastCd.skillMax, 4, '原生技能 8 秒 × 冷却倍率')
+assert.equal(lastCd.skillMax, 3.5, '原生技能 7 秒 × 冷却倍率')
 assert.equal(lastCd.formationBreak, 0)
 assert.equal(lastCd.formationBreakMax, 8)
 // _tick 累积到 0.1s 触发推送
