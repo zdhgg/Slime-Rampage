@@ -708,6 +708,22 @@ export const SKILL_DATABASE = {
         },
     },
     {
+      id: 'com_shock',
+      name: '震荡扩能',
+      icon: '🫧',
+      // 原生黏液专属：空格「黏液震荡」是全表唯一没有成长通道的主动技，
+      // 这张卡补上它的纵线——数值在 ORIGIN_SKILL.use 按 skillLevels.com_shock
+      // 实时读取（apply 无需写状态，重开/读档天然一致）。
+      originOnly: true,
+      desc: '强化黏液震荡：伤害与范围逐级提升',
+      tags: ['通用', '主动技'],
+      maxLevel: 3,
+      stats(lv) {
+        return `震荡伤害 +${(lv + 1) * 10}% · 范围 +${(lv + 1) * 8}px`
+      },
+      apply() {},
+    },
+    {
       id: 'com_adrenaline',
       name: '肾上腺素',
       icon: '⚡',
@@ -975,9 +991,11 @@ export function rollSkills(game, count = 3) {
   // 通用池技能
   for (const s of SKILL_DATABASE.common) {
     const curLv = levels[s.id] || 0
-    if (curLv < s.maxLevel) {
-      candidatePool.push({ ...s, role: 'common', level: curLv })
-    }
+    if (curLv >= s.maxLevel) continue
+    // origin 专属卡：震荡扩能只服务原生黏液的黏液震荡；拟态暴食/共生后
+    // 空格已换成签名技（震荡不再使用），同步停发，避免死卡进池。
+    if (s.originOnly && (game.startingStrain !== 'origin' || game.mimicryStrain)) continue
+    candidatePool.push({ ...s, role: 'common', level: curLv })
   }
 
   // 流派技能
@@ -1031,6 +1049,15 @@ export function rollSkills(game, count = 3) {
         let reqMet = true
         if (s.requires && s.requires.length > 0) {
           reqMet = s.requires.some((reqId) => (levels[reqId] || 0) > 0)
+          // T2 深潜门槛：任一 T1 点 1 级即解锁会让「深潜期」名不副实——
+          // 额外要求本树累计投入 ≥2 级（前置本身的 1 级计入，即最多再补 1 级）。
+          // 只作用带前置的 T2：招募位（requires 为空）、T3/T4 的链式前置、
+          // 副专精共鸣与里程碑觉醒均不受影响。投入按解析后主树统计
+          // （暗影变体 id 稳定；元素血统的法术树只含本系卡，口径一致）。
+          if (reqMet && s.tier === 2) {
+            const invested = primarySkills.reduce((n, sk) => n + (levels[sk.id] || 0), 0)
+            reqMet = invested >= 2
+          }
         }
 
         if (reqMet) {

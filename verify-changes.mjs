@@ -154,9 +154,11 @@ engine.player.level = 5
 engine.onLevelUp = () => {}
 engine.openFreeSkillPanel()
 assert.equal(engine.primarySpec, 'gatling', 'openFreeSkillPanel 内部完成觉醒（覆盖秘籍入口）')
-// T2 门槛：觉醒后才能看到 gat_split（requires 满足时）
+// T2 门槛：觉醒后还需主树累计投入 ≥2 级才能看到 gat_split（requires 满足时）
 engine.skillLevels['gat_multishot'] = 1
-assert.ok(rollSkills(engine, 30).some((o) => o.id === 'gat_split'), '觉醒后 T2 进入候选')
+assert.ok(!rollSkills(engine, 30).some((o) => o.id === 'gat_split'), '仅 1 级 T1 不进 T2 候选')
+engine.skillLevels['gat_velocity'] = 1
+assert.ok(rollSkills(engine, 30).some((o) => o.id === 'gat_split'), '主树投入 2 级后 T2 进入候选')
 engine.resume()
 
 // origin：无角色身份 → 保留四系 T1 自由探索与 Lv.5 四选一

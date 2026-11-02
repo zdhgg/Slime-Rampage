@@ -180,10 +180,12 @@ check('暂停不消耗影袭前摇，死亡、结算与重开清理所有状态'
   assert.ok(g.weaponSystem._projectiles.length > 0)
   assert.equal(c.enabled, false)
 })
-check('裂影横斩在 Lv.5 觉醒并有前置后进入暗影技能池，原生黏液不抽到无效技能', g => {
+check('裂影横斩在 Lv.5 觉醒且有前置、主树投入 ≥2 级后进入暗影技能池，原生黏液不抽到无效技能', g => {
   learn(g, 'ass_lethal')
   assert.ok(!rollSkills(g, 100).some(s => s.id === 'ass_cleave'))
   g.player.level = 5; g._ensureRoleAwakening()
+  assert.ok(!rollSkills(g, 100).some(s => s.id === 'ass_cleave'))
+  learn(g, 'ass_stride')
   assert.ok(rollSkills(g, 100).some(s => s.id === 'ass_cleave'))
   g.applyStartingStrain('origin'); g.reset(); g.player.level = 5; g.primarySpec = 'assassin'; learn(g, 'ass_lethal')
   assert.ok(!rollSkills(g, 100).some(s => s.id === 'ass_cleave'))
