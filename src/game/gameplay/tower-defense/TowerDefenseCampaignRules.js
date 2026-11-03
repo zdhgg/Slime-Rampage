@@ -592,7 +592,7 @@ export function getStageConfig(stageId, { endless = false } = {}) {
   const traps = getStageSpecificTraps(topology.traps, clampedStage, stageInChapter, topology.path)
     .filter(trap => progression[trapFeatures[trap.id]]);
   let slotSeeds = clampedStage <= 5 && !endless
-    ? [{ x: 0.20, y: 0.33 }, { x: 0.38, y: 0.31 }, { x: 0.53, y: 0.62 }, { x: 0.76, y: 0.61 }, { x: 0.80, y: 0.40 }, { x: 0.16, y: 0.56 }]
+    ? [{ x: 0.20, y: 0.33 }, { x: 0.38, y: 0.31 }, { x: 0.53, y: 0.62 }, { x: 0.76, y: 0.61 }, { x: 0.85, y: 0.65 }, { x: 0.20, y: 0.50 }]
       .slice(0, clampedStage === 1 ? 4 : clampedStage <= 3 ? 5 : 6)
       .map((slot, slotIndex) => ({ ...slot, slotIndex, leyline: 'none', locked: false, cost: 0, reward: 0 }))
     : getStageSpecificSlots(topology.buildSlots, clampedStage, stageInChapter, chapter.id);
