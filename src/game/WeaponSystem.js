@@ -14,6 +14,7 @@ import {
   onGluttonFDevoured,
   onNormalDevoured,
 } from './GluttonResource.js'
+import { gainPrimalEnergy, onPrimalKill, PRIMAL_SOURCES } from './PrimalEnergy.js'
 import { GluttonCombat, GLUTTON_HEAL_COOLDOWN } from './GluttonCombat.js'
 import { ShadowCombat } from './ShadowCombat.js'
 import { resolveWeaponVisual, splitWeaponVisual, tintedWeaponVisual } from './WeaponVisuals.js'
@@ -339,7 +340,7 @@ export class WeaponSystem extends Entity {
 
   /** 以玩家位置为原点，向目标发射飞弹（多弹时并排扇形齐射） */
   fire(target) {
-    if (this.spellCombat.enabled) return this.spellCombat.cast([...this.spellCombat.elements][0], target)
+    if (this.spellCombat.enabled && !this.spellCombat.usesBasicProjectile) return this.spellCombat.cast([...this.spellCombat.elements][0], target)
     if (this.gluttonCombat.enabled) return this.gluttonCombat.bite(target)
     if (this.shadowCombat.enabled) return this.shadowCombat.stab(target)
     const px = this.player.x
@@ -429,7 +430,7 @@ export class WeaponSystem extends Entity {
     // 1) 冷却计时 → 自动索敌 → 发射 / 咬击
     this.spellCombat.update(dt)
     this.cooldown -= dt
-    if (!this.spellCombat.enabled && this.cooldown <= 0) {
+    if ((!this.spellCombat.enabled || this.spellCombat.usesBasicProjectile) && this.cooldown <= 0) {
       const curInterval = this.attackInterval
       if (this.gluttonCombat.enabled) {
         // 没有近战目标时保留就绪；进入范围即起手，前摇内不重复攻击。
@@ -918,6 +919,7 @@ export class WeaponSystem extends Entity {
             const rMul = (this.reactionDmgMul || 1.0) * (this.geneReactionDmgMul || 1.0)
             const tickDmg = Math.max(1, Math.round(damage * 0.4 * rMul))
             const effects = {}
+            let elementProcApplied = false // 拟态能量：本次命中是否触发了元素附魔（来源③）
             if (p.freezeChance > 0 && Math.random() < p.freezeChance) effects.freeze = 1.5
             if (p.burnChance > 0 && Math.random() < p.burnChance) {
               effects.burn = 2 * dotMul
@@ -934,13 +936,16 @@ export class WeaponSystem extends Entity {
             if (procs.burn?.chance && (this.critGuaranteesElement && isCrit || Math.random() < procs.burn.chance)) {
               effects.burn = Math.max(effects.burn || 0, procs.burn.duration * dotMul)
               effects.burnDmg = Math.max(effects.burnDmg || 0, tickDmg)
+              elementProcApplied = true
             }
             if (procs.freeze?.chance && (this.critGuaranteesElement && isCrit || Math.random() < procs.freeze.chance)) {
               effects.freeze = Math.max(effects.freeze || 0, procs.freeze.duration)
+              elementProcApplied = true
             }
             if (procs.poison?.chance && (this.critGuaranteesElement && isCrit || Math.random() < procs.poison.chance)) {
               effects.poison = Math.max(effects.poison || 0, procs.poison.duration * dotMul)
               effects.poisonDmg = Math.max(effects.poisonDmg || 0, tickDmg)
+              elementProcApplied = true
             }
 
             // 元素：四象混沌原质 终极觉醒
@@ -962,6 +967,10 @@ export class WeaponSystem extends Entity {
             if (penetrates) p.pierces--
             else p.destroy()
             e.hit(damage, effects)
+            // 拟态能量（origin 独占，P0）：飞弹命中计来源①；本次命中触发元素附魔另计来源③。
+            // 函数内部对非 origin 直接短路，其他血统零开销零行为变化。
+            gainPrimalEnergy(this.game, PRIMAL_SOURCES.PROJECTILE)
+            if (elementProcApplied) gainPrimalEnergy(this.game, PRIMAL_SOURCES.ELEMENT)
             this._burstColor(e.x, e.y, p.visual.impact, isCrit ? 14 : p.visual.impactCount, isCrit)
             this.game.sound.hit(p.visual.sound)
 
@@ -973,7 +982,7 @@ export class WeaponSystem extends Entity {
               isCrit ? '#ffd166' : '#ffffff',
               isCrit ? 26 : 14
             )
-            if (!e.active) this._onKill(e)
+            if (!e.active) { this._onKill(e); onPrimalKill(this.game, e) } // 击杀加成：精英 +15 / 首领 +30
 
             // 元素反应
             if (gelR) this._chainLightning(e, damage * rMul)
@@ -1035,15 +1044,15 @@ export class WeaponSystem extends Entity {
     this.player.triggerKillRush?.(2)
     this.player.triggerDevourGuard?.(3)
     this.gluttonCombat.grantGuard()
-    if (this.gluttonCombat.enabled) this.gluttonCombat.onDevoured(e)
+    if (this.gluttonCombat.biteUnlocked) this.gluttonCombat.onDevoured(e)
     else this._ring(e.x, e.y, '#8ae84a', 30)
     this.game.sound.devour()
 
     // 同一次吞噬的牧师/基因恢复合并，近战批量吞噬每 4 秒最多恢复一次。
     if ((this.player.devourHeal || this.player.geneDevourHeal > 0 || e.type === 'priest') &&
-        this.player.hp < this.player.maxHp && (!this.gluttonCombat.enabled || this.player.gluttonHealCooldown <= 0)) {
+        this.player.hp < this.player.maxHp && (!this.gluttonCombat.biteUnlocked || this.player.gluttonHealCooldown <= 0)) {
       this.player.heal(Math.max(1, this.player.geneDevourHeal || 0))
-      if (this.gluttonCombat.enabled) this.player.gluttonHealCooldown = GLUTTON_HEAL_COOLDOWN
+      if (this.gluttonCombat.biteUnlocked) this.player.gluttonHealCooldown = GLUTTON_HEAL_COOLDOWN
     }
 
     // 捕食原核（黑市终点）：每次吞噬攻击永久 +3%，封顶 +100%——

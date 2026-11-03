@@ -2,12 +2,15 @@ import { shadowTargetAlive as alive, shadowLineClear, traceShadowPath, shadowCir
 import { renderPet, renderPetShot } from './PetVisuals.js'
 import { PET_PARTNER_TYPES, getPetRally } from './PetSkills.js'
 import { petSupportStats, petSupportDescription } from './PetSupport.js'
+import { getOriginActiveGrowth, trySpendPrimalOverload, PRIMAL_RALLY_OVERLOAD_DURATION, PRIMAL_RALLY_OVERLOAD_DAMAGE } from './PrimalEnergy.js'
 
 const TYPES = {
   guardian: { name: '岩甲团团', role: '近战', color: '#edc479', hp: 9, speed: 290, interval: 0.85, power: 1.4, range: 85, follow: 65, windup: 0.19 },
   hunter: { name: '疾风芽芽', role: '远程', color: '#8edacb', hp: 6, speed: 420, interval: 0.65, power: 1.15, range: 260, follow: 200, windup: 0.18, projectileSpeed: 510 },
   dew: { name: '甘露啵啵', role: '治疗', color: '#8fd7e8', hp: 7, speed: 350, interval: 1.05, power: 0.8, range: 225, follow: 170, windup: 0.23, projectileSpeed: 430 },
   spore: { name: '孢云菇菇', role: '控场', color: '#c3a4dc', hp: 8, speed: 320, interval: 1.2, power: 0.85, range: 210, follow: 160, windup: 0.26, projectileSpeed: 360 },
+  // 残响团团：岩甲团团的弱化投影（共生共鸣挂件产物），近战、更脆、无完整支援体量
+  echo: { name: '残响团团', role: '近战', color: '#a8c8a0', hp: 5, speed: 290, interval: 0.95, power: 0.8, range: 85, follow: 70, windup: 0.19 },
 }
 const ranged = e => e.type === 'mage' || e.type === 'archer'
 const FORMATION = {
@@ -15,6 +18,7 @@ const FORMATION = {
   hunter: { angle: 2.25, distance: 72 },
   dew: { angle: -2.25, distance: 72 },
   spore: { angle: Math.PI, distance: 112 },
+  echo: { angle: -0.62, distance: 66 },
 }
 
 /** 共生伙伴有独立生命与倒地状态。伤害只走实体结算，不复制本体触发链。 */
@@ -22,17 +26,47 @@ export class PetCombat {
   constructor(weapon) { this.weapon = weapon; this.reset() }
   get game() { return this.weapon.game }
   get player() { return this.weapon.player }
-  get enabled() { return this.game?.startingStrain === 'summoner' }
+  /**
+   * 完整名册（共生血统级）：共生血统天生开启；origin 拟态共生专精（Lv.5）后同样开启。
+   * 岩甲团团只属于完整名册——残响伙伴挂件只给投影，不送护卫。
+   */
+  get fullRoster() {
+    const g = this.game
+    return g?.startingStrain === 'summoner' || (g?.startingStrain === 'origin' && g?.primarySpec === 'symbiosis')
+  }
+  /**
+   * 共生伙伴系统开关：完整名册恒开；origin 选了【残响伙伴】共鸣挂件后同样开启
+   * （挂件是共生树的副专精产物，只可能由 origin 取得）。
+   */
+  get enabled() { return this.fullRoster || this.level('sym_sub_echo') > 0 }
   get available() { return this.enabled && !this.player.dead && !this.game.runFinished }
   level(id) { return this.game?.skillLevels?.[id] || 0 }
   get recovery() { return Math.max(4, 8 - this.level('pet_recovery')) }
-  get rosterTypes() { return ['guardian', ...Object.entries(PET_PARTNER_TYPES).filter(([id]) => this.level(id)).map(([, type]) => type)] }
+  get rosterTypes() {
+    const types = this.fullRoster ? ['guardian'] : []
+    for (const [id, type] of Object.entries(PET_PARTNER_TYPES)) if (this.level(id)) types.push(type)
+    if (this.level('sym_sub_echo')) types.push('echo')
+    return types
+  }
   get cap() { return this.rosterTypes.length }
-  get damageScale() { return (1 + this.level('pet_power') * 0.2) * (this.game.primarySpec === 'symbiosis' ? 1.2 : 1) }
-  get rallyStats() { return getPetRally(this.level('pet_command')) }
+  /** 残响投影按挂件等级缩放（lv1 基底，lv2 +50%） */
+  typeScale(type) { return type === 'echo' ? 1 + 0.5 * (this.level('sym_sub_echo') - 1) : 1 }
+  get damageScale() {
+    return (1 + this.level('pet_power') * 0.2 + this.level('sym_sub_surge') * 0.4) *
+      (this.game.primarySpec === 'symbiosis' ? 1.2 : 1)
+  }
+  get rallyStats() {
+    const stats = getPetRally(this.level('pet_command'))
+    if (this.game?.startingStrain === 'origin' && this.game.primarySpec === 'symbiosis') {
+      const growth = getOriginActiveGrowth(this.game)
+      stats.duration += growth.rallyDuration + (this.rallyOverloaded ? PRIMAL_RALLY_OVERLOAD_DURATION : 0)
+      stats.damage += growth.rallyDamage + (this.rallyOverloaded ? PRIMAL_RALLY_OVERLOAD_DAMAGE : 0)
+    }
+    return stats
+  }
   get attackRate() { return (1 + this.level('pet_haste') * 0.12) * (this.rallyTime > 0 ? 1 + this.rallyStats.haste : 1) }
-  get moveScale() { return this.rallyTime > 0 ? 1 + this.rallyStats.move : 1 }
-  reset() { this.items = []; this.shots = []; this.rallyTime = 0; this.rallyDuration = 0; this.rallyFlash = 0; this.serial = 0 }
+  get moveScale() { return (this.rallyTime > 0 ? 1 + this.rallyStats.move : 1) * (1 + this.level('sym_sub_surge') * 0.15) }
+  reset() { this.items = []; this.shots = []; this.rallyTime = 0; this.rallyDuration = 0; this.rallyOverloaded = false; this.rallyFlash = 0; this.serial = 0 }
 
   formationPoint(type) {
     const slot = FORMATION[type]
@@ -48,7 +82,7 @@ export class PetCombat {
     }
     for (const type of types) {
       let pet = this.items.find(p => p.type === type)
-      const maxHp = TYPES[type].hp + this.level('pet_vitality') * 3
+      const maxHp = Math.round((TYPES[type].hp + this.level('pet_vitality') * 3) * this.typeScale(type))
       if (!pet) {
         const end = this.formationPoint(type)
         pet = { ...end, id: ++this.serial, type, name: TYPES[type].name, radius: 17, isPet: true,
@@ -94,7 +128,7 @@ export class PetCombat {
 
   lureTarget(enemy) {
     if (!this.available || !enemy || enemy.isBoss) return null
-    const pet = this.items.find(p => p.type === 'guardian' && p.hp > 0)
+    const pet = this.items.find(p => this.supportStats(p).kind === 'taunt' && p.hp > 0)
     if (pet?.supportActive > 0) return this.isTaunted(enemy) && shadowLineClear(this.game, pet, enemy) ? pet : null
     if (!pet || Math.hypot(pet.x - enemy.x, pet.y - enemy.y) > 180 || !shadowLineClear(this.game, pet, enemy)) return null
     if (!pet.claims.has(enemy) && pet.claims.size >= 3) return null
@@ -103,8 +137,8 @@ export class PetCombat {
   }
 
   isTaunted(enemy) {
-    const guardian = this.items.find(p => p.type === 'guardian' && p.hp > 0)
-    return this.available && alive(enemy) && !enemy.isBoss && !!guardian && guardian.supportActive > 0 && guardian.taunted.has(enemy)
+    const taunter = this.items.find(p => this.supportStats(p).kind === 'taunt' && p.hp > 0)
+    return this.available && alive(enemy) && !enemy.isBoss && !!taunter && taunter.supportActive > 0 && taunter.taunted.has(enemy)
   }
 
   supportStats(pet) { return petSupportStats(pet.type, this.game.skillLevels) }
@@ -181,6 +215,7 @@ export class PetCombat {
     this.sync()
     const pets = this.items.filter(p => p.hp > 0)
     if (!pets.length || this.rallyTime > 0) return false
+    this.rallyOverloaded = this.game.startingStrain === 'origin' && this.game.primarySpec === 'symbiosis' && trySpendPrimalOverload(this.game)
     this.rallyTime = this.rallyDuration = this.rallyStats.duration
     this.rallyFlash = 0.55
     for (const pet of pets) {
@@ -195,7 +230,7 @@ export class PetCombat {
     }
     this.weapon._ring(this.player.x, this.player.y, '#edc479', 100)
     this.weapon._burstColor(this.player.x, this.player.y, '#edc479', 12, false)
-    this.game.enemyManager.addText(this.player.x, this.player.y - 45, '共生鼓舞', null, '#ffe4a1', 15)
+    this.game.enemyManager.addText(this.player.x, this.player.y - 45, this.rallyOverloaded ? '⚡ 超载鼓舞!' : '共生鼓舞', null, '#ffe4a1', 15)
     this.game.sound?.bite?.(false, false)
     this.game.shakeScreen?.(2, 0.15)
     return true
@@ -203,7 +238,7 @@ export class PetCombat {
 
   attackDamage(pet) {
     const teamwork = this.level('pet_capstone') && this.items.filter(p => p.hp > 0).length >= 2 ? 1.3 : 1
-    return this.weapon.damage * this.weapon.levelMul * TYPES[pet.type].power * this.damageScale * teamwork *
+    return this.weapon.damage * this.weapon.levelMul * TYPES[pet.type].power * this.typeScale(pet.type) * this.damageScale * teamwork *
       (this.rallyTime > 0 ? 1 + this.rallyStats.damage : 1)
   }
 
@@ -306,7 +341,7 @@ export class PetCombat {
     const range = TYPES[pet.type].range + 15
     if (!alive(primary) || Math.hypot(primary.x - pet.x, primary.y - pet.y) > range || !shadowLineClear(this.game, pet, primary)) return
     const damage = this.attackDamage(pet)
-    if (pet.type !== 'guardian') {
+    if (TYPES[pet.type].projectileSpeed) {
       this.launchShot(pet, primary, damage)
       pet.shotCount++
       if (pet.type === 'hunter' && this.level('pet_volley') && pet.shotCount % 3 === 0) {
@@ -323,6 +358,7 @@ export class PetCombat {
     this.sync()
     if (!this.available) return
     this.rallyTime = Math.max(0, this.rallyTime - dt)
+    if (this.rallyTime === 0) this.rallyOverloaded = false
     this.rallyFlash = Math.max(0, this.rallyFlash - dt)
     for (const pet of this.items) {
       if (!this.available) break

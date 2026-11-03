@@ -16,8 +16,9 @@ import { disableGluttonResource, resetGluttonResource } from './GluttonResource.
  *  - 五条角色血统各自绑定一棵专精树（roleSpec）：Lv.1~4 只开放本角色 T1 + 通用，
  *    Lv.5 由引擎自动觉醒（不弹四选一），彻底消除「选了贪噬、Lv.5 却点元素」的身份断裂；
  *  - 五条角色各有 空格 专属主动技能（见 StrainSkills.js）；
- *  - `origin` 保持「自由构筑」语义：roleSpec = null，Lv.1~4 四系 T1 全开放、
- *    Lv.5 仍是四选一，不参与吞噬独占，保留黏液震荡主动。
+ *  - `origin` 为「祖细胞拟态」：roleSpec = null，Lv.1~4 三系 T1 自由混搭、
+ *    Lv.5 五系血统任选拟态（获机制层不获属性），Lv.9 独占副专精，
+ *    保留黏液震荡主动（拟态暴食/共生后换成签名技）。
  *
  * 数值纪律（避免与 Lv.5 专精抢同一个参数）：
  *  - 血统只改「开局就生效」的机制口径与基础属性，且一律用加法/乘法叠加，
@@ -36,7 +37,7 @@ export const STRAINS = {
     id: 'origin',
     name: '原生黏液',
     icon: '🫧',
-    desc: '无修正的原始形态。Lv.1~4 三系技能全开放，Lv.5 自由觉醒主专精；空格释放黏液震荡解围。进化路线：Lv.5 主专精觉醒 → Lv.6~8 主树 T2/T3 深潜 → Lv.9 副专精共鸣 → Lv.14 且战局第 10 波（远征第 5 关）后开放主树终极觉醒。',
+    desc: '无修正的原始祖细胞。Lv.1~4 三系技能自由混搭，Lv.5 五系任选拟态，保留远程普攻与元素吸收；暴食获得吞噬与重咬，共生获得伙伴与鼓舞。震荡扩能随主动形态自动继承，拟态能量达到 40 时有效主动会消耗 40 点超载。Lv.9 选择副专精立即获得一项基础共鸣，后续升级继续强化；Lv.14 且战局第 10 波（远征第 5 关）后开放主树终极觉醒。',
     roleSpec: null,
   },
   glutton: {
@@ -71,7 +72,7 @@ export const STRAINS = {
     id: 'elemental',
     name: '元素史莱姆',
     icon: '🔮',
-    desc: '开局选择法术，并自带 1 点法术护盾，破盾后 8 秒重建。普通升级强化本系威力和护盾；毒素可学习传染。首个 BOSS 核心确定第二元素与融合，后续核心改造当前组合。两套自动法术、一个空格主动术。暴击率 +8%，生命 −1。',
+    desc: '开局使用原质飞弹，自带 1 点法术护盾，破盾后 8 秒重建。Lv.2 选择第一系法术，Lv.5 选择第二系并觉醒融合，Lv.10 进化空格主动术；三个节点各占用本次升级奖励。普通升级强化已学法术与护盾，BOSS 核心改造当前组合。两套自动法术、一个空格主动术。暴击率 +8%，生命 −1。',
     roleSpec: 'elemental',
     critChance: 0.08,
     maxHp: -1,
@@ -99,6 +100,23 @@ export const STRAIN_IDS = ['origin', 'glutton', 'ricochet', 'elemental', 'shadow
 export const CHARACTER_IDS = ['glutton', 'ricochet', 'elemental', 'shadow', 'summoner']
 
 /**
+ * 原生黏液「祖细胞拟态」：专精 → 拟态血统。
+ * Lv.5 五选一觉醒时，origin 获得对应血统的**机制层**（吞噬/伙伴等独占机制与
+ * 签名空格技），但不获得血统属性修正——血统独占的是「天生是」，
+ * origin 拟态换的是「能不能」。gatling / elemental / assassin 三树
+ * 对远程原生天然可用，无需拟态身份，故不在此映射。
+ */
+export const MIMICRY_STRAINS = {
+  gluttony: 'glutton',
+  symbiosis: 'summoner',
+}
+
+/** origin 拟态后的血统 id（非 origin 或无拟态血统时为 null） */
+export function mimicryStrain(strainId, primarySpec) {
+  return strainId === 'origin' ? MIMICRY_STRAINS[primarySpec] || null : null
+}
+
+/**
  * 空格 专属主动技能表（角色 id → 技能定义）。
  * 原生黏液保留自由构筑，并拥有基础解围技能。
  */
@@ -117,9 +135,10 @@ export function getStrainSkill(strainId) {
 }
 
 /**
- * 该角色能否吞噬敌人。
- * 只有暴食史莱姆可以；origin（自由构筑）与其余角色一律不能——
- * 独占是角色差异的骨架，不能因为「origin 没有身份」就给它全部权限。
+ * 该角色能否吞噬敌人（按血统）。
+ * 只有暴食史莱姆天生可以；origin 的吞噬权限是**拟态产物**——
+ * Lv.5 选择暴食专精后经 GameEngine.canDevour（叠加 mimicryStrain）获得，
+ * 本函数只回答「血统本身给不给」，不参与拟态判定。
  */
 export function canDevour(strainId) {
   return strainId === 'glutton'
@@ -140,7 +159,7 @@ export function hasGluttonCharge(strainId) {
  * 暴食/弹射/暗影不使用元素——它们各自的专精树本来就不含元素技能，
  * 元素对它们只是「能捡但捡不起来」的空资源。
  *
- * `origin` 之所以保留权限：它的 roleSpec 为 null，Lv.5 四选一时仍可能主动
+ * `origin` 之所以保留权限：它的 roleSpec 为 null，Lv.5 拟态时仍可能主动
  * 选择元素树；保留权限才不会让那棵树的技能变成死机制。
  */
 export function canUseElements(strainId) {

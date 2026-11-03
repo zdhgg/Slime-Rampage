@@ -262,9 +262,9 @@ check('重开与角色切换清掉暴食状态；暗影用影刃、元素用法�
       g.weaponSystem.fire(spawn(g))
       assert.ok(g.weaponSystem.shadowCombat.swing)
     } else if (strain === 'elemental') {
-      assert.equal(g.weaponSystem._projectiles.length, 0)
-      assert.ok(g.weaponSystem.spellCombat.shots.length > 0)
-      assert.equal(g.weaponSystem.spellCombat.stats.casts, 1)
+      assert.ok(g.weaponSystem._projectiles.length > 0, 'Lv.1 原质飞弹正常攻击')
+      assert.equal(g.weaponSystem.spellCombat.elements.size, 0)
+      assert.equal(g.weaponSystem.spellCombat.stats.casts, 0)
     } else assert.ok(g.weaponSystem._projectiles.length > 0)
   }
 })

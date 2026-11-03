@@ -5,7 +5,8 @@ export function getPetRally(level = 0) {
 
 export const PET_SPEC_INFO = {
   key: 'symbiosis', name: '共生契约', icon: '🐾', color: '#edc479',
-  desc: '岩甲护卫 · 逐步招募四人小队 · 全队鼓舞', bonus: '伙伴伤害 +20%', subBonus: '',
+  desc: '岩甲护卫 · 逐步招募四人小队 · 全队鼓舞', bonus: '伙伴伤害 +20%',
+  subBonus: '🥈 副专精共鸣：解锁【残响伙伴(弱化护卫投影)】与【兽灵回响(伙伴强化)】',
   roadmap: ['T1：伤害／生命／攻速基础培养', 'T2：升级或 BOSS 秘典招募伙伴，最多四只', 'T3：伙伴专属被动与鼓舞强化', '终极：共生守望'],
 }
 export const PET_PARTNER_TYPES = { pet_partner: 'hunter', pet_dew_partner: 'dew', pet_spore_partner: 'spore' }
@@ -38,7 +39,25 @@ export const PET_SKILLS = {
       return `鼓舞 ${rally.duration} 秒 · 攻击力 +${Math.round(rally.damage * 100)}%`
     }, PET_PARTNER_SKILLS),
     { ...skill('pet_capstone', '🌟 共生守望', 4, 1, '至少两只伙伴存活时，全体伙伴伤害额外提高 30%', '两只以上存活 · 全体伤害 ×1.3', ['pet_command']), isCapstone: true },
-  ], secondary: [],
+  ],
+  // 共鸣挂件刻意不带 requiresStrain：它们服务 origin 的 Lv.9 副专精拟态——
+  // 非共生血统也能拿到一只弱化伙伴投影，是「拟态只给机制层」的挂件化表达。
+  secondary: [
+    {
+      id: 'sym_sub_echo', spec: 'symbiosis', name: '残响伙伴', icon: '🐚',
+      desc: '召唤一只残响团团协同作战：岩甲团团的弱化投影，近战护卫并可周期残响挑衅',
+      tags: ['共生共鸣', '伙伴'], maxLevel: 2,
+      stats(lv) { return lv === 0 ? '残响团团 ×1（弱化投影）' : '残响团团生命与伤害 +50%' },
+      apply(game) { game.weaponSystem.petCombat.sync() },
+    },
+    {
+      id: 'sym_sub_surge', spec: 'symbiosis', name: '兽灵回响', icon: '🔊',
+      desc: '所有在场伙伴（含残响）的攻击伤害与移动速度提升',
+      tags: ['共生共鸣', '强化'], maxLevel: 2,
+      stats(lv) { return `伙伴伤害 +${(lv + 1) * 40}% · 伙伴移速 +${(lv + 1) * 15}%` },
+      apply(game) { game.weaponSystem.petCombat.sync() },
+    },
+  ],
 }
 export const PET_BOSS_SKILLS = [
   ...PET_SKILLS.primary.filter(s => s.isPartnerChoice).map(s => ({

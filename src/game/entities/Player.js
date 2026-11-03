@@ -5,6 +5,7 @@ import { ENDLESS_FORMATION_BREAK_SPEED_MUL } from '../EndlessMode.js'
 import { AssetManager } from '../AssetManager.js'
 import { renderSlimeFamilyBody, renderSlimeFamilyFace, paintSlimeFamilySilhouette, slimeFamilyBodyState, slimeFamilyFaceState } from '../SlimeFamilyArtRenderer.js'
 import { getSlimeFamilyArt } from '../SlimeFamilyArt.js'
+import { resetPrimalEnergy } from '../PrimalEnergy.js'
 
 const TAU = Math.PI * 2
 
@@ -159,6 +160,8 @@ export class Player extends Entity {
     this.baseSecondarySlots = BASE_SECONDARY_SLOTS
     this.secondarySlots = BASE_SECONDARY_SLOTS
     this._secondaryIds = new Set()
+    // 拟态能量（origin 独占资源，P0）：归零初始化，获取/消耗口径见 PrimalEnergy.js
+    resetPrimalEnergy(this)
     this._refreshElements()
 
     // —— 基因属性（阶段八：黑市局外成长，由 applyGenes 维护） ——
@@ -643,7 +646,9 @@ export class Player extends Entity {
   }
 
   hit(damage, attack = null) {
-    if (this.invincible > 0 || this.dead || this.game?.runFinished || !(damage > 0)) return false // 无敌帧内免疫（含结算后）
+    if (this.dead || this.game?.runFinished || !(damage > 0)) return false
+    // 区域灼烧（zoneBurn）不吃受击无敌帧：0.5s 节奏 DoT 会被 0.5s 无敌帧吞掉一半
+    if (this.invincible > 0 && !attack?.zoneBurn) return false // 无敌帧内免疫（含结算后）
     // Only explicit enemy attack tokens are eligible; costs/events retain their old semantics.
     if (attack?.enemyAttack && this.evasionChance > 0) {
       // The existing 0.2-second virtual-body visual is also the protection window.
@@ -989,7 +994,8 @@ export class Player extends Entity {
       sx *= bite.sx * horizontal + bite.sy * (1 - horizontal)
       sy *= bite.sy * horizontal + bite.sx * (1 - horizontal)
     }
-    const chargePulse = this.strainId === 'glutton' ? this.gluttonLastGainPulse / 0.6 : 0
+    // 猎食点脉冲按资源归属而非血统名判定：origin 拟态暴食后同样反馈
+    const chargePulse = this.gluttonCharge >= 0 ? this.gluttonLastGainPulse / 0.6 : 0
     if (chargePulse > 0) { sx *= 1 + chargePulse * 0.07; sy *= 1 + chargePulse * 0.07 }
 
     // 吞噬膨胀脉冲（吞咽瞬间果冻鼓起）

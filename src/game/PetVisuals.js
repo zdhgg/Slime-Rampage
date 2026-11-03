@@ -5,7 +5,12 @@ const LOOK = {
   hunter: { base: '#83d3bd', light: '#d5fff0', shade: '#4a9c8d', edge: '#315e57', eye: '#203d3a' },
   dew: { base: '#8fd7e8', light: '#e4fbff', shade: '#5099b4', edge: '#356a7d', eye: '#24495a' },
   spore: { base: '#c3a4dc', light: '#f0ddf8', shade: '#866aa4', edge: '#59466f', eye: '#303047' },
+  // 残响团团：岩甲团团的弱化投影——同轮廓、冷调半透明残响色
+  echo: { base: '#9fbfae', light: '#ddf3e6', shade: '#6e8f7e', edge: '#4a6357', eye: '#233530' },
 }
+
+/** 近战型伙伴（沿用 guardian 的咬合/嘲讽视觉分支；远程型走弹道分支） */
+const isMeleePet = (type) => type === 'guardian' || type === 'echo'
 
 function fillPath(ctx, points, fill, stroke, width = 1.5) {
   ctx.beginPath()
@@ -195,16 +200,16 @@ export function renderPet(ctx, pet, recovery, time = 0, rallyTime = 0) {
     ctx.translate(0, Math.sin(time * 4 + pet.id * 1.7) * 1.1)
     if (pet.support) {
       const k = 1 - Math.max(0, pet.support.time) / pet.support.maxTime
-      if (pet.type === 'guardian') ctx.scale(1 + k * .22, 1 - k * .25)
+      if (isMeleePet(pet.type)) ctx.scale(1 + k * .22, 1 - k * .25)
       else if (pet.type === 'hunter') { ctx.rotate(Math.sin(k * Math.PI * 2) * .16); ctx.translate(0, -k * 3) }
       else if (pet.type === 'dew') { ctx.translate(0, -k * 4); ctx.scale(1 + k * .12, 1 + k * .15) }
       else { ctx.translate(0, k * 3); ctx.scale(1 + k * .2, 1 - k * .2) }
     } else if (pet.supportFx > .3) {
       const recoil = (pet.supportFx - .3) / .25
-      ctx.translate(0, -Math.sin(recoil * Math.PI) * (pet.type === 'guardian' ? 4 : 2))
+      ctx.translate(0, -Math.sin(recoil * Math.PI) * (isMeleePet(pet.type) ? 4 : 2))
     } else if (pet.attack) {
       const k = 1 - Math.max(0, pet.attack.time) / pet.attack.maxTime
-      if (pet.type === 'guardian') {
+      if (isMeleePet(pet.type)) {
         ctx.translate(Math.cos(pet.angle) * k * 7, Math.sin(pet.angle) * k * 7)
         ctx.rotate(pet.angle)
         ctx.scale(1 + k * 0.17, 1 - k * 0.18)
@@ -221,7 +226,7 @@ export function renderPet(ctx, pet, recovery, time = 0, rallyTime = 0) {
   }
 
   if (pet.flash > 0 && pet.down <= 0) ctx.filter = 'brightness(1.5)'
-  if (pet.type === 'guardian') drawGuardian(ctx, look)
+  if (isMeleePet(pet.type)) drawGuardian(ctx, look)
   else if (pet.type === 'hunter') drawHunter(ctx, look)
   else if (pet.type === 'dew') drawDew(ctx, look)
   else drawSpore(ctx, look)
@@ -229,7 +234,7 @@ export function renderPet(ctx, pet, recovery, time = 0, rallyTime = 0) {
 
   if (pet.down <= 0) renderSupport(ctx, pet, look, time)
 
-  if (pet.down <= 0 && pet.attack && pet.type !== 'guardian') {
+  if (pet.down <= 0 && pet.attack && !isMeleePet(pet.type)) {
     const charge = 1 - Math.max(0, pet.attack.time) / pet.attack.maxTime
     ctx.save()
     ctx.globalAlpha = 0.45 + charge * 0.5
@@ -248,7 +253,7 @@ export function renderPet(ctx, pet, recovery, time = 0, rallyTime = 0) {
     ctx.globalAlpha = fade * 0.82
     ctx.strokeStyle = look.light
     ctx.lineCap = 'round'
-    if (pet.type === 'guardian') {
+    if (isMeleePet(pet.type)) {
       ctx.lineWidth = pet.attackBoosted ? 4 : 3
       ctx.beginPath(); ctx.arc(0, 0, 25, angle - 0.72, angle + 0.72); ctx.stroke()
       ctx.lineWidth = 1.5
@@ -300,7 +305,7 @@ function renderSupport(ctx, pet, look, time) {
       ctx.beginPath(); ctx.arc(pet.x + Math.cos(angle) * 25, pet.y - 6 + Math.sin(angle) * 14, 1.5 + charge, 0, TAU); ctx.fill()
     }
   }
-  if (pet.type === 'guardian' && pet.supportActive > 0) {
+  if (isMeleePet(pet.type) && pet.supportActive > 0) {
     ctx.globalAlpha = .55 + Math.sin(time * 6) * .1
     ctx.strokeStyle = look.light; ctx.lineWidth = 2
     ctx.beginPath(); ctx.arc(pet.x, pet.y - 1, 25, -.9, .9); ctx.stroke()
@@ -314,7 +319,7 @@ function renderSupport(ctx, pet, look, time) {
   if (pet.supportFx > 0) {
     const progress = 1 - pet.supportFx / .55
     ctx.globalAlpha = (1 - progress) * .65
-    if (pet.type === 'guardian') {
+    if (isMeleePet(pet.type)) {
       for (const offset of [0, 13]) {
         ctx.beginPath(); ctx.ellipse(pet.x, pet.y + 12, 22 + progress * 48 + offset, 7 + progress * 15 + offset / 3, 0, 0, TAU); ctx.stroke()
       }

@@ -3,14 +3,16 @@ import { setCritSource } from './CritSources.js'
 import { ELEMENTAL_SKILLS, ELEMENTAL_SPEC_INFO, resolveElementalSkill } from './SpellRules.js'
 import { spellSkillAvailable, prioritizeSpellChoices } from './ElementalUpgrades.js'
 import { SHADOW_EXTRA_SKILLS, SHADOW_SKILL_VARIANTS, SHADOW_CLONE_SKILL_IDS, SHADOW_SPEC_INFO, resolveShadowSkill } from './ShadowSkills.js'
+import { getOriginActiveGrowth } from './PrimalEnergy.js'
 /**
  * 技能池：流派化专精技能体系（阶段式里程碑觉醒架构）
  *
  * 核心升级节奏：
- *  - Lv. 1 ~ 4【初生自由探索期】：4 大流派的所有 T1 基础技能 + 通用生存技能全部开放，自由混搭尝试，绝不锁定流派；
- *  - Lv. 5【主专精觉醒里程碑】：触发「主专精觉醒仪式」，4 大流派并排陈列，预览未来技能树后主动确立【主专精】；
+ *  - Lv. 1 ~ 4【初生自由探索期】：三系 T1 基础技能 + 通用生存技能全部开放，自由混搭尝试，绝不锁定流派；
+ *  - Lv. 5【主专精觉醒里程碑】：触发「主专精觉醒仪式」——角色血统自动觉醒本树，
+ *    origin（祖细胞拟态）五系血统并排陈列，拟态选定后获得该血统机制层；
  *  - Lv. 6 ~ 8【主专精深潜期】：主专精解锁 T2、T3 进阶技能，通用池持续兜底；
- *  - Lv. 9【副专精共鸣里程碑】：触发「副专精觉醒仪式」，从剩余 3 个流派中主动选定 1 个【副专精】；
+ *  - Lv. 9【副专精共鸣里程碑】：原生从其余四系选择副专精，立即获得一项基础共鸣；
  *  - Lv. 10+【深潜与终极觉醒】：主专精开放 T4 终极质变大招（Capstone），副专精开放专属共鸣挂件。
  */
 
@@ -109,8 +111,10 @@ export const SKILL_DATABASE = {
         desc: '提高吞噬线与吸附范围，加快吞噬和近战命中首领的猎食点获取',
         tags: ['暴食·T1', '吞噬'],
         maxLevel: 3,
-        stats(lv) {
-          return `吞噬阈值 ${[28, 32, 36][lv]}% · 吸附 +${[20, 40, 60][lv]}% · 吞噬充能 +${[20, 40, 60][lv]}% · 首领充能 +${[33, 66, 100][lv]}%`
+        stats(lv, game) {
+          // 首领充能走近战普攻命中——拟态 origin 无普攻咬击，该通道不生效，不承诺。
+          const bossPart = game?.startingStrain === 'origin' ? '' : ` · 首领充能 +${[33, 66, 100][lv]}%`
+          return `吞噬阈值 ${[28, 32, 36][lv]}% · 吸附 +${[20, 40, 60][lv]}% · 吞噬充能 +${[20, 40, 60][lv]}%${bossPart}`
         },
         apply(game, lv) {
           game.devourThreshold = [0.28, 0.32, 0.36][lv - 1]
@@ -711,15 +715,16 @@ export const SKILL_DATABASE = {
       id: 'com_shock',
       name: '震荡扩能',
       icon: '🫧',
-      // 原生黏液专属：空格「黏液震荡」是全表唯一没有成长通道的主动技，
-      // 这张卡补上它的纵线——数值在 ORIGIN_SKILL.use 按 skillLevels.com_shock
-      // 实时读取（apply 无需写状态，重开/读档天然一致）。
+      // 原生主动成长：Lv.5 拟态后转为重咬伤害/范围，或鼓舞攻击加成/时长。
+      // 实际技能按等级实时读取，不在觉醒时反复叠加属性。
       originOnly: true,
-      desc: '强化黏液震荡：伤害与范围逐级提升',
+      desc: '强化原生主动；拟态暴食后强化重咬，拟态共生后强化鼓舞，已有等级自动继承',
       tags: ['通用', '主动技'],
       maxLevel: 3,
-      stats(lv) {
-        return `震荡伤害 +${(lv + 1) * 10}% · 范围 +${(lv + 1) * 8}px`
+      stats(lv, game) {
+        const growth = getOriginActiveGrowth(game, lv + 1)
+        if (game?.primarySpec === 'symbiosis') return `鼓舞攻击加成额外 +${Math.round(growth.rallyDamage * 100)}% · 持续时间 +${growth.rallyDuration} 秒`
+        return `${game?.primarySpec === 'gluttony' ? '重咬' : '震荡'}伤害 +${(lv + 1) * 10}% · 范围 +${(lv + 1) * 8}px`
       },
       apply() {},
     },
@@ -843,12 +848,15 @@ export const BOSS_SKILL_DATABASE = {
 /** 取当前角色可获得的 BOSS 秘典候选。 */
 export function rollBossSkills(game, count = 3) {
   const strain = game.startingStrain || game.player?.strainId || 'origin'
+  // 拟态血统（祖细胞拟态）：requiresElementalStrain 仍认真血统（元素史莱姆独占），
+  // 伙伴契约认拟态——origin 拟态共生后招募秘典必须可达。
+  const effectiveStrain = game.mimicryStrain || strain
   const spec = game.roleSpec || game.primarySpec
   if (!spec || !BOSS_SKILL_DATABASE[spec]) return []
   const owned = game.bossSkillIds || new Set()
   const pool = BOSS_SKILL_DATABASE[spec].filter((skill) =>
     !owned.has(skill.id) && (!skill.requiresElementalStrain || strain === 'elemental') &&
-    (!skill.partnerSkillId || (strain === 'summoner' && !(game.skillLevels?.[skill.partnerSkillId] > 0)))
+    (!skill.partnerSkillId || (effectiveStrain === 'summoner' && !(game.skillLevels?.[skill.partnerSkillId] > 0)))
   )
   const shuffled = pool.slice().sort(() => Math.random() - 0.5)
   // 未招募的伙伴至少出现一项，让击败首领始终有组队的机会。
@@ -868,9 +876,10 @@ const SKILL_CAPABILITY = {
   // 只在「吞噬」发生时生效 → 仅 canDevour 的角色可用
   glut_eruption: 'devour',
   glut_sub_digest: 'devour',
-  // 元素共鸣是元素血统专属；原生黏液可以使用元素法术，但不能取得共鸣体。
-  ele_sub_boost: 'elemental_strain',
-  ele_sub_aura: 'elemental_strain',
+  // 元素共鸣挂件按「元素权限」开放：元素史莱姆与原生黏液（元素进化体）可用；
+  // 共生/暴食/弹射/暗影无元素权限，仍然拿不到。
+  ele_sub_boost: 'element',
+  ele_sub_aura: 'element',
 }
 
 /** 该技能在当前角色权限下是否有实际效果 */
@@ -894,11 +903,33 @@ function specPrimaryUsable(specKey, canDevour) {
   return true
 }
 
+/**
+ * origin 拟态觉醒附注（祖细胞拟态）：暴食/共生两棵树的拟态会在觉醒时补发
+ * 机制层（吞噬+猎食点+重咬 / 首只伙伴+鼓舞），这是里程碑选项的真实内容，
+ * 必须写进卡里——否则玩家不知道这次觉醒还送独占机制。
+ */
+const MIMICRY_AWAKENING_NOTES = {
+  gluttony: '🧬 拟态授予：解锁吞噬 · 猎食点 · 空格变暴食重咬（普攻仍为远程飞弹）；继承震荡扩能与拟态超载',
+  symbiosis: '🧬 拟态授予：岩甲团团即刻到场 · 空格变共生鼓舞（本体伤害不减）；继承震荡扩能与拟态超载',
+}
+
+const SECONDARY_STARTERS = {
+  gluttony: 'glut_sub_armor', gatling: 'gat_sub_mag', elemental: 'ele_sub_aura',
+  assassin: 'ass_sub_insight', symbiosis: 'sym_sub_echo',
+}
+
 /** 某专精的 secondary 技能在当前权限下还剩哪些可用 */
 function secondarySkills(specKey, canDevour = true, canUseElements = true, isElementalStrain = true) {
   return (SKILL_DATABASE[specKey]?.secondary || []).filter((s) =>
     skillUsable(s, canDevour, canUseElements, isElementalStrain)
   )
+}
+
+/** 里程碑预览与实际授予共用一项合法共鸣；已满级时回退到本系其余可用项。 */
+export function getSecondaryStarter(game, specKey) {
+  const skills = secondarySkills(specKey, game.canDevour !== false, game.canUseElements !== false, game.startingStrain === 'elemental')
+    .filter(s => (game.skillLevels?.[s.id] || 0) < s.maxLevel)
+  return skills.find(s => s.id === SECONDARY_STARTERS[specKey]) || skills[0] || null
 }
 
 /** 该专精是否还有可用的 secondary（用于 Lv.9 里程碑候选过滤） */
@@ -915,24 +946,40 @@ export function rollSkills(game, count = 3) {
   const primarySpec = game.primarySpec
   const secondarySpec = game.secondarySpec
   // 角色身份（阶段十九）：四名角色在 Lv.1~4 只开放本角色 T1；
-  // origin（roleSpec = null）保留四系 T1 自由探索 + Lv.5 四选一。
+  // origin（roleSpec = null）保留三系 T1 自由探索 + Lv.5 五系拟态。
   const roleSpec = game.roleSpec || null
   // 角色权限（第三/第四批）：技能池必须与独占能力对齐，否则会把死技能摆到玩家面前。
   // 引擎侧是 getter（布尔）；测试桩缺省按「有权限」处理，与本文件其它桩口径一致。
   const canDevour = game.canDevour !== false
   const canUseElements = game.canUseElements !== false
   const isElementalStrain = game.startingStrain === 'elemental'
-  const isSpecOffered = (k) => (k !== 'symbiosis' || game.startingStrain === 'summoner') && specPrimaryUsable(k, canDevour)
-  const isSecondarySpecOffered = (k) => specSecondaryUsable(k, canDevour, canUseElements, isElementalStrain)
+  const isOrigin = game.startingStrain === 'origin'
+  // 拟态血统（祖细胞拟态）：origin 选了暴食/共生后，requiresStrain 按拟态血统判定——
+  // 否则共生树全员 requiresStrain:'summoner' 会把自己锁死。引擎 getter 缺省（测试桩）
+  // 时退化为 startingStrain，行为与旧版完全一致。
+  const effectiveStrain = game.mimicryStrain || game.startingStrain
+  // 里程碑口径「选了觉醒就拿到机制」：origin 的 Lv.5 五系全可选（拟态授予机制层）。
+  const isMilestoneOffered = (k) =>
+    (k !== 'symbiosis' || effectiveStrain === 'summoner' || isOrigin) &&
+    (specPrimaryUsable(k, canDevour) || (k === 'gluttony' && isOrigin))
+  // 早期池口径「现在就能用」：暴食/共生 T1 对未拟态的 origin 是死卡，不进 Lv.1~4 池。
+  const isT1Offered = (k) => (k !== 'symbiosis' || effectiveStrain === 'summoner') && specPrimaryUsable(k, canDevour)
+  const isSecondarySpecOffered = (k) => specSecondaryUsable(k, canDevour, canUseElements, isElementalStrain) && !!getSecondaryStarter(game, k)
 
   // ===================================================
-  // 1. Lv. 5 里程碑：主专精觉醒仪式（四系陈列；按权限过滤）
+  // 1. Lv. 5 里程碑：主专精觉醒仪式（origin 五系拟态陈列；角色血统只列本树，按权限过滤）
   // ===================================================
   if (pLevel >= 5 && !primarySpec) {
     return Object.keys(SKILL_DATABASE)
-      .filter((k) => k !== 'common' && isSpecOffered(k))
+      .filter((k) => k !== 'common' && isMilestoneOffered(k))
       .map((k) => {
         const info = SPEC_INFO[k]
+        const mimicryNote = isOrigin ? MIMICRY_AWAKENING_NOTES[k] : null
+        // 「已投入 X 级」徽标：早期自由混搭的沉淀在里程碑上可见，
+        // 觉醒哪条系一眼有数（配合卡池收敛，雏形与觉醒自然衔接）。
+        const invested = (SKILL_DATABASE[k].primary || []).reduce((n, s) => n + (levels[s.id] || 0), 0)
+        const bonus = [mimicryNote, info.bonus, invested > 0 ? `已投入 ${invested} 级` : null]
+          .filter(Boolean).join(' ／ ')
         return {
           id: `milestone_pri_${k}`,
           spec: k,
@@ -942,16 +989,16 @@ export function rollSkills(game, count = 3) {
           icon: info.icon,
           color: info.color,
           desc: info.desc,
-          bonus: info.bonus,
+          bonus,
           roadmap: info.roadmap,
           tags: ['👑 主专精觉醒', info.name],
-          stats: info.bonus,
+          stats: bonus,
         }
       })
   }
 
   // ===================================================
-  // 2. Lv. 9 里程碑：副专精共鸣仪式（剩余三系陈列；按权限过滤）
+  // 2. Lv. 9 里程碑：其余四系陈列；立即授予基础共鸣，后续升级继续强化。
   // ===================================================
   if (pLevel >= 9 && primarySpec && !secondarySpec && !roleSpec) {
     return Object.keys(SKILL_DATABASE)
@@ -962,6 +1009,10 @@ export function rollSkills(game, count = 3) {
         // 不得在面板上继续宣告它（否则是「文案承诺了却永远拿不到」）。
         const keptSkills = secondarySkills(k, canDevour, canUseElements, isElementalStrain)
         const partial = keptSkills.length < SKILL_DATABASE[k].secondary.length
+        const starter = getSecondaryStarter(game, k)
+        const starterLevel = levels[starter.id] || 0
+        const starterStats = typeof starter.stats === 'function' ? starter.stats(starterLevel, game) : starter.stats
+        const instantBonus = `立即获得【${starter.name}】Lv.${starterLevel + 1}：${starterStats}`
         return {
           id: `milestone_sec_${k}`,
           spec: k,
@@ -970,15 +1021,13 @@ export function rollSkills(game, count = 3) {
           name: `确立【${info.name}】`,
           icon: info.icon,
           color: info.color,
-          desc: info.desc,
-          bonus: info.subBonus,
+          desc: starter.desc,
+          bonus: instantBonus,
           roadmap: partial
             ? [keptSkills.map((s) => `${s.icon} ${s.name}`).join(' ／ ')]
             : [info.subBonus],
           tags: ['🥈 副专精共鸣', info.name],
-          stats: partial
-            ? keptSkills.map((s) => `${s.icon} ${s.name}`).join(' ／ ')
-            : info.subBonus,
+          stats: instantBonus,
         }
       })
   }
@@ -992,9 +1041,8 @@ export function rollSkills(game, count = 3) {
   for (const s of SKILL_DATABASE.common) {
     const curLv = levels[s.id] || 0
     if (curLv >= s.maxLevel) continue
-    // origin 专属卡：震荡扩能只服务原生黏液的黏液震荡；拟态暴食/共生后
-    // 空格已换成签名技（震荡不再使用），同步停发，避免死卡进池。
-    if (s.originOnly && (game.startingStrain !== 'origin' || game.mimicryStrain)) continue
+    // 震荡扩能服务原生的所有主动形态，拟态后继续提供对应强化。
+    if (s.originOnly && game.startingStrain !== 'origin') continue
     candidatePool.push({ ...s, role: 'common', level: curLv })
   }
 
@@ -1003,14 +1051,14 @@ export function rollSkills(game, count = 3) {
     if (specKey === 'common') continue
 
     const primarySkills = (specKey === 'elemental' && isElementalStrain ? ELEMENTAL_SKILLS : tree.primary).map(s => resolveElementalSkill(resolveShadowSkill(s, game), game))
-      .filter(s => skillUsable(s, canDevour, canUseElements, isElementalStrain, game.startingStrain))
+      .filter(s => skillUsable(s, canDevour, canUseElements, isElementalStrain, effectiveStrain))
       .filter(s => !isElementalStrain || game.weaponSystem?.spellCombat?.fusion || !['ele_resonance', 'ele_overload'].includes(s.id))
       .filter(s => !isElementalStrain || specKey !== 'elemental' || spellSkillAvailable(s, game))
 
     // 尚未确立主专精（Lv.1~4）：
     //  - 角色血统（roleSpec）：只开放本角色 T1——Lv.5 会自动觉醒，不需要玩家再选一次；
-    //  - origin（roleSpec = null）：保留四系 T1 自由探索，但**排除暴食主树**
-    //    （第四批：origin 无 canDevour，glut_maw 是「拿攻击换吞噬线」的纯负面卡）。
+    //  - origin（roleSpec = null）：保留三系 T1 自由探索，但**排除暴食/共生树**
+    //    （拟态前无吞噬、无伙伴，那些 T1 是死卡；Lv.5 里程碑才放宽成五系可选）。
     // 注意这里刻意不带 tier 过滤之外的放宽条件：T2/T3 仍必须等 primarySpec 确立
     // （GameEngine._ensureRoleAwakening）后才会进入候选池，不会因为角色绑定而提前。
     if (!primarySpec) {
@@ -1021,7 +1069,7 @@ export function rollSkills(game, count = 3) {
           if (curLv < s.maxLevel) candidatePool.push({ ...s, role: 'role_t1', level: curLv })
         }
       } else {
-        if (!isSpecOffered(specKey)) continue
+        if (!isT1Offered(specKey)) continue
         for (const s of primarySkills.filter((sk) => sk.tier === 1)) {
           const curLv = levels[s.id] || 0
           if (curLv < s.maxLevel) candidatePool.push({ ...s, role: 't1_free', level: curLv })
@@ -1032,7 +1080,7 @@ export function rollSkills(game, count = 3) {
       for (const s of primarySkills) {
         const curLv = levels[s.id] || 0
         if (curLv >= s.maxLevel) continue
-        if (!skillUsable(s, canDevour, canUseElements, isElementalStrain, game.startingStrain)) continue
+        if (!skillUsable(s, canDevour, canUseElements, isElementalStrain, effectiveStrain)) continue
         if (s.excludes?.some(id => (levels[id] || 0) > 0)) continue
 
         // 终极觉醒需要构筑深度和战局进度同时达标，防止单次经验暴涨或慢打
@@ -1078,16 +1126,46 @@ export function rollSkills(game, count = 3) {
   }
 
   // 觉醒时先选第一位搭档，后续升级仍可招募其余伙伴。
-  if (game.startingStrain === 'summoner' && primarySpec === 'symbiosis' &&
+  // effectiveStrain：origin 拟态共生后同样先招募（岩甲团团随 enabled 自动到场，
+  // 但三选一招募位是共生树的组队入口，不能只靠常驻位）。
+  if (effectiveStrain === 'summoner' && primarySpec === 'symbiosis' &&
       !PET_PARTNER_SKILLS.some(id => (levels[id] || 0) > 0)) {
     const choices = PET_PARTNER_SKILLS.map(id => candidatePool.find(skill => skill.id === id)).filter(Boolean)
     if (choices.length === PET_PARTNER_SKILLS.length) return choices.slice(0, count)
   }
 
   // 洗牌算法
-  for (let i = candidatePool.length - 1; i > 0; i--) {
-    const j = (Math.random() * (i + 1)) | 0
-    ;[candidatePool[i], candidatePool[j]] = [candidatePool[j], candidatePool[i]]
+  // 投入收敛（自由探索期治「散落」）：已投入系 / 已点过的卡加权排前——
+  // Lv.1~4 的混搭会自然长成雏形，Lv.5 觉醒有土壤，而不是三次各开一门。
+  // 元素血统沿用均匀洗牌（法术优先级抽取有自己的口径）。
+  if (!isElementalStrain) {
+    const specInvestment = {}
+    for (const [specKey, tree] of Object.entries(SKILL_DATABASE)) {
+      if (specKey === 'common' || !tree.primary) continue
+      specInvestment[specKey] = tree.primary.reduce((sum, s) => sum + (levels[s.id] || 0), 0)
+    }
+    // 已点过 +50%/级；同系自由技能再按全树投入 +75%/级（只作用未觉醒探索期）
+    const weightOf = (s) =>
+      1 + 0.5 * (levels[s.id] || 0) +
+      ((s.role === 't1_free' || s.role === 'role_t1') ? 0.75 * (specInvestment[s.spec] || 0) : 0)
+    const rest = candidatePool.slice()
+    candidatePool.length = 0
+    while (rest.length) {
+      let total = 0
+      for (const s of rest) total += weightOf(s)
+      let roll = Math.random() * total
+      let idx = 0
+      for (; idx < rest.length - 1; idx++) {
+        roll -= weightOf(rest[idx])
+        if (roll <= 0) break
+      }
+      candidatePool.push(rest.splice(idx, 1)[0])
+    }
+  } else {
+    for (let i = candidatePool.length - 1; i > 0; i--) {
+      const j = (Math.random() * (i + 1)) | 0
+      ;[candidatePool[i], candidatePool[j]] = [candidatePool[j], candidatePool[i]]
+    }
   }
 
   // 终极觉醒大招优先排在前列

@@ -59,8 +59,9 @@ assert.equal(engine.input._feverQueued, false, '暂停应清空队列（无幽�
 engine.resume()
 ok('输入挂起：UI 期间不劫持 Space、恢复后无幽灵操作')
 
-// —— 2. 主专精只在局内觉醒（origin 路径）：开局无专精，Lv.5 三系陈列且不附赠 T1 ——
-// 第四批：origin 无 canDevour，暴食主树已从候选池排除（见下方 2b 与第 3 组）
+// —— 2. 主专精只在局内觉醒（origin 路径）：开局无专精，Lv.5 五系拟态陈列且不附赠 T1 ——
+// 祖细胞拟态：origin 的 Lv.5 五系血统全可选（含暴食/共生，拟态补发机制层；
+// 早期 Lv.1~4 池仍排除这两树——见 2b 与第 3 组）
 assert.equal(engine.primarySpec, null)
 assert.equal(engine.weaponSystem.projectileCount, 1, '开局保持基础单弹')
 assert.equal(typeof engine.applyStartingSpec, 'undefined', '引擎不再暴露开局预选通道')
@@ -68,9 +69,9 @@ engine.player.level = 5
 engine.player.exp = 0
 engine.player.maxExp = 1
 let options = rollSkills(engine, 3)
-assert.equal(options.length, 3, 'Lv.5 展示三个可选主专精（暴食已排除）')
+assert.equal(options.length, 5, 'Lv.5 展示五个可选主专精（五系拟态全陈列）')
 assert.ok(options.every((o) => o.isMilestone && o.milestoneType === 'primary'))
-assert.ok(!options.some((o) => o.spec === 'gluttony'), 'origin 不得选择暴食主专精')
+assert.ok(options.some((o) => o.spec === 'gluttony') && options.some((o) => o.spec === 'symbiosis'), '拟态里程碑含暴食与共生')
 engine.applySkill(options.find((o) => o.spec === 'gatling'))
 assert.equal(engine.primarySpec, 'gatling')
 assert.equal(engine.weaponSystem.projectileCount, 2, '机枪觉醒只应用专精赋能，不附赠 T1')
@@ -108,7 +109,7 @@ assert.equal(engine.primarySpec, 'elemental')
 assert.equal(engine.weaponSystem.projectileCount, 1, '机枪赋能不残留')
 assert.ok(Math.abs(engine.weaponSystem.freezeChance - 0.2) < 1e-9, '元素觉醒只应用 +20% 基础赋能')
 assert.equal(engine.skillLevels['ele_affinity'] || 0, 0, '元素路线同样不附赠 T1')
-ok('主专精仅在 Lv.5 局内选择（origin 三选一），开局无预选与附赠技能')
+ok('主专精仅在 Lv.5 局内选择（origin 五系拟态），开局无预选与附赠技能')
 
 // —— 2b. 角色化（阶段十九）：角色绑定技能树、Lv.5 自动觉醒、吞噬独占、F 冷却 ——
 // 候选池只含本角色 T1 + 通用：其它树的 T1 不得出现（这是角色差异的骨架）
@@ -161,8 +162,9 @@ engine.skillLevels['gat_velocity'] = 1
 assert.ok(rollSkills(engine, 30).some((o) => o.id === 'gat_split'), '主树投入 2 级后 T2 进入候选')
 engine.resume()
 
-// origin：无角色身份 → 保留四系 T1 自由探索与 Lv.5 四选一
-// 第四批修正：origin 无 canDevour，暴食主树从候选池排除（glut_maw 是纯负面卡）
+// origin：祖细胞拟态 → Lv.1~4 三系 T1 自由探索，Lv.5 五系拟态
+// 早期池口径「现在就能用」：暴食/共生 T1 在拟态前是死卡，不进池；
+// 里程碑口径「选了觉醒就拿到机制」：五系全陈列。
 engine.applyStartingStrain('origin')
 engine.reset()
 assert.equal(engine.roleSpec, null)
@@ -170,14 +172,17 @@ assert.equal(engine.primarySpec, null)
 engine.player.level = 4
 const originPool = rollSkills(engine, 30)
 const originSpecs = [...new Set(originPool.map((o) => o.spec).filter(Boolean))]
-assert.equal(originSpecs.length, 3, 'origin Lv.4 开放三系 T1（不含暴食）')
-assert.ok(!originSpecs.includes('gluttony'), 'origin Lv.4 不得出现暴食主树')
+assert.equal(originSpecs.length, 3, 'origin Lv.4 开放三系 T1（不含暴食/共生）')
+assert.ok(!originSpecs.includes('gluttony') && !originSpecs.includes('symbiosis'), 'origin Lv.4 不得出现暴食/共生主树')
 engine.player.level = 5
 const originMilestone = rollSkills(engine, 3)
-assert.equal(originMilestone.length, 3, 'origin Lv.5 三选一（暴食已排除）')
+assert.equal(originMilestone.length, 5, 'origin Lv.5 五系拟态全陈列')
 assert.ok(originMilestone.every((o) => o.isMilestone && o.milestoneType === 'primary'))
-assert.ok(!originMilestone.some((o) => o.spec === 'gluttony'), 'origin Lv.5 不得出现暴食主专精')
-ok('角色化：四角色绑定技能树并在 Lv.5 自动觉醒，origin 保留三系自由探索与三选一')
+assert.ok(
+  originMilestone.some((o) => o.spec === 'gluttony') && originMilestone.some((o) => o.spec === 'symbiosis'),
+  'origin Lv.5 拟态里程碑含暴食与共生'
+)
+ok('角色化：四角色绑定技能树并在 Lv.5 自动觉醒，origin 保留三系自由探索与五系拟态')
 
 // —— 2c. 吞噬独占：只有暴食角色能吞噬，且白旗标记只对暴食出现 ——
 engine.applyStartingStrain('glutton')
@@ -238,7 +243,7 @@ engine._updateStrainSkill(shadowSkill.cooldown + 0.1)
 assert.equal(engine.player.strainSkillCd, 0, '冷却随 dt 递减到 0')
 engine.running = wasRunning
 
-// origin 没有 F 技能：F 通道对它无效，冷却恒为 0
+// origin 拟态前的空格技是黏液震荡（拟态暴食/共生后换成签名技，见 verify-origin-mimicry）
 engine.applyStartingStrain('origin')
 engine.reset()
 assert.equal(engine.strainSkill.id, 'slime_shock', '原生拥有黏液震荡')
@@ -338,7 +343,7 @@ ok('早期元素入口：第 2 波保底精英每局一次，沿用既有核心�
   )
 }
 
-// 可吸收 vs 不可吸收：五角色逐一验证 absorbElement 与权限闸门
+// 原生保留属性吸收，元素按等级学法术，其余角色拒绝元素。
 {
   const { canUseElements } = await import('./src/game/Strains.js')
   for (const strainId of ['elemental', 'origin']) {
@@ -346,7 +351,14 @@ ok('早期元素入口：第 2 波保底精英每局一次，沿用既有核心�
     engine.reset()
     assert.equal(engine.canUseElements, true, `${strainId} 可以使用元素`)
     engine.player.absorbElement('fire')
-    assert.equal(engine.player.elements.get('fire'), 1, `${strainId} 可吸收元素`)
+    if (strainId === 'origin') assert.equal(engine.player.elements.get('fire'), 1, '原生可吸收属性核心')
+    else {
+      assert.equal(engine.player.elements.size, 0, '元素角色不会绕过等级节点吸收旧属性核心')
+      engine.player.level = 2
+      const spells = engine.weaponSystem.spellCombat
+      assert.equal(spells.applyMilestone(spells.milestoneReward().options.find(o => o.element === 'water')), true)
+      assert.equal(engine.player.elements.get('water'), 1, 'Lv.2 确实获得所选法术')
+    }
   }
   for (const strainId of ['glutton', 'ricochet', 'shadow']) {
     engine.applyStartingStrain(strainId)
@@ -361,7 +373,7 @@ ok('早期元素入口：第 2 波保底精英每局一次，沿用既有核心�
     assert.equal(engine.player._primaryReaction, null, `${strainId}：未锁定主形态`)
   }
 }
-ok('元素权限：elemental/origin 可吸收，glutton/gatling/shadow 的 absorbElement 完全无副作用')
+ok('元素权限：元素按等级学法术、原生吸收属性核心，其余角色不吸收')
 
 // 四条核心产出路径（精英 / Boss / 吞噬 / hunt 事件）逐一对五角色核验
 {
@@ -472,9 +484,11 @@ ok('早期保底精英：只对有元素权限的角色生成，无权限角色�
 {
   engine.applyStartingStrain('elemental')
   engine.reset()
-  engine.player.absorbElement('fire')
   const spells = engine.weaponSystem.spellCombat
-  assert.equal(spells.applyCore(spells.coreOptions().find(option => option.element === 'water')), true)
+  engine.player.level = 2
+  assert.equal(spells.applyMilestone(spells.milestoneReward().options.find(option => option.element === 'fire')), true)
+  engine.player.level = 5
+  assert.equal(spells.applyMilestone(spells.milestoneReward().options.find(option => option.element === 'water')), true)
   assert.equal(engine.canUseElements, true)
   assert.equal(engine.player.elements.size, 2, '元素角色已累积元素')
 
@@ -490,7 +504,7 @@ ok('早期保底精英：只对有元素权限的角色生成，无权限角色�
   engine.applyStartingStrain('elemental')
   engine.reset()
   assert.equal(engine.canUseElements, true, '切回元素角色后权限恢复')
-  assert.equal(engine.player.elements.size, 1, '重开后仅保留起始元素')
+  assert.equal(engine.player.elements.size, 0, '重开后回到原质飞弹，Lv.2 重新选择第一法术')
   assert.equal(engine.weaponSystem.spellCombat.cores, 0, '重开后核心强化不残留')
 }
 ok('重置归位：元素权限、元素等级、反应与附魔缓存在换角色/重开后全部归零')
@@ -513,11 +527,11 @@ ok('重置归位：元素权限、元素等级、反应与附魔缓存在换角�
     assert.ok(pool.every((o) => o.id !== 'glut_maw' && o.id !== 'glut_bulk'))
   }
 
-  // ② origin Lv.5 不得出现暴食主专精
+  // ② origin Lv.5 里程碑是五系拟态全陈列（含暴食/共生——拟态在觉醒时补发机制层）
   engine.player.level = 5
   const pri = rollSkills(engine, 10)
-  assert.ok(pri.every((o) => o.spec !== 'gluttony'), 'origin Lv.5 不得出现暴食主专精')
-  assert.equal(pri.length, 3, 'origin Lv.5 恰好三选一')
+  assert.equal(pri.length, 5, 'origin Lv.5 恰好五选一（拟态全陈列）')
+  assert.ok(pri.some((o) => o.spec === 'gluttony') && pri.some((o) => o.spec === 'symbiosis'))
 
   // ③ 所有 canDevour=false 的角色：secondary 池不得出现 glut_sub_digest
   // ④ 所有 canUseElements=false 的角色：secondary 池不得出现 ele_sub_boost
@@ -542,11 +556,11 @@ ok('重置归位：元素权限、元素等级、反应与附魔缓存在换角�
     const elePool = rollSkills(engine, 30).map((o) => o.id)
     assert.equal(
       elePool.includes('ele_sub_boost'),
-      elementalStrain,
-      `${strainId}(元素血统=${elementalStrain})：元素共鸣体仅在元素血统时进池`
+      elements,
+      `${strainId}(canUseElements=${elements})：元素共鸣体仅在有元素权限时进池`
     )
-    assert.equal(elePool.includes('ele_sub_aura'), elementalStrain,
-      `${strainId}：元素共鸣光环仅在元素血统时进池`)
+    assert.equal(elePool.includes('ele_sub_aura'), elements,
+      `${strainId}：元素共鸣光环仅在有元素权限时进池`)
 
     // 本角色自己的 secondary 系不受影响
     if (engine.roleSpec) {

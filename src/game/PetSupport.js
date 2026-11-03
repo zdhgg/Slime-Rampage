@@ -1,5 +1,7 @@
 export const PET_SUPPORT = {
   guardian: { kind: 'taunt', name: '岩甲挑衅', cooldown: 20, duration: 3, radius: 240, limit: 4, windup: .28 },
+  // 残响团团：弱化嘲讽（共生共鸣挂件的投影，人少时短、范围窄、数量少）
+  echo: { kind: 'taunt', name: '残响挑衅', cooldown: 24, duration: 2, radius: 190, limit: 2, windup: .28 },
   hunter: { kind: 'weaken', name: '柔风抑敌', cooldown: 14, duration: 4, radius: 300, limit: 3, reduction: .25, windup: .24 },
   dew: { kind: 'heal', name: '甘露回春', cooldown: 12, duration: .6, windup: .3 },
   spore: { kind: 'slow', name: '孢云缓行', cooldown: 16, duration: 3, radius: 260, limit: 5, windup: .3 },
