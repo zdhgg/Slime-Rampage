@@ -10,18 +10,32 @@ import { BASE_SPELL_PALETTES, FUSION_SPELL_PALETTES } from './src/game/SpellPale
 let checks = 0
 function check(name, test, element = 'fire') {
   const g = createArena('elemental')
-  g.startingElement = element; g.reset(); g.running = true; g.input.suspended = false; g.runState = 'active'
+  g.reset(); g.running = true; g.input.suspended = false; g.runState = 'active'
   g.weaponSystem.critChance = 0; g.enemyManager._enemies.length = 0; g.enemyManager._spawnTimer = Infinity
   g.mapFeatures.resolvePlayerMovement = () => false; g.mapFeatures.barricades = []
   const s = g.weaponSystem.spellCombat
+  startSchool(s, element)
   try { test(g, s); console.log(`✓ ${++checks}. ${name}`) } finally { dispose(g) }
 }
 const hold = s => { for (const id of s.elements) s.clocks[id] = 100 }
-const fuse = (s, id) => assert.equal(s.applyCore(s.coreOptions().find(o => o.element === id)), true)
+// Combat fixtures begin after learning; full reward routing is covered separately.
+const startSchool = (s, id) => {
+  s.start(); s.player.level = 2
+  assert.equal(s.applyMilestone(s.milestoneReward().options.find(o => o.element === id)), true)
+}
+const fuse = (s, id) => {
+  s.player.level = Math.max(5, s.player.level)
+  assert.equal(s.applyMilestone(s.milestoneReward().options.find(o => o.element === id)), true)
+  s.game._ensureRoleAwakening()
+}
+const evolve = s => {
+  s.player.level = Math.max(10, s.player.level)
+  assert.equal(s.applyMilestone(s.milestoneReward().options[0]), true)
+}
 const near = (a, b) => assert.ok(Math.abs(a - b) < 1e-8, `${a} ≈ ${b}`)
 const learnSpell = (g, id) => { const skill = ELEMENTAL_SKILLS.find(s => s.id === id); assert.ok(skill); g.applySkill(skill) }
 
-for (const element of SPELL_ELEMENT_IDS) check(`${element}: 开局法术、等待目标、独立计时与零旧飞弹`, (g, s) => {
+for (const element of SPELL_ELEMENT_IDS) check(`${element}: 学习后等待目标、独立计时与零旧飞弹`, (g, s) => {
   assert.deepEqual([...s.elements], [element]); assert.equal(g.player.elements.size, 1)
   s.update(1); assert.equal(s.stats.casts, 0); assert.equal(s.clocks[element], 0)
   spawn(g, { hp: 1000 }); s.update(.01); assert.equal(s.stats.casts, 1)
@@ -80,7 +94,7 @@ for (const f of SPELL_FUSIONS) check(`${f.name}: 自动反应、空格独立成�
   s.damage(e, .1, trigger); assert.equal(s.stats.reactions, before, '反应不会递归或连续触发')
   s.fields.length = 0; s.marks.clear(); const hp = e.hp; pressSpace(g)
   assert.equal(s.stats.activeCasts, 1); assert.ok(e.hp < hp); assert.equal(g.strainSkill.name, f.active)
-  for (let i = 0; i < 3; i++) assert.equal(s.applyCore(s.coreOptions().find(o => o.id === 'active')), true)
+  evolve(s)
   assert.equal(g.strainSkill.name, f.evolved); assert.equal(s.elements.size, 2)
   g.player.strainSkillCd = 0; pressSpace(g)
   assert.ok(s.delayed.length > 0 || s.fields.some(field => field.rain || field.storm || field.icy))
@@ -91,10 +105,11 @@ for (const f of SPELL_FUSIONS) check(`${f.name}: 自动反应、空格独立成�
 }, f.combo[0])
 
 check('核心选择不可伪造、不会引入第三元素；强化耗尽有无尽兜底', (g, s) => {
-  const options = s.coreOptions(); assert.equal(options.length, 3); assert.equal(new Set(options.map(o => o.id)).size, 3)
+  g.player.level = 5
+  const options = s.milestoneReward().options; assert.equal(options.length, 3); assert.equal(new Set(options.map(o => o.id)).size, 3)
   assert.equal(s.applyCore({ id: 'invalid' }), false)
   fuse(s, 'poison'); assert.equal(s.applyCore(options.find(o => o.element === 'water')), false)
-  for (const id of ['shape_fire', 'shape_poison', 'reaction', 'active']) for (let i = 0; i < 3; i++) {
+  for (const id of ['shape_fire', 'shape_poison', 'reaction']) for (let i = 0; i < 3; i++) {
     // Exact offered shape alternates; consume another available card until the requested branch appears.
     let option = s.coreOptions().find(o => o.id === id)
     if (!option) { s.cores++; option = s.coreOptions().find(o => o.id === id) }
@@ -104,6 +119,7 @@ check('核心选择不可伪造、不会引入第三元素；强化耗尽有无�
   const power = s.power; s.applyCore(fallback.find(o => o.id === 'power')); assert.ok(s.power > power)
 })
 check('单个 BOSS 奖励一次，普通怪与精英零属性核心，职业秘籍合并', (g, s) => {
+  fuse(s, 'poison')
   let reward
   g.onSpellCore = r => { reward = r }
   const elite = spawn(g, { hp: 1 }); elite.isElite = true
@@ -111,7 +127,7 @@ check('单个 BOSS 奖励一次，普通怪与精英零属性核心，职业秘�
   const boss = spawnBoss(g, 1)
   s.damage(boss, 10, 'fire'); g.weaponSystem._settleKill(boss)
   assert.equal(g._spellCoreQueue.length, 1); assert.ok(g.gemManager._gems.every(gem => gem.type === 'exp'))
-  g._openPendingSpellCore(); assert.equal(reward.first, true); assert.equal(g._pauseLock, 1)
+  g._openPendingSpellCore(); assert.equal(reward.first, false); assert.equal(g._pauseLock, 1)
   assert.equal(g.resolveSpellCore('invalid'), false); assert.equal(g._pauseLock, 1)
   assert.equal(g.resolveSpellCore(reward.options[0].id), true)
   assert.equal(g._pauseLock, 0); assert.equal(s.cores, 1); assert.equal(s.elements.size, 2)
@@ -126,6 +142,7 @@ check('首领编队全队结束才发一颗核心', (g, s) => {
   assert.equal(g.queueSpellCore(bosses[0]), false)
 })
 check('升级与核心串行：恢复进入核心选择，暂停锁与溢出经验正确', (g, s) => {
+  fuse(s, 'poison')
   let reward, levels = 0
   g.onLevelUp = () => levels++; g.onSpellCore = info => { reward = info }
   g.openFreeSkillPanel(); assert.equal(g._pauseLock, 1)
@@ -134,6 +151,7 @@ check('升级与核心串行：恢复进入核心选择，暂停锁与溢出经�
   g.resolveSpellCore(reward.options[0].id); assert.equal(g._pauseLock, 0); assert.equal(s.cores, 1)
 })
 check('远征核心先于补给，转场清理不会丢失奖励', (g, s) => {
+  fuse(s, 'poison')
   let reward, supplies = 0
   g.onSpellCore = info => { reward = info }; g.onExpeditionReward = () => supplies++
   g.configureRun({ mode: 'expedition', difficulty: 'normal' })
@@ -165,7 +183,7 @@ check('普通升级无旧附魔与四系终极，已有基因有效且幂等，�
   applyGenes(g, genes); near(s.power, grown); near(s.reactionPower, grownReaction)
   assert.deepEqual(g.player._procs, {}); assert.equal(g.player.secondarySlots, 0)
   s.applyCore(s.coreOptions()[0]); g.reset()
-  assert.equal(s.cores, 0); assert.equal(s.elements.size, 1); assert.deepEqual(s.upgrades, {})
+  assert.equal(s.cores, 0); assert.equal(s.elements.size, 0); assert.deepEqual(s.upgrades, {})
   assert.equal(g._spellCoreSeen.size, 0); assert.equal(s.marks.size, 0)
   g.applyStartingStrain('origin'); g.reset(); g.player.absorbElement('fire'); g.player.absorbElement('poison')
   assert.equal(g.player._primaryReaction, 'acid'); assert.ok(g.player._procs.burn); assert.ok(g.player.secondarySlots > 0)
@@ -200,7 +218,7 @@ check('主动留下的毒雾仍能被自动火球引燃，具有反应间隔', (
   s.damage(e, 1, 'fire'); assert.equal(s.stats.reactions, 1)
 })
 check('主动术被自爆反杀后不再制造领域、延迟攻击或追加伤害', (g, s) => {
-  fuse(s, 'poison'); for (let i = 0; i < 3; i++) s.applyCore(s.coreOptions().find(o => o.id === 'active'))
+  fuse(s, 'poison'); evolve(s)
   g.player.hp = 1
   s.shield.points = 0; s.shield.remaining = s.shield.cooldown
   const bomb = spawn(g, { hp: 1, x: 20 }); bomb.affix = 'explosive'; bomb.affixes = ['explosive']
@@ -219,7 +237,7 @@ for (const element of SPELL_ELEMENT_IDS) check(`${element}: 连续 20 秒实战�
 
 check('四系候选只匹配已掌握法术，单系保底两项；冰封要求先选减速', (g, s) => {
   for (const element of SPELL_ELEMENT_IDS) {
-    s.start(element); g.skillLevels = {}; g.primarySpec = null; g.player.level = 2
+    startSchool(s, element); g.skillLevels = {}; g.primarySpec = null; g.player.level = 2
     for (let i = 0; i < 40; i++) {
       const cards = rollSkills(g, 3)
       assert.ok(cards.filter(c => c.element === element).length >= 2)
@@ -228,8 +246,8 @@ check('四系候选只匹配已掌握法术，单系保底两项；冰封要求�
     }
   }
   learnSpell(g, 'spell_ice_slow')
-  s.start('water'); assert.ok(rollSkills(g, 30).some(c => c.id === 'spell_ice_freeze'))
-  g.skillLevels = {}; s.start('fire'); fuse(s, 'lightning')
+  startSchool(s, 'water'); assert.ok(rollSkills(g, 30).some(c => c.id === 'spell_ice_freeze'))
+  g.skillLevels = {}; startSchool(s, 'fire'); fuse(s, 'lightning')
   for (let i = 0; i < 40; i++) {
     const cards = rollSkills(g, 3)
     assert.ok(cards.some(c => c.element === 'fire')); assert.ok(cards.some(c => c.element === 'lightning'))
@@ -289,23 +307,23 @@ check('余烬蔓延延迟点燃近邻、只传一代、继承每跳灼烧，且�
   assert.ok(s.contagion.infections.size > 0 && s.embers.infections.size > 0, '毒素与余烬各自记账')
 }, 'fire')
 check('火系新卡需先学余烬附着：未学燃烧时炽燃与余烬蔓延不进候选', (g, s) => {
-  s.start('fire'); g.skillLevels = {}; g.primarySpec = null; g.player.level = 2
+  startSchool(s, 'fire'); g.skillLevels = {}; g.primarySpec = null; g.player.level = 2
   const ids = () => rollSkills(g, 30).map(card => card.id)
   assert.ok(!ids().includes('spell_fire_brittle') && !ids().includes('spell_fire_spread'))
   learnSpell(g, 'spell_fire_burn')
   assert.ok(ids().includes('spell_fire_brittle') && ids().includes('spell_fire_spread'))
 }, 'fire')
 check('穿透、减速、雷链目标/距离和毒雾范围/持续/中毒升级改变实际行为', (g, s) => {
-  s.start('water'); learnSpell(g, 'spell_ice_pierce'); learnSpell(g, 'spell_ice_slow')
+  startSchool(s, 'water'); learnSpell(g, 'spell_ice_pierce'); learnSpell(g, 'spell_ice_slow')
   const a = spawn(g, { x: 50 }), b = spawn(g, { x: 110 }), c = spawn(g, { x: 170 })
   hold(s); s.cast('water', c); s.update(.3); assert.ok([a,b,c].every(e => e.hp < 100 && e.spellSlowTime > 0))
   assert.equal(a.spellSlowAmount, .4); learnSpell(g, 'spell_ice_slow'); s.damage(a, .1, 'water'); assert.equal(a.spellSlowAmount, .55)
-  g.enemyManager._enemies.length = 0; s.start('lightning')
+  g.enemyManager._enemies.length = 0; startSchool(s, 'lightning')
   const chainTargets = [spawn(g,{x:50}),spawn(g,{x:240}),spawn(g,{x:430})]
   s.cast('lightning',chainTargets[0]); hold(s); s.update(.13); assert.equal(chainTargets[1].hp,100)
   learnSpell(g,'spell_lightning_chain');learnSpell(g,'spell_lightning_reach')
   s.cast('lightning',chainTargets[0]); s.update(.13); assert.ok(chainTargets.every(e=>e.hp<100))
-  s.start('poison'); const target=chainTargets[0], initial=s.field(target); const radius=initial.radius, life=initial.life
+  startSchool(s, 'poison'); const target=chainTargets[0], initial=s.field(target); const radius=initial.radius, life=initial.life
   s.damage(target, .1,'poison'); assert.equal(target.poisonHits,0)
   learnSpell(g,'spell_poison_area'); learnSpell(g,'spell_poison_duration'); learnSpell(g,'spell_poison_linger')
   const enhanced=s.field(target); assert.ok(enhanced.radius>radius && enhanced.life>life)
@@ -314,7 +332,7 @@ check('穿透、减速、雷链目标/距离和毒雾范围/持续/中毒升级�
 
 for (const f of SPELL_FUSIONS) for (const reverse of [false, true]) check(`${f.name} ${reverse ? '逆序' : '正序'}：两套法术持续输出、无状态升级也融合`, (g, s) => {
   const ids = reverse ? [...f.combo].reverse() : f.combo
-  s.start(ids[0]); fuse(s,ids[1]); const boss=spawnBoss(g,10000)
+  startSchool(s, ids[0]); fuse(s,ids[1]); const boss=spawnBoss(g,10000)
   for(let i=0;i<300;i++){s.update(.05);boss._tickStatus(.05)}
   for(const id of ids) { assert.ok(s.stats.castsByElement[id]>3); assert.ok(s.stats.damageByElement[id]>0) }
   assert.ok(s.stats.reactions>0); assert.equal(s.elements.size,2)
@@ -581,7 +599,7 @@ check('传染总感染预算96、每帧最多处理8个传播源，且不新增�
 
 check('四系威力通过实际飞行、雷击和毒雾命中生效，燃烧毒伤继承强化', (g, s) => {
   for (const element of SPELL_ELEMENT_IDS) {
-    s.start(element); hold(s); const target = spawn(g, { x: 100, hp: 10000 })
+    startSchool(s, element); hold(s); const target = spawn(g, { x: 100, hp: 10000 })
     s.cast(element, target); s.update(.6); const base = 10000 - target.hp
     s.shots = []; s.fields = []; s.lightning.reset(); target.hp = 10000
     learnSpell(g, `spell_${element}_power`); s.cast(element, target); s.update(.6)
@@ -711,7 +729,7 @@ check('霜纹脆化：霜纹在冰箭命中后附着，带霜纹目标承受更�
   near(markedHp - fresh.hp, baseline * iceBrittleMul(1))
 }, 'water')
 check('冰系新卡按前置逐步进入候选：分裂需贯穿，脆化与冰封需寒霜，迸裂需冰封', (g, s) => {
-  s.start('water'); g.skillLevels = {}; g.primarySpec = null; g.player.level = 2
+  startSchool(s, 'water'); g.skillLevels = {}; g.primarySpec = null; g.player.level = 2
   const ids = () => rollSkills(g, 30).map(card => card.id)
   assert.ok(!ids().includes('spell_ice_split') && !ids().includes('spell_ice_shatter') && !ids().includes('spell_ice_brittle'))
   assert.ok(ids().includes('spell_ice_multi'), '多重冰箭无需前置')
@@ -750,7 +768,7 @@ for (const fusion of SPELL_FUSIONS) for (const order of [fusion.combo, [...fusio
   })
   s.render(recorder); assert.ok(styles.includes(palette.main)); assert.ok(styles.includes(palette.accent))
   assert.equal(s.elements.size, 2); assert.ok(s.stats.damage > 0)
-  s.start(order[0]); assert.equal(s.palette(order[0]).main, BASE_SPELL_PALETTES[order[0]].main)
+  startSchool(s, order[0]); assert.equal(s.palette(order[0]).main, BASE_SPELL_PALETTES[order[0]].main)
 }, order[0])
 check('已有毒雾和传染在融合后切换配色，雷暴形态继承当前融合色', (g, s) => {
   hold(s); const target = spawn(g, { hp: 10000 }); s.field(target)

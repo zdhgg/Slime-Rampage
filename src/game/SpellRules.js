@@ -1,6 +1,7 @@
 /** Elemental strain only. Origin retains the legacy elemental system. */
 import { ELEMENTAL_SCHOOL_SKILLS } from './ElementalUpgrades.js'
 import { BASE_SPELL_PALETTES, FUSION_SPELL_PALETTES } from './SpellPalette.js'
+import { ELEMENTAL_MILESTONE_LEVELS } from './ElementalProgression.js'
 export const SPELL_ELEMENTS = {
   fire: { id: 'fire', name: '火焰', icon: '🔥', color: '#ffae70', spell: '火球术', interval: 1.4, desc: '发射单颗火球，命中产生小范围爆炸；升级可变大、增多、附加燃烧。', upgrade: '融合裂焰', upgradeDesc: '火球保留飞行与爆炸，向附近敌人释放融合元素的裂焰。' },
   water: { id: 'water', name: '寒冰', icon: '❄️', color: '#94dbef', spell: '寒冰箭', interval: 1.1, desc: '冰箭穿透两个目标；升级可增加穿透，并逐步获得减速和冻结。', upgrade: '融合冰晶', upgradeDesc: '冰箭保留穿透路径，命中时释放融合冰晶。' },
@@ -33,7 +34,7 @@ export const getSpellFusion = elements => SPELL_FUSIONS.find(f => f.combo.every(
 export const ELEMENTAL_SPEC_INFO = {
   name: '双元素法师', desc: '双系施法 · 融合反应 · 主动爆发',
   bonus: '法术伤害 +20% · 融合反应伤害 +35%',
-  roadmap: ['基础：两套法术自动施放', '融合：法术之间自然触发反应', '法术核心：改造当前组合', '高阶：进化空格融合术'],
+  roadmap: ['Lv.2：选择首个自动法术', 'Lv.5：选择第二系并融合', 'BOSS 核心：改造当前组合', 'Lv.10：进化空格融合术'],
 }
 
 // Shared IDs keep legacy saves and origin behavior stable; role-specific resolution is explicit.
@@ -59,11 +60,43 @@ function coreCard(id, name, desc, stats, extra = {}) {
   return { id, name, desc, stats, icon: '◆', color: '#b6a4ff', isSpellCore: true, ...extra }
 }
 
-export function spellCoreOptions(combat) {
-  if (!combat.fusion) return SPELL_ELEMENT_IDS.filter(id => !combat.elements.has(id)).map(id => {
+/** These rewards replace the normal upgrade at the corresponding level. */
+export function spellMilestoneReward(combat) {
+  if (!combat.available) return null
+  const level = combat.player.level
+  if (!combat.elements.size && level >= ELEMENTAL_MILESTONE_LEVELS.first) {
+    return { stage: 'first', source: `Lv.${ELEMENTAL_MILESTONE_LEVELS.first}`, options: SPELL_ELEMENT_IDS.map(id => {
+      const el = SPELL_ELEMENTS[id]
+      const desc = { fire: '火球命中小范围爆炸。升级可变大、增多或燃烧。', water: '冰箭穿透两个目标。升级可获得减速和冻结。', lightning: '从本体释放闪电，连锁打击两个目标。', poison: '向近敌抛出毒囊，落地形成持续伤害区域。' }[id]
+      return coreCard(`spell_learn_${id}`, el.spell, desc, '替换原质飞弹 · 自动施放', {
+        element: id, kind: 'learn', icon: el.icon, color: el.color,
+        label: { fire: '爆炸伤害 · 推荐初次体验', water: '直线穿透 · 升级可冻结', lightning: '连锁打击', poison: '持续区域伤害' }[id],
+      })
+    }) }
+  }
+  if (combat.elements.size === 1 && level >= ELEMENTAL_MILESTONE_LEVELS.fusion) {
+    return { stage: 'fusion', source: `Lv.${ELEMENTAL_MILESTONE_LEVELS.fusion}`, options: spellFusionOptions(combat) }
+  }
+  if (combat.fusion && !combat.milestoneEvolved && level >= ELEMENTAL_MILESTONE_LEVELS.evolution) {
+    const fusion = combat.fusion
+    return { stage: 'evolution', source: `Lv.${ELEMENTAL_MILESTONE_LEVELS.evolution}`, options: [
+      coreCard('spell_milestone_evolution', fusion.evolved, fusion.evolution,
+        '主动基础伤害 +75% · 基础冷却 10 → 8.8 秒 · 范围与演出进化',
+        { kind: 'evolution', isEvolution: true, color: fusion.color, icon: '✦' }),
+    ] }
+  }
+  return null
+}
+
+function spellFusionOptions(combat) {
+  return SPELL_ELEMENT_IDS.filter(id => !combat.elements.has(id)).map(id => {
     const el = SPELL_ELEMENTS[id], fusion = getSpellFusion(new Set([...combat.elements, id]))
     return coreCard(`spell_fuse_${id}`, el.name, el.desc, `融合：${fusion.name} · 空格：${fusion.active}`, { element: id, color: fusion.color, icon: el.icon, fusion, kind: 'fusion', preview: `${fusion.activeDesc} 配色：${fusion.palette.name}。` })
   })
+}
+
+export function spellCoreOptions(combat) {
+  if (!combat.fusion) return []
   const options = []
   const conversion = combat.elements.has('lightning') && combat.cores >= 3 && !combat.lightning.storm
     ? coreCard('lightning_storm', '雷暴转化', '将雷系自动普攻改为空中落雷，优先选择射程内的怪群或精英。命中后继续传导；已学雷系强化、融合与另一系法术全部保留。', '替换雷系普攻形态 · 不增加技能位', { kind: 'form', element: 'lightning', color: SPELL_ELEMENTS.lightning.color, icon: '⚡' }) : null
@@ -71,12 +104,11 @@ export function spellCoreOptions(combat) {
     const el = SPELL_ELEMENTS[id], rank = combat.rank(`shape_${id}`)
     if (rank < 3) options.push(coreCard(`shape_${id}`, el.upgrade, el.upgradeDesc, `融合改造 ${rank} → ${rank + 1} · 每级法术伤害 +12%`, { kind: 'shape', element: id, level: rank, color: el.color, icon: el.icon }))
   }
-  const reaction = combat.rank('reaction'), active = combat.rank('active')
+  const reaction = combat.rank('reaction')
   if (reaction < 3) options.push(coreCard('reaction', `${combat.fusion.name} · 共鸣`, `提高融合伤害与反应频率。${REACTION_SPREAD[combat.fusion.id]}第三级扩大反应范围。`, `共鸣 ${reaction} → ${reaction + 1} · 每级反应伤害 +25%`, { kind: 'reaction', level: reaction }))
-  if (active < 3) options.push(coreCard('active', active === 2 ? combat.fusion.evolved : `${combat.fusion.active} · 强化`, active === 2 ? combat.fusion.evolution : '提高空格融合术伤害与范围，并缩短冷却。第三级进化为高阶法术。', `进化 ${active} → ${active + 1} · 每级主动伤害 +25%`, { kind: 'active', level: active, isEvolution: active === 2 }))
-  // Keep one offer from each available path; alternate the basic-spell branch across rewards.
+  // Prefer a basic-spell branch and the reaction branch; evolution belongs to Lv.10.
   const shapes = options.filter(s => s.kind === 'shape')
-  const selected = [conversion && (combat.cores % 2 === 1 || !shapes.length) ? conversion : shapes.length ? shapes[combat.cores % shapes.length] : null, options.find(s => s.kind === 'reaction'), options.find(s => s.kind === 'active')].filter(Boolean)
+  const selected = [conversion && (combat.cores % 2 === 1 || !shapes.length) ? conversion : shapes.length ? shapes[combat.cores % shapes.length] : null, options.find(s => s.kind === 'reaction')].filter(Boolean)
   if (conversion) options.push(conversion)
   for (const option of options) if (selected.length < 3 && !selected.includes(option)) selected.push(option)
   for (const [id, name, stats] of [['power', '施法凝聚', '自动法术伤害 +8%'], ['reactionPower', '融合凝聚', '融合反应伤害 +10%'], ['activePower', '原质凝聚', '空格法术伤害 +10%']]) {

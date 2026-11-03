@@ -1,4 +1,4 @@
-import { SPELL_ELEMENTS, normalizeSpellElement, getSpellFusion, spellCoreOptions } from './SpellRules.js'
+import { SPELL_ELEMENTS, getSpellFusion, spellCoreOptions, spellMilestoneReward } from './SpellRules.js'
 import { shadowTargetAlive as alive, shadowCircleEntry, shadowLineClear, traceShadowPath } from './ShadowGeometry.js'
 import { renderSpells } from './SpellVisuals.js'
 import { LightningCasting } from './LightningCasting.js'
@@ -9,6 +9,7 @@ import { fireMultiDamageMul, fireBrittleMul } from './FireSpellRules.js'
 import { spellPalette } from './SpellPalette.js'
 
 const distance2 = (a, b) => (a.x - b.x) ** 2 + (a.y - b.y) ** 2
+const PRIMAL_SPELL_PALETTE = { main: '#b6a4ff', accent: '#d8d1ff', core: '#f4f0ff', shade: '#4d426e', name: '原质紫' }
 
 /** Two automatic spell clocks and one active fusion. No legacy projectile/proc recursion. */
 export class SpellCombat {
@@ -17,8 +18,9 @@ export class SpellCombat {
   get player() { return this.weapon.player }
   get enabled() { return this.game?.startingStrain === 'elemental' && (!this.game.gameplayId || this.game.gameplayId === 'arena') }
   get available() { return this.enabled && !this.player.dead && !this.game.runFinished }
+  get usesBasicProjectile() { return this.enabled && this.elements.size === 0 }
   get fusion() { return getSpellFusion(this.elements) }
-  palette(element = [...this.elements][0]) { return spellPalette(this.fusion?.id, element) }
+  palette(element = [...this.elements][0]) { return this.usesBasicProjectile ? PRIMAL_SPELL_PALETTE : spellPalette(this.fusion?.id, element) }
   level(id) { return this.game?.skillLevels?.[id] || 0 }
   rank(id) { return this.upgrades[id] || 0 }
   get rangeScale() { return Math.min(1.65, 1 + this.level('ele_spread') * .08 + (this.rank('active') === 3 ? .12 : 0)) }
@@ -36,6 +38,7 @@ export class SpellCombat {
       sy: 1 + (windup ? -.12 : .12) * pulse, offset: (windup ? -.06 : .16) * pulse }
   }
   reset() {
+    this.milestoneEvolved = false
     this.elements = new Set(); this.upgrades = {}; this.clocks = {}; this.shots = []; this.fields = []
     this.effects = []; this.delayed = []; this.marks = new Map(); this.time = 0; this.cores = 0
     this.castPulse = 0; this.castColor = '#b6a4ff'; this.castPulses = {}; this.reactionBudget = 8; this.volley = 0
@@ -44,10 +47,9 @@ export class SpellCombat {
     this.shield.reset(); this.contagion.reset(); this.embers.reset()
     this.stats = { casts: 0, reactions: 0, activeCasts: 0, damage: 0, castsByElement: {}, damageByElement: {}, fireExplosions: 0, bodyLightningCasts: 0, skyStrikes: 0, shieldAbsorbed: 0, contagionTransfers: 0, burnSpreads: 0 }
   }
-  start(id) {
+  start() {
     this.reset()
     if (!this.enabled) return
-    this.elements.add(normalizeSpellElement(id)); this.clocks[normalizeSpellElement(id)] = .4
     this.shield.reset(true)
     this.syncElements()
   }
@@ -57,18 +59,35 @@ export class SpellCombat {
     p._primaryReaction = this.fusion?.id || null; p._secondaryIds.clear(); p._refreshElements()
   }
   coreOptions() { return spellCoreOptions(this) }
+  milestoneReward() { return spellMilestoneReward(this) }
+  applyMilestone(option) {
+    const current = this.milestoneReward()?.options.find(card => card.id === option?.id)
+    if (!current) return false
+    if (current.kind === 'evolution') {
+      this.upgrades.active = 3
+      this.milestoneEvolved = true
+    } else {
+      this.elements.add(current.element)
+      this.clocks[current.element] = .4
+      if (current.kind === 'learn') {
+        this.game.startingElement = current.element
+        this.weapon._projectiles.length = 0
+      }
+    }
+    this.player.strainSkillCd = 0
+    this.syncElements()
+    this.game.sound?.elementUp?.()
+    this.fx(this.player.x, this.player.y, 100, this.fusion?.color || current.color, 'core', .8)
+    return true
+  }
   applyCore(option) {
+    if (!this.fusion) return false
     const current = this.coreOptions().find(card => card.id === option?.id)
     if (!current || !this.available) return false
-    if (current.kind === 'fusion') {
-      this.elements.add(current.element); this.clocks[current.element] = .65
-      this.player.strainSkillCd = 0
-    } else {
-      this.upgrades[current.id] = this.rank(current.id) + 1
-      if (current.kind === 'form') {
-        this.lightning.jobs = this.lightning.jobs.filter(job => job.kind === 'strike' && !job.basic)
-        this.lightning.charge = 0
-      }
+    this.upgrades[current.id] = this.rank(current.id) + 1
+    if (current.kind === 'form') {
+      this.lightning.jobs = this.lightning.jobs.filter(job => job.kind === 'strike' && !job.basic)
+      this.lightning.charge = 0
     }
     this.cores++; this.syncElements()
     this.game.sound?.elementUp?.()
