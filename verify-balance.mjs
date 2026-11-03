@@ -208,11 +208,16 @@ function createManager(mode = 'timed', difficulty = 'normal', stage = 1) {
     const prev = DIFFICULTIES[order[i - 1]]
     const current = DIFFICULTIES[order[i]]
     assert.ok(current.enemyHpMul > prev.enemyHpMul)
+    assert.ok(current.eliteHpMul > prev.eliteHpMul)
+    assert.ok(current.bossHpMul > prev.bossHpMul)
     assert.ok(current.enemySpeedCap > prev.enemySpeedCap)
     assert.ok(current.spawnPressureMul > prev.spawnPressureMul)
     assert.ok(current.eliteChanceCap > prev.eliteChanceCap)
+    assert.ok(current.rewardMul > prev.rewardMul)
   }
-  ok('简单到地狱的生命、移速上限、密度与精英率严格递增')
+  assert.equal(DIFFICULTIES.hard.doubleAffixChance, 0.12)
+  assert.equal(DIFFICULTIES.hell.doubleAffixChance, 0.35)
+  ok('简单到地狱的生命、精英耐久、首领血量、移速上限、密度、精英率与奖励倍率严格递增，困难预热双词缀')
 }
 
 // 11. 远征后段不再叠出过量 Boss 招式层数，且修饰与计时波次无关。
@@ -258,7 +263,7 @@ function createManager(mode = 'timed', difficulty = 'normal', stage = 1) {
     const encounter = getExpeditionBoss(stage.bossId)
     return manager.beginExpeditionStageBoss(encounter, !!encounter.final).maxHp
   })
-  assert.deepEqual(hp, [163, 220, 292, 397, 516, 674, 895, 1426])
+  assert.deepEqual(hp, [314, 421, 556, 750, 970, 1260, 1665, 2646])
   assert.ok(hp.every((value, index) => index === 0 || value > hp[index - 1]))
 
   // 曲线平滑性：不再有末章悬崖（旧口径终章相对前章 +82%~+99%），
@@ -269,8 +274,9 @@ function createManager(mode = 'timed', difficulty = 'normal', stage = 1) {
 
   const timed = createManager('timed', 'normal', 1).manager
   timed.wave = 5
-  assert.equal(timed.spawnBoss({ type: 'boss-knight' }).maxHp, 100)
-  ok('普通远征首领生命递增至 163～1426，曲线平滑且限时首领基础生命不受影响')
+  // BOSS 平衡 2026-11：基础体量 100+10w × 首档 2 → 300（原 100 太脆，实战 10~25 秒即倒）
+  assert.equal(timed.spawnBoss({ type: 'boss-knight' }).maxHp, 300)
+  ok('普通远征首领生命递增至 314～2646，曲线平滑且限时首领基础生命不受影响')
 }
 
 // 15. 限时首领血量按波次档位乘算成长，终局成为真正的强度高峰。
@@ -282,13 +288,16 @@ function createManager(mode = 'timed', difficulty = 'normal', stage = 1) {
   const at20 = getWaveModifiers(normal, 20).bossHpMul
   const at25 = getWaveModifiers(normal, 25).bossHpMul
   assert.ok(at5 < at10 && at10 < at15 && at15 < at20 && at20 < at25)
-  assert.equal(at5, 1)
+  // BOSS 平衡 2026-11：首档 1 → 2（前段抬升），终档 3.32 不变
+  assert.equal(at5, 2)
   assert.equal(at25, 3.32)
   // 档位在波次区间内保持稳定（第 25~29 波同档），避免同段内无意义抖动
   assert.equal(getWaveModifiers(normal, 29).bossHpMul, at25)
-  // 无尽仍由灾变档位负责，不受限时档位表影响
-  assert.equal(getWaveModifiers({ mode: 'endless', difficulty: 'normal' }, 25).bossHpMul, 1.18)
-  ok('限时首领按波次档位乘算成长（1 → 3.32），无尽仍走灾变档位')
+  // 无尽补齐乘算成长（2026-11）：20 波前与限时首档一致（×2），
+  // 之后按灾变档位复用限时成长表并与 (1+tier*0.18) 叠乘（第 25 波：1.18 × 2.3）
+  assert.equal(getWaveModifiers({ mode: 'endless', difficulty: 'normal' }, 5).bossHpMul, 2)
+  assert.ok(Math.abs(getWaveModifiers({ mode: 'endless', difficulty: 'normal' }, 25).bossHpMul - 1.18 * 2.3) < 1e-9)
+  ok('限时首领按波次档位乘算成长（2 → 3.32），无尽按灾变档位复用同一成长表')
 }
 
 // 16. 首领二阶段连击：段数随难度档位提升，破绽窗口随段数延长。

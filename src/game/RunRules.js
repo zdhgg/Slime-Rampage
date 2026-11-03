@@ -173,12 +173,13 @@ export function getExpeditionBoss(id) {
 }
 
 /**
- * 远征首领需要承载完整机制循环，统一给 1.6 倍体量。
+ * 远征首领需要承载完整机制循环，统一给 2.2 倍体量（BOSS 平衡 2026-11 由 1.6 上调：
+ * 旧体量在实战构筑下章节首领 20~50 秒就倒，机制还没轮转完战斗已结束）。
  * 终章的额外强度改由成长曲线（EXPEDITION_BOSS_GROWTH）与统帅自身 hpMul 提供——
  * 旧口径在此处再叠一层 2× 会让终章相对前一章暴涨近一倍，形成曲线悬崖。
  */
 export function getExpeditionBossHpMultiplier(encounter) {
-  return encounter ? 1.6 : 1
+  return encounter ? 2.2 : 1
 }
 
 export const EXPEDITION_STAGES = [
@@ -395,10 +396,12 @@ const EXPEDITION_INTERLUDE_COUNTS = { easy: 0, normal: 2, hard: 4, hell: 6 }
  *  - 远征：每章一档逐章递进（上限 12 章），避免旧口径「前段平、末章暴涨」
  * 用查表而非 pow 是为了让断言可精确复现，也便于逐档手调。
  */
-const TIMED_BOSS_GROWTH = [1, 1.35, 1.82, 2.46, 3.32]
+// BOSS 平衡 2026-11：前段档位大幅抬升（1 → 2），配合 Boss 基础体量公式上调，
+// 让第 5/10 波首领不再被实战构筑 10~25 秒融化；终局档位保持 3.32 不变。
+const TIMED_BOSS_GROWTH = [2, 2.3, 2.6, 2.9, 3.32]
 const EXPEDITION_BOSS_GROWTH = [1, 1.16, 1.35, 1.56, 1.81, 2.1, 2.44, 2.83, 3.28, 3.8, 4.41, 5.12]
 
-/** 首领成长系数：远征按章、限时按波次档位，其余模式（无尽）由灾变档位负责 */
+/** 首领成长系数：远征按章、限时按波次档位、无尽按灾变档位复用同一成长表 */
 function getBossGrowth(selection, wave, expeditionTier) {
   if (selection?.mode === 'expedition') {
     return EXPEDITION_BOSS_GROWTH[Math.min(expeditionTier, EXPEDITION_BOSS_GROWTH.length - 1)]
@@ -406,6 +409,14 @@ function getBossGrowth(selection, wave, expeditionTier) {
   if (selection?.mode === 'timed') {
     const timedTier = Math.max(0, Math.floor((Math.max(1, wave) - 5) / 5))
     return TIMED_BOSS_GROWTH[Math.min(timedTier, TIMED_BOSS_GROWTH.length - 1)]
+  }
+  // 无尽（BOSS 平衡 2026-11 补齐）：此前成长恒为 1，前段首领只有 baseHp 线性抬升、
+  // 血量明显落后于限时同波次。改为 20 波前与限时首档一致（×2），
+  // 20 波后按灾变档位复用限时成长表，与 (1+tier*0.18) 叠乘。
+  if (selection?.mode === 'endless') {
+    if (wave < 20) return TIMED_BOSS_GROWTH[0]
+    const tier = getEndlessDisasterTier(selection, wave)
+    return TIMED_BOSS_GROWTH[Math.min(tier, TIMED_BOSS_GROWTH.length - 1)]
   }
   return 1
 }
@@ -447,6 +458,7 @@ export const DIFFICULTIES = {
     description: '更耐打，勇者攻势更舒缓。',
     playerBonusHp: 2,
     enemyHpMul: 0.85,
+    eliteHpMul: 0.9,
     enemySpeedMul: 0.92,
     enemySpeedCap: 285,
     spawnPressureMul: 0.85,
@@ -464,6 +476,7 @@ export const DIFFICULTIES = {
     description: '标准攻势与完整成长节奏。',
     playerBonusHp: 0,
     enemyHpMul: 1,
+    eliteHpMul: 1,
     enemySpeedMul: 1,
     enemySpeedCap: 305,
     spawnPressureMul: 1,
@@ -478,34 +491,36 @@ export const DIFFICULTIES = {
   hard: {
     id: 'hard',
     name: '困难',
-    description: '更密集的精英攻势与更强的王级勇者。',
+    description: '更密集的精英攻势、零星双词缀精英与更强的王级勇者。',
     playerBonusHp: 0,
-    enemyHpMul: 1.12,
+    enemyHpMul: 1.18,
+    eliteHpMul: 1.1,
     enemySpeedMul: 1.04,
     enemySpeedCap: 320,
     spawnPressureMul: 1.12,
     attackTempoMul: 1.06,
     eliteChanceMul: 1.5,
     eliteChanceCap: 0.18,
-    bossHpMul: 1.15,
-    rewardMul: 1.25,
-    doubleAffixChance: 0,
+    bossHpMul: 1.22,
+    rewardMul: 1.35,
+    doubleAffixChance: 0.12,
     bossPatternBonus: 1,
   },
   hell: {
     id: 'hell',
     name: '地狱',
-    description: '极限攻势；部分精英同时拥有两种词缀。',
+    description: '极限攻势；大量精英同时拥有两种词缀，首领展现终极杀招。',
     playerBonusHp: 0,
-    enemyHpMul: 1.28,
+    enemyHpMul: 1.38,
+    eliteHpMul: 1.2,
     enemySpeedMul: 1.07,
     enemySpeedCap: 335,
     spawnPressureMul: 1.22,
     attackTempoMul: 1.12,
     eliteChanceMul: 2,
     eliteChanceCap: 0.24,
-    bossHpMul: 1.3,
-    rewardMul: 1.6,
+    bossHpMul: 1.45,
+    rewardMul: 1.8,
     doubleAffixChance: 0.35,
     bossPatternBonus: 2,
   },

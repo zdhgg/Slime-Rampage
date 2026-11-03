@@ -86,11 +86,14 @@ export class ExpeditionBoss extends Boss {
       return
     }
     // 二阶段连击：与基类同口径（patternBonus 由难度与章节深度共同决定），
-    // 让远征首领的二阶段从「同一机制重复」变成连续两/三段机制连段。
+    // 让远征首领的二阶段从「同一机制重复」变成连续两/三段机制连段，并叠加决斗狂暴连段。
     if (this._chainStep === 0) {
-      this._chainTotal = this.phase === 2 ? (this.patternBonus >= 1 ? 3 : 2) : 1
+      this._chainTotal =
+        (this.phase === 2 ? (this.patternBonus >= 1 ? 3 : 2) : 1) +
+        (this._duelRage ? this._duelChainBonus : 0)
     }
     const p = this.game.player
+    const pb = Math.min(3, this.patternBonus || 0)
     this.specialPattern = this.encounter.mechanic
     this.specialState = 'telegraph'
     this.specialDuration = this.encounter.telegraph
@@ -112,7 +115,7 @@ export class ExpeditionBoss extends Boss {
         }
       })
     } else if (mechanic === 'hunter-converge') {
-      const count = this.phase === 2 ? 12 : 8
+      const count = (this.phase === 2 ? 12 : 8) + pb * 2
       const radius = this.phase === 2 ? 340 : 300
       this.skillData.sources = Array.from({ length: count }, (_, i) => {
         const angle = (i / count) * TAU
@@ -120,7 +123,7 @@ export class ExpeditionBoss extends Boss {
       })
     } else if (mechanic === 'purifier-annulus') {
       this.skillData.inner = this.phase === 2 ? 155 : 130
-      this.skillData.outer = this.phase === 2 ? 315 : 350
+      this.skillData.outer = (this.phase === 2 ? 315 : 350) - pb * 10
     } else if (mechanic === 'shield-wall') {
       this.skillData.gap = this.phase === 2 ? 0 : 1
     } else if (mechanic === 'relic-echo') {
@@ -134,7 +137,7 @@ export class ExpeditionBoss extends Boss {
         : [['knight', 'archer'], ['hound', 'mage']]
       this.skillData.formation = formations[this._patternIndex++ % formations.length]
     } else if (mechanic === 'royal-chess') {
-      const tile = this.phase === 2 ? 88 : 108
+      const tile = (this.phase === 2 ? 88 : 108) - pb * 4
       this.skillData.tile = tile
       this.skillData.safeParity = 1 - this._tileParity(p.x, p.y, tile)
     }
@@ -147,7 +150,9 @@ export class ExpeditionBoss extends Boss {
   _executeSpecial() {
     const p = this.game.player
     const mechanic = this.specialPattern
-    const damage = this.phase === 2 ? 3 : 2
+    const pb = Math.min(3, this.patternBonus || 0)
+    // 强招命中 3/4 点（原 2/3）：章节机制都有明确预警与走位解，命中代价应构成威胁
+    const damage = this.phase === 2 ? 4 : 3
 
     if (mechanic === 'border-pincer') {
       const angles = [this.lockedAngle - 0.46, this.lockedAngle + 0.46]
@@ -162,7 +167,7 @@ export class ExpeditionBoss extends Boss {
     } else if (mechanic === 'beacon-triad') {
       const points = this.skillData.points || []
       if (points.some((point) => (p.x - point.x) ** 2 + (p.y - point.y) ** 2 < 78 ** 2)) p.hit(damage, this.skillData.attackEvent ||= { enemyAttack: true })
-      for (const point of points) this._radial(point.x, point.y, this.phase === 2 ? 8 : 6, 260, Math.PI / 6)
+      for (const point of points) this._radial(point.x, point.y, (this.phase === 2 ? 8 : 6) + pb, 260, Math.PI / 6)
       if (points.length) {
         const destination = points.reduce((best, point) => {
           const distance = (p.x - point.x) ** 2 + (p.y - point.y) ** 2
@@ -179,7 +184,7 @@ export class ExpeditionBoss extends Boss {
     } else if (mechanic === 'purifier-annulus') {
       const distance = Math.hypot(p.x - this.x, p.y - this.y)
       if (distance < this.skillData.inner || distance > this.skillData.outer) p.hit(damage, this.skillData.attackEvent ||= { enemyAttack: true })
-      this._radial(this.x, this.y, this.phase === 2 ? 14 : 10, 285, this._patternIndex++ * 0.17)
+      this._radial(this.x, this.y, (this.phase === 2 ? 14 : 10) + pb * 2, 285, this._patternIndex++ * 0.17)
     } else if (mechanic === 'shield-wall') {
       const gap = this.skillData.gap ?? 1
       const nx = -Math.sin(this.lockedAngle)
@@ -192,8 +197,8 @@ export class ExpeditionBoss extends Boss {
       }
     } else if (mechanic === 'relic-echo') {
       const offset = this.phase === 2 ? Math.PI / 10 : Math.PI / 8
-      this._radial(this.targetX, this.targetY, 8, 270, offset)
-      this._radial(this.skillData.echoX, this.skillData.echoY, 8, 270, offset + Math.PI / 8)
+      this._radial(this.targetX, this.targetY, 8 + pb * 2, 270, offset)
+      this._radial(this.skillData.echoX, this.skillData.echoY, 8 + pb * 2, 270, offset + Math.PI / 8)
     } else if (mechanic === 'ash-cross') {
       const angle = this.phase === 2 ? this.lockedAngle + Math.PI / 4 : this.lockedAngle
       const dx = p.x - this.targetX
@@ -212,7 +217,7 @@ export class ExpeditionBoss extends Boss {
           'wraith'
         )
       }
-      this._radial(this.x, this.y, this.phase === 2 ? 15 : 11, 225, this._patternIndex++ * 0.37)
+      this._radial(this.x, this.y, (this.phase === 2 ? 15 : 11) + pb * 2, 225, this._patternIndex++ * 0.37)
     } else if (mechanic === 'seal-quadrants') {
       if (this._quadrant(p.x, p.y) !== this.skillData.safeQuadrant) p.hit(damage, this.skillData.attackEvent ||= { enemyAttack: true })
       for (let i = 0; i < 4; i++) this._bullet(this.x, this.y, i * Math.PI / 2, 'mage', 300)
@@ -268,7 +273,7 @@ export class ExpeditionBoss extends Boss {
     this._recoveryDuration = breakWindow
     this.vulnerableTimer = breakWindow
     this.stateLabel = '破绽暴露'
-    this.specialCd = this.encounter.cooldown * (this.phase === 2 ? 0.78 : 1) / this.attackTempo
+    this.specialCd = (this.encounter.cooldown * (this.phase === 2 ? 0.78 : 1) * (this._duelRage ? 0.7 : 1)) / this.attackTempo
   }
 
   _bullet(x, y, angle, kind, speed) {
@@ -276,6 +281,7 @@ export class ExpeditionBoss extends Boss {
       speed,
       radius: kind === 'mage' ? 8 : 6,
       isBoss: true,
+      damage: 2,
     })
   }
 

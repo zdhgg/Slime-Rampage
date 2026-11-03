@@ -13,8 +13,12 @@ let boss
 function reset() {
   g.pause(); g.configureRun({ mode: 'expedition', difficulty: 'normal' })
   g.applyStartingStrain(document.querySelector('#role').value)
-  g.startingElement = document.querySelector('#element').value; g.reset()
+  g.reset()
   g.player.level = 4; g.weaponSystem.damage *= 1.08 ** 3
+  if (g.startingStrain === 'elemental') {
+    const spells = g.weaponSystem.spellCombat
+    spells.applyMilestone(spells.milestoneReward().options.find(o => o.element === document.querySelector('#element').value))
+  }
   g.enemyManager._enemies.length = 0
   g.enemyManager._spawnTimer = Infinity
   g.mapFeatures.barricades = []

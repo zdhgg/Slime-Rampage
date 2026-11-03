@@ -61,10 +61,11 @@ for (const fps of [15, 30, 60, 120]) for (const encounter of encounters) for (co
     const count = [...hits.values()]
     // Rendering and snapshot reads must not change combat state (gradient cache is visual only).
     b.render(ctx2d)
-    const { _shadowGrad, game, ...before } = b
+    // duelArena 是引擎侧 BossArena 实例引用（含 game/canvas），不属于 BOSS 战斗状态，快照排除
+    const { _shadowGrad, game, duelArena, ...before } = b
     const beforeSnapshot = structuredClone(before)
     for (let i = 0; i < 3; i++) { b.render(ctx2d); finite(b) }
-    const { _shadowGrad: afterGradient, game: afterGame, ...after } = b
+    const { _shadowGrad: afterGradient, game: afterGame, duelArena: afterDuelArena, ...after } = b
     assert.deepEqual(after, beforeSnapshot)
     assert.deepEqual([...hits.values()], count)
     b.cancelAttack(); clean(b)

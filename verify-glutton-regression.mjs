@@ -120,14 +120,22 @@ try {
       boss.summonCd = Infinity
       const stats = track(g)
       let frame = 0
+      // 持续输出探针：相邻两次真实命中的最长间隔（秒）。资源枯竭会表现为长时间没有命中，
+      // 比「打到多少血」更能区分「停滞」与「被更强的 BOSS 打退」。
+      let prevHits = 0, lastHitFrame = -1, maxGapFrames = 0
       try {
         for (; frame < 180 * 60 && boss.active && !g.player.dead; frame++) {
           boss.summonCd = Infinity // 二阶段会重设召唤冷却，无杂兵场景继续屏蔽召唤。
           steer(g, boss)
           g.update(DT)
           validate(g)
+          if (stats.bossHits > prevHits) {
+            prevHits = stats.bossHits
+            if (lastHitFrame >= 0) maxGapFrames = Math.max(maxGapFrames, frame - lastHitFrame)
+            lastHitFrame = frame
+          }
         }
-        bosses.push({ level, type, killed: !boss.active, hp: g.player.hp, bossHp: Math.round(boss.hp), seconds: Number((frame * DT).toFixed(1)), casts: stats.casts, hits: stats.bossHits })
+        bosses.push({ level, type, killed: !boss.active, hp: g.player.hp, bossHp: Math.round(boss.hp), seconds: Number((frame * DT).toFixed(1)), casts: stats.casts, hits: stats.bossHits, maxGap: Number((maxGapFrames * DT).toFixed(1)) })
         assert.ok(stats.bossHits > 0, '首领必须受到真实近战命中')
         assert.equal(g.weaponSystem.devours, 0, '无杂兵首领场景不能依赖吞噬奖励')
       } finally { dispose(g) }
@@ -135,8 +143,11 @@ try {
   }
   console.table(bosses)
   assert.ok(bosses.every(r => r.casts > 0), '全部等级和首领种类都能独立获取并使用猎食点')
-  // Lv.1 对战 189 HP 首领是资源压力场景，不要求简单走位机器人必胜。
-  assert.ok(bosses.every(r => r.bossHp < 189 / 2), '全部场景能持续近战输出，不会资源枯竭停滞')
+  // Lv.1 对战 189 HP 首领是资源压力场景，不要求简单走位机器人必胜；
+  // BOSS 伤害翻倍（2026-11 平衡）后 Lv.1 机器人会被提前打退，半血不再是有效门槛，
+  // 改为要求最低有效伤害（≥25%）+ 命中间隔有界；Lv.8/14 仍要求打到半血。
+  assert.ok(bosses.every(r => r.level === 1 ? r.bossHp < 189 * 0.75 : r.bossHp < 189 / 2), '全部场景能持续近战输出，不会资源枯竭停滞')
+  assert.ok(bosses.every(r => r.maxGap < 6), '命中间隔有界，不会因资源枯竭停滞（近战追击远程首领的脱手窗口 < 6s）')
   assert.ok(bosses.filter(r => r.level === 14).every(r => r.killed), '完整近战构筑可以击败三类首领')
   for (const type of ['boss-knight', 'boss-mage', 'boss-archer']) {
     const rows = bosses.filter(r => r.type === type)

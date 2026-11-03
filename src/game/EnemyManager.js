@@ -532,6 +532,7 @@ export class EnemyManager extends Entity {
     const affixes = this._rollAffixes(elite)
 
     const baseHp = 1 + ((Math.random() * 3) | 0) + Math.floor((effectiveWave - 1) / 2)
+    const eliteHpMul = elite ? profile.eliteHpMul || 1 : 1
     const enemy = new Enemy({
       x,
       y,
@@ -541,7 +542,7 @@ export class EnemyManager extends Entity {
       // 波次成长曲线：每波速度 +6%（封顶）、每 2 波基础生命 +1（职业/精英系数在 Enemy 内乘算）
       speed: rand(65, 110) * this._speedGrowth() * (profile.enemySpeedMul || 1),
       speedCap: profile.enemySpeedCap,
-      hp: baseHp * (profile.enemyHpMul || 1) * wave.enemyHpMul,
+      hp: baseHp * (profile.enemyHpMul || 1) * eliteHpMul * wave.enemyHpMul,
       rewardHp: baseHp,
       attackTempo: (profile.attackTempoMul || 1) * (wave.attackTempoMul || 1),
     })
@@ -562,6 +563,7 @@ export class EnemyManager extends Entity {
     const effectiveWave = this._effectiveWave()
     const baseHp = 1 + ((Math.random() * 3) | 0) + Math.floor((effectiveWave - 1) / 2)
     const hpDivisor = Math.max(1, options.hpDivisor || 1)
+    const eliteHpMul = elite ? profile.eliteHpMul || 1 : 1
     const enemy = new Enemy({
       x,
       y,
@@ -570,7 +572,7 @@ export class EnemyManager extends Entity {
       affixes: this._rollAffixes(elite, options.affix || null),
       speed: rand(65, 110) * this._speedGrowth() * (profile.enemySpeedMul || 1) * (options.speedMul || 1),
       speedCap: profile.enemySpeedCap,
-      hp: (baseHp * (profile.enemyHpMul || 1) * wave.enemyHpMul) / hpDivisor,
+      hp: (baseHp * (profile.enemyHpMul || 1) * eliteHpMul * wave.enemyHpMul) / hpDivisor,
       rewardHp: baseHp,
       attackTempo: (profile.attackTempoMul || 1) * (wave.attackTempoMul || 1),
     })
@@ -731,6 +733,7 @@ export class EnemyManager extends Entity {
     this.game.sound.bossRoar()
     this.game.shakeScreen(6, 0.35) // Boss 登场震撼（阶段十五美化）
     this.game.onBossSpawn?.(boss)
+    this.game.bossArena?.activate(boss) // 决斗圈门槛自检（仅限时第 5 波单体骑士王），不满足则静默跳过
     this.game.dialogue?.sayBoss(boss, 'spawn')
     return boss
   }

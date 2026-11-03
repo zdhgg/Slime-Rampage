@@ -73,8 +73,14 @@ try {
       g.enemyManager._enemies.length = 0; g.enemyManager._spawnTimer = Infinity; g.enemyManager._waveTimer = -1e9
       g.worldEvents.active = false; g.mapFeatures.active = false
       g.player.level = level; g.weaponSystem.levelMul = 1.08 ** (level - 1); g._ensureRoleAwakening()
-      if (level >= 8) { learn(g, 'ass_lethal'); learn(g, 'ass_stride'); learn(g, 'ass_echo'); learn(g, 'ass_execute'); learn(g, 'ass_decoy', 2); learn(g, 'ass_legion') }
-      if (level >= 14) { learn(g, 'ass_lethal'); learn(g, 'ass_stride', 2); learn(g, 'ass_execute'); learn(g, 'ass_legion'); learn(g, 'ass_capstone') }
+      if (level >= 8 && level < 14) { learn(g, 'ass_lethal'); learn(g, 'ass_stride'); learn(g, 'ass_echo'); learn(g, 'ass_execute'); learn(g, 'ass_decoy', 2); learn(g, 'ass_legion') }
+      if (level >= 14) {
+        // Lv.14 是「完整构筑」：BOSS 伤害翻倍后（2026-11 平衡）纯输出构筑会被法师两下带走，
+        // 满预算里的生存卡（细胞增殖 5 + 再生核心 2）是这套构筑的正当组成部分；
+        // 与 Lv.8 分支互斥，保证始终按 level-1 的预算分配。
+        learn(g, 'ass_lethal'); learn(g, 'ass_stride', 2); learn(g, 'ass_execute'); learn(g, 'ass_legion'); learn(g, 'ass_capstone')
+        learn(g, 'com_vital', 5); learn(g, 'com_regen', 2)
+      }
       assert.ok(Object.values(g.skillLevels).reduce((sum, n) => sum + n, 0) <= level - 1, '遵守正常升级预算')
       clearTimeout(g._evolutionTimer); g.resume()
       const boss = spawnBoss(g, 189, type); boss._reinforced = true

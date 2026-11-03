@@ -12,7 +12,7 @@ const BOSS_CFG = {
     radius: 36,
     range: 0,
     attackInterval: 1.6,
-    damage: 2,
+    damage: 3,
     special: '王者冲锋',
     phaseName: '血誓狂袭',
   },
@@ -22,7 +22,7 @@ const BOSS_CFG = {
     radius: 34,
     range: 300,
     attackInterval: 2.8,
-    damage: 1,
+    damage: 2,
     special: '奥术环爆',
     phaseName: '奥术失控',
   },
@@ -32,7 +32,7 @@ const BOSS_CFG = {
     radius: 34,
     range: 260,
     attackInterval: 2.2,
-    damage: 1,
+    damage: 2,
     special: '王庭箭雨',
     phaseName: '猎杀领域',
   },
@@ -42,7 +42,7 @@ const BOSS_CFG = {
     radius: 40,
     range: 275,
     attackInterval: 1.9,
-    damage: 2,
+    damage: 3,
     special: '三圣裁决',
     phaseName: '终焉轮转',
   },
@@ -52,7 +52,7 @@ const BOSS_CFG = {
     radius: 40,
     range: 275,
     attackInterval: 1.85,
-    damage: 2,
+    damage: 3,
     special: '王庭战阵',
     phaseName: '统帅决意',
   },
@@ -78,7 +78,9 @@ export class Boss extends Enemy {
     expeditionBoss = false,
   }) {
     const cfg = BOSS_CFG[type]
-    const baseHp = 60 + wave * 8
+    // BOSS 耐久补强（BOSS 平衡 2026-11）：基础体量 60+8w → 100+10w，
+    // 配合 RunRules 的限时档位前段抬升，目标实战中位 TTK 45~90 秒（原 10~30 秒太脆）
+    const baseHp = 100 + wave * 10
     const encounterHpMul = finalBoss ? 1.35 : expeditionBoss ? 1.25 : 1
     const hp = Math.round(baseHp * hpMultiplier * encounterHpMul)
     super({ x, y, speed: cfg.speed, hp, type: 'knight' })
@@ -128,6 +130,10 @@ export class Boss extends Enemy {
     // —— 血量阈值事件：75% 增援 / 25% 困兽之斗（半血二阶段仍走原路径） ——
     this._reinforced = false
     this._lastStand = false
+    // —— 决斗圈（P0：仅限时第 5 波骑士王）：activate 时由 BossArena 挂接 ——
+    this.duelArena = null
+    this._duelRage = false
+    this._duelChainBonus = 0
 
     this._walkT = Math.random() * 10
     this._moving = false
@@ -198,9 +204,9 @@ export class Boss extends Enemy {
     this.cancelAttack({ preserveVulnerability: true })
   }
 
-  /** 强招后的破绽承伤倍率：躲完一整套机制的回报必须值得专门去抓 */
+  /** 强招后的破绽承伤倍率：躲完一整套机制的回报必须值得专门去抓（狂暴期 2.5×） */
   get vulnerableMultiplier() {
-    return 1.8
+    return this._duelRage ? 2.5 : 1.8
   }
 
   get combatInfo() {
@@ -246,6 +252,29 @@ export class Boss extends Enemy {
       this._lastStand = true
       this._onLastStand()
     }
+    // 决斗圈残血狂暴：与「困兽之斗」同为 25% 触发但相互独立，一次性永久生效
+    if (!this._duelRage && ratio <= 0.25 && this.duelArena?.rageEnabled) {
+      this._duelRage = true
+      this._onDuelRage()
+    }
+  }
+
+  /**
+   * 决斗圈狂暴（25% 一次性永久）：体型 +8%、攻速 ×0.75、强招冷却 ×0.7、
+   * 连段 +1（困难/地狱再 +1）、破绽窗口收窄但增伤加深、决斗圈再收 15%。
+   * 伤害 +1 但不额外召唤小怪——压迫感来自节奏与空间，而非数量。
+   */
+  _onDuelRage() {
+    const difficulty = this.game.runProfile?.id || 'normal'
+    this.radius *= 1.08
+    this.attackInterval *= 0.75
+    this.damage += 1
+    this._duelChainBonus = difficulty === 'hard' || difficulty === 'hell' ? 2 : 1
+    this.duelArena?.shrink(difficulty === 'hell' ? 0.78 : 0.85)
+    this.duelArena?.flash()
+    this.game.enemyManager.addText(this.x, this.y - this.radius - 52, '狂血狂暴', null, '#ff5040', 17)
+    this.game.sound.bossRoar()
+    this.game.shakeScreen(6, 0.3)
   }
 
   /** 75%：首领召来护卫，逼迫玩家在输出与清场之间取舍 */
@@ -360,7 +389,9 @@ export class Boss extends Enemy {
     // 简单/普通 2 段，困难/地狱与深层无尽 3 段。这是难度档位的「行为差异」，
     // 而不只是数值差异（预警时间仍不缩短，保持公平底线）。
     if (this._chainStep === 0) {
-      this._chainTotal = this.phase === 2 ? (this.patternBonus >= 1 ? 3 : 2) : 1
+      this._chainTotal = this.phase === 2
+        ? (this.patternBonus >= 1 ? 3 : 2) + (this._duelRage ? this._duelChainBonus : 0)
+        : 1
     }
     const p = this.game.player
     if (this.isCompositeBoss) {
@@ -408,7 +439,7 @@ export class Boss extends Enemy {
           this.targetY,
           (i / count) * TAU,
           'mage',
-          { speed: (this.phase === 2 ? 315 : 285) + chain * 20, radius: 8, isBoss: true }
+          { speed: (this.phase === 2 ? 315 : 285) + chain * 20, radius: 8, isBoss: true, damage: 2 }
         )
       }
       this.game.shakeScreen(4, 0.2)
@@ -428,7 +459,7 @@ export class Boss extends Enemy {
         this.y,
         this.lockedAngle + off,
         'archer',
-        { speed: 470, radius: 6, isBoss: true }
+        { speed: 470, radius: 6, isBoss: true, damage: 2 }
       )
     }
     this._beginRecovery(0.95)
@@ -445,12 +476,43 @@ export class Boss extends Enemy {
     const p = this.game.player
     const hitRadius = this.radius + p.radius + 12
     if (!this.dashHit && (p.x - this.x) ** 2 + (p.y - this.y) ** 2 <= hitRadius * hitRadius) {
-      p.hit(3 + Math.floor(this.patternBonus / 2) + chain, this._specialAttackEvent ||= { enemyAttack: true })
+      // 冲锋命中 4 点（原 3）：BOSS 威胁补强后，撞中一次的代价配得上 0.72s 的预警
+      p.hit(4 + Math.floor(this.patternBonus / 2) + chain + (this._duelRage ? 1 : 0), this._specialAttackEvent ||= { enemyAttack: true })
       this.dashHit = true
     }
     if (this.specialTimer <= 0) {
       this.game.shakeScreen(4, 0.18)
+      this._duelPincer() // 决斗夹击：冲锋落地瞬间的无预警扇形击退波（仅决斗圈骑士王）
       this._beginRecovery(1.2)
+    }
+  }
+
+  /**
+   * 决斗夹击（P0）：冲锋落地瞬间追加 120° 扇形击退波——无预警、沿冲锋方向、
+   * 伤害固定 2（不吃狂暴加成）、半径 200。横向预判走位或位移技（暗影影袭、
+   * 超载震荡击退等）可在落地帧离开扇形，是明确的反制窗口。
+   */
+  _duelPincer() {
+    if (this.type !== 'boss-knight' || !this.duelArena?.pincerEnabled) return
+    const p = this.game.player
+    const radius = 200
+    const halfAngle = Math.PI / 3 // 120° 扇形
+    // 短促的落地扇形闪光（无预警，靠节奏预判：冲锋停 = 夹击来）
+    this._pincerFx = { angle: this.lockedAngle, until: this.game.elapsed + 0.3, duration: 0.3 }
+    this.game.sound.enemyShoot()
+    const dx = p.x - this.x
+    const dy = p.y - this.y
+    const dist = Math.hypot(dx, dy)
+    if (dist > radius + p.radius) return
+    let diff = Math.atan2(dy, dx) - this.lockedAngle
+    diff = Math.atan2(Math.sin(diff), Math.cos(diff))
+    if (Math.abs(diff) > halfAngle) return
+    if (!p.hit(2, { enemyAttack: true })) return
+    // 击退：沿远离 BOSS 方向推开（出圈有 0.8s 宽限兜底，不会直接被灼烧判死）
+    if (!p.dead && dist > 0) {
+      const push = 130
+      p.x = clamp(p.x + (dx / dist) * push, p.radius, this.game.worldWidth - p.radius)
+      p.y = clamp(p.y + (dy / dist) * push, p.radius, this.game.worldHeight - p.radius)
     }
   }
 
@@ -474,8 +536,9 @@ export class Boss extends Enemy {
     return { continuing: false, steps }
   }
 
-  /** 破绽窗口时长：基础值 + 收尾余量 + 每多一段连击追加，连段越长回报越高 */
+  /** 破绽窗口时长：基础值 + 收尾余量 + 每多一段连击追加，连段越长回报越高（狂暴期收窄至 0.8s 起） */
   _chainBreakWindow(duration, steps) {
+    if (this._duelRage) return 0.8 + Math.max(0, steps - 1) * 0.2
     return duration + 0.4 + Math.max(0, steps - 1) * 0.35
   }
 
@@ -494,7 +557,7 @@ export class Boss extends Enemy {
     this.stateLabel = '破绽暴露'
     const pattern = this.specialPattern || this.type
     const baseCd = pattern === 'boss-mage' ? 6 : pattern === 'boss-archer' ? 5.4 : 5
-    this.specialCd = baseCd * (this.phase === 2 ? 0.76 : 1) / this.attackTempo
+    this.specialCd = baseCd * (this.phase === 2 ? 0.76 : 1) * (this._duelRage ? 0.7 : 1) / this.attackTempo
   }
 
   _updateStandardAttack(dt) {
@@ -544,7 +607,7 @@ export class Boss extends Enemy {
         const step = this.type === 'boss-mage' ? 0.15 : 0.22
         for (let i = 0; i < count; i++) {
           const off = (i - (count - 1) / 2) * step
-          this.game.enemyManager.spawnBullet(this.x, this.y, this.facing + off, this.type === 'boss-mage' ? 'mage' : 'archer', { isBoss: true })
+          this.game.enemyManager.spawnBullet(this.x, this.y, this.facing + off, this.type === 'boss-mage' ? 'mage' : 'archer', { isBoss: true, damage: 2 })
         }
         this.game.sound.enemyShoot()
       }
@@ -673,6 +736,23 @@ export class Boss extends Enemy {
     const cast = hasArt ? BOSS_CAST[artId] : null
     const top = hasArt ? enemyArtTop(artId, r) : r
     this._renderTelegraph(ctx)
+
+    // 决斗夹击落地闪光：无预警招式的事后读法——短促扇形让玩家记住「冲锋停 = 夹击来」
+    if (this._pincerFx && t < this._pincerFx.until) {
+      const fx = this._pincerFx
+      const fade = (fx.until - t) / fx.duration
+      ctx.save()
+      ctx.fillStyle = `rgba(255, 132, 74, ${0.34 * fade})`
+      ctx.strokeStyle = `rgba(255, 190, 130, ${0.7 * fade})`
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      ctx.moveTo(this.x, this.y)
+      ctx.arc(this.x, this.y, 200, fx.angle - Math.PI / 3, fx.angle + Math.PI / 3)
+      ctx.closePath()
+      ctx.fill()
+      ctx.stroke()
+      ctx.restore()
+    }
 
     const auraPulse = 0.5 + 0.5 * Math.sin(t * 2.5)
     const feet = hasArt ? enemyArtFeet(artId, r) : r * 0.85

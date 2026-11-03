@@ -212,7 +212,8 @@ for (const id of BOSSES) {
   assets.draw = (ctx, key, ...rest) => { drawn.push(key); return assetDraw(ctx, key, ...rest) }
   assets.drawArt = (ctx, key, ...rest) => { artCalls.push(key); return assetDrawArt(ctx, key, ...rest) }
   const clocks = b => ({ hp: b.hp, _walkT: b._walkT, attackCd: b.attackCd, attackInterval: b.attackInterval, facing: b.facing, x: b.x, y: b.y, flash: b.flash, _moving: b._moving, specialState: b.specialState, specialTimer: b.specialTimer, specialDuration: b.specialDuration, phaseShift: b.phaseShift, enraged: b.enraged, _attackAnim: b._attackAnim, _animClock: b._animClock, vulnerableTimer: b.vulnerableTimer })
-  const snapshot = b => { const { _shadowGrad, game, ...rest } = b; return structuredClone(rest) }
+  // duelArena 是引擎侧 BossArena 实例引用（含 game/canvas 与函数），不属于 BOSS 战斗状态快照
+  const snapshot = b => { const { _shadowGrad, game, duelArena, ...rest } = b; return structuredClone(rest) }
   const cacheImages = () => new Set(BOSSES.flatMap(id => [1, 2].flatMap(tier => [...(R.getEnemyFrameCache(id).tiers.get(tier)?.values() || [])].flatMap(f => [f.img, f.flash]))))
   const artImages = ctx => { const own = cacheImages(); return ctx.__log.filter(([k, a]) => k === 'drawImage' && own.has(a[0])) }
 
@@ -240,7 +241,7 @@ for (const id of BOSSES) {
       const before = clocks(boss), beforeSnap = snapshot(boss), ctx = recorder()
       boss.render(ctx)
       assert.deepEqual(clocks(boss), before, `${id}: render is read-only for combat clocks`)
-      const { _shadowGrad, game: g2, ...rest } = boss
+      const { _shadowGrad, game: g2, duelArena: _duelArena, ...rest } = boss
       assert.deepEqual(rest, beforeSnap, `${id}: render leaves the boss deep-equal`)
       assert.equal(artCalls.length, 0, `${id}: boss render never touches drawArt`)
       if (registered) {

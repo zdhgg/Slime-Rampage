@@ -52,7 +52,7 @@ ok('灾变按等级叠加，刷怪/攻速/精英率受控封顶，王级后备�
 
 assert.equal(calculateMaterialReward(100, endless, { result: 'extracted', endlessRewardBonus: 0.3 }), 130)
 assert.equal(calculateMaterialReward(100, endless, { result: 'defeat', endlessRewardBonus: 0.3 }), 91)
-assert.equal(calculateMaterialReward(100, { mode: 'timed', difficulty: 'hard' }, { result: 'defeat', endlessRewardBonus: 1 }), 125)
+assert.equal(calculateMaterialReward(100, { mode: 'timed', difficulty: 'hard' }, { result: 'defeat', endlessRewardBonus: 1 }), 135)
 ok('无尽安全撤离完整结算，战败保留 70%，其他模式不受无尽规则污染')
 
 const firstBounties = getEndlessBountyChoices(1)
