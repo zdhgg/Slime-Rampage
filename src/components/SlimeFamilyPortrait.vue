@@ -1,8 +1,7 @@
 <script setup>
 /* Current slime portrait — the family cast drawn live on canvas.
  * Same painter Player.render uses (src/game/slime-art/slime-painter.js +
- * slime-cast.js); idle breathing by default, `performing` shows the release
- * keyframe, and the elemental portrait shows the chosen starting element. */
+ * slime-cast.js); portraits use idle breathing and can show a supplied element. */
 import { onMounted, onBeforeUnmount, ref } from 'vue'
 import '../game/slime-art/slime-painter.js'
 import { drawSlimeFamily, slimePose } from '../game/slime-art/slime-cast.js'
@@ -11,7 +10,6 @@ const props = defineProps({
   strain: { type: String, default: 'origin' },
   element: { type: String, default: '' },
   compact: Boolean,
-  performing: Boolean,
 })
 
 const cv = ref(null)
@@ -35,7 +33,7 @@ function paint(t) {
   x.save()
   x.translate(w / 2, h * 0.9 - r * 0.8)
   drawSlimeFamily(x, props.strain, r, {
-    ...slimePose(props.strain, props.performing ? 'release' : 'idle', t),
+    ...slimePose(props.strain, 'idle', t),
     el: props.element ? [props.element] : ['fire'],
   })
   x.restore()
@@ -50,7 +48,7 @@ onBeforeUnmount(() => cancelAnimationFrame(raf))
 </script>
 
 <template>
-<canvas ref="cv" class="slime-family-portrait" :class="[strain, { compact, performing }]" aria-hidden="true" />
+<canvas ref="cv" class="slime-family-portrait" :class="[strain, { compact }]" aria-hidden="true" />
 </template>
 
 <style scoped>

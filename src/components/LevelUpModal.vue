@@ -4,6 +4,7 @@
  */
 import { computed } from 'vue'
 import { REACTION_SLOT_LEVELS, getReactionSlotLevelBonus } from '../game/entities/Player.js'
+import { useCardFocus } from './useCardFocus.js'
 
 /**
  * 主专精的规则改写（专精 → 玩法规则）：觉醒面板直接标出「这条流派怎么改写玩法」。
@@ -34,7 +35,7 @@ const props = defineProps({
   options: { type: Array, required: true }, // 技能选项数组
   level: { type: Number, required: true }, // 当前等级
   // 角色身份（阶段十九）：非空 = 四角色血统，Lv.1~4 只开放本树；
-  // 空 = origin 自由构筑，仍走四系自由探索 + Lv.5 四选一
+  // 空 = origin 祖细胞拟态，仍走三系自由探索 + Lv.5 五系拟态
   roleSpec: { type: String, default: null },
   // 元素权限（第四批）：无权限角色的槽位里程碑是空承诺，需隐藏
   canUseElements: { type: Boolean, default: true },
@@ -42,6 +43,16 @@ const props = defineProps({
   secondarySlots: { type: Number, default: 0 },
 })
 const emit = defineEmits(['select'])
+
+/**
+ * 键盘选卡（基因进化 3 卡与里程碑觉醒共用一套）：
+ * 打开默认选中中间卡；←/→ 循环切换；Enter/空格 确认；数字键直选；
+ * 鼠标悬停同步写回同一 selectedIndex，不做第二套 hover 状态。
+ */
+const { selectedIndex } = useCardFocus(
+  () => props.options,
+  (card) => emit('select', card),
+)
 
 /**
  * 槽位里程碑提示（等级 → 元素联动的高亮时刻）：
@@ -105,18 +116,21 @@ const isPartnerSelection = computed(() => props.options?.length > 0 && props.opt
         <div class="milestone-sub">
           {{ milestoneType === 'primary'
             ? '主专精将确立你的核心战斗形态，并解锁后续 T2~T3 高阶技能与 T4 终极觉醒大招！'
-            : '副专精将为你的史莱姆提供强力共鸣被动与专属辅助质变！' }}
+            : '选择后立即获得一项基础共鸣，后续升级可继续强化并解锁同系辅助能力。' }}
         </div>
       </div>
 
       <div class="milestone-cards">
         <div
-          v-for="s in options"
+          v-for="(s, idx) in options"
           :key="s.id"
           class="milestone-card"
+          :class="{ 'is-selected': selectedIndex === idx }"
           :style="{ '--spec-color': s.color }"
           @click="emit('select', s)"
+          @mouseenter="selectedIndex = idx"
         >
+          <kbd class="key-hint" aria-hidden="true">{{ idx + 1 }}</kbd>
           <div class="ms-top">
             <div class="ms-icon">{{ s.icon }}</div>
             <div class="ms-name">{{ s.name }}</div>
@@ -125,7 +139,7 @@ const isPartnerSelection = computed(() => props.options?.length > 0 && props.opt
 
           <!-- 觉醒即时赋能 -->
           <div class="ms-bonus-box">
-            <div class="ms-bonus-title">⚡ 初始觉醒赋能</div>
+            <div class="ms-bonus-title">{{ milestoneType === 'primary' ? '⚡ 初始觉醒赋能' : '⚡ 选择后立即获得' }}</div>
             <div class="ms-bonus-val">{{ s.bonus }}</div>
           </div>
 
@@ -148,6 +162,7 @@ const isPartnerSelection = computed(() => props.options?.length > 0 && props.opt
           </button>
         </div>
       </div>
+      <div class="keyboard-hint" aria-hidden="true">⌨ ← → 切换 · Enter / 空格 确认 · 数字键直选</div>
     </div>
 
     <!-- 2. 常规升级 3 卡面板 (自由探索 / 主副专精深潜 / 通用) -->
@@ -163,7 +178,7 @@ const isPartnerSelection = computed(() => props.options?.length > 0 && props.opt
           : level < 5
           ? (roleSpec
             ? '🌱 阶段说明：Lv.1~4 只开放本角色专属技能树（Lv.5 自动觉醒为你的主专精，无需选择）'
-            : '🌱 阶段说明：Lv.1~4 为自由变异期（四系技能全开放，不锁死流派，Lv.5 将触发主专精觉醒仪式）')
+            : '🌱 阶段说明：Lv.1~4 为自由变异期（三系技能全开放，不锁死流派，Lv.5 将触发五系血统拟态觉醒）')
           : '📈 等级成长：攻击力自动提升 8%（已生效，可与技能叠加）' }}
       </div>
       <div v-if="slotMilestone" class="levelup-slot" :class="{ hit: slotMilestone.hit }">
@@ -171,13 +186,15 @@ const isPartnerSelection = computed(() => props.options?.length > 0 && props.opt
       </div>
       <div class="levelup-cards">
         <button
-          v-for="s in options"
+          v-for="(s, idx) in options"
           :key="s.id"
-          :class="['skill-card', cardClass(s)]"
+          :class="['skill-card', cardClass(s), { 'is-selected': selectedIndex === idx }]"
           :style="s.isPartnerChoice ? { '--partner-color': s.color } : undefined"
           :title="s.isBossSkill ? 'BOSS 专属技能' : `当前 Lv.${s.level} · 选择后 Lv.${s.level + 1}`"
           @click="emit('select', s)"
+          @mouseenter="selectedIndex = idx"
         >
+          <kbd class="key-hint" aria-hidden="true">{{ idx + 1 }}</kbd>
           <!-- 流派定位指示 -->
           <div class="role-badge">{{ roleLabel(s) }}</div>
 
@@ -201,6 +218,7 @@ const isPartnerSelection = computed(() => props.options?.length > 0 && props.opt
           <div class="skill-num">{{ s.stats }}</div>
         </button>
       </div>
+      <div class="keyboard-hint" aria-hidden="true">⌨ ← → 切换 · Enter / 空格 确认 · 数字键直选</div>
     </div>
   </div>
 </template>
@@ -213,6 +231,8 @@ const isPartnerSelection = computed(() => props.options?.length > 0 && props.opt
   display: flex;
   align-items: center;
   justify-content: center;
+  /* 五系拟态里程碑有 5 张卡：内容超高时宁可滚动也不可裁掉顶部 */
+  overflow-y: auto;
   background: rgba(0, 0, 0, 0.8);
   backdrop-filter: blur(5px);
 }
@@ -222,12 +242,14 @@ const isPartnerSelection = computed(() => props.options?.length > 0 && props.opt
 ==================================================== */
 .milestone-panel {
   text-align: center;
-  max-width: 1200px;
-  width: 95%;
+  max-width: 1240px;
+  width: 97%;
+  /* margin:auto + overlay 滚动：放得下时居中，放不下时从顶部排起可滚到底部 */
+  margin: auto;
 }
 
 .milestone-header {
-  margin-bottom: 24px;
+  margin-bottom: 18px;
 }
 
 .milestone-title {
@@ -247,8 +269,9 @@ const isPartnerSelection = computed(() => props.options?.length > 0 && props.opt
 
 .milestone-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 18px;
+  /* 5 张卡一排：196px×5 + 间距 ≈ 1120px，1240 容器内自适应铺开 */
+  grid-template-columns: repeat(auto-fit, minmax(196px, 1fr));
+  gap: 14px;
   justify-content: center;
 }
 
@@ -257,7 +280,7 @@ const isPartnerSelection = computed(() => props.options?.length > 0 && props.opt
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  padding: 24px 18px 20px;
+  padding: 18px 12px 14px;
   border-radius: 20px;
   background: linear-gradient(170deg, rgba(28, 32, 38, 0.95), rgba(12, 16, 20, 0.98));
   border: 1.5px solid rgba(255, 255, 255, 0.12);
@@ -275,57 +298,57 @@ const isPartnerSelection = computed(() => props.options?.length > 0 && props.opt
 
 .ms-top {
   text-align: center;
-  margin-bottom: 14px;
+  margin-bottom: 10px;
 }
 
 .ms-icon {
-  font-size: 46px;
+  font-size: 36px;
   line-height: 1.2;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
 
 .ms-name {
-  font-size: 20px;
+  font-size: 17px;
   font-weight: 800;
   color: var(--spec-color);
-  margin-bottom: 6px;
+  margin-bottom: 5px;
 }
 
 .ms-desc {
-  font-size: 12px;
+  font-size: 11.5px;
   line-height: 1.5;
   color: rgba(232, 245, 224, 0.7);
 }
 
 .ms-bonus-box {
-  margin: 10px 0;
-  padding: 8px 10px;
+  margin: 8px 0;
+  padding: 7px 8px;
   border-radius: 10px;
   background: rgba(255, 209, 102, 0.08);
   border: 1px dashed rgba(255, 209, 102, 0.3);
 }
 
 .ms-bonus-title {
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 700;
   color: #ffd166;
-  margin-bottom: 4px;
+  margin-bottom: 3px;
 }
 
 .ms-bonus-val {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   color: #fff;
-  line-height: 1.4;
+  line-height: 1.45;
 }
 
 .ms-roadmap {
-  margin: 8px 0 16px;
-  padding: 8px;
+  margin: 6px 0 12px;
+  padding: 7px;
   border-radius: 10px;
   background: rgba(0, 0, 0, 0.35);
-  font-size: 11px;
-  line-height: 1.6;
+  font-size: 10.5px;
+  line-height: 1.55;
 }
 
 /* 元素规则改写（专精 → 元素联动）：主专精独有的元素玩法说明 */
@@ -659,6 +682,55 @@ const isPartnerSelection = computed(() => props.options?.length > 0 && props.opt
   border: 1px solid rgba(255, 209, 102, 0.25);
 }
 
+/* ====================================================
+   3. 键盘选中态（与鼠标 hover 区分）与按键提示
+   hover = 卡片上浮 + 流派色描边；选中 = 金色外环 + 呼吸光晕，
+   两者可同时存在（鼠标悬在选中卡上）而语义不混。
+==================================================== */
+.skill-card.is-selected,
+.milestone-card.is-selected {
+  transform: translateY(-6px);
+  outline: 3px solid #ffd166;
+  outline-offset: 3px;
+  animation: selectedRingPulse 1.6s ease-in-out infinite;
+}
+
+@keyframes selectedRingPulse {
+  0%, 100% { box-shadow: 0 0 14px rgba(255, 209, 102, 0.28); }
+  50% { box-shadow: 0 0 30px rgba(255, 209, 102, 0.6); }
+}
+
+/* 数字键角标（可发现的快捷键标注，不是隐藏键） */
+.key-hint {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  min-width: 18px;
+  padding: 1px 5px;
+  border-radius: 5px;
+  font-family: inherit;
+  font-size: 10.5px;
+  font-weight: 800;
+  text-align: center;
+  color: rgba(255, 209, 102, 0.9);
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(255, 209, 102, 0.4);
+  pointer-events: none;
+}
+
+.is-selected .key-hint {
+  color: #1a1206;
+  background: #ffd166;
+  border-color: #ffd166;
+}
+
+.keyboard-hint {
+  margin-top: 18px;
+  font-size: 12px;
+  letter-spacing: 1px;
+  color: rgba(234, 255, 221, 0.55);
+}
+
 @media (max-width: 900px) {
   .levelup-overlay {
     align-items: flex-start;
@@ -701,6 +773,28 @@ const isPartnerSelection = computed(() => props.options?.length > 0 && props.opt
     gap: 12px;
   }
 
+  /* 里程碑卡在窄屏单列铺开：五系拟态卡内容密集，两列挤压不可读 */
+  .milestone-cards {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .milestone-card {
+    padding: 14px 12px 12px;
+  }
+
+  .milestone-card:hover {
+    transform: none;
+  }
+
+  .ms-icon {
+    font-size: 30px;
+  }
+
+  .ms-name {
+    font-size: 16px;
+  }
+
   .skill-card {
     display: grid;
     grid-template-columns: 52px minmax(0, 1fr);
@@ -716,6 +810,12 @@ const isPartnerSelection = computed(() => props.options?.length > 0 && props.opt
   }
 
   .skill-card:hover {
+    transform: none;
+  }
+
+  /* 窄屏禁用 hover 上浮，选中态同样保持原位，只留金环标识 */
+  .skill-card.is-selected,
+  .milestone-card.is-selected {
     transform: none;
   }
 

@@ -1,23 +1,18 @@
 <script setup>
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { Check, ChevronDown, Play, Sparkles } from 'lucide-vue-next'
+import { computed, ref } from 'vue'
+import { Check, ChevronDown, Sparkles } from 'lucide-vue-next'
 import { STRAINS, STRAIN_IDS, STRAIN_SKILLS } from '../game/Strains.js'
 import { GLUTTON_HEAVY_DAMAGE, GLUTTON_BOSS_HEAVY_DAMAGE } from '../game/GluttonCombat.js'
 import { STRAIN_PRESENTATION, strainTraits } from './strainPresentation.js'
 import SlimeFamilyPortrait from './SlimeFamilyPortrait.vue'
-import { SPELL_ELEMENTS } from '../game/SpellRules.js'
-
-const props = defineProps({ modelValue: { type: String, default: 'origin' }, element: { type: String, default: 'fire' } })
-const emit = defineEmits(['update:modelValue', 'update:element', 'preview'])
+const props = defineProps({ modelValue: { type: String, default: 'origin' } })
+const emit = defineEmits(['update:modelValue'])
 const selected = computed(() => STRAINS[props.modelValue] || STRAINS.origin)
 const look = computed(() => STRAIN_PRESENTATION[selected.value.id])
 const skill = computed(() => STRAIN_SKILLS[selected.value.id])
 const traits = computed(() => strainTraits(selected.value.id))
 const index = computed(() => String(STRAIN_IDS.indexOf(selected.value.id) + 1).padStart(2, '0'))
-const performing = ref(false)
-const previewCount = ref(0)
 const roster = ref(null)
-let previewTimer
 
 const skillSummary = computed(() => selected.value.id === 'glutton'
   ? `消耗 1 猎食点，近身重咬造成 ${GLUTTON_HEAVY_DAMAGE} 倍伤害（首领 ${GLUTTON_BOSS_HEAVY_DAMAGE} 倍），将可吞噬的残血或被咬杀目标直接吞噬。`
@@ -26,14 +21,6 @@ const skillSummary = computed(() => selected.value.id === 'glutton'
     : selected.value.id === 'elemental'
       ? '开局近身冲击解围；第一次融合后，空格进化为当前双元素的融合爆发。'
     : skill.value?.desc)
-
-function preview() {
-  if (performing.value) return
-  performing.value = true
-  previewCount.value++
-  emit('preview')
-  previewTimer = setTimeout(() => { performing.value = false }, 1250)
-}
 
 // Arrow keys move focus and selection together, while Tab remains native.
 function navigate(event, currentIndex) {
@@ -48,12 +35,6 @@ function navigate(event, currentIndex) {
   roster.value?.querySelectorAll('button')[next]?.focus({ preventScroll: true })
 }
 
-watch(() => props.modelValue, () => {
-  clearTimeout(previewTimer)
-  performing.value = false
-  previewCount.value = 0
-})
-onBeforeUnmount(() => clearTimeout(previewTimer))
 </script>
 
 <template>
@@ -87,7 +68,7 @@ onBeforeUnmount(() => clearTimeout(previewTimer))
         </svg>
         <div class="stage-light" aria-hidden="true"></div>
         <div :key="selected.id" class="portrait-entry">
-          <SlimeFamilyPortrait :strain="selected.id" :element="element" :performing="performing" />
+          <SlimeFamilyPortrait :strain="selected.id" element="neutral" />
         </div>
         <div class="stage-baseline" aria-hidden="true"><span></span>{{ look.label }}<span></span></div>
       </div>
@@ -108,25 +89,12 @@ onBeforeUnmount(() => clearTimeout(previewTimer))
             <span class="skill-key" aria-hidden="true"><template v-if="skill">SPACE</template><Sparkles v-else :size="19" /></span>
             <div class="skill-copy">
               <div class="skill-title"><b>{{ skill?.name || '自由觉醒' }}</b><span>{{ skill ? (skill.chargeMax ? '猎食点驱动' : `冷却 ${skill.cooldown} 秒`) : 'Lv.5 选择主专精' }}</span></div>
-              <p>{{ skillSummary || 'Lv.1–4 三系技能均可选择，Lv.5 自由觉醒主专精。' }}</p>
+              <p>{{ skillSummary || 'Lv.1–4 三系技能均可选择，Lv.5 五系血统任选拟态，获得其独占机制与签名技能。' }}</p>
             </div>
           </div>
 
-          <div v-if="selected.id === 'elemental'" class="starting-spells">
-            <div class="starting-spells-head"><b>起始元素</b><span>首个 BOSS 核心确定第二系</span></div>
-            <div class="starting-spells-options" role="group" aria-label="起始元素">
-              <button v-for="el in SPELL_ELEMENTS" :key="el.id" type="button" :aria-pressed="element === el.id" :class="{ chosen: element === el.id }" :style="{ '--spell-color': el.color }" @click="emit('update:element', el.id)"><span>{{ el.icon }} {{ el.name }}</span><small>{{ el.spell }}</small></button>
-            </div>
-            <p>{{ SPELL_ELEMENTS[element].desc }}</p>
-          </div>
+          <p v-if="selected.id === 'elemental'" class="spell-growth-note">Lv.2 选择首个法术 → Lv.5 选择第二系并融合 → Lv.10 融合主动术进化</p>
 
-          <div class="dossier-actions">
-            <button class="preview-action" type="button" :aria-disabled="performing" @click="preview">
-              <Play :size="13" :fill="performing ? 'none' : 'currentColor'" aria-hidden="true" />
-              {{ performing ? '预览中' : selected.id === 'elemental' ? '预览法术' : skill ? '预览技能' : '预览动作' }}
-            </button>
-            <span class="awakening-note">{{ look.awakening }}</span>
-          </div>
           <details :key="`${selected.id}-rules`" class="strain-rules">
             <summary>完整血统机制 <ChevronDown :size="13" aria-hidden="true" /></summary>
             <p>{{ selected.desc }}</p>
@@ -156,14 +124,12 @@ onBeforeUnmount(() => clearTimeout(previewTimer))
         </button>
       </div>
     </div>
-    <span class="sr-only" role="status">已选择{{ selected.name }}。{{ previewCount ? `已预览${skill?.name || '角色动作'} ${previewCount} 次。${skillSummary || ''}` : '' }}</span>
+    <span class="sr-only" role="status">已选择{{ selected.name }}。</span>
   </section>
 </template>
 
 <style scoped>
-.starting-spells { margin: 18px 0; }.starting-spells-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 10px; }.starting-spells-head b { color: #dddce5; font-size: 12px; }.starting-spells-head > span { color: #85838e; font-size: 10px; }
-.starting-spells-options { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }.starting-spells-options button { padding: 10px 6px; background: #171919; border: 1px solid #3c3c40; border-radius: 5px; cursor: pointer; color: #b4b1bb; font: inherit; text-align: center; }.starting-spells-options button span, .starting-spells-options small { display: block; }.starting-spells-options button span { font-size: 12px; }.starting-spells-options small { margin-top: 5px; font-size: 10px; color: #8e8b96; }.starting-spells-options button.chosen { border-color: var(--spell-color); color: var(--spell-color); background: #25252a; }.starting-spells-options button:hover { background: #242427; }.starting-spells-options button:focus-visible { outline: 2px solid var(--spell-color); outline-offset: 2px; }.starting-spells p { margin: 10px 0 0; font-size: 11px; line-height: 1.7; color: #a09ca9; }
-@media (max-width: 420px) { .starting-spells-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }.starting-spells-head { align-items: flex-start; flex-direction: column; gap: 5px; } }
+.spell-growth-note { margin: 18px 0; color: #bcb5d4; font-size: 12px; line-height: 1.8; }
 .strain-select { min-width: 0; }
 .selection-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 16px; }
 .selection-heading h3 { margin: 0; color: #e9e7de; font-size: 13px; font-weight: 650; }
@@ -196,11 +162,6 @@ onBeforeUnmount(() => clearTimeout(previewTimer))
 .skill-title b { color: #e0e1d5; font-size: 12px; }
 .skill-title span { color: #909582; font-size: 10px; }
 .skill-copy p { min-height: 38px; margin: 6px 0 0; color: #a7aa9b; font-size: 11px; line-height: 1.75; }
-.dossier-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin-top: 10px; }
-.preview-action { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-width: 99px; min-height: 32px; padding: 6px 12px; border: 1px solid #4b5340; border-radius: 5px; color: var(--strain-color); background: #23291c; font-family: inherit; font-size: 11px; font-weight: 600; cursor: pointer; transition: background .15s, border-color .15s; }
-.preview-action:hover { background: #303a25; border-color: var(--strain-color); }
-.preview-action[aria-disabled="true"] { cursor: default; color: #9fa78e; }
-.awakening-note { color: #8f9682; font-size: 10px; }
 .strain-rules { margin-top: 8px; font-size: 11px; }
 .strain-rules summary { display: flex; align-items: center; gap: 4px; width: fit-content; min-height: 24px; color: #a5ab98; list-style: none; cursor: pointer; }
 .strain-rules summary::-webkit-details-marker { display: none; }
@@ -222,9 +183,8 @@ onBeforeUnmount(() => clearTimeout(previewTimer))
 .roster-check { position: absolute; top: 8px; right: 8px; display: grid; place-items: center; width: 15px; height: 15px; border-radius: 50%; color: #1b2619; background: var(--option-color); visibility: hidden; }
 .selected .roster-check { visibility: visible; }
 .strain-option:active { background: #303527; }
-.preview-action:active { transform: translateY(1px); }
 .strain-option:focus-visible { outline: 2px solid #eed197; outline-offset: -3px; }
-.preview-action:focus-visible, .strain-rules summary:focus-visible { outline: 2px solid #eed197; outline-offset: 3px; }
+.strain-rules summary:focus-visible { outline: 2px solid #eed197; outline-offset: 3px; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 @keyframes portrait-enter { from { opacity: 0; transform: translateY(7px) scale(.98); } to { opacity: 1; transform: none; } }
 @keyframes dossier-enter { from { opacity: .3; transform: translateY(4px); } to { opacity: 1; transform: none; } }
@@ -243,7 +203,6 @@ onBeforeUnmount(() => clearTimeout(previewTimer))
   .character-intro { min-height: 34px; margin-top: 8px; line-height: 1.65; }
   .character-traits { margin: 12px 0; padding-bottom: 12px; }
   .skill-copy p { min-height: 32px; }
-  .dossier-actions { margin-top: 8px; }
   .strain-rules { margin-top: 4px; }
   .strain-option { min-height: 78px; padding-top: 6px; padding-bottom: 6px; }
   .roster-portrait { height: 56px; }
@@ -270,7 +229,6 @@ onBeforeUnmount(() => clearTimeout(previewTimer))
   .character-name { font-size: 28px; }
   .character-intro { min-height: 0; }
   .character-traits { margin-top: 18px; }
-  .preview-action { min-height: 40px; }
   .strain-rules summary { min-height: 36px; }
 }
 @media (max-width: 370px) {
@@ -280,7 +238,6 @@ onBeforeUnmount(() => clearTimeout(previewTimer))
   .roster-portrait { width: 48px; }
   .character-traits dd { font-size: 16px; }
   .character-traits div + div { padding-left: 10px; }
-  .awakening-note { font-size: 9px; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::after { animation: none !important; transition: none !important; }

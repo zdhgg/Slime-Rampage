@@ -200,6 +200,25 @@ const digestTitle = computed(() => {
   }
   return `吞噬积累消化能量（${Math.round(digestRatio.value * 100)}%）· 满槽转化元素等级｜已爆发 ${digest.bursts} 次`
 })
+
+/** 拟态能量（origin 独占，P0）：异源充能 → ≥40 空格技超载；满格脉冲提示 */
+const primalRatio = computed(() => {
+  const primal = props.stats.primal
+  if (!primal?.max) return 0
+  return Math.max(0, Math.min(1, primal.value / primal.max))
+})
+const primalReady = computed(() => {
+  const primal = props.stats.primal
+  return !!primal && primal.value >= primal.cost
+})
+const primalTitle = computed(() => {
+  const primal = props.stats.primal
+  if (!primal) return ''
+  const effect = primal.effect || '半径 ×1.5、伤害 ×2.5、击退翻倍'
+  if (primalRatio.value >= 1) return `拟态能量已满 · 下次有效空格技将超载：${effect}`
+  if (primalReady.value) return `拟态能量 ${primal.value}/${primal.max} · 下次有效空格技将超载：${effect}`
+  return `拟态能量 ${primal.value}/${primal.max} · 交替使用不同伤害来源（飞弹/震荡/元素附魔）充能，≥${primal.cost} 后空格技超载`
+})
 </script>
 
 <template>
@@ -240,9 +259,10 @@ const digestTitle = computed(() => {
         <div v-if="stats.spells" class="hud-spell-build" :title="`当前配色：${stats.spells.palette?.name || '基础元素'}`">
           <div class="hud-spell-slots">
             <span v-for="el in stats.spells.elements" :key="el.id" :style="{ '--spell-color': el.color }" :title="`${el.desc} 自动施法间隔 ${el.interval.toFixed(2)} 秒 · ${el.enhancements || '基础法术'} · 核心改造 ${el.rank}/3`"><i>{{ el.icon }}</i><b>{{ el.spell }}</b><small v-if="el.enhancements">{{ el.enhancements }}</small><small v-else-if="el.rank">改造 {{ el.rank }}</small></span>
-            <span v-if="stats.spells.elements.length === 1" class="spell-slot-empty">◇<small>首个 BOSS 核心融合</small></span>
+            <span v-if="stats.spells.elements.length === 0" class="spell-slot-empty">◇<b>原质飞弹</b><small>Lv.2 选择首个法术</small></span>
+            <span v-if="stats.spells.elements.length === 1" class="spell-slot-empty">◇<small>Lv.5 选择第二系</small></span>
           </div>
-          <p v-if="stats.spells.fusion" :title="stats.spells.fusion.desc"><b>{{ stats.spells.fusion.name }}</b><span>核心 {{ stats.spells.cores }} · 空格进化 {{ stats.spells.activeRank }}/3</span></p>
+          <p v-if="stats.spells.fusion" :title="stats.spells.fusion.desc"><b>{{ stats.spells.fusion.name }}</b><span>核心 {{ stats.spells.cores }} · {{ stats.spells.activeRank >= 3 ? '主动术已进化' : 'Lv.10 主动术进化' }}</span></p>
           <p v-else><span>基础法术自动施放 · 空格原质释放</span></p>
 
         </div>
@@ -286,6 +306,19 @@ const digestTitle = computed(() => {
           <i><em :style="{ width: Math.round(Math.min(1, digestRatio) * 100) + '%' }"></em></i>
           <b v-if="digestRatio >= 1">{{ stats.elements.length ? '爆发就绪' : '待吸收元素' }}</b>
           <b v-else>{{ Math.round(digestRatio * 100) }}%</b>
+        </div>
+        <!-- 拟态能量（原生黏液独占）：异源充能条，5 格 × 20，≥40 可超载、满格脉冲 -->
+        <div
+          v-if="stats.strainId === 'origin'"
+          class="hud-primal"
+          :class="{ ready: primalReady, full: primalRatio >= 1 }"
+          :title="primalTitle"
+        >
+          <span>🫧 拟态</span>
+          <i><em :style="{ width: Math.round(primalRatio * 100) + '%' }"></em></i>
+          <b v-if="primalRatio >= 1">已满</b>
+          <b v-else-if="primalReady">超载就绪</b>
+          <b v-else>{{ stats.primal?.value ?? 0 }}</b>
         </div>
         <!-- 流派专精指示（阶段十八） -->
         <div v-if="stats.primarySpec || stats.secondarySpec" class="hud-specs">
@@ -1014,6 +1047,55 @@ const digestTitle = computed(() => {
 
 .hud-digest.ready em {
   background: linear-gradient(90deg, #ffd166, #ff9f43);
+}
+
+.hud-primal {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  color: rgba(140, 255, 200, 0.86);
+  letter-spacing: 1px;
+  white-space: nowrap;
+}
+
+.hud-primal i {
+  display: block;
+  width: 76px;
+  height: 5px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.12);
+  /* 5 格 × 20：分段刻度线 */
+  outline: 1px solid rgba(140, 255, 200, 0.18);
+  background-image: repeating-linear-gradient(90deg, transparent 0 14px, rgba(0, 0, 0, 0.55) 14px 15px);
+  background-size: 15px 100%;
+}
+
+.hud-primal em {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #4dd0e1, #8cffc8);
+  transition: width 0.2s ease;
+}
+
+.hud-primal b {
+  font-size: 10px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.68);
+}
+
+.hud-primal.ready {
+  color: #8cffc8;
+}
+
+.hud-primal.ready em {
+  background: linear-gradient(90deg, #8cffc8, #ffd166);
+}
+
+.hud-primal.full {
+  animation: digestPulse 1s ease-in-out infinite alternate;
 }
 
 @keyframes digestPulse {

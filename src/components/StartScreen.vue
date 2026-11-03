@@ -31,7 +31,6 @@ import {
 } from '../game/RunRules.js'
 import { getExpeditionStages } from '../game/RunRules.js'
 import { STRAINS } from '../game/Strains.js'
-import { SPELL_ELEMENTS } from '../game/SpellRules.js'
 import StrainSelect from './StrainSelect.vue'
 import AboutGame from './AboutGame.vue'
 import { STRAIN_PRESENTATION } from './strainPresentation.js'
@@ -183,7 +182,7 @@ onMounted(() => {
 })
 onUnmounted(() => window.removeEventListener('hashchange', syncAboutLocation))
 
-const selection = ref({ ...normalizeRunSelection(props.preferences), strain: 'origin', element: 'fire' })
+const selection = ref({ ...normalizeRunSelection(props.preferences), strain: 'origin' })
 const playstyleGrid = ref(null)
 const modeGrid = ref(null)
 const runnerGrid = ref(null)
@@ -195,7 +194,6 @@ watch(
     selection.value = {
       ...normalizeRunSelection(props.preferences),
       strain: selection.value.strain || 'origin',
-      element: selection.value.element || 'fire',
     }
   }
 )
@@ -679,7 +677,7 @@ watch(
           </div>
 
           <div class="config-flow">
-            <StrainSelect :model-value="selection.strain" :element="selection.element" @update:element="selection.element = $event; emit('ui-sound', 'select')" @update:model-value="selectStrain" @preview="emit('ui-sound', 'select')" />
+            <StrainSelect :model-value="selection.strain" @update:model-value="selectStrain" />
             <section class="config-step" aria-labelledby="difficulty-heading">
               <header class="step-heading">
                 <b id="difficulty-heading">难度</b>
@@ -761,7 +759,7 @@ watch(
             <span>{{ selectedDifficulty.name }}</span>
             <i aria-hidden="true">·</i>
             <span class="summary-strain" :style="{ color: STRAIN_PRESENTATION[selectedStrain.id].color }">{{ selectedStrain.name }}</span>
-            <span v-if="selectedStrain.id === 'elemental'" :style="{ color: SPELL_ELEMENTS[selection.element].color }">{{ SPELL_ELEMENTS[selection.element].spell }}</span>
+            <span v-if="selectedStrain.id === 'elemental'">Lv.2 学习法术</span>
           </p>
           <button class="primary-action" @click="prepare">
             开始行动

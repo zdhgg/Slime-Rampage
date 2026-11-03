@@ -7,37 +7,31 @@ export const STRAIN_PRESENTATION = {
     ...SLIME_FAMILY_ART.summoner,
     label: '共生小队', epithet: '与你并肩的每一次成长',
     intro: '团团嘲讽、疾风减攻、孢云减速、甘露治疗，逐只招募伙伴保护本体。空格鼓舞全队，提高伙伴的攻击力、攻速与移速。',
-    awakening: 'Lv.5 自动觉醒共生契约',
   },
   origin: {
     ...SLIME_FAMILY_ART.origin,
-    label: '自由构筑', epithet: '一切进化的起点',
-    intro: '用黏液震荡推开近敌，让每一次选择决定你的进化方向。',
-    awakening: 'Lv.5 五系拟态觉醒 · Lv.9 副专精共鸣 · Lv.14 终极觉醒（第 10 波后）',
+    label: '祖细胞拟态', epithet: '一切进化的起点',
+    intro: '未分化的原始形态。Lv.5 拟态任意一条血统的独占机制——吞噬、伙伴、弹幕、元素或暗影，由你写下进化方向。',
   },
   glutton: {
     ...SLIME_FAMILY_ART.glutton,
     label: '近身吞噬', epithet: '永不满足的猎食者',
     intro: '贴近猎物，咬击吞噬。以捕食积累猎食点，用重咬撕开包围，获得短时护甲。',
-    awakening: 'Lv.5 自动觉醒暴食专精',
   },
   ricochet: {
     ...SLIME_FAMILY_ART.ricochet,
     label: '多弹齐射', epithet: '弹幕中的精确回响',
     intro: '让更多、更快的飞弹铺开火力，用连续齐射压制敌人，并借短时加速拉开距离。',
-    awakening: 'Lv.5 自动觉醒弹射专精',
   },
   elemental: {
     ...SLIME_FAMILY_ART.elemental,
     label: '双元素法师', epithet: '在体内孕育融合的法术',
-      intro: '两系法术自动施放，空格释放融合爆发。自带自动重建的法术护盾，升级可强化本系威力与防御；法术核心改造当前双元素组合。',
-    awakening: 'Lv.5 自动觉醒元素专精',
+    intro: '以原质飞弹起步，局内逐步掌握两系自动法术，空格释放融合爆发。自带破盾后自动重建的法术护盾。',
   },
   shadow: {
     ...SLIME_FAMILY_ART.shadow,
     label: '暴击分身', epithet: '虚实之间的围猎者',
     intro: '闪避后短暂虚化，暴击凝出分身诱敌挡弹。学习影袭留身后，空格空放也能留下分身自保，命中可指挥群影夹击。',
-    awakening: 'Lv.5 自动觉醒暗影专精',
   },
 }
 
@@ -72,8 +66,8 @@ export function strainTraits(id) {
       { label: '生命上限', value: String(strain.maxHp).replace('-', '−'), cost: true },
     ]
     default: return [
-      { label: '初期技能', value: '三系开放' },
-      { label: 'Lv.5 觉醒', value: '自由选择' },
+      { label: 'Lv.5 拟态', value: '五系任选' },
+      { label: 'Lv.9 独占', value: '副专精共鸣' },
       { label: '专属主动', value: '黏液震荡' },
     ]
   }

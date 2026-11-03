@@ -1,6 +1,5 @@
 import { DIFFICULTIES, MODES, getExpeditionStages, normalizeRunSelection } from './RunRules.js'
 import { STRAINS } from './Strains.js'
-import { SPELL_ELEMENTS, normalizeSpellElement } from './SpellRules.js'
 
 const MODE_BRIEFINGS = {
   expedition: {
@@ -41,7 +40,7 @@ const DIFFICULTY_REPORTS = {
 
 const STAGE_COUNT_CN = { 6: '六', 7: '七', 8: '八', 9: '九', 10: '十', 11: '十一', 12: '十二' }
 
-export function getRunIntro(selection, strainId = 'origin', element = 'fire') {
+export function getRunIntro(selection, strainId = 'origin') {
   const value = normalizeRunSelection(selection)
   const briefing = MODE_BRIEFINGS[value.mode]
   const strain = STRAINS[strainId] || STRAINS.origin
@@ -54,7 +53,7 @@ export function getRunIntro(selection, strainId = 'origin', element = 'fire') {
     rewardMultiplier: DIFFICULTIES[value.difficulty].rewardMul,
     threatReport: DIFFICULTY_REPORTS[value.difficulty],
     strainNote: strain.id === 'origin' ? null : strain.id === 'elemental'
-      ? `作战血统：${strain.name} · 起始法术：${SPELL_ELEMENTS[normalizeSpellElement(element)].spell}。首个 BOSS 核心确定第二系，空格进化为融合术。`
+      ? `作战血统：${strain.name} · 原质飞弹自动攻击。Lv.2 选择第一系法术，Lv.5 选择第二系并融合，Lv.10 进化融合主动术。`
       : `作战血统：${strain.name} · ${strain.desc}`,
     objective:
       value.mode === 'expedition'

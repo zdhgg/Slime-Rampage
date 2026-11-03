@@ -49,7 +49,6 @@ import {
 import { calculateMaterialReward, normalizeRunSelection, sumDrops } from './game/RunRules.js'
 import { createDefaultStats } from './game/GameEngine.js'
 import { getRunIntro } from './game/RunIntro.js'
-import { normalizeSpellElement } from './game/SpellRules.js'
 import { accountApi } from './services/AccountClient.js'
 import { loadCampaignSave, loadLegacyCampaign, setAccountCampaign } from './game/gameplay/tower-defense/TowerDefenseSave.js'
 
@@ -635,8 +634,7 @@ async function onPrepareRun(selection) {
   pendingRun.value = {
     selection: normalized,
     strain,
-    element: normalizeSpellElement(selection?.element),
-    intro: getRunIntro(normalized, strain, selection?.element),
+    intro: getRunIntro(normalized, strain),
   }
   loadPublicLeaderboard(normalized)
 }
@@ -657,7 +655,7 @@ async function onDeployRun() {
   engine.value.configureGameplay('arena') // 从 Runner 独立玩法返回后必须显式切回 Arena 管线
   engine.value.configureRun(plan.selection)
   spellCoreReward.value = null
-  engine.value.applyStartingStrain(plan.strain, plan.element)
+  engine.value.applyStartingStrain(plan.strain)
   engine.value.reset()
   engine.value.start()
   started.value = true
@@ -905,8 +903,7 @@ function onRestart() {
   pendingRun.value = {
     selection: { ...selectedRun.value },
     strain,
-    element: engine.value?.startingElement || 'fire',
-    intro: getRunIntro(selectedRun.value, strain, engine.value?.startingElement),
+    intro: getRunIntro(selectedRun.value, strain),
   }
 }
 

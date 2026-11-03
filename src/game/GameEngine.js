@@ -1,13 +1,13 @@
 import { setCritSource } from './CritSources.js'
 import { resolveShadowSkill } from './ShadowSkills.js'
-import { normalizeSpellElement, resolveElementalSkill } from './SpellRules.js'
+import { resolveElementalSkill } from './SpellRules.js'
 import { InputManager } from './InputManager.js'
 import { ELEMENTAL_SPEC_PROC_CAP, Player, STARTING_EXP_THRESHOLD } from './entities/Player.js'
 import { EnemyManager } from './EnemyManager.js'
 import { WeaponSystem } from './WeaponSystem.js'
 import { GemManager } from './GemManager.js'
 import { SoundManager } from './SoundManager.js'
-import { rollSkills, rollBossSkills, getSpecInfo, SPEC_INFO } from './SkillPool.js'
+import { rollSkills, rollBossSkills, getSpecInfo, getSecondaryStarter, SPEC_INFO } from './SkillPool.js'
 import { applyGenes } from './GenePool.js'
 import { buildSpecies } from './Species.js'
 import { REACTIONS, getElement, getActiveReactions } from './ElementSystem.js'
@@ -19,7 +19,9 @@ import { MapFeatureManager } from './MapFeatureManager.js'
 import { DialogueManager } from './DialogueManager.js'
 import { createGameplay, normalizeGameplayId } from './gameplay/GameplayFactory.js'
 import { AmbientLayer } from './effects/AmbientLayer.js'
-import { STRAIN_IDS, applyStrain, canDevour, canUseElements, getStrainSkill } from './Strains.js'
+import { STRAINS, STRAIN_IDS, applyStrain, canDevour, canUseElements, getStrainSkill, mimicryStrain } from './Strains.js'
+import { PRIMAL_ENERGY_MAX, PRIMAL_OVERLOAD_COST, resetPrimalEnergy, primalOverloadDescription } from './PrimalEnergy.js'
+import { BossArena } from './BossArena.js'
 import {
   GLUTTON_CHARGE_MAX,
   GLUTTON_DEVOURS_PER_CHARGE,
@@ -74,6 +76,34 @@ export const DEVOUR_THRESHOLD_CAP = 0.4
  * UI 层用它初始化 stats（引擎就绪前 HUD 渲染不访问 undefined 字段），
  * 字段增删只改引擎这一处，消除「初始对象与回调拷贝手工双写」的漂移。
  */
+/**
+ * origin 拟态授予（祖细胞拟态）：选择暴食/共生专精时，补发该血统的机制层——
+ * 资源、涂装与首只伙伴。刻意只给机制不给属性（暴食 +1hp / 共生 −45% 伤害
+ * 仍是血统独占），血统赢在「开局即是」，origin 赢在「自由+元素+双专精」。
+ *  - gluttony：授予猎食点资源（空格换成重咬由 strainSkill 分派完成）；
+ *    吞噬权限由 canDevour 读 mimicryStrain，此处无需写状态。
+ *  - symbiosis：刷新伙伴名册（岩甲团团是常驻名册位，enabled 一开自动到场）。
+ * 非 origin 或非拟态血统时为空操作，与里程碑/自动觉醒两条入口共用。
+ * 模块级函数（不挂类）：测试桩直接 call _applyPrimarySpecBonus 时不依赖原型。
+ */
+export function applyMimicryGrant(engine, spec) {
+  if (engine.startingStrain !== 'origin') return
+  const mimicry = mimicryStrain(engine.startingStrain, spec)
+  if (!mimicry) return
+  const strain = STRAINS[mimicry]
+  if (engine.player) {
+    engine.player.strainTint = strain?.tint || engine.player.strainTint
+    engine.player.strainDeco = strain?.deco || engine.player.strainDeco
+  }
+  if (mimicry === 'glutton') {
+    // 猎食点是局内资源：拟态授予时从 0 点/0 进度开始（disable 的 -1 哨兵在此转正）。
+    resetGluttonResource(engine.player)
+  } else if (mimicry === 'summoner') {
+    // 伙伴立即到场：enabled 闸门刚开，sync 才会把常驻名册位实例化。
+    engine.weaponSystem?.petCombat?.sync?.()
+  }
+}
+
 export function createDefaultStats() {
   return {
     elapsed: 0,
@@ -108,6 +138,8 @@ export function createDefaultStats() {
     canUseElements: true,
     spells: null,
     digest: { charge: 0, max: 100, bursts: 0 },
+    // 拟态能量（origin 独占，P0）：异源充能 → ≥cost 时空格技升档为超载版
+    primal: { value: 0, max: 100, cost: 40, effect: primalOverloadDescription() },
     // 暴食猎食点（仅暴食角色在 _pushStats 里给出 true 与真实数值）
     glutton: { has: false, charge: 0, max: 2, progress: 0, progressPer: 5, ready: false },
     x: 0,
@@ -192,6 +224,7 @@ export class GameEngine {
     this.entities = []
     this.player = new Player({ input: this.input })
     this.enemyManager = new EnemyManager()
+    this.bossArena = new BossArena(this) // 决斗圈（P0：限时第 5 波骑士王）；非 Entity，由帧管线显式驱动
     this.mapFeatures = new MapFeatureManager()
     this.worldEvents = new WorldEventManager()
     this.dialogue = new DialogueManager()
@@ -262,7 +295,7 @@ export class GameEngine {
     this.primarySpec = null // 主专精（'gluttony' | 'gatling' | 'elemental' | 'assassin'）
     this.secondarySpec = null // 副专精
     this.startingStrain = 'origin' // 开局血统预选（先天属性，reset 末尾叠加应用）
-    this.startingElement = 'fire'
+    this.startingElement = null // Set when the first spell is learned at Lv.2.
     this.onSpellCore = null
     this._spellCoreQueue = []
     this._spellCoreChoice = null
@@ -381,6 +414,9 @@ export class GameEngine {
    */
   configureGameplay(id) {
     this.gameplay?.destroy()
+    // 新玩法会话不继承旧暂停锁：finishGameplay 的终止暂停会把锁留在 ≥1，
+    // 否则下一局首次手动暂停/切后台后 resume 与可见性恢复都不会再 start
+    this._pauseLock = 0
     this.gameplayId = normalizeGameplayId(id)
     this.gameplay = createGameplay(this.gameplayId)
     this.gameplay.attach(this)
@@ -492,11 +528,21 @@ export class GameEngine {
   // ------------------------------------------------------------
 
   /**
-   * 该角色能否吞噬敌人。只有暴食史莱姆可以；origin 没有身份，也不享受独占。
+   * origin 拟态血统（祖细胞拟态）：Lv.5 选择暴食/共生专精后，获得对应血统的
+   * 机制层身份（'glutton' / 'summoner'）。只读主专精推导，不单独持久化——
+   * 读档/测试桩缺字段时退化为 null，门禁全部自然关回。
+   */
+  get mimicryStrain() {
+    return mimicryStrain(this.startingStrain, this.primarySpec)
+  }
+
+  /**
+   * 该角色能否吞噬敌人。暴食天生可以；origin 拟态暴食专精后同样可以
+   * （吞噬→消化→元素吸收链路因此只对 origin 与暴食可达，且 origin 独有元素侧）。
    * EnemyManager._checkDevour 与 Enemy.hit 共用此判定，避免两处口径漂移。
    */
   get canDevour() {
-    return canDevour(this.startingStrain)
+    return canDevour(this.startingStrain) || this.mimicryStrain === 'glutton'
   }
 
   /**
@@ -508,9 +554,14 @@ export class GameEngine {
     return canUseElements(this.startingStrain)
   }
 
-  /** 当前角色的空格技能定义，包含原生黏液。 */
+  /**
+   * 当前角色的空格技能定义，包含原生黏液。
+   * origin 拟态后换成拟态血统的签名技（暴食→重咬、共生→鼓舞）：
+   * 这两条血统的资源体系（猎食点/伙伴）与空格扳机绑定，保留黏液震荡
+   * 等于给了弹药不给扳机。gatling/elemental/assassin 拟态为 null，保震荡。
+   */
   get strainSkill() {
-    const skill = getStrainSkill(this.startingStrain), spells = this.weaponSystem.spellCombat
+    const skill = getStrainSkill(this.mimicryStrain || this.startingStrain), spells = this.weaponSystem.spellCombat
     if (!spells.enabled) return skill
     this._spellActiveSkill ||= { ...skill, use: engine => engine.weaponSystem.spellCombat.useActive() }
     Object.assign(this._spellActiveSkill, { id: spells.fusion ? `fusion_${spells.fusion.id}` : skill.id, name: spells.activeName,
@@ -525,7 +576,7 @@ export class GameEngine {
    *  - rollSkills 保持只负责生成候选，不产生副作用；
    *  - 所有会抽卡的入口（升级 / 王级秘籍 / 悬赏奖励 / 远征勇者秘籍）都先经过这里，
    *    因此任何一个入口在 Lv.5 都不会漏掉觉醒，也不会弹出错的四选一面板；
-   *  - origin 的 roleSpec 为 null，直接短路 → 保留 Lv.5 四选一里程碑。
+   *  - origin 的 roleSpec 为 null，直接短路 → 保留 Lv.5 五系拟态里程碑。
    *
    * 时序要求：必须在 weaponSystem.reset() / player.resetRunState() / applyGenes /
    * applyStrain 之后调用（觉醒会改写 damage/fireInterval/maxHp 等基础值）。
@@ -646,6 +697,15 @@ export class GameEngine {
    * 技能池耗尽（全满级）时静默继续，不再弹面板。
    */
   triggerLevelUp() {
+    const reward = this.weaponSystem.spellCombat.milestoneReward()
+    if (reward && this.onSpellCore && !this._spellCoreChoice) {
+      this.pause()
+      this._ensureRoleAwakening()
+      this._spellCoreChoice = { ...reward, milestone: true, first: reward.stage === 'fusion' }
+      this.sound.levelUp(); this._pushStats()
+      this.onSpellCore(this._spellCoreChoice)
+      return
+    }
     this.openFreeSkillPanel()
   }
 
@@ -709,8 +769,15 @@ export class GameEngine {
         this.enemyManager?.addText?.(this.player.x, this.player.y - 20, `👑 主专精确立：${info?.name || skill.spec}`, null, info?.color || '#ffd166', 16)
         this.sound.wave()
       } else if (skill.milestoneType === 'secondary') {
+        if (this.secondarySpec || this.roleSpec || this.startingStrain !== 'origin' || this.player.level < 9 || !this.primarySpec || skill.spec === this.primarySpec) return
+        const starter = getSecondaryStarter(this, skill.spec)
+        if (!starter) return
         this.secondarySpec = skill.spec
-        this.enemyManager?.addText?.(this.player.x, this.player.y - 20, `🥈 副专精确立：${info?.name || skill.spec}`, null, info?.color || '#74b9ff', 16)
+        const level = (this.skillLevels[starter.id] || 0) + 1
+        this.skillLevels[starter.id] = level
+        starter.apply?.(this, level)
+        this.enemyManager?.addText?.(this.player.x, this.player.y - 20, `🥈 副专精确立：${info?.name || skill.spec} · 获得${starter.name}`, null, info?.color || '#74b9ff', 16)
+        this.sound.wave()
       }
     } else {
       // 2. 常规技能与自由探索技能应用
@@ -770,14 +837,15 @@ export class GameEngine {
       // 显式比较 true，保证字段在任何上下文（含测试桩缺字段）下都是布尔值。
       this.weaponSystem.critGuaranteesElement = this.canUseElements === true
     }
+    applyMimicryGrant(this, spec)
   }
 
   /** 开局血统预选：先天属性每局 reset 末尾（基因/难度之后）叠加应用 */
-  applyStartingStrain(id, element = this.startingElement) {
+  applyStartingStrain(id) {
     this.startingStrain = STRAIN_IDS.includes(id) ? id : 'origin'
-    this.startingElement = normalizeSpellElement(element)
+    this.startingElement = null
     applyStrain(this, this.startingStrain)
-    this.weaponSystem.spellCombat.start(this.startingElement)
+    this.weaponSystem.spellCombat.start()
     return true
   }
 
@@ -796,6 +864,8 @@ export class GameEngine {
     if (this.runFinished || this.player?.dead || this._pauseLock > 0 || this._spellCoreChoice || !this._spellCoreQueue?.length || !this.onSpellCore) return false
     const spells = this.weaponSystem.spellCombat
     if (!spells.enabled) return false
+    // Early BOSS rewards wait for Lv.5; they never bypass the level-based fusion.
+    if (!spells.fusion) return false
     const reward = this._spellCoreQueue.shift(), options = spells.coreOptions()
     this._spellCoreChoice = { ...reward, first: !spells.fusion, options }
     this.pause(); this.sound.absorb(); this._pushStats()
@@ -805,7 +875,8 @@ export class GameEngine {
 
   resolveSpellCore(id) {
     const option = this._spellCoreChoice?.options.find(s => s.id === id)
-    if (!option || !this.weaponSystem.spellCombat.applyCore(option)) return false
+    const spells = this.weaponSystem.spellCombat
+    if (!option || !(this._spellCoreChoice.milestone ? spells.applyMilestone(option) : spells.applyCore(option))) return false
     this._spellCoreChoice = null
     this._pushStats(); this._pushCooldown(); this.resume()
     return true
@@ -1042,6 +1113,7 @@ export class GameEngine {
   }
 
   handleBossDefeated(boss) {
+    this.bossArena.onBossDeath(boss) // 决斗圈随 BOSS 死亡消散
     const encounterComplete = this.enemyManager.advanceBossEncounter(boss)
     if (
       this.runState === 'finale' &&
@@ -1430,6 +1502,7 @@ export class GameEngine {
     resetGluttonResource(p)
     this.skillLevels = {}
     this.bossSkillIds = new Set()
+    this.startingElement = null
     this._spellCoreQueue = []
     this._spellCoreChoice = null
     this._spellCoreSeen.clear()
@@ -1458,6 +1531,7 @@ export class GameEngine {
     this._shakeT = 0 // 清空屏幕震动（阶段十五）
     this.sound.stopMusic() // 复位 BGM（reset 后由 start() 重建，防孤立播放）
     this.enemyManager.reset()
+    this.bossArena.reset() // 决斗圈：纯局内状态，重开归零
     this.mapFeatures.reset()
     this.worldEvents.reset()
     this.dialogue.reset()
@@ -1469,7 +1543,8 @@ export class GameEngine {
       p.hp = p.maxHp
     }
     applyStrain(this, this.startingStrain) // 血统先天属性：最后叠加（生命/移速/攻击/吞噬口径）
-    this.weaponSystem.spellCombat.start(this.startingElement)
+    resetPrimalEnergy(p) // 拟态能量：纯局内资源，重开归零（不进存档）
+    this.weaponSystem.spellCombat.start()
     if (this.runSelection.mode === 'expedition') {
       this._enterExpeditionStage(1, true)
     } else if (this.runSelection.mode === 'endless') {
@@ -1572,8 +1647,9 @@ export class GameEngine {
       // 空格角色技能：菜单/冷却条数据源。
       // 资源型技能（暴食）额外给出 charge 口径，HUD 改渲染猎食点而非冷却条——
       // 它的 skillMax 恒为 0，因此旧的冷却分支天然不会被点亮。
-      pets: this.startingStrain === 'summoner' ? this.weaponSystem.petCombat.hud() : null,
-      petRally: this.startingStrain === 'summoner' ? this.weaponSystem.petCombat.rallyHud() : null,
+      // 伙伴面板跟随系统开关而非血统名：origin 拟态共生后同样显示名册与鼓舞状态
+      pets: this.weaponSystem.petCombat.enabled ? this.weaponSystem.petCombat.hud() : null,
+      petRally: this.weaponSystem.petCombat.enabled ? this.weaponSystem.petCombat.rallyHud() : null,
       spellShield: this.weaponSystem.spellCombat.available ? this.weaponSystem.spellCombat.shield.hud() : null,
       shadow: this.startingStrain === 'shadow' ? {
         evasion: this.player.evasionChance, crit: this.weaponSystem.critChance,
@@ -1640,6 +1716,13 @@ export class GameEngine {
         charge: Math.round(this.weaponSystem.digestCharge),
         max: this.weaponSystem.digestChargeMax,
         bursts: this.weaponSystem.digestBursts,
+      },
+      // 拟态能量（HUD 能量条；非 origin 恒为 0，HUD 按 strainId 决定是否渲染）
+      primal: {
+        value: Math.round(this.player.primalEnergy || 0),
+        max: PRIMAL_ENERGY_MAX,
+        cost: PRIMAL_OVERLOAD_COST,
+        effect: primalOverloadDescription(this),
       },
       // 暴食猎食点（stats 侧口径，给常驻面板用；高频冷却条走 cooldown.charge）：
       // 非暴食角色 has=false，HUD 整项不渲染
@@ -1731,6 +1814,7 @@ export class GameEngine {
         if (e.active && !this.runFinished) e.update(dt)
         if (this._pauseLock > 0 || this.runFinished) break
       }
+      this.bossArena.update(dt) // 决斗圈：圈心跟随与界外灼烧（在实体结算之后判定）
     }
     this._updateCamera(dt) // 相机跟随玩家（在实体更新之后）
     this._ambient.update(dt, this.camera, this.width, this.height, this._mapThemeId)
@@ -1802,6 +1886,7 @@ export class GameEngine {
     // 实体渲染（世界坐标系，整体随相机平移）
     ctx.save()
     ctx.translate(-camX, -camY)
+    this.bossArena.renderWorld(ctx) // 决斗圈圈环：压在敌人与预警层之下
     for (const e of this.entities) {
       if (!e.active || e === this.dialogue) continue
       // 玩家与敌人按脚点 y 合并排序绘制：站在敌人南侧盖住它，北侧被它盖住
@@ -1826,6 +1911,8 @@ export class GameEngine {
     ctx.globalAlpha = 0.5
     ctx.fillRect(0, 0, width, height)
     ctx.globalAlpha = 1
+
+    this.bossArena.renderOverlay(ctx, width, height) // 决斗圈屏幕层：狂暴红闪 / 界外泛红 + 回圈箭头
   }
 
   // ------------------------------------------------------------
