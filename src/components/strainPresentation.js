@@ -6,7 +6,7 @@ export const STRAIN_PRESENTATION = {
   summoner: {
     ...SLIME_FAMILY_ART.summoner,
     label: '共生小队', epithet: '与你并肩的每一次成长',
-    intro: '团团嘲讽、疾风减攻、孢云减速、甘露治疗，逐只招募伙伴保护本体。空格鼓舞全队，提高伙伴的攻击力、攻速与移速。',
+    intro: '随机招募伙伴并探索追猎、孢潮、守望三条路线；第 6 波／远征第 3 章后确认方向。空格鼓舞全队，提高伙伴的攻击力、攻速与移速。',
   },
   origin: {
     ...SLIME_FAMILY_ART.origin,
@@ -20,13 +20,13 @@ export const STRAIN_PRESENTATION = {
   },
   ricochet: {
     ...SLIME_FAMILY_ART.ricochet,
-    label: '多弹齐射', epithet: '弹幕中的精确回响',
-    intro: '让更多、更快的飞弹铺开火力，用连续齐射压制敌人，并借短时加速拉开距离。',
+    label: '随机弹道', epithet: '在随机中生长的弹幕',
+    intro: '前期随机混搭分裂、贯穿与折射，中期根据已有入口确认路线。路线锁定后继续抽取进阶与混搭，后期有机会获得互斥终极，替换空格疾射。',
   },
   elemental: {
     ...SLIME_FAMILY_ART.elemental,
-    label: '双元素法师', epithet: '在体内孕育融合的法术',
-    intro: '以原质飞弹起步，局内逐步掌握两系自动法术，空格释放融合爆发。自带破盾后自动重建的法术护盾。',
+    label: '万象法师', epithet: '在体内孕育四系法术',
+    intro: '以原质飞弹起步，局内随机掌握四系法术，可走单系极化、双系融合或多系轮转；中期确认路线后追寻互斥终极。自带破盾后自动重建的法术护盾。',
   },
   shadow: {
     ...SLIME_FAMILY_ART.shadow,
@@ -57,7 +57,7 @@ export function strainTraits(id) {
     ]
     case 'elemental': return [
       { label: '暴击率', value: `+${percent(strain.critChance)}%` },
-      { label: '法术配置', value: '双元素融合' },
+      { label: '法术配置', value: '三路线构筑' },
       { label: '生命上限', value: String(strain.maxHp).replace('-', '−'), cost: true },
     ]
     case 'shadow': return [

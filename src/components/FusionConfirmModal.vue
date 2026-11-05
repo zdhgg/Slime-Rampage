@@ -1,4 +1,5 @@
 <script setup>
+import SkillIcon from './SkillIcon.vue'
 /**
  * FusionConfirmModal：首次融合确认面板（阶段十六追加设计）
  *
@@ -16,7 +17,7 @@ const emit = defineEmits(['resolve'])
 <template>
   <div class="fusion-overlay" role="dialog" aria-modal="true" aria-label="首次融合确认">
     <div class="fusion-panel">
-      <div class="fusion-kicker">发现元素核心：{{ info.icon }} {{ info.name }}</div>
+      <div class="fusion-kicker">发现元素核心：<SkillIcon :skill="{ id: info.type, spec: 'elemental', element: info.type }" size="inline" /> {{ info.name }}</div>
 
       <!-- 首颗元素：预览可融合方向（阶段十六追加反馈） -->
       <template v-if="info.firstElement">
@@ -25,7 +26,7 @@ const emit = defineEmits(['resolve'])
         <div class="fusion-combos">
           可与
           <span v-for="c in info.combos" :key="c.species" class="combo-item">
-            {{ c.icon }}{{ c.name }} → {{ c.species }}
+            <SkillIcon :skill="{ id: c.element, spec: 'elemental', element: c.element }" size="inline" />{{ c.name }} → {{ c.species }}
           </span>
           融合
         </div>

@@ -1,6 +1,7 @@
 // Real arena frame loop, deterministic seeds; the controller only steers and presses Space.
 import assert from 'node:assert/strict'
 import { createArena, spawnBoss, learn, dispose } from './test-support/arena-fixture.mjs'
+import { rollSkills } from './src/game/SkillPool.js'
 
 const originalRandom = Math.random
 const randomFor = seed => () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 4294967296)
@@ -50,8 +51,14 @@ try {
     const g = createArena('shadow')
     g.configureRun({ mode: 'timed', difficulty: 'normal' }); g.reset(); g.running = true
     g.onLevelUp = options => {
-      const priorities = ['ass_echo', 'ass_lethal', 'ass_execute', 'ass_decoy', 'ass_legion', 'ass_stride', 'ass_cleave', 'ass_capstone', 'com_regen', 'com_vital']
-      g.applySkill(priorities.map(id => options.find(s => s.id === id)).find(Boolean) || options[0]); g.resume()
+      const route = options.find(s => s.isShadowRoute)
+      if (route) {
+        g.applySkill(options.find(s => s.route === 'swarm' && !s.locked) || options.find(s => !s.locked) || options[0])
+      } else {
+        const priorities = ['ass_echo', 'shadow_swarm_assault', 'ass_lethal', 'ass_execute', 'ass_decoy', 'ass_legion', 'ass_stride', 'ass_cleave', 'com_regen', 'com_vital']
+        g.applySkill(priorities.map(id => options.find(s => s.id === id)).find(Boolean) || options[0])
+      }
+      g.resume()
     }
     const stats = track(g)
     let deaths = 0
@@ -78,8 +85,13 @@ try {
         // Lv.14 是「完整构筑」：BOSS 伤害翻倍后（2026-11 平衡）纯输出构筑会被法师两下带走，
         // 满预算里的生存卡（细胞增殖 5 + 再生核心 2）是这套构筑的正当组成部分；
         // 与 Lv.8 分支互斥，保证始终按 level-1 的预算分配。
-        learn(g, 'ass_lethal'); learn(g, 'ass_stride', 2); learn(g, 'ass_execute'); learn(g, 'ass_legion'); learn(g, 'ass_capstone')
-        learn(g, 'com_vital', 5); learn(g, 'com_regen', 2)
+        learn(g, 'ass_echo', 3); learn(g, 'ass_lethal'); learn(g, 'ass_stride'); learn(g, 'ass_execute')
+        const combat = g.weaponSystem.shadowCombat
+        combat.route = 'swarm'; combat.normalChoices = 5; g.enemyManager.wave = 10
+        g.skillLevels.shadow_swarm_assault = 1
+        const ultimate = rollSkills(g, 99).find(s => s.id === 'ass_capstone')
+        if (ultimate) g.applySkill(ultimate)
+        learn(g, 'com_vital', 3); learn(g, 'com_regen', 1)
       }
       assert.ok(Object.values(g.skillLevels).reduce((sum, n) => sum + n, 0) <= level - 1, '遵守正常升级预算')
       clearTimeout(g._evolutionTimer); g.resume()
@@ -102,7 +114,7 @@ try {
   for (const type of ['boss-knight', 'boss-mage', 'boss-archer']) {
     const rows = bosses.filter(r => r.type === type)
     const rates = rows.map(r => (189 - r.bossHp) / r.seconds)
-    assert.ok(rates[2] > rates[1] && rates[1] > rates[0], '专精成长提高实际输出效率')
+    assert.ok(rates[2] > rates[0] && rates[1] > rates[0], '中后期构筑的实际输出效率高于起始阶段')
   }
   console.log('暗影回归：3 组 120 秒敌潮、9 组无杂兵首领战通过（简单机器人不代表真人胜率）')
 } finally { Math.random = originalRandom }

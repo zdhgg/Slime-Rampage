@@ -3,8 +3,18 @@
  * LevelUpModal：升级技能与里程碑专精觉醒面板
  */
 import { computed } from 'vue'
+import SkillIcon from './SkillIcon.vue'
 import { REACTION_SLOT_LEVELS, getReactionSlotLevelBonus } from '../game/entities/Player.js'
 import { useCardFocus } from './useCardFocus.js'
+import RicochetRouteChoice from './RicochetRouteChoice.vue'
+import GluttonRouteChoice from './GluttonRouteChoice.vue'
+import SymbiosisRouteChoice from './SymbiosisRouteChoice.vue'
+import ElementalRouteChoice from './ElementalRouteChoice.vue'
+import ShadowRouteChoice from './ShadowRouteChoice.vue'
+import { GLUTTON_ICON_COLORS, GLUTTON_ICON_ROUTES } from './gluttonIconMap.js'
+import { RICOCHET_ROUTE_COLORS } from './ricochetIconMap.js'
+import { SYMBIOSIS_ICON_COLORS, SYMBIOSIS_ICON_ROUTES } from './symbiosisIconMap.js'
+import { SHADOW_ICON_COLORS, SHADOW_ICON_ROUTES } from './shadowIconMap.js'
 
 /**
  * 主专精的规则改写（专精 → 玩法规则）：觉醒面板直接标出「这条流派怎么改写玩法」。
@@ -44,6 +54,14 @@ const props = defineProps({
 })
 const emit = defineEmits(['select'])
 
+const isRicochetRoute = computed(() => !!props.options?.[0]?.isRicochetRoute)
+const isGluttonRoute = computed(() => !!props.options?.[0]?.isGluttonRoute)
+const isSymbiosisRoute = computed(() => !!props.options?.[0]?.isSymbiosisRoute)
+const isElementalRoute = computed(() => !!props.options?.[0]?.isElementalRoute)
+const isShadowRoute = computed(() => !!props.options?.[0]?.isShadowRoute)
+const isGluttonSkill = (s) => !!(s?.isGluttonSkill || s?.id?.startsWith('glut_'))
+const isSymbiosisSkill = (s) => !!(s?.isSymbiosisSkill || s?.id?.startsWith('sym_'))
+
 /**
  * 键盘选卡（基因进化 3 卡与里程碑觉醒共用一套）：
  * 打开默认选中中间卡；←/→ 循环切换；Enter/空格 确认；数字键直选；
@@ -52,6 +70,7 @@ const emit = defineEmits(['select'])
 const { selectedIndex } = useCardFocus(
   () => props.options,
   (card) => emit('select', card),
+  () => !isRicochetRoute.value && !isGluttonRoute.value && !isSymbiosisRoute.value && !isElementalRoute.value && !isShadowRoute.value,
 )
 
 /**
@@ -75,13 +94,19 @@ const slotMilestone = computed(() => {
 })
 
 // 是否处于专精觉醒里程碑
-const isMilestone = props.options?.[0]?.isMilestone || false
-const milestoneType = props.options?.[0]?.milestoneType || 'primary'
+const isMilestone = computed(() => !!props.options?.[0]?.isMilestone)
+const milestoneType = computed(() => props.options?.[0]?.milestoneType || 'primary')
 
 const roleLabel = (s) => {
-  if (s.element) return `${s.icon} ${s.tags[0]}`
+  if (s.element) return s.tags?.[0] || '元素强化'
+  if (s.originOnly) return '🧬 原生拟态成长'
   if (s.isBossSkill) return s.isPartnerChoice ? '🐾 BOSS伙伴契约' : '📜 BOSS职业秘典'
   if (s.isCapstone) return '🌟 终极觉醒'
+  if (s.isRicochetSkill) return s.tags?.[0] || '弹道进化'
+  if (s.isGluttonSkill) return s.tags?.[0] || '暴食进化'
+  if (s.isSymbiosisSkill) return s.tags?.[0] || '共生进化'
+  if (s.isElementalSkill || s.isElementalDiscovery || s.spec === 'elemental') return s.tags?.[0] || '元素构筑'
+  if (s.isShadowSkill) return s.tags?.[0] || '暗影进化'
   if (s.isPartnerChoice) return '🐾 招募伙伴 · 在场 +1'
   if (s.role === 't1_free') return '🌱 自由变异尝试'
   if (s.role === 'primary') return '🔥 主专精深潜'
@@ -91,7 +116,7 @@ const roleLabel = (s) => {
 }
 
 const cardClass = (s) => {
-  if (s.element || s.role === 'role_t1') return 'card-primary'
+  if (s.element || s.role === 'role_t1' || s.originOnly) return 'card-primary'
   if (s.isBossSkill) return s.isPartnerChoice ? 'card-partner' : 'card-boss'
   if (s.isCapstone) return 'card-capstone'
   if (s.isPartnerChoice) return 'card-partner'
@@ -103,12 +128,38 @@ const cardClass = (s) => {
 
 const isBossReward = computed(() => !!props.options?.[0]?.isBossSkill)
 const isPartnerSelection = computed(() => props.options?.length > 0 && props.options.every(s => s.isPartnerChoice))
+const cardStyle = (s) => {
+  if (s.isRicochetSkill || s.id?.startsWith('boss_rico_')) {
+    const route = s.route || s.routes?.[0]
+    const family = s.isBossSkill ? 'boss' : s.kind === 'hybrid' ? 'hybrid' : route || 'common'
+    return { '--rico-color': RICOCHET_ROUTE_COLORS[family] || RICOCHET_ROUTE_COLORS.common }
+  }
+  if (isGluttonSkill(s) || s.isGluttonRoute) {
+    const route = s.route || GLUTTON_ICON_ROUTES[s.id] || 'common'
+    return { '--glutton-color': s.color || GLUTTON_ICON_COLORS[route] || GLUTTON_ICON_COLORS.common }
+  }
+  if (isSymbiosisSkill(s) || s.isSymbiosisRoute) {
+    const route = s.route || SYMBIOSIS_ICON_ROUTES[s.id] || 'common'
+    return { '--symbiosis-color': s.color || SYMBIOSIS_ICON_COLORS[route] || SYMBIOSIS_ICON_COLORS.common }
+  }
+  if (s.isShadowSkill || s.isShadowRoute) {
+    const route = s.route || SHADOW_ICON_ROUTES[s.id] || 'common'
+    return { '--shadow-color': s.color || SHADOW_ICON_COLORS[route] || SHADOW_ICON_COLORS.common }
+  }
+  return s.isPartnerChoice ? { '--partner-color': s.color } : undefined
+}
+const visibleTags = (s) => s.isRicochetSkill && s.tags?.[0] === roleLabel(s) ? s.tags.slice(1) : (s.tags || [])
 </script>
 
 <template>
   <div class="levelup-overlay" role="dialog" aria-modal="true" aria-label="升级选择">
+    <RicochetRouteChoice v-if="isRicochetRoute" :options="options" @select="(route) => emit('select', route)" />
+    <GluttonRouteChoice v-else-if="isGluttonRoute" :options="options" @select="(route) => emit('select', route)" />
+    <SymbiosisRouteChoice v-else-if="isSymbiosisRoute" :options="options" @select="(route) => emit('select', route)" />
+    <ElementalRouteChoice v-else-if="isElementalRoute" :options="options" @select="(route) => emit('select', route)" />
+    <ShadowRouteChoice v-else-if="isShadowRoute" :options="options" @select="(route) => emit('select', route)" />
     <!-- 1. 里程碑专精觉醒仪式大面板 (Lv.5 / Lv.9) -->
-    <div v-if="isMilestone" class="milestone-panel">
+    <div v-else-if="isMilestone" class="milestone-panel">
       <div class="milestone-header">
         <h2 class="milestone-title">
           {{ milestoneType === 'primary' ? '👑 Lv.5 主专精觉醒 · 抉择你的进化宿命 👑' : '🥈 Lv.9 副专精共鸣 · 挑选你的辅助流派 🥈' }}
@@ -132,7 +183,7 @@ const isPartnerSelection = computed(() => props.options?.length > 0 && props.opt
         >
           <kbd class="key-hint" aria-hidden="true">{{ idx + 1 }}</kbd>
           <div class="ms-top">
-            <div class="ms-icon">{{ s.icon }}</div>
+            <SkillIcon :skill="{ ...s, id: `spec_${s.spec}` }" />
             <div class="ms-name">{{ s.name }}</div>
             <div class="ms-desc">{{ s.desc }}</div>
           </div>
@@ -169,17 +220,17 @@ const isPartnerSelection = computed(() => props.options?.length > 0 && props.opt
     <div v-else class="levelup-panel">
       <h2 class="levelup-title">{{ isBossReward ? '📜 王级职业秘典 · 选择一项专属强化 📜' : isPartnerSelection ? '招募你的第一位搭档' : `✨ 升级！Lv.${level} · 选择一项基因进化 ✨` }}</h2>
       <div class="levelup-grow">
-        {{ isBossReward
+        {{ options[0]?.buildNote || (isBossReward
           ? (options.some(s => s.isPartnerChoice) ? '选择伙伴契约即可增加一位在场伙伴；每种一只，最多组成四人小队。' : '击败首领获得的职业秘典：不占用升级次数，只能选择当前职业的强力专属技能。')
           : isPartnerSelection
           ? '先选一位搭档同行，后续升级或 BOSS 秘典可继续招募，最多四只伙伴共同作战。'
           : roleSpec === 'elemental'
-          ? '围绕已掌握的法术成长；融合后两套法术持续施放，各自的升级都保留。'
+          ? '随机发现新元素与本系强化；掌握两系后融合，三系以上按顺序轮转。中期路线锁定后方向不再改变。'
           : level < 5
           ? (roleSpec
             ? '🌱 阶段说明：Lv.1~4 只开放本角色专属技能树（Lv.5 自动觉醒为你的主专精，无需选择）'
             : '🌱 阶段说明：Lv.1~4 为自由变异期（三系技能全开放，不锁死流派，Lv.5 将触发五系血统拟态觉醒）')
-          : '📈 等级成长：攻击力自动提升 8%（已生效，可与技能叠加）' }}
+          : '📈 等级成长：攻击力自动提升 8%（已生效，可与技能叠加）') }}
       </div>
       <div v-if="slotMilestone" class="levelup-slot" :class="{ hit: slotMilestone.hit }">
         {{ slotMilestone.text }}
@@ -188,8 +239,8 @@ const isPartnerSelection = computed(() => props.options?.length > 0 && props.opt
         <button
           v-for="(s, idx) in options"
           :key="s.id"
-          :class="['skill-card', cardClass(s), { 'is-selected': selectedIndex === idx }]"
-          :style="s.isPartnerChoice ? { '--partner-color': s.color } : undefined"
+          :class="['skill-card', cardClass(s), { 'is-selected': selectedIndex === idx, 'is-ricochet': s.isRicochetSkill || s.id?.startsWith('boss_rico_'), 'is-ricochet-hybrid': s.kind === 'hybrid', 'is-glutton': isGluttonSkill(s), 'is-elemental': s.isElementalSkill || s.isElementalDiscovery, 'is-shadow': s.isShadowSkill, 'is-active-skill': s.id === 'com_shock' }]"
+          :style="cardStyle(s)"
           :title="s.isBossSkill ? 'BOSS 专属技能' : `当前 Lv.${s.level} · 选择后 Lv.${s.level + 1}`"
           @click="emit('select', s)"
           @mouseenter="selectedIndex = idx"
@@ -199,16 +250,13 @@ const isPartnerSelection = computed(() => props.options?.length > 0 && props.opt
           <div class="role-badge">{{ roleLabel(s) }}</div>
 
           <!-- 等级角标 -->
-          <i v-if="!s.isBossSkill" class="skill-lv">Lv.{{ s.level + 1 }}/{{ s.maxLevel }}</i>
+          <i v-if="!s.isBossSkill" class="skill-lv">Lv.{{ s.level + 1 }}/{{ s.maxLevel === Infinity ? '∞' : s.maxLevel }}</i>
           <i v-else class="skill-lv boss-lv">BOSS</i>
 
-          <div v-if="s.isPartnerChoice" class="skill-icon partner-icon" aria-hidden="true">
-            <span :class="['partner-mark', s.partnerSkillId || s.id]"></span>
-          </div>
-          <div v-else class="skill-icon">{{ s.icon }}</div>
+          <SkillIcon :skill="s" />
 
-          <div class="skill-tags">
-            <span v-for="t in s.tags || []" :key="t" class="skill-tag">{{ t }}</span>
+          <div v-if="visibleTags(s).length" class="skill-tags">
+            <span v-for="t in visibleTags(s)" :key="t" class="skill-tag">{{ t }}</span>
           </div>
 
           <div class="skill-name">{{ s.name }}</div>
@@ -301,11 +349,6 @@ const isPartnerSelection = computed(() => props.options?.length > 0 && props.opt
   margin-bottom: 10px;
 }
 
-.ms-icon {
-  font-size: 36px;
-  line-height: 1.2;
-  margin-bottom: 4px;
-}
 
 .ms-name {
   font-size: 17px;
@@ -533,6 +576,80 @@ const isPartnerSelection = computed(() => props.options?.length > 0 && props.opt
   border-color: #ffd1ee;
   box-shadow: 0 10px 36px rgba(255, 139, 209, 0.5);
 }
+.skill-card.is-ricochet {
+  border: 1px solid color-mix(in srgb, var(--rico-color) 48%, transparent);
+  background: linear-gradient(165deg, color-mix(in srgb, var(--rico-color) 10%, #111820), #0a0f14);
+}
+.skill-card.is-ricochet:hover {
+  border-color: color-mix(in srgb, var(--rico-color) 82%, white 18%);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--rico-color) 16%, transparent);
+}
+.skill-card.is-ricochet .role-badge {
+  color: var(--rico-color);
+  background: color-mix(in srgb, var(--rico-color) 11%, #111820);
+  border-color: color-mix(in srgb, var(--rico-color) 36%, transparent);
+}
+.skill-card.is-ricochet .skill-name { color: var(--rico-color); }
+.skill-card.is-ricochet .skill-tag {
+  color: color-mix(in srgb, var(--rico-color) 82%, white 18%);
+  background: color-mix(in srgb, var(--rico-color) 8%, transparent);
+  border-color: color-mix(in srgb, var(--rico-color) 24%, transparent);
+}
+.skill-card.is-ricochet .skill-num {
+  color: color-mix(in srgb, var(--rico-color) 90%, white 10%);
+  border-color: color-mix(in srgb, var(--rico-color) 28%, transparent);
+  background: color-mix(in srgb, var(--rico-color) 7%, transparent);
+}
+.skill-card.is-ricochet-hybrid { border-style: dashed; }
+.skill-card.is-glutton {
+  border: 1px solid color-mix(in srgb, var(--glutton-color) 48%, transparent);
+  background: linear-gradient(165deg, color-mix(in srgb, var(--glutton-color) 10%, #21170f), #100d0b);
+}
+.skill-card.is-glutton:hover {
+  border-color: color-mix(in srgb, var(--glutton-color) 82%, white 18%);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--glutton-color) 16%, transparent);
+}
+.skill-card.is-glutton .role-badge {
+  color: var(--glutton-color);
+  background: color-mix(in srgb, var(--glutton-color) 11%, #21170f);
+  border-color: color-mix(in srgb, var(--glutton-color) 36%, transparent);
+}
+.skill-card.is-glutton .skill-name { color: var(--glutton-color); }
+.skill-card.is-glutton .skill-tag {
+  color: color-mix(in srgb, var(--glutton-color) 82%, white 18%);
+  background: color-mix(in srgb, var(--glutton-color) 8%, transparent);
+  border-color: color-mix(in srgb, var(--glutton-color) 24%, transparent);
+}
+.skill-card.is-glutton .skill-num {
+  color: color-mix(in srgb, var(--glutton-color) 90%, white 10%);
+  border-color: color-mix(in srgb, var(--glutton-color) 28%, transparent);
+  background: color-mix(in srgb, var(--glutton-color) 7%, transparent);
+}
+.skill-card.is-shadow {
+  border: 1px solid color-mix(in srgb, var(--shadow-color) 45%, transparent);
+  background: linear-gradient(165deg, color-mix(in srgb, var(--shadow-color) 9%, #171821), #0c0e15);
+}
+.skill-card.is-shadow:hover {
+  border-color: color-mix(in srgb, var(--shadow-color) 82%, white 18%);
+  box-shadow: 0 8px 22px color-mix(in srgb, var(--shadow-color) 15%, transparent);
+}
+.skill-card.is-shadow .role-badge,
+.skill-card.is-shadow .skill-name { color: var(--shadow-color); }
+.skill-card.is-shadow .role-badge,
+.skill-card.is-shadow .skill-tag,
+.skill-card.is-shadow .skill-num { border-color: color-mix(in srgb, var(--shadow-color) 30%, transparent); }
+.skill-card.is-shadow .skill-tag { color: color-mix(in srgb, var(--shadow-color) 82%, white 18%); background: color-mix(in srgb, var(--shadow-color) 7%, transparent); }
+.skill-card.is-shadow .skill-num { color: color-mix(in srgb, var(--shadow-color) 90%, white 10%); background: color-mix(in srgb, var(--shadow-color) 6%, transparent); }
+.skill-card.is-active-skill {
+  border: 1px solid color-mix(in srgb, #8bdbe8 48%, transparent);
+  background: linear-gradient(165deg, color-mix(in srgb, #8bdbe8 10%, #111820), #0a0f14);
+}
+.skill-card.is-active-skill .role-badge,
+.skill-card.is-active-skill .skill-name { color: #8bdbe8; }
+.skill-card.is-active-skill .role-badge,
+.skill-card.is-active-skill .skill-tag,
+.skill-card.is-active-skill .skill-num { border-color: color-mix(in srgb, #8bdbe8 30%, transparent); }
+.skill-card.is-active-skill .skill-num { color: #a9eaf2; background: color-mix(in srgb, #8bdbe8 7%, transparent); }
 @keyframes capstonePulse {
   from { box-shadow: 0 0 16px rgba(255, 211, 42, 0.3); }
   to { box-shadow: 0 0 32px rgba(255, 211, 42, 0.65); }
@@ -595,46 +712,6 @@ const isPartnerSelection = computed(() => props.options?.length > 0 && props.opt
   color: #32142d;
   background: linear-gradient(90deg, #ffd1ee, #ff8bd1);
 }
-
-.skill-icon {
-  font-size: 44px;
-  line-height: 1.2;
-  margin: 6px 0 10px;
-}
-.partner-icon { display: flex; align-items: center; justify-content: center; width: 58px; height: 53px; }
-.partner-mark {
-  position: relative;
-  display: block;
-  width: 48px;
-  height: 39px;
-  border: 2px solid #315e57;
-  border-radius: 46% 46% 35% 35%;
-  background:
-    radial-gradient(ellipse 3px 4px at 16px 25px, #203d3a 95%, transparent),
-    radial-gradient(ellipse 3px 4px at 32px 25px, #203d3a 95%, transparent),
-    linear-gradient(135deg, #d5fff0, #83d3bd 52%, #4a9c8d);
-  box-shadow: inset 0 3px 4px rgba(255, 255, 255, .28), 0 5px 0 rgba(0, 0, 0, .18);
-}
-.partner-mark::before,
-.partner-mark::after { content: ''; position: absolute; }
-.partner-mark.pet_partner::before { width: 13px; height: 20px; left: 7px; top: -15px; border-radius: 90% 0 90% 0; transform: rotate(-22deg); background: #83d3bd; border: 2px solid #315e57; }
-.partner-mark.pet_partner::after { width: 13px; height: 20px; right: 6px; top: -15px; border-radius: 0 90% 0 90%; transform: rotate(22deg); background: #a5e7c9; border: 2px solid #315e57; }
-.partner-mark.pet_dew_partner {
-  border-color: #356a7d;
-  background:
-    radial-gradient(ellipse 3px 4px at 16px 25px, #24495a 95%, transparent),
-    radial-gradient(ellipse 3px 4px at 32px 25px, #24495a 95%, transparent),
-    linear-gradient(135deg, #e4fbff, #8fd7e8 60%, #5099b4);
-}
-.partner-mark.pet_dew_partner::before { width: 20px; height: 20px; left: 14px; top: -16px; border-radius: 3px 100% 8px 100%; transform: rotate(44deg); background: #bceefa; border-left: 2px solid #356a7d; border-top: 2px solid #356a7d; }
-.partner-mark.pet_spore_partner {
-  border-color: #59466f;
-  background:
-    radial-gradient(ellipse 3px 4px at 16px 26px, #303047 95%, transparent),
-    radial-gradient(ellipse 3px 4px at 32px 26px, #303047 95%, transparent),
-    linear-gradient(135deg, #f0ddf8, #c3a4dc 64%, #866aa4);
-}
-.partner-mark.pet_spore_partner::before { width: 60px; height: 25px; top: -13px; left: -8px; border: 2px solid #59466f; border-radius: 50% 50% 28% 28%; background: radial-gradient(circle at 19px 10px, #e9d4f3 0 3px, transparent 4px), radial-gradient(circle at 41px 8px, #e9d4f3 0 4px, transparent 5px), #8c6eaa; }
 
 .skill-tags {
   display: flex;
@@ -787,10 +864,6 @@ const isPartnerSelection = computed(() => props.options?.length > 0 && props.opt
     transform: none;
   }
 
-  .ms-icon {
-    font-size: 30px;
-  }
-
   .ms-name {
     font-size: 16px;
   }
@@ -830,13 +903,12 @@ const isPartnerSelection = computed(() => props.options?.length > 0 && props.opt
     right: 12px;
   }
 
-  .skill-icon {
+  :deep(.skill-card .skill-glyph) {
     grid-column: 1;
     grid-row: 1 / 5;
     align-self: center;
+    justify-self: center;
     margin: 0;
-    font-size: 38px;
-    text-align: center;
   }
 
   .skill-tags {

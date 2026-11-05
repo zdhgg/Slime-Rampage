@@ -4,18 +4,20 @@ import { fireMultiDamageMul, fireBrittleMul, burnSpreadRange, burnSpreadTargets,
 import { BASE_SPELL_PALETTES } from './SpellPalette.js'
 // Round display values only; retain hundredths for short effects such as 0.15s stun.
 const seconds = value => Number(value.toFixed(2))
+export const spellSchoolPower = level => 1 + Math.min(3, level) * .2 + (level > 3 ? .3 * (1 - .8 ** (level - 3)) : 0)
+const schoolPowerCaps = Object.freeze({ expedition: { hard: 7, hell: 10 }, timed: 9, endless: 13 })
 
 const school = (element, id, name, icon, desc, maxLevel, stats, extra = {}) => ({
-  id, element, name, icon, desc, maxLevel, stats, spec: 'elemental', tier: 1, apply() {}, ...extra,
+  id, element, name, icon, desc, maxLevel, stats, spec: 'elemental', isElementalSkill: true, tier: 1, apply() {}, ...extra,
   tags: [{ fire: '火焰·火球术', water: '寒冰·冰箭', lightning: '雷电·闪电链', poison: '毒素·毒雾' }[element], extra.requires ? '进阶效果' : '法术改造'],
   color: BASE_SPELL_PALETTES[element].main,
 })
 
 export const ELEMENTAL_SCHOOL_SKILLS = [
-  school('fire', 'spell_fire_power', '火球增幅', '🔥', '提高火球爆炸及其燃烧伤害，融合后仍保留。', 3, lv => `火焰法术伤害 +${(lv + 1) * 20}%`),
-  school('water', 'spell_water_power', '霜矢强化', '❄️', '提高冰箭与寒冰法术伤害，保持已有穿透和控制效果。', 3, lv => `寒冰法术伤害 +${(lv + 1) * 20}%`),
-  school('lightning', 'spell_lightning_power', '雷霆强化', '⚡', '提高闪电及后续传导伤害，雷暴转化后继续生效。', 3, lv => `雷电法术伤害 +${(lv + 1) * 20}%`),
-  school('poison', 'spell_poison_power', '剧毒浓缩', '🧪', '提高毒雾每跳与附着毒伤，传染继承强化后的毒素。', 3, lv => `毒素法术伤害 +${(lv + 1) * 20}%`),
+  school('fire', 'spell_fire_power', '火球增幅', '🔥', '提高火球爆炸及其燃烧伤害，融合后仍保留；路线确认后可继续成长，后续收益递减。', 3, lv => `火焰法术伤害 +${Math.round((spellSchoolPower(lv + 1) - 1) * 100)}%`, { growthClass: 'core', rankCaps: schoolPowerCaps }),
+  school('water', 'spell_water_power', '霜矢强化', '❄️', '提高冰箭与寒冰法术伤害，保持已有穿透和控制效果；路线确认后可继续成长，后续收益递减。', 3, lv => `寒冰法术伤害 +${Math.round((spellSchoolPower(lv + 1) - 1) * 100)}%`, { growthClass: 'core', rankCaps: schoolPowerCaps }),
+  school('lightning', 'spell_lightning_power', '雷霆强化', '⚡', '提高闪电及后续传导伤害，雷暴转化后继续生效；路线确认后可继续成长，后续收益递减。', 3, lv => `雷电法术伤害 +${Math.round((spellSchoolPower(lv + 1) - 1) * 100)}%`, { growthClass: 'core', rankCaps: schoolPowerCaps }),
+  school('poison', 'spell_poison_power', '剧毒浓缩', '🧪', '提高毒雾每跳与附着毒伤，传染继承强化后的毒素；路线确认后可继续成长，后续收益递减。', 3, lv => `毒素法术伤害 +${Math.round((spellSchoolPower(lv + 1) - 1) * 100)}%`, { growthClass: 'core', rankCaps: schoolPowerCaps }),
   school('fire', 'spell_fire_size', '火球膨胀', '🔥', '火球体积与爆炸范围增大，覆盖更多敌人。', 3, lv => `火球体积、爆炸范围 +${(lv + 1) * 20}%`),
   school('fire', 'spell_fire_count', '多重火球', '☄️', '每轮追加一颗火球，分时发射；追加火球分摊到附近敌人，主目标是首领或精英时聚火，每颗伤害适当降低，总火力提高。', 2,
     lv => `每轮火球 ${lv + 1} → ${lv + 2} 颗 · 单颗伤害 ${Math.round(fireMultiDamageMul(lv + 2) * 100)}% · 普通敌人分摊`),

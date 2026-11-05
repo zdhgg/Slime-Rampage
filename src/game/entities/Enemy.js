@@ -232,6 +232,7 @@ export class Enemy extends Entity {
     // 兼容：game 桩未提供 canDevour 时按「可吞噬」处理（旧测试与调试桩）。
     const devourEnabled = this.game?.canDevour ?? true
     if (
+      !effects?.preventDevour &&
       devourEnabled &&
       !this.isBoss &&
       !NO_DEVOUR_TYPES.has(this.type) &&

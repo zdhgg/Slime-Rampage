@@ -1,4 +1,5 @@
 <script setup>
+import SkillIcon from './SkillIcon.vue'
 /**
  * ReactionSwapModal：副反应位已满的替换面板（阶段十六槽位经济）
  *
@@ -23,7 +24,7 @@ const emit = defineEmits(['resolve'])
       <div class="swap-cards">
         <!-- 新反应候选（不可点击，高亮展示） -->
         <button class="swap-card swap-new" disabled>
-          <div class="swap-icon">✨</div>
+          <SkillIcon :skill="`fusion_${info.candidate.id}`" />
           <div class="swap-name">{{ info.candidate.combo }} {{ info.candidate.name }}</div>
           <div class="swap-desc">{{ info.candidate.desc }}</div>
           <div class="swap-num">新反应</div>
@@ -35,7 +36,7 @@ const emit = defineEmits(['resolve'])
           class="swap-card"
           @click="emit('resolve', info.candidate.id, s.id)"
         >
-          <div class="swap-icon">♻️</div>
+          <SkillIcon :skill="`fusion_${s.id}`" />
           <div class="swap-name">{{ s.combo }} {{ s.name }}</div>
           <div class="swap-desc">{{ s.desc }}</div>
           <div class="swap-num">点击替换</div>

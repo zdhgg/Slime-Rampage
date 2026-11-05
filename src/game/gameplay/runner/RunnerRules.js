@@ -398,6 +398,29 @@ export function getRunnerFusionWeapon(primary, secondary) {
   return RUNNER_FUSION_WEAPONS[key] || null
 }
 
+export function getRunnerFusionCodex() {
+  const result = []
+  for (const [key, fusion] of Object.entries(RUNNER_FUSION_WEAPONS)) {
+    const core = RUNNER_WEAPON_CORES[fusion.primary]
+    const elem = RUNNER_SECONDARY_ELEMENTS[fusion.secondary]
+    result.push({
+      key,
+      id: fusion.id,
+      name: fusion.name,
+      color: fusion.color,
+      description: fusion.description,
+      primaryId: fusion.primary,
+      primaryName: core?.name || fusion.primary,
+      primaryColor: core?.color || '#79d9ee',
+      secondaryId: fusion.secondary,
+      secondaryName: elem?.name || fusion.secondary,
+      secondaryIcon: elem?.icon || '⚡',
+      secondaryColor: elem?.color || '#ffd859',
+    })
+  }
+  return result
+}
+
 export const RUNNER_ENTITY_TYPES = {
   scout: {
     id: 'scout',
@@ -751,7 +774,7 @@ export const RUNNER_SUBMODES = {
         patterns: [
           ['scout', 'attack', 'fever_shard'],
           ['barrel', 'gate_bullet_time', 'rapid'],
-          ['hound', 'fever_shard', 'attack'],
+          ['archer', 'attack', 'fever_shard'],
           ['swarm', 'gate_magnet', 'barrel'],
         ],
       },
@@ -766,7 +789,7 @@ export const RUNNER_SUBMODES = {
         patterns: [
           ['carrier_boss', 'barrier', 'fever_shard'],
           ['charger', 'gate_booster', 'scout'],
-          ['laser_gate', 'fever_shard', 'gold_convoy'],
+          ['mage', 'gate_bullet_time', 'fever_shard'],
           ['archer', 'guard', 'barrel'],
         ],
       },
@@ -781,7 +804,7 @@ export const RUNNER_SUBMODES = {
         patterns: [
           ['carrier_boss', 'shield', 'gate_drone'],
           ['elite', 'twin_assassin', 'fever_shard'],
-          ['laser_gate', 'brute', 'charger'],
+          ['archer', 'mage', 'barrel'],
           ['rapid', 'elite', 'priest'],
         ],
       },
@@ -814,7 +837,7 @@ export const RUNNER_SUBMODES = {
         patterns: [
           ['scout', 'attack', null],
           ['barrel', 'rapid', 'fever_shard'],
-          ['hound', 'guard', 'gate_magnet'],
+          ['archer', 'guard', 'gate_magnet'],
           ['swarm', 'gate_bullet_time', 'fever_shard'],
         ],
       },
@@ -829,7 +852,7 @@ export const RUNNER_SUBMODES = {
         patterns: [
           ['shield', 'barrier', 'attack'],
           ['charger', 'gate_booster', 'fever_shard'],
-          ['laser_gate', 'scout', 'barrel'],
+          ['mage', 'scout', 'barrel'],
           ['repair', 'gold_convoy', 'rapid'],
           ['swarm', 'gate_drone', 'fever_shard'],
           ['archer', 'guard', 'barrier'],
@@ -847,7 +870,7 @@ export const RUNNER_SUBMODES = {
           ['priest', 'shield', 'attack'],
           ['laser_gate', 'splitter', 'fever_shard'],
           ['carrier_boss', 'repair', 'charger'],
-          ['twin_assassin', 'attack', 'shield'],
+          ['archer', 'attack', 'shield'],
           ['rapid', 'priest', 'barrel'],
           ['mage', 'gate_bullet_time', 'fever_shard'],
         ],

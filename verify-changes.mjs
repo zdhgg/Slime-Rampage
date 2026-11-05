@@ -113,7 +113,13 @@ ok('主专精仅在 Lv.5 局内选择（origin 五系拟态），开局无预选
 
 // —— 2b. 角色化（阶段十九）：角色绑定技能树、Lv.5 自动觉醒、吞噬独占、F 冷却 ——
 // 候选池只含本角色 T1 + 通用：其它树的 T1 不得出现（这是角色差异的骨架）
-const roleT1 = (opt) => opt.tier === 1 || opt.role === 'role_t1' || !!SKILL_DATABASE.common.find((s) => s.id === opt.id)
+// 路线入口（kind === 'seed'）允许在探索期出现，即使其原始定义是 T2；
+// 这里仍禁止普通 T2/T3 与终极提前进池。
+const roleT1 = (opt) =>
+  opt.tier === 1 ||
+  opt.role === 'role_t1' ||
+  opt.kind === 'seed' ||
+  !!SKILL_DATABASE.common.find((s) => s.id === opt.id)
 for (const [strainId, spec] of [
   ['glutton', 'gluttony'],
   ['ricochet', 'gatling'],
@@ -131,7 +137,7 @@ for (const [strainId, spec] of [
     pool.every((o) => o.spec === spec || o.role === 'common'),
     `${strainId} Lv.4 只开放本角色与通用技能（实际：${[...new Set(pool.map((o) => o.spec || o.role))].join('/')}）`
   )
-  assert.ok(pool.every(roleT1), `${strainId} Lv.4 只有 T1 与通用，不含 T2/T3`)
+  assert.ok(pool.every(roleT1), `${strainId} Lv.4 只有 T1、路线入口与通用，不含普通 T2/T3`)
   assert.ok(!pool.some((o) => o.isCapstone), `${strainId} Lv.4 不含终极觉醒`)
 
   // Lv.5：觉醒发生在 openFreeSkillPanel 内部（抽卡之前），不再弹四选一
@@ -155,7 +161,14 @@ engine.player.level = 5
 engine.onLevelUp = () => {}
 engine.openFreeSkillPanel()
 assert.equal(engine.primarySpec, 'gatling', 'openFreeSkillPanel 内部完成觉醒（覆盖秘籍入口）')
-// T2 门槛：觉醒后还需主树累计投入 ≥2 级才能看到 gat_split（requires 满足时）
+assert.ok(rollSkills(engine, 30).some(o => o.id === 'rico_split'), '弹射继续随机探索入口')
+assert.ok(!rollSkills(engine, 30).some(o => o.id.startsWith('gat_')), '弹射不再使用旧加特林技能树')
+engine.resume()
+// 原生拟态加特林保留原 T2 门槛：累计投入 ≥2 级才能看到 gat_split。
+engine.applyStartingStrain('origin')
+engine.reset()
+engine.player.level = 5
+engine.primarySpec = 'gatling'
 engine.skillLevels['gat_multishot'] = 1
 assert.ok(!rollSkills(engine, 30).some((o) => o.id === 'gat_split'), '仅 1 级 T1 不进 T2 候选')
 engine.skillLevels['gat_velocity'] = 1
@@ -536,10 +549,12 @@ ok('重置归位：元素权限、元素等级、反应与附魔缓存在换角�
   // ③ 所有 canDevour=false 的角色：secondary 池不得出现 glut_sub_digest
   // ④ 所有 canUseElements=false 的角色：secondary 池不得出现 ele_sub_boost
   // 直接设置 secondarySpec 来检验「逐技能过滤」，不依赖里程碑候选（里程碑 id 只编码目标系）
+  // 弹射／暴食／元素／暗影／共生血统已各自切换到独立随机池，
+  // 旧三系 secondary 能力权限矩阵只剩 origin 仍在使用。
   for (const strainId of STRAIN_IDS) {
+    if (strainId !== 'origin') continue
     const devour = canDevour(strainId)
     const elements = canUseElements(strainId)
-    const elementalStrain = strainId === 'elemental'
     engine.applyStartingStrain(strainId)
     engine.reset()
     engine.primarySpec = 'gatling' // 任意主系，避开 Lv.9 里程碑分支

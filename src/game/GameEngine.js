@@ -7,7 +7,14 @@ import { EnemyManager } from './EnemyManager.js'
 import { WeaponSystem } from './WeaponSystem.js'
 import { GemManager } from './GemManager.js'
 import { SoundManager } from './SoundManager.js'
-import { rollSkills, rollBossSkills, getSpecInfo, getSecondaryStarter, SPEC_INFO } from './SkillPool.js'
+import { rollSkills, rollBossSkills, getSpecInfo, getSecondaryStarter, SPEC_INFO, SKILL_DATABASE } from './SkillPool.js'
+import { RICOCHET_ROUTES, RICOCHET_SKILL_BY_ID, ricochetSkillAvailable, ricochetRouteReady, RICOCHET_BOSS_SKILLS } from './RicochetRules.js'
+import { GLUTTON_ROUTES, GLUTTON_SKILL_BY_ID, gluttonSkillAvailable, gluttonRouteReady } from './GluttonBuild.js'
+import { SYMBIOSIS_ROUTES, SYMBIOSIS_SKILL_BY_ID, symbiosisSkillAvailable, symbiosisRouteReady } from './SymbiosisBuild.js'
+import { ELEMENTAL_ROUTES, ELEMENTAL_ROUTE_SKILL_BY_ID, elementalSkillAvailable, elementalRouteReady } from './ElementalBuild.js'
+import { SHADOW_ROUTES, SHADOW_ROUTE_SKILL_BY_ID, getShadowSkill, shadowSkillAvailable, shadowRouteReady } from './ShadowBuild.js'
+import { ENDLESS_SKILL_BY_ID } from './EndlessSkills.js'
+import { getEffectiveSkillMaxLevel } from './SkillProgression.js'
 import { applyGenes } from './GenePool.js'
 import { buildSpecies } from './Species.js'
 import { REACTIONS, getElement, getActiveReactions } from './ElementSystem.js'
@@ -133,6 +140,8 @@ export function createDefaultStats() {
     primarySpec: null,
     secondarySpec: null,
     roleSpec: null,
+    ricochet: null,
+    symbiosis: null,
     strainId: 'origin',
     canDevour: false,
     canUseElements: true,
@@ -561,11 +570,12 @@ export class GameEngine {
    * 等于给了弹药不给扳机。gatling/elemental/assassin 拟态为 null，保震荡。
    */
   get strainSkill() {
+    if (this.weaponSystem?.ricochetCombat?.enabled) return this.weaponSystem.ricochetCombat.activeSkill
     const skill = getStrainSkill(this.mimicryStrain || this.startingStrain), spells = this.weaponSystem.spellCombat
     if (!spells.enabled) return skill
     this._spellActiveSkill ||= { ...skill, use: engine => engine.weaponSystem.spellCombat.useActive() }
-    Object.assign(this._spellActiveSkill, { id: spells.fusion ? `fusion_${spells.fusion.id}` : skill.id, name: spells.activeName,
-      cooldown: spells.activeCooldown, getDesc: () => spells.fusion ? `${spells.rank('active') >= 3 ? spells.fusion.evolution : spells.fusion.activeDesc} 同时推开身边的普通敌人。` : skill.desc })
+    Object.assign(this._spellActiveSkill, { id: spells.routeUltimate ? `elemental_${spells.routeUltimate}` : spells.fusion ? `fusion_${spells.fusion.id}` : skill.id, name: spells.activeName,
+      cooldown: spells.activeCooldown, getDesc: () => spells.routeUltimate ? `${spells.routeUltimate === 'single' ? '主元素极化爆发' : spells.routeUltimate === 'fusion' ? '终极融合反应' : '完成一轮元素轮转'}，同时推开身边的普通敌人。` : spells.fusion ? `${spells.rank('active') >= 3 ? spells.fusion.evolution : spells.fusion.activeDesc} 同时推开身边的普通敌人。` : skill.desc })
     return this._spellActiveSkill
   }
 
@@ -635,9 +645,11 @@ export class GameEngine {
       p.strainSkillReadyPulse = 0.4
       return
     }
-    if (p.strainSkillCd > 0) return
+    const shadow = this.startingStrain === 'shadow' ? this.weaponSystem.shadowCombat : null
+    const shadowFollowup = !!shadow?.canFollowup
+    if (p.strainSkillCd > 0 && !shadowFollowup) return
     if (skill.use(this) === false) return // 方向被障碍完全挡住或动作冲突时，不消耗冷却。
-    p.strainSkillCd = p.strainSkillMax
+    if (!shadowFollowup) p.strainSkillCd = p.strainSkillMax
     p.strainSkillReadyPulse = 0.4
   }
 
@@ -698,7 +710,9 @@ export class GameEngine {
    */
   triggerLevelUp() {
     const reward = this.weaponSystem.spellCombat.milestoneReward()
-    if (reward && this.onSpellCore && !this._spellCoreChoice) {
+    // 现代元素成长只保留 Lv.2 的首系教学；第二元素、路线确认和终极都进入普通随机卡池。
+    // milestoneReward 仍保留旧核心接口，供存档兼容与核心测试使用，但不再在升级时强制融合。
+    if (reward && reward.stage === 'first' && this.onSpellCore && !this._spellCoreChoice) {
       this.pause()
       this._ensureRoleAwakening()
       this._spellCoreChoice = { ...reward, milestone: true, first: reward.stage === 'fusion' }
@@ -749,19 +763,97 @@ export class GameEngine {
     this.onLevelUp?.(options)
   }
 
-  /** 应用技能（支持里程碑专精觉醒与常规技能） */
+  /** 应用技能；成功返回 true，无效选择返回 false，让 UI 保留选卡面板。 */
   applySkill(skill) {
-    if (!skill) return
+    if (!skill) return false
+    // 弹射路线是唯一需要二阶段确认的中期节点；路线卡本身不进入技能等级表。
+    if (skill.isRicochetRoute) {
+      const route = skill.route
+      if (!ricochetRouteReady(this) || !RICOCHET_ROUTES[route] || !this.weaponSystem.ricochetCombat.chooseRoute(route)) return false
+      this.weaponSystem.registerSkillEvolution({ spec: 'gatling', tier: 2 })
+      this.enemyManager?.addText?.(this.player.x, this.player.y - 20, `🧭 路线锁定：${RICOCHET_ROUTES[route].name}`, null, RICOCHET_ROUTES[route].color, 16)
+      this.sound.wave()
+      this.evolutionEvent('路线确立', RICOCHET_ROUTES[route].name, 'gatling', RICOCHET_ROUTES[route].bonus)
+      if (this._pendingExpeditionStage > 0) {
+        const nextStage = this._pendingExpeditionStage
+        this._pendingExpeditionStage = 0
+        this._enterExpeditionStage(nextStage)
+      }
+      this._pushStats()
+      this._refreshRicochetCooldown()
+      this.resume()
+      return true
+    }
+    if (skill.isGluttonRoute) {
+      const route = skill.route
+      if (!gluttonRouteReady(this) || !GLUTTON_ROUTES[route] || !this.weaponSystem.gluttonCombat.chooseRoute(route)) return false
+      this.weaponSystem.registerSkillEvolution({ spec: 'gluttony', tier: 2 })
+      this.enemyManager?.addText?.(this.player.x, this.player.y - 20, `🧭 路线锁定：${GLUTTON_ROUTES[route].name}`, null, GLUTTON_ROUTES[route].color, 16)
+      this.sound.wave()
+      this.evolutionEvent('路线确立', GLUTTON_ROUTES[route].name, 'gluttony', GLUTTON_ROUTES[route].bonus)
+      if (this._pendingExpeditionStage > 0) {
+        const nextStage = this._pendingExpeditionStage
+        this._pendingExpeditionStage = 0
+        this._enterExpeditionStage(nextStage)
+      }
+      this._pushStats()
+      this.resume()
+      return true
+    }
+    if (skill.isSymbiosisRoute) {
+      const route = skill.route
+      if (!symbiosisRouteReady(this) || !SYMBIOSIS_ROUTES[route] || !this.weaponSystem.petCombat.chooseRoute(route)) return false
+      this.weaponSystem.registerSkillEvolution({ spec: 'symbiosis', tier: 2 })
+      this.enemyManager?.addText?.(this.player.x, this.player.y - 20, `🧭 路线锁定：${SYMBIOSIS_ROUTES[route].name}`, null, SYMBIOSIS_ROUTES[route].color, 16)
+      this.sound.wave()
+      this.evolutionEvent('路线确立', SYMBIOSIS_ROUTES[route].name, 'symbiosis', SYMBIOSIS_ROUTES[route].bonus)
+      this._pushStats()
+      this.resume()
+      return true
+    }
+    if (skill.isElementalRoute) {
+      const route = skill.route
+      const spells = this.weaponSystem.spellCombat
+      if (!elementalRouteReady(this) || !ELEMENTAL_ROUTES[route] || !spells.chooseRoute(route)) return false
+      this.weaponSystem.registerSkillEvolution({ spec: 'elemental', tier: 2 })
+      this.enemyManager?.addText?.(this.player.x, this.player.y - 20, `🧭 路线锁定：${ELEMENTAL_ROUTES[route].name}`, null, ELEMENTAL_ROUTES[route].color, 16)
+      this.sound.wave()
+      this.evolutionEvent('路线确立', ELEMENTAL_ROUTES[route].name, 'elemental', ELEMENTAL_ROUTES[route].bonus)
+      this._pushStats()
+      this.resume()
+      return true
+    }
+    if (skill.isShadowRoute) {
+      const route = skill.route, shadow = this.weaponSystem.shadowCombat
+      if (!shadowRouteReady(this) || !SHADOW_ROUTES[route] || !shadow.chooseRoute(route)) return false
+      this.weaponSystem.registerSkillEvolution({ spec: 'assassin', tier: 2 })
+      this.enemyManager?.addText?.(this.player.x, this.player.y - 20, `🧭 路线锁定：${SHADOW_ROUTES[route].name}`, null, SHADOW_ROUTES[route].color, 16)
+      this.sound.wave()
+      this.evolutionEvent('路线确立', SHADOW_ROUTES[route].name, 'assassin', SHADOW_ROUTES[route].bonus)
+      if (this._pendingExpeditionStage > 0) {
+        const nextStage = this._pendingExpeditionStage
+        this._pendingExpeditionStage = 0
+        this._enterExpeditionStage(nextStage)
+      }
+      this._pushStats(); this._pushCooldown(); this.resume()
+      return true
+    }
     skill = resolveShadowSkill(skill, this)
     skill = resolveElementalSkill(skill, this)
 
     // 1. BOSS 职业秘典：只记录一次，不能通过普通升级重复取得
     if (skill.isBossSkill) {
+      if (this.startingStrain === 'ricochet') {
+        skill = RICOCHET_BOSS_SKILLS.find(s => s.id === skill.id)
+        if (!skill) return false
+      }
+      if (this.bossSkillIds.has(skill.id)) return false
       this.bossSkillIds.add(skill.id)
       skill.apply?.(this)
       this.enemyManager?.addText?.(this.player.x, this.player.y - 20, `📜 BOSS秘典：${skill.name}`, null, skill.color || '#ffd166', 16)
       this.sound.wave()
     } else if (skill.isMilestone) {
+      if (this.startingStrain === 'ricochet') return false
       const info = getSpecInfo(skill.spec, this)
       if (skill.milestoneType === 'primary') {
         this.primarySpec = skill.spec
@@ -769,9 +861,9 @@ export class GameEngine {
         this.enemyManager?.addText?.(this.player.x, this.player.y - 20, `👑 主专精确立：${info?.name || skill.spec}`, null, info?.color || '#ffd166', 16)
         this.sound.wave()
       } else if (skill.milestoneType === 'secondary') {
-        if (this.secondarySpec || this.roleSpec || this.startingStrain !== 'origin' || this.player.level < 9 || !this.primarySpec || skill.spec === this.primarySpec) return
+        if (this.secondarySpec || this.roleSpec || this.startingStrain !== 'origin' || this.player.level < 9 || !this.primarySpec || skill.spec === this.primarySpec) return false
         const starter = getSecondaryStarter(this, skill.spec)
-        if (!starter) return
+        if (!starter) return false
         this.secondarySpec = skill.spec
         const level = (this.skillLevels[starter.id] || 0) + 1
         this.skillLevels[starter.id] = level
@@ -781,8 +873,58 @@ export class GameEngine {
       }
     } else {
       // 2. 常规技能与自由探索技能应用
+      let choiceState = null
+      if (skill.isEndlessMastery) {
+        if (this.runSelection?.mode !== 'endless') return false
+        skill = ENDLESS_SKILL_BY_ID[skill.id]
+        if (!skill) return false
+      } else if (this.startingStrain === 'ricochet') {
+        const offered = skill
+        const canonical = RICOCHET_SKILL_BY_ID[skill.id]
+        if (!canonical || !ricochetSkillAvailable(this, canonical)) return false
+        skill = { ...canonical, role: offered.role, progressionRole: offered.progressionRole, maxLevel: offered.maxLevel }
+        choiceState = this.weaponSystem.ricochetCombat
+      } else if (this.startingStrain === 'glutton') {
+        const offered = skill
+        const common = SKILL_DATABASE.common.find(entry => entry.id === skill.id)
+        const canonical = common ? { ...common, kind: 'common' }
+          : GLUTTON_SKILL_BY_ID[skill.id] || this._gluttonPrimarySkills().find(entry => entry.id === skill.id)
+        if (!canonical || ((canonical.isGluttonSkill || common) && !gluttonSkillAvailable(this, canonical, this._gluttonPrimarySkills()))) return false
+        const role = common ? 'common' : offered.role
+        skill = { ...canonical, role, progressionRole: common ? 'common' : offered.progressionRole }
+        choiceState = this.weaponSystem.gluttonCombat
+      } else if (this.startingStrain === 'summoner') {
+        const offered = skill
+        const common = SKILL_DATABASE.common.find(entry => entry.id === skill.id)
+        const canonical = common ? { ...common, kind: 'common' } : SYMBIOSIS_SKILL_BY_ID[skill.id] || this._symbiosisPrimarySkills().find(entry => entry.id === skill.id)
+        if (!canonical || ((canonical.isSymbiosisSkill || common) && !symbiosisSkillAvailable(this, canonical, this._symbiosisPrimarySkills()))) return false
+        const role = common ? 'common' : offered.role
+        skill = { ...canonical, role, progressionRole: common ? 'common' : offered.progressionRole }
+        choiceState = this.weaponSystem.petCombat
+      } else if (this.startingStrain === 'elemental') {
+        const offered = skill
+        const common = SKILL_DATABASE.common.find(entry => entry.id === skill.id)
+        const canonical = common ? { ...common, kind: 'common' } : ELEMENTAL_ROUTE_SKILL_BY_ID[skill.id] || skill
+        if (!canonical || ((canonical.isElementalSkill || common) && !elementalSkillAvailable(this, canonical))) return false
+        const role = common ? 'common' : offered.role || 'primary'
+        skill = { ...canonical, role, progressionRole: common ? 'common' : offered.progressionRole }
+        choiceState = this.weaponSystem.spellCombat
+      } else if (this.startingStrain === 'shadow') {
+        const offered = skill
+        const baseSkills = SKILL_DATABASE.assassin.primary.map(entry => resolveShadowSkill(entry, this))
+        const canonical = getShadowSkill(skill.id, baseSkills, SKILL_DATABASE.common) || SHADOW_ROUTE_SKILL_BY_ID[skill.id]
+        if (!canonical || !shadowSkillAvailable(this, canonical)) return false
+        const common = canonical.kind === 'common'
+        skill = { ...canonical, role: common && canonical.growthClass !== 'core' ? 'common' : offered.role || 'primary',
+          progressionRole: common && canonical.growthClass !== 'core' ? 'common' : offered.progressionRole || 'primary',
+          maxLevel: offered.maxLevel ?? canonical.maxLevel }
+        choiceState = this.weaponSystem.shadowCombat
+      }
+      if (!skill.isEndlessMastery && (this.skillLevels[skill.id] || 0) >= getEffectiveSkillMaxLevel(this, skill, skill.role)) return false
       this.skillLevels[skill.id] = (this.skillLevels[skill.id] || 0) + 1
-      skill.apply?.(this, this.skillLevels[skill.id])
+      if (this.startingStrain === 'elemental' && skill.isElementalDiscovery) this.weaponSystem.spellCombat.applyElementalSkill(skill, this.skillLevels[skill.id])
+      else skill.apply?.(this, this.skillLevels[skill.id])
+      if (choiceState) choiceState.normalChoices++
     }
 
     const weaponEvolved = this.weaponSystem.registerSkillEvolution(skill)
@@ -792,9 +934,12 @@ export class GameEngine {
         `武器进化：${info?.name || skill.spec}`,
         skill.name.replace(/^🌟\s*/, ''),
         skill.spec,
-        skill.spec === 'symbiosis' ? '至少两只伙伴存活时，全体伙伴共同强化伤害' : skill.spec === 'gluttony' ? '咬击范围与伤害提升，重咬和冲撞可吞噬半血猎物' : this.startingStrain === 'shadow' ? '分身影刃贯穿敌群，影袭协同进化为十字夹击' : '弹体轮廓、出膛反馈与命中音色完成终极异化'
+        skill.isRicochetSkill ? skill.desc : skill.spec === 'symbiosis' ? (SYMBIOSIS_ROUTES[skill.route]?.ultimateDesc || '伙伴协同与鼓舞机制完成终极异化') : skill.spec === 'gluttony' ? '咬击范围与伤害提升，重咬和冲撞可吞噬半血猎物' : this.startingStrain === 'shadow' ? '分身影刃贯穿敌群，影袭协同进化为十字夹击' : '弹体轮廓、出膛反馈与命中音色完成终极异化'
       )
     }
+
+    this._refreshRicochetCooldown()
+    this._pushStats()
 
     if (this._pendingExpeditionStage > 0) {
       const nextStage = this._pendingExpeditionStage
@@ -802,6 +947,21 @@ export class GameEngine {
       this._enterExpeditionStage(nextStage)
     }
     this.resume()
+    return true
+  }
+
+  _refreshRicochetCooldown() {
+    if (!this.weaponSystem.ricochetCombat.enabled) return
+    this.player.strainSkillMax = this.strainSkill.cooldown * (this.player.activeSkillCdMultiplier || 1)
+    this._pushCooldown()
+  }
+
+  _gluttonPrimarySkills() {
+    return (SKILL_DATABASE?.gluttony?.primary || [])
+  }
+
+  _symbiosisPrimarySkills() {
+    return [...(SKILL_DATABASE?.symbiosis?.primary || []), ...Object.values(SYMBIOSIS_SKILL_BY_ID)]
   }
 
   /**
@@ -865,9 +1025,9 @@ export class GameEngine {
     const spells = this.weaponSystem.spellCombat
     if (!spells.enabled) return false
     // Early BOSS rewards wait for Lv.5; they never bypass the level-based fusion.
-    if (!spells.fusion) return false
+    if (!spells.elements.size) return false
     const reward = this._spellCoreQueue.shift(), options = spells.coreOptions()
-    this._spellCoreChoice = { ...reward, first: !spells.fusion, options }
+    this._spellCoreChoice = { ...reward, stage: 'boss', first: false, options }
     this.pause(); this.sound.absorb(); this._pushStats()
     this.onSpellCore(this._spellCoreChoice)
     return true
@@ -1176,7 +1336,7 @@ export class GameEngine {
   }
 
   _enterExpeditionStage(stage, forceMap = false) {
-    this.weaponSystem.shadowCombat.reset()
+    this.weaponSystem.shadowCombat.reset({ preserveBuild: true })
     this.weaponSystem.petCombat.reset()
     this.player._dodgedAttacks = new WeakSet()
     const total = getExpeditionStages(this.runSelection.difficulty).length
@@ -1402,7 +1562,7 @@ export class GameEngine {
       combos = REACTIONS.filter((r) => r.combo.includes(type)).map((r) => {
         const other = r.combo.find((e) => e !== type)
         const oe = getElement(other)
-        return { icon: oe?.icon || '?', name: oe?.name || '', species: r.species }
+        return { element: other, icon: oe?.icon || '?', name: oe?.name || '', species: r.species }
       })
     } else {
       const test = new Map(this.player.elements)
@@ -1658,6 +1818,7 @@ export class GameEngine {
         chance: this.weaponSystem.shadowCombat.clones.chance,
         power: this.weaponSystem.shadowCombat.clones.power,
         duration: this.weaponSystem.shadowCombat.clones.duration,
+        ...this.weaponSystem.shadowCombat.hud(),
       } : null,
       skillId: this.strainSkill?.id || null,
       skillName: this.strainSkill?.name || '',
@@ -1679,7 +1840,7 @@ export class GameEngine {
       // 实际攻击力（基础 × 等级成长 × 捕食吞噬加成，供 HUD 展示）
       dmg:
         Math.round(
-          this.weaponSystem.damage * this.weaponSystem.levelMul * this.weaponSystem.devourDamageMul * 100
+          this.weaponSystem.damage * this.weaponSystem.levelMul * this.weaponSystem.devourDamageMul * (this.weaponSystem.ricochetCombat.route === 'pierce' ? 1.35 : 1) * 100
         ) / 100,
       wave: this.enemyManager.wave,
       waveName: this.enemyManager.waveName,
@@ -1710,6 +1871,8 @@ export class GameEngine {
       strainId: this.startingStrain,
       canDevour: this.canDevour,
       canUseElements: this.canUseElements,
+      ricochet: this.weaponSystem.ricochetCombat.enabled ? this.weaponSystem.ricochetCombat.hud() : null,
+      symbiosis: this.weaponSystem.petCombat.enabled ? this.weaponSystem.petCombat.hudBuild() : null,
       spells: this.weaponSystem.spellCombat.enabled ? this.weaponSystem.spellCombat.hud() : null,
       // 消化进度（吞噬 → 元素联动的可见口径）：满载待命时 ratio = 1，吸收首颗核心即兑现
       digest: {
@@ -1734,6 +1897,7 @@ export class GameEngine {
             progress: this.player.gluttonDevourProgress,
             progressPer: GLUTTON_DEVOURS_PER_CHARGE,
             ready: this.player.gluttonCharge > 0 && this.player.gluttonRecastLock <= 0,
+            ...(this.weaponSystem.gluttonCombat.enabled ? this.weaponSystem.gluttonCombat.hud() : {}),
           }
         : { has: false, charge: 0, max: GLUTTON_CHARGE_MAX, progress: 0, progressPer: GLUTTON_DEVOURS_PER_CHARGE, ready: false },
       x: Math.round(this.player.x), // 扁平坐标：UI 端可直接整树赋值（见 createDefaultStats）

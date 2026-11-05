@@ -13,7 +13,7 @@ export class ShadowClones {
   get player() { return this.combat.player }
   get game() { return this.combat.weapon.game }
   get chance() { return SHADOW_CLONE_CHANCES[this.player.shadowCloneChanceLevel || 0] }
-  get power() { return SHADOW_CLONE_POWERS[this.player.shadowClonePowerLevel || 0] }
+  get power() { return SHADOW_CLONE_POWERS[Math.min(SHADOW_CLONE_POWERS.length - 1, this.player.shadowClonePowerLevel || 0)] }
   get duration() { return SHADOW_CLONE_LIFETIMES[this.player.shadowCloneLifeLevel || 0] }
   get cap() { return SHADOW_CLONE_CAPS[this.player.shadowCloneCapLevel || 0] }
   reset() { this.items = []; this.procCooldown = 0; this.serial = 0; this.focus = null }
@@ -131,6 +131,7 @@ export class ShadowClones {
     if (!this.combat.available || !alive(enemy) || !shadowLineClear(this.game, c, enemy)) return
     const before = enemy.hp
     this.combat.hit(enemy, multiplier, { secondary: true, angle: c.angle, clone: true })
+    if (!enemy.active) this.combat.onCloneKill(c, enemy)
     const stats = this.combat.weapon.stats
     stats.shadowDamage = (stats.shadowDamage || 0) + Math.max(0, before - Math.max(0, enemy.hp))
   }
@@ -168,12 +169,12 @@ export class ShadowClones {
         Object.assign(c, end)
         const moved = Math.hypot(c.x - x, c.y - y)
         r.remaining -= moved
-        this.sweep(c, x, y, c.x, c.y, this.power * 2, 3, r.hits, 16)
+        this.sweep(c, x, y, c.x, c.y, this.power * this.combat.swarmCommandMultiplier, 3, r.hits, 16)
         if (r.remaining <= 0.01 || moved < distance - 0.01) {
-          this.sweep(c, c.x, c.y, c.x + Math.cos(r.angle) * 65, c.y + Math.sin(r.angle) * 65, this.power * 2, 3, r.hits, 16)
+          this.sweep(c, c.x, c.y, c.x + Math.cos(r.angle) * 65, c.y + Math.sin(r.angle) * 65, this.power * this.combat.swarmCommandMultiplier, 3, r.hits, 16)
           if (this.player.shadowCloneLord) {
             const dx = Math.cos(r.angle + Math.PI / 2) * 66, dy = Math.sin(r.angle + Math.PI / 2) * 66
-            this.sweep(c, r.x - dx, r.y - dy, r.x + dx, r.y + dy, this.power * 2, 3, r.hits, 16)
+            this.sweep(c, r.x - dx, r.y - dy, r.x + dx, r.y + dy, this.power * this.combat.swarmCommandMultiplier, 3, r.hits, 16)
           }
           c.rush = null; c.crossFlash = this.player.shadowCloneLord; c.flash = 0.18; c.cooldown = SHADOW_CLONE_INTERVAL
         }

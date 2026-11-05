@@ -3,6 +3,10 @@ const TINT_CACHE = new Map()
 
 const MATERIALS = {
   base: { shape: 'orb', color: '#8cffc8', core: '#effff7', impact: '#8cffc8', radius: 6, sound: 'base' },
+  ricochet: { shape: 'shard', color: '#79d9ee', core: '#e9fcff', impact: '#79d9ee', radius: 6, sound: 'spark' },
+  rico_split: { shape: 'spore', color: '#79dfc8', core: '#ebfff8', impact: '#79dfc8', radius: 6, sound: 'fluid' },
+  rico_pierce: { shape: 'shard', color: '#f1bf74', core: '#fff3d8', impact: '#f1bf74', radius: 6, sound: 'ember' },
+  rico_bounce: { shape: 'core', color: '#b4a2ef', core: '#f4efff', impact: '#b4a2ef', radius: 6, sound: 'spark' },
   // 共生史莱姆的契约色：与本体玫瑰粉（SLIME_FAMILY_ART.summoner.body）同源。
   // 共生没有元素权限（canUseElements 恒 false），若不显式给材质，
   // 它打出的弹体、出膛火花与命中音色会和所有非元素角色一样是薄荷绿——
@@ -41,6 +45,7 @@ const rgba = (hex, alpha) => {
 }
 
 function materialKey(state) {
+  if (state.strain === 'ricochet') return MATERIALS[`rico_${state.ricochetRoute}`] ? `rico_${state.ricochetRoute}` : 'ricochet'
   if (state.chaos) return 'chaos'
   if (MATERIALS[state.primaryReaction]) return state.primaryReaction
   for (const id of state.elements || []) {

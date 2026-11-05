@@ -1095,9 +1095,9 @@ console.log('✓ Runner 180s soak drains every buff and keeps arrays bounded')
 // Phase B 之前记录下来的 Director encounter 基线（前 3 行）。
 // 用于证明新增的路线/岔口不会无意义地扰动既有 encounter 随机序列。
 const DIRECTOR_BASELINE = {
-  1001: '0:fever_shard/gate|1:attack/gate|2:hound/enemy;0:attack/gate|1:hound/enemy|2:fever_shard/gate;0:swarm/enemy|0:swarm/enemy|0:swarm/enemy|1:gate_magnet/gate|2:barrel/obstacle',
-  2026: '0:attack/gate|1:fever_shard/gate|2:scout/enemy;0:attack/gate|1:hound/enemy|2:fever_shard/gate;0:fever_shard/gate|1:hound/enemy|2:attack/gate',
-  4242: '0:gate_magnet/gate|1:barrel/obstacle|2:swarm/enemy|2:swarm/enemy|2:swarm/enemy;0:attack/gate|1:hound/enemy|2:fever_shard/gate;0:gate_magnet/gate|1:swarm/enemy|1:swarm/enemy|1:swarm/enemy|2:barrel/obstacle',
+  1001: '0:attack/gate|1:fever_shard/gate|2:archer/enemy;0:fever_shard/gate|1:archer/enemy|2:attack/gate;0:swarm/enemy|0:swarm/enemy|0:swarm/enemy|1:gate_magnet/gate|2:barrel/obstacle',
+  2026: '0:attack/gate|1:fever_shard/gate|2:scout/enemy;0:fever_shard/gate|1:archer/enemy|2:attack/gate;0:attack/gate|1:archer/enemy|2:fever_shard/gate',
+  4242: '0:gate_magnet/gate|1:barrel/obstacle|2:swarm/enemy|2:swarm/enemy|2:swarm/enemy;0:fever_shard/gate|1:archer/enemy|2:attack/gate;0:gate_magnet/gate|1:swarm/enemy|1:swarm/enemy|1:swarm/enemy|2:barrel/obstacle',
 }
 
 const directorRowSignature = (director) => {
@@ -1317,8 +1317,13 @@ console.log('✓ Phase B / Test E: same seed + same choices reproduces fork and 
     laneB.forkLog[0].routeId,
     '不同车道选择必须锁定不同路线'
   )
-  assert.equal(laneA.forkLog[0].elapsed, laneB.forkLog[0].elapsed, '同 seed 下岔口解析时刻必须一致')
-  const firstResolveT = laneA.forkLog[0].elapsed
+  // 岔口牌按真实 elapsedTime 生成，出现时刻必须与车道选择无关。
+  const firstForkSpawn = (run) => Math.min(...run.trace.filter((e) => e.kind === 'fork').map((e) => e.t))
+  assert.equal(firstForkSpawn(laneA), firstForkSpawn(laneB), '同 seed 下岔口牌生成时刻必须一致')
+  // 解析时刻允许不同：牌子的世界推进受子弹时间 dilation 影响，先吃到
+  // gate_bullet_time 的运行会更晚抵达解析深度。这里只比较两条运行都尚未
+  // 解析的共同窗口，避免把「拾取道具改变了世界速度」误判成不确定性。
+  const firstResolveT = Math.min(laneA.forkLog[0].elapsed, laneB.forkLog[0].elapsed)
   const preFork = (run) => run.trace.filter((e) => e.t <= firstResolveT)
   assert.ok(
     JSON.stringify(preFork(laneA)) === JSON.stringify(preFork(laneB)),

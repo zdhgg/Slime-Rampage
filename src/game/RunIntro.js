@@ -53,7 +53,7 @@ export function getRunIntro(selection, strainId = 'origin') {
     rewardMultiplier: DIFFICULTIES[value.difficulty].rewardMul,
     threatReport: DIFFICULTY_REPORTS[value.difficulty],
     strainNote: strain.id === 'origin' ? null : strain.id === 'elemental'
-      ? `作战血统：${strain.name} · 原质飞弹自动攻击。Lv.2 选择第一系法术，Lv.5 选择第二系并融合，Lv.10 进化融合主动术。`
+      ? `作战血统：${strain.name} · 原质飞弹自动攻击。Lv.2 发现首系法术，前期随机探索，第 6 波／第 3 章确认单系、双系或多系路线。`
       : `作战血统：${strain.name} · ${strain.desc}`,
     objective:
       value.mode === 'expedition'

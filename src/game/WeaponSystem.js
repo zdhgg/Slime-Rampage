@@ -14,10 +14,12 @@ import {
   onGluttonFDevoured,
   onNormalDevoured,
 } from './GluttonResource.js'
-import { gainPrimalEnergy, onPrimalKill, PRIMAL_SOURCES } from './PrimalEnergy.js'
+import { gainOriginMechanism, gainOriginSecondary, gainPrimalEnergy, onPrimalKill, PRIMAL_SOURCES } from './PrimalEnergy.js'
 import { GluttonCombat, GLUTTON_HEAL_COOLDOWN } from './GluttonCombat.js'
 import { ShadowCombat } from './ShadowCombat.js'
+import { RicochetCombat } from './RicochetCombat.js'
 import { resolveWeaponVisual, splitWeaponVisual, tintedWeaponVisual } from './WeaponVisuals.js'
+import { getEndlessSkillBonus } from './EndlessSkills.js'
 
 const TAU = Math.PI * 2
 export const COMMON_LOOT_CHANCE = 0.1
@@ -48,6 +50,8 @@ export function getLootDropCount(enemy, random = Math.random) {
  * 技能是构筑向强化，两者叠加后后期依旧需要元素反应撑强度。
  */
 const LEVEL_DMG_GROWTH = 1.08
+const ENDLESS_LEVEL_SOFTCAP = 6
+const ENDLESS_LEVEL_TAPER = 18
 
 /**
  * 武器系统：自动索敌 + 追踪弹发射 + 碰撞伤害结算 + 击杀粒子
@@ -136,6 +140,7 @@ export class WeaponSystem extends Entity {
 
     this.gluttonCombat = new GluttonCombat(this)
     this.shadowCombat = new ShadowCombat(this)
+    this.ricochetCombat = new RicochetCombat(this)
     this.petCombat = new PetCombat(this)
     this.spellCombat = new SpellCombat(this)
     this._projectiles = []
@@ -216,6 +221,7 @@ export class WeaponSystem extends Entity {
     this._weaponPulse = 0
     this.gluttonCombat.reset()
     this.shadowCombat.reset()
+    this.ricochetCombat.reset()
     this.petCombat.reset()
     this.spellCombat.reset()
     this._projectiles.length = 0
@@ -263,7 +269,25 @@ export class WeaponSystem extends Entity {
    * 只随玩家等级增长，王级秘籍/免费面板不加成。
    */
   onLevelUp() {
-    this.levelMul *= LEVEL_DMG_GROWTH
+    this.refreshLevelMultiplier()
+  }
+
+  refreshLevelMultiplier() {
+    const levelUps = Math.max(0, (this.player?.level || 1) - 1)
+    if (this.game?.runSelection?.mode !== 'endless') {
+      this.levelMul = LEVEL_DMG_GROWTH ** levelUps
+      return this.levelMul
+    }
+    const earlyLevels = Math.min(20, levelUps)
+    const early = LEVEL_DMG_GROWTH ** earlyLevels
+    const tail = Math.max(0, levelUps - 20)
+    const levelScale = tail > 0
+      ? early + (ENDLESS_LEVEL_SOFTCAP - early) * (1 - Math.exp(-tail / ENDLESS_LEVEL_TAPER))
+      : early
+    // One shared, saturating mastery factor is applied to the existing level
+    // curve. Ranks never multiply the current result by another rank bonus.
+    this.levelMul = levelScale * (1 + getEndlessSkillBonus(this.game?.skillLevels))
+    return this.levelMul
   }
 
   /** 自动索敌：返回距玩家最近的存活敌人（无则 null） */
@@ -325,6 +349,7 @@ export class WeaponSystem extends Entity {
   }
 
   _visualProfile() {
+    if (this.ricochetCombat.enabled) return this.ricochetCombat.visual()
     const spec = this.game.primarySpec
     return resolveWeaponVisual({
       primaryReaction: this.player._primaryReaction,
@@ -339,10 +364,11 @@ export class WeaponSystem extends Entity {
   }
 
   /** 以玩家位置为原点，向目标发射飞弹（多弹时并排扇形齐射） */
-  fire(target) {
+  fire(target, options = {}) {
     if (this.spellCombat.enabled && !this.spellCombat.usesBasicProjectile) return this.spellCombat.cast([...this.spellCombat.elements][0], target)
     if (this.gluttonCombat.enabled) return this.gluttonCombat.bite(target)
     if (this.shadowCombat.enabled) return this.shadowCombat.stab(target)
+    if (this.ricochetCombat.enabled) return this.ricochetCombat.fire(target, options)
     const px = this.player.x
     const py = this.player.y
     const n = this.projectileCount
@@ -405,13 +431,14 @@ export class WeaponSystem extends Entity {
     if (this.berserkBuffTimer > 0) this.berserkBuffTimer -= dt
     if (this._muzzleT > 0) this._muzzleT -= dt
     if (this._weaponPulse > 0) this._weaponPulse -= dt
+    if (this.ricochetCombat.enabled) this.ricochetCombat.update(dt)
     this._updateDigestPulse(dt) // 消化能量过半时的心跳微粒（吞噬 → 元素联动的可见前兆）
 
     if (this.rapidVolley) {
       this.rapidVolley.timer -= dt
       while (this.rapidVolley.remaining > 0 && this.rapidVolley.timer <= 0) {
         const target = this._findNearest()
-        if (target) this.fire(target)
+        if (target) this.fire(target, this.rapidVolley)
         this.rapidVolley.remaining--
         this.rapidVolley.timer += 0.12
       }
@@ -447,7 +474,10 @@ export class WeaponSystem extends Entity {
     }
 
     // 2) 飞弹移动（追踪目标）
-    for (const p of this._projectiles) p.update(dt)
+    for (const p of this._projectiles) {
+      if (p.ricochet) { p.prevX = p.x; p.prevY = p.y }
+      p.update(dt)
+    }
 
     // 3) 碰撞检测与伤害结算
     this._resolveCollisions()
@@ -879,6 +909,7 @@ export class WeaponSystem extends Entity {
 
     for (const p of this._projectiles) {
       if (!p.active) continue
+      if (p.ricochet) { this.ricochetCombat.resolve(p); continue }
       // 飞弹所在网格：只查 3×3 邻域（CELL_SIZE=64 ≥ 最大半径和 42，跨格碰撞不可能漏检）
       const pcx = (p.x / CELL_SIZE) | 0
       const pcy = (p.y / CELL_SIZE) | 0
@@ -971,6 +1002,11 @@ export class WeaponSystem extends Entity {
             // 函数内部对非 origin 直接短路，其他血统零开销零行为变化。
             gainPrimalEnergy(this.game, PRIMAL_SOURCES.PROJECTILE)
             if (elementProcApplied) gainPrimalEnergy(this.game, PRIMAL_SOURCES.ELEMENT)
+            // 主/副专精机制来源只在本系特有行为兑现时计一次；分裂与元素反应都受同一窗口节流。
+            if (p.isSplit && this.game?.primarySpec === 'gatling') gainOriginMechanism(this.game, 'gatling')
+            if (p.isSplit && this.game?.secondarySpec === 'gatling') gainOriginSecondary(this.game, 'gatling')
+            if (isCrit && this.game?.primarySpec === 'assassin') gainOriginMechanism(this.game, 'assassin')
+            if (isCrit && this.game?.secondarySpec === 'assassin') gainOriginSecondary(this.game, 'assassin')
             this._burstColor(e.x, e.y, p.visual.impact, isCrit ? 14 : p.visual.impactCount, isCrit)
             this.game.sound.hit(p.visual.sound)
 
@@ -994,6 +1030,9 @@ export class WeaponSystem extends Entity {
               else this._dropPool(e.x, e.y)
             }
             if (steamR) this._dropCloud(e.x, e.y)
+
+            if ((gelR || acidR || steamR || elementProcApplied) && this.game?.primarySpec === 'elemental') gainOriginMechanism(this.game, 'elemental')
+            if ((gelR || acidR || steamR || elementProcApplied) && this.game?.secondarySpec === 'elemental') gainOriginSecondary(this.game, 'elemental')
 
             // 元素过载爆轰
             if (this.reactionShockwave > 0 && (gelR || acidR || steamR || this.isChaosOrigin)) {
@@ -1422,6 +1461,7 @@ export class WeaponSystem extends Entity {
     this.spellCombat.render(ctx)
     // 先粒子后飞弹：炸裂特效叠在飞弹之下，视觉更自然
     for (const pt of this._particles) pt.render(ctx)
+    this.ricochetCombat.render(ctx)
     for (const p of this._projectiles) p.render(ctx)
   }
 }

@@ -1,0 +1,7 @@
+/* 启动占位界面样式。从 index.html 内联 <style> 迁出：Vite 6.4.x 在含空格的
+   Windows 路径下无法为内联 CSS 建立 html-proxy 映射，构建会直接失败。 */
+html, body { margin: 0; background: #0b0d0b; color: #e6ebdf; }
+#game-boot { position: fixed; inset: 0; display: grid; place-content: center; gap: 14px; padding: 28px; font: 14px/1.7 'Segoe UI', 'Microsoft YaHei', sans-serif; text-align: center; }
+#game-boot h1 { margin: 0; font-size: 26px; }
+#game-boot p { margin: 0; color: #a4af9c; }
+#game-boot button { justify-self: center; padding: 9px 22px; border: 1px solid #a4bc92; border-radius: 5px; background: #a4bc92; color: #182012; font: inherit; cursor: pointer; }

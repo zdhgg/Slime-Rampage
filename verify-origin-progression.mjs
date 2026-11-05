@@ -24,14 +24,14 @@ for (const spec of ['gatling', 'elemental', 'assassin', 'gluttony', 'symbiosis']
     if (spec === 'gluttony') g.player.gluttonCharge = 2
     pressSpace(g)
     settleSwing(g.weaponSystem.gluttonCombat)
-    assert.equal(g.player.primalEnergy, ['gluttony', 'symbiosis'].includes(spec) ? 39 : 47)
+    assert.equal(g.player.primalEnergy, spec === 'symbiosis' ? 39 : spec === 'gluttony' ? 44 : 47, '对应主专精机制触发有限充能')
     if (spec === 'symbiosis') g.weaponSystem.petCombat.update(13)
     g.player.strainSkillCd = 0
     g.player.gluttonRecastLock = 0
     g.player.primalEnergy = 40
     pressSpace(g)
     settleSwing(g.weaponSystem.gluttonCombat)
-    assert.equal(g.player.primalEnergy, ['gluttony', 'symbiosis'].includes(spec) ? 0 : 1)
+    assert.equal(g.player.primalEnergy, spec === 'symbiosis' ? 0 : 1, '有效超载后仍可由同源机制补充少量能量')
   })
 }
 

@@ -3,7 +3,9 @@ import {
   hasGluttonCharge, isGluttonLocked, onGluttonBossBasicHit, spendGluttonCharge,
 } from './GluttonResource.js'
 import { bitePose, renderBiteMotion, renderBiteFeedback } from './effects/GluttonBiteVisual.js'
-import { canPrimalOverload, trySpendPrimalOverload, getOriginActiveGrowth, PRIMAL_BITE_OVERLOAD_DAMAGE, PRIMAL_BITE_OVERLOAD_RANGE } from './PrimalEnergy.js'
+import { canPrimalOverload, gainPrimalEnergy, getPrimalOverloadProfile, trySpendPrimalOverload, getOriginActiveGrowth, PRIMAL_SOURCES, PRIMAL_BITE_OVERLOAD_DAMAGE, PRIMAL_BITE_OVERLOAD_RANGE } from './PrimalEnergy.js'
+import { triggerOriginSecondaryEcho } from './OriginEchoes.js'
+import { GLUTTON_ROUTES, GLUTTON_RULES, getGluttonEndlessDamageMultiplier, getGluttonHeavyDamageMultiplier, getGluttonHeavyReachMultiplier, gluttonProgressReady, gluttonRouteReady, gluttonRouteInvestment } from './GluttonBuild.js'
 
 const TAU = Math.PI * 2
 /** 从 a 转到 b 的最短有符号角差。 */
@@ -79,8 +81,12 @@ export class GluttonCombat {
     this.aimAngle = this.weapon?.player?.facing ?? -Math.PI / 2
     this.aimTarget = null
     this.acidBurstSeq = 0
+    this.route = null
+    this.normalChoices = 0
+    this.mires = []
   }
 
+  get game() { return this.weapon.game }
   get player() { return this.weapon.player }
   /** 全套近战咬击（自动咬人替代普攻）：仅暴食血统。 */
   get enabled() { return this.weapon.game?.startingStrain === 'glutton' }
@@ -95,13 +101,35 @@ export class GluttonCombat {
   }
   /** 重咬与吞噬结算表现的统一闸门（真暴食或拟态暴食）。 */
   get biteUnlocked() { return this.enabled || this.mimicry }
+  get routeInfo() { return GLUTTON_ROUTES[this.route] || null }
+  get endlessDamageMultiplier() { return getGluttonEndlessDamageMultiplier(this.weapon.game?.skillLevels) }
+  refreshStats() {}
+  chooseRoute(route) {
+    if (!this.enabled || !GLUTTON_ROUTES[route] || !gluttonRouteReady(this.game) || !this.game.skillLevels?.[GLUTTON_ROUTES[route].seed]) return false
+    this.route = route
+    this.weapon._weaponPulse = .7
+    return true
+  }
+  hud() {
+    const route = this.routeInfo
+    return {
+      route: this.route, name: route?.name || '暴食探索', icon: route?.icon || '🍽️', color: route?.color || '#ff9f43',
+      investment: route ? gluttonRouteInvestment(this.game, this.route) : 0,
+      normalChoices: this.normalChoices, routeReady: gluttonRouteReady(this.game), progressReady: gluttonProgressReady(this.game),
+      ultimate: !!(route && this.game.skillLevels?.[route.ultimate]), ultimateName: route?.ultimateName || '',
+      ultimateReady: !!(route && this.game.player?.level >= GLUTTON_RULES.ultimateLevel && gluttonProgressReady(this.game, true)),
+      note: route ? `${route.name}已锁定 · ${route.ultimateName}为互斥终极` : `前期随机探索 · 选卡满${GLUTTON_RULES.choicesBeforeRoute}次且第${GLUTTON_RULES.routeWave}波／远征第${GLUTTON_RULES.routeStage}章后确认路线`,
+    }
+  }
   // 拟态也读 pose：空格重咬时 origin 身体同样需要咬合方向的挤压反馈；
   // 吞噬吸入口（_startDevour 的 _devourAngle）仍只认 enabled，不受影响。
   get pose() { return this.biteUnlocked && !this.player.dead ? bitePose(this.swing, this.flash) : null }
   reach(heavy = false) {
-    const base = this.player.radius + (heavy ? GLUTTON_HEAVY_REACH * (1 + 0.1 * (this.player.gluttonHeavyLevel || 0)) : GLUTTON_BITE_REACH) * (this.player.isGluttonyLord ? 1.25 : 1)
+    const base = this.player.radius + (heavy ? GLUTTON_HEAVY_REACH * getGluttonHeavyReachMultiplier(this.player.gluttonHeavyLevel) : GLUTTON_BITE_REACH) * (this.player.isGluttonyLord ? 1.25 : 1)
     if (!heavy || !this.mimicry) return base
-    return (base + getOriginActiveGrowth(this.weapon.game).rangeBonus) * (canPrimalOverload(this.player) ? PRIMAL_BITE_OVERLOAD_RANGE : 1)
+    const overloaded = canPrimalOverload(this.player)
+    const profile = getPrimalOverloadProfile(this.weapon.game, overloaded)
+    return (base + getOriginActiveGrowth(this.weapon.game).rangeBonus) * (overloaded ? PRIMAL_BITE_OVERLOAD_RANGE * profile.biteRangeMul : 1)
   }
 
   /** 朝向参考：玩家最近一次有效移动方向；静止时沿用最后朝向。 */
@@ -181,8 +209,9 @@ export class GluttonCombat {
     if (heavy && !spendGluttonCharge(this.player)) return false
     // 与猎食点一起在有效起手后扣费；索敌失败、释放锁和重复输入都不会丢失能量。
     const overloaded = heavy && this.mimicry && trySpendPrimalOverload(this.weapon.game)
+    const overloadProfile = getPrimalOverloadProfile(this.weapon.game, overloaded)
     const primalDamageMul = heavy && this.mimicry
-      ? getOriginActiveGrowth(this.weapon.game).damageMul * (overloaded ? PRIMAL_BITE_OVERLOAD_DAMAGE : 1) : 1
+      ? getOriginActiveGrowth(this.weapon.game).damageMul * (overloaded ? PRIMAL_BITE_OVERLOAD_DAMAGE * overloadProfile.biteDamageMul : 1) : 1
 
     this.flash = null
     this.aimTarget = chosen
@@ -207,13 +236,19 @@ export class GluttonCombat {
 
   heavyBite() { return this.bite(this.nearest(true), true) }
 
-  grantGuard() {
+  grantGuard(force = false) {
     const p = this.player
-    if (!this.biteUnlocked || p.dead || p.gluttonGuardCooldown > 0) return
+    if (!this.biteUnlocked || p.dead || (!force && p.gluttonGuardCooldown > 0)) return
     p.gluttonGuard = 1
     p.gluttonGuardTimer = p.gluttonGuardDuration
     p.gluttonGuardCooldown = GLUTTON_GUARD_COOLDOWN
     this.guardPulse = 0.24
+  }
+
+  onGuardBlocked() {
+    if (this.route !== 'shell' || !(this.player.gluttonCounterLevel > 0) || this.player.gluttonCounterCooldown > 0) return
+    this.player.gluttonCounterCooldown = this.player.gluttonShellUltimate ? 0.7 : 1.1
+    this.counterPulse()
   }
 
   onDevoured(enemy) {
@@ -221,6 +256,45 @@ export class GluttonCombat {
     const angle = this.swing?.angle ?? this.flash?.angle ?? Math.atan2(enemy.y - this.player.y, enemy.x - this.player.x)
     this.morsels.push({ x: enemy.x, y: enemy.y, angle, life: 0.3, maxLife: 0.3 })
     if (this.morsels.length > 20) this.morsels.shift()
+    if (this.route === 'mire' && this.player.gluttonMireLevel > 0) this.spawnMire(enemy.x, enemy.y)
+  }
+
+  spawnMire(x, y) {
+    const level = this.player.gluttonMireLevel || 0
+    this.mires.push({ x, y, r: 46 + Math.min(7, level) * 5, life: Math.min(3.2, 2.2 + level * .2), maxLife: Math.min(3.2, 2.2 + level * .2), tick: 0 })
+    if (this.mires.length > 8) this.mires.shift()
+  }
+
+  counterPulse() {
+    if (this.route !== 'shell' || !(this.player.gluttonCounterLevel > 0)) return
+    const level = this.player.gluttonCounterLevel
+    const radius = 92 + Math.min(6, level) * 8
+    const damage = this.weapon.damage * this.weapon.levelMul * this.endlessDamageMultiplier * (.4 + Math.min(5, level - 1) * .08)
+    for (const enemy of this.weapon.enemyManager.enemies) {
+      if (!enemy.active || enemy.devouring || Math.hypot(enemy.x - this.player.x, enemy.y - this.player.y) > radius + enemy.radius) continue
+      enemy.hit(damage, { preventDevour: true })
+      if (!enemy.active) this.weapon._onKill(enemy)
+    }
+    this.weapon._ring(this.player.x, this.player.y, '#e3bd73', radius)
+    this.weapon._burstColor(this.player.x, this.player.y, '#fff0b0', 8, false)
+  }
+
+  aftershock(angle, level, damage, ultimate = false) {
+    const radius = 120 + Math.min(5, level) * 12
+    const waves = ultimate ? 2 : 1
+    for (let wave = 0; wave < waves; wave++) {
+      const waveDamage = damage * (0.3 + Math.min(5, level - 1) * .08) * (wave ? .65 : 1)
+      for (const enemy of this.weapon.enemyManager.enemies) {
+        if (!enemy.active || enemy.devouring) continue
+        const dx = enemy.x - this.player.x, dy = enemy.y - this.player.y
+        if (Math.hypot(dx, dy) > radius + enemy.radius) continue
+        const delta = Math.abs(Math.atan2(Math.sin(Math.atan2(dy, dx) - angle), Math.cos(Math.atan2(dy, dx) - angle)))
+        if (delta > Math.PI * .3) continue
+        enemy.hit(waveDamage, { preventDevour: true })
+        if (!enemy.active) this.weapon._onKill(enemy)
+      }
+    }
+    this.weapon._ring(this.player.x + Math.cos(angle) * radius * .45, this.player.y + Math.sin(angle) * radius * .45, '#f28a59', radius * .55)
   }
 
   impact(enemy, swing, x, y) {
@@ -303,10 +377,22 @@ export class GluttonCombat {
       if (this.flash.life <= 0) this.flash = null
     }
     this.guardPulse = Math.max(0, this.guardPulse - dt)
-    for (const list of [this.impacts, this.morsels, this.acidBursts]) {
+    for (const list of [this.impacts, this.morsels, this.acidBursts, this.mires]) {
       for (let i = list.length - 1; i >= 0; i--) {
         list[i].life -= dt
         if (list[i].life <= 0) list.splice(i, 1)
+      }
+    }
+    for (const mire of this.mires) {
+      mire.tick -= dt
+      if (mire.tick > 0) continue
+      mire.tick = .45
+      const damage = this.weapon.damage * this.weapon.levelMul * this.weapon.devourDamageMul * this.endlessDamageMultiplier * (.22 + Math.min(5, this.player.gluttonMireLevel - 1) * .035)
+      for (const enemy of this.weapon.enemyManager.enemies) {
+        if (!enemy.active || enemy.devouring || Math.hypot(enemy.x - mire.x, enemy.y - mire.y) > mire.r + enemy.radius) continue
+        enemy.hit(damage, { preventDevour: true })
+        if (!enemy.isBoss) enemy.slow = Math.max(enemy.slow || 0, .35)
+        if (!enemy.active) this.weapon._onKill(enemy)
       }
     }
     this.acidCooldown = Math.max(0, this.acidCooldown - dt)
@@ -349,7 +435,7 @@ export class GluttonCombat {
             if (this.player.dead || this.weapon.game.runFinished) break
             const multiplier = swing.heavy ? (e.isBoss ? GLUTTON_BOSS_HEAVY_DAMAGE : GLUTTON_HEAVY_DAMAGE) : GLUTTON_BITE_DAMAGE
             const crit = !swing.heavy && Math.random() < this.weapon.critChance ? this.weapon.critMul : 1
-            const damage = this.weapon.damage * this.weapon.levelMul * this.weapon.devourDamageMul * multiplier * (swing.heavy ? 1 + 0.15 * (this.player.gluttonHeavyLevel || 0) : 1) * crit * (this.player.isGluttonyLord ? 1.25 : 1) * swing.primalDamageMul
+            const damage = this.weapon.damage * this.weapon.levelMul * this.weapon.devourDamageMul * this.endlessDamageMultiplier * multiplier * (swing.heavy ? getGluttonHeavyDamageMultiplier(this.player.gluttonHeavyLevel) : 1) * crit * (this.player.isGluttonyLord ? 1.25 : 1) * swing.primalDamageMul
             const x = e.x, y = e.y
             const hit = this.hit(e, damage, { source, basic: !swing.heavy, execute: swing.heavy && this.player.isGluttonyLord })
             landed ||= hit
@@ -360,8 +446,15 @@ export class GluttonCombat {
               this.queueAcid(source)
             }
           }
+          if (landed && swing.heavy && this.route === 'jaw' && this.player.gluttonAftershockLevel > 0) {
+            this.aftershock(swing.angle, this.player.gluttonAftershockLevel, this.weapon.damage * this.weapon.levelMul * this.weapon.devourDamageMul * this.endlessDamageMultiplier, this.player.gluttonJawUltimate)
+          }
+          if (landed && swing.heavy && this.player.gluttonShellUltimate) this.grantGuard()
           this.weapon.game.sound.bite(swing.heavy, landed)
           if (landed && swing.heavy) {
+            if (this.mimicry && this.game.primarySpec === 'gluttony') gainPrimalEnergy(this.game, PRIMAL_SOURCES.MECHANISM)
+            if (this.mimicry && this.game.secondarySpec === 'gluttony') gainPrimalEnergy(this.game, PRIMAL_SOURCES.SECONDARY)
+            if (this.mimicry && swing.overloaded) triggerOriginSecondaryEcho(this.game, { center: { x: this.player.x, y: this.player.y }, overloaded: true })
             // 首领命中的咬合反馈略强，但保持适度，不打断玩家走位。
             if (bossHit) this.weapon.game.shakeScreen(4, 0.15)
             else this.weapon.game.shakeScreen(3, 0.12)
@@ -374,7 +467,7 @@ export class GluttonCombat {
       this.acidPending = false
       this.acidCooldown = 0.4
       const radius = 90 + this.player.devourAcidBurst * 10
-      const damage = this.weapon.damage * this.weapon.levelMul * this.weapon.devourDamageMul * (0.65 + this.player.devourAcidBurst * 0.35)
+      const damage = this.weapon.damage * this.weapon.levelMul * this.weapon.devourDamageMul * this.endlessDamageMultiplier * (0.65 + this.player.devourAcidBurst * 0.35)
       for (const e of [...this.weapon.enemyManager.enemies]) {
         if (this.player.dead || this.weapon.game.runFinished) break
         if (!e.active || e.devouring || Math.hypot(e.x - this.player.x, e.y - this.player.y) > radius + e.radius) continue
@@ -389,6 +482,16 @@ export class GluttonCombat {
 
   render(ctx) {
     if (!this.biteUnlocked || this.player.dead) return
+    for (const mire of this.mires) {
+      ctx.save()
+      ctx.globalAlpha = Math.max(0, mire.life / mire.maxLife) * .45
+      ctx.fillStyle = '#b5d66f'
+      ctx.beginPath(); ctx.arc(mire.x, mire.y, mire.r, 0, TAU); ctx.fill()
+      ctx.globalAlpha = Math.max(0, mire.life / mire.maxLife) * .75
+      ctx.strokeStyle = '#dff6a1'; ctx.lineWidth = 2
+      ctx.beginPath(); ctx.arc(mire.x, mire.y, mire.r * .82, 0, TAU); ctx.stroke()
+      ctx.restore()
+    }
     renderBiteMotion(ctx, this.player, this.swing, this.flash)
     renderBiteFeedback(ctx, this)
   }

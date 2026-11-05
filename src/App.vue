@@ -842,8 +842,14 @@ async function onBuyGene(geneId) {
 
 /** 点击技能卡片：应用技能 → 关面板 → 恢复引擎主循环 */
 function onSelectSkill(skill) {
+  const options = levelUpOptions.value
   levelUpOptions.value = null
-  engine.value?.applySkill(skill)
+  if (!engine.value?.applySkill(skill)) {
+    // 无效卡不能留下「面板已关、选卡暂停锁仍在」的死局。
+    // 成功选卡可能同步触发溢出经验的下一轮面板，因此先清空再调用引擎。
+    if (!levelUpOptions.value) levelUpOptions.value = options
+    return
+  }
   snd()?.select() // 技能确认音
 }
 
@@ -1050,6 +1056,7 @@ onUnmounted(() => {
       :controls-disabled="!!gameplayResult || !!levelUpOptions || !!gameOverInfo || !!expeditionReward || !!endlessDecision"
       @activate-fever="engine?.gameplay?.activateFever?.()"
       @change-lane="engine?.gameplay?.changeLane?.($event)"
+      @jump="engine?.gameplay?.jump?.()"
       @layout-change="engine?.gameplay?.renderer?.setHudInsets?.($event)"
       @toggle-mute="onToggleMute"
       @toggle-pause="onPause"

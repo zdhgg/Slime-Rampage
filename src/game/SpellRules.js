@@ -32,9 +32,9 @@ const REACTION_SPREAD = { steam: '第二级追加冰霜扩散。', gel: '第二�
 export const getSpellFusion = elements => SPELL_FUSIONS.find(f => f.combo.every(id => elements.has(id))) || null
 
 export const ELEMENTAL_SPEC_INFO = {
-  name: '双元素法师', desc: '双系施法 · 融合反应 · 主动爆发',
-  bonus: '法术伤害 +20% · 融合反应伤害 +35%',
-  roadmap: ['Lv.2：选择首个自动法术', 'Lv.5：选择第二系并融合', 'BOSS 核心：改造当前组合', 'Lv.10：进化空格融合术'],
+  name: '万象法师', desc: '单系极化 · 双系融合 · 多系轮转',
+  bonus: '法术伤害 +20% · 可在中期确认元素构筑路线',
+  roadmap: ['Lv.2：发现首个自动法术', '探索期：随机发现新元素与本系强化', '第 6 波／第 3 章：确认单系、双系或多系路线', 'Lv.14＋路线投入：随机出现互斥终极'],
 }
 
 // Shared IDs keep legacy saves and origin behavior stable; role-specific resolution is explicit.
@@ -74,6 +74,8 @@ export function spellMilestoneReward(combat) {
       })
     }) }
   }
+  // Legacy direct callers may still request the old milestone preview. The
+  // live upgrade flow no longer forces these stages; it uses random discovery.
   if (combat.elements.size === 1 && level >= ELEMENTAL_MILESTONE_LEVELS.fusion) {
     return { stage: 'fusion', source: `Lv.${ELEMENTAL_MILESTONE_LEVELS.fusion}`, options: spellFusionOptions(combat) }
   }
@@ -96,8 +98,20 @@ function spellFusionOptions(combat) {
 }
 
 export function spellCoreOptions(combat) {
-  if (!combat.fusion) return []
+  if (!combat.elements.size) return []
   const options = []
+  if (!combat.fusion) {
+    for (const id of combat.activeElements) {
+      const element = SPELL_ELEMENTS[id], rank = combat.rank(`shape_${id}`)
+      if (rank < 3) options.push(coreCard(`shape_${id}`, element.upgrade, element.upgradeDesc,
+        `法术改造 ${rank} → ${rank + 1} · 伤害 +12%`, { kind: 'shape', element: id, level: rank, icon: element.icon, color: element.color }))
+    }
+    for (const [id, name, stats] of [['power', '施法凝聚', '自动法术伤害 +8%'], ['activePower', '原质凝聚', '空格法术伤害 +10%']]) {
+      if (options.length < 3) options.push(coreCard(id, name, '继续深化当前元素构筑。', stats, { kind: 'power', level: combat.rank(id) }))
+    }
+    if (options.length < 3) options.push(coreCard('shield_core', '护盾回充', '恢复法术护盾并缩短重建时间。', '护盾立即恢复 · 重建冷却 −1 秒', { kind: 'shield', icon: '🛡️' }))
+    return options.slice(0, 3).map(option => ({ ...option, color: combat.palette().main }))
+  }
   const conversion = combat.elements.has('lightning') && combat.cores >= 3 && !combat.lightning.storm
     ? coreCard('lightning_storm', '雷暴转化', '将雷系自动普攻改为空中落雷，优先选择射程内的怪群或精英。命中后继续传导；已学雷系强化、融合与另一系法术全部保留。', '替换雷系普攻形态 · 不增加技能位', { kind: 'form', element: 'lightning', color: SPELL_ELEMENTS.lightning.color, icon: '⚡' }) : null
   for (const id of combat.elements) {
@@ -106,7 +120,7 @@ export function spellCoreOptions(combat) {
   }
   const reaction = combat.rank('reaction')
   if (reaction < 3) options.push(coreCard('reaction', `${combat.fusion.name} · 共鸣`, `提高融合伤害与反应频率。${REACTION_SPREAD[combat.fusion.id]}第三级扩大反应范围。`, `共鸣 ${reaction} → ${reaction + 1} · 每级反应伤害 +25%`, { kind: 'reaction', level: reaction }))
-  // Prefer a basic-spell branch and the reaction branch; evolution belongs to Lv.10.
+  // Core rewards strengthen existing spells and reactions; route ultimates stay in the random level-up pool.
   const shapes = options.filter(s => s.kind === 'shape')
   const selected = [conversion && (combat.cores % 2 === 1 || !shapes.length) ? conversion : shapes.length ? shapes[combat.cores % shapes.length] : null, options.find(s => s.kind === 'reaction')].filter(Boolean)
   if (conversion) options.push(conversion)

@@ -5,14 +5,15 @@ export function getPetRally(level = 0) {
 
 export const PET_SPEC_INFO = {
   key: 'symbiosis', name: '共生契约', icon: '🐾', color: '#edc479',
-  desc: '岩甲护卫 · 逐步招募四人小队 · 全队鼓舞', bonus: '伙伴伤害 +20%',
+  desc: '随机组队 · 三条路线 · 全队鼓舞', bonus: '伙伴伤害 +20%',
   subBonus: '🥈 副专精共鸣：解锁【残响伙伴(弱化护卫投影)】与【兽灵回响(伙伴强化)】',
-  roadmap: ['T1：伤害／生命／攻速基础培养', 'T2：升级或 BOSS 秘典招募伙伴，最多四只', 'T3：伙伴专属被动与鼓舞强化', '终极：共生守望'],
+  roadmap: ['探索：随机招募伙伴与追猎／孢潮／守望入口', '确认：第 6 波／远征第 3 章后锁定一条路线', '深潜：路线进阶与伙伴契约继续随机出现', '🌟 终极：万灵齐射／万孢盛放／共生堡垒（三选一互斥）'],
 }
 export const PET_PARTNER_TYPES = { pet_partner: 'hunter', pet_dew_partner: 'dew', pet_spore_partner: 'spore' }
 export const PET_PARTNER_SKILLS = Object.keys(PET_PARTNER_TYPES)
 const skill = (id, name, tier, maxLevel, desc, stats, requires = []) => ({
   id, name, spec: 'symbiosis', requiresStrain: 'summoner', icon: '🐾', tier, maxLevel, desc, stats,
+  growthClass: tier === 1 && maxLevel > 1 ? 'core' : undefined,
   requires, tags: ['共生', `T${tier}`], apply(game) { game.weaponSystem.petCombat.sync() },
 })
 const partner = (id, name, icon, color, desc, stats) => ({

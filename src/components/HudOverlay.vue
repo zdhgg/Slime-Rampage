@@ -7,6 +7,8 @@
  * cooldown 由 onCooldown 以 ~10Hz 推送（连续条平滑数据源）。
  */
 import { computed } from 'vue'
+import SkillIcon from './SkillIcon.vue'
+import { routeIconId } from './skillIconRegistry.js'
 import { Pause, Play, Volume2, VolumeX } from 'lucide-vue-next'
 import { SPEC_INFO, getSpecInfo } from '../game/SkillPool.js'
 import { formatRunClock } from '../game/RunRules.js'
@@ -102,9 +104,12 @@ const formationBreakPercent = computed(() => {
 
 /** 空格 角色主动技能：冷却条进度（所有角色均有主动技能） */
 const skillPercent = computed(() => {
+  if (props.cooldown.shadow?.followup) return 100
   const max = props.cooldown.skillMax || 0
   return max > 0 ? Math.max(0, 100 - (props.cooldown.skillCd / max) * 100) : 0
 })
+const skillReady = computed(() => !!props.cooldown.shadow?.followup || props.cooldown.skillCd <= 0.02)
+const skillLabel = computed(() => props.cooldown.shadow?.followup ? '影袭追击' : props.cooldown.skillCd <= 0.02 ? props.cooldown.skillName : `${props.cooldown.skillCd.toFixed(1)}s`)
 const hasStrainSkill = computed(() => !!props.cooldown.skillId && (props.cooldown.skillMax || 0) > 0)
 
 /**
@@ -217,7 +222,7 @@ const primalTitle = computed(() => {
   const effect = primal.effect || '半径 ×1.5、伤害 ×2.5、击退翻倍'
   if (primalRatio.value >= 1) return `拟态能量已满 · 下次有效空格技将超载：${effect}`
   if (primalReady.value) return `拟态能量 ${primal.value}/${primal.max} · 下次有效空格技将超载：${effect}`
-  return `拟态能量 ${primal.value}/${primal.max} · 交替使用不同伤害来源（飞弹/震荡/元素附魔）充能，≥${primal.cost} 后空格技超载`
+  return `拟态能量 ${primal.value}/${primal.max} · 交替使用不同伤害来源（飞弹/震荡/元素反应/主机制/副共鸣）充能，≥${primal.cost} 后超载：${effect}`
 })
 </script>
 
@@ -256,14 +261,38 @@ const primalTitle = computed(() => {
         </div>
       </div>
       <div class="hud-build">
+        <div v-if="stats.ricochet" class="hud-ricochet" :title="stats.ricochet.note">
+          <SkillIcon :skill="{ id: routeIconId('gatling', stats.ricochet.route), spec: 'gatling', route: stats.ricochet.route }" size="inline" />
+          <span><b>{{ stats.ricochet.name }}</b><small v-if="stats.ricochet.route">投入 {{ stats.ricochet.investment }}/4 · {{ stats.ricochet.ultimate ? `终极：${stats.ricochet.ultimateName}` : stats.ricochet.ultimateReady ? '终极已进入随机池' : '终极进度未达标' }}</small><small v-else>入口 {{ stats.ricochet.seeds?.join(' · ') || '尚未抽到' }} · {{ stats.ricochet.normalChoices < 5 ? `还需选卡 ${5 - stats.ricochet.normalChoices} 次` : stats.ricochet.routeReady ? '下次选卡确认路线' : stats.ricochet.progressReady ? '等待随机入口' : '等待第 6 波／第 3 章' }}</small></span>
+        </div>
+        <div v-if="stats.glutton?.has && stats.glutton?.route" class="hud-glutton-build" :style="{ '--glutton-color': stats.glutton.color }" :title="stats.glutton.note">
+          <SkillIcon :skill="{ id: routeIconId('gluttony', stats.glutton.route), spec: 'gluttony', route: stats.glutton.route }" size="inline" />
+          <span><b>{{ stats.glutton.name }}</b><small>{{ stats.glutton.investment }}/4 · {{ stats.glutton.ultimate ? `终极：${stats.glutton.ultimateName}` : stats.glutton.ultimateReady ? '终极已进入随机池' : '终极进度未达标' }}</small></span>
+        </div>
+        <div v-if="stats.symbiosis" class="hud-symbiosis-build" :style="{ '--symbiosis-color': stats.symbiosis.color }" :title="stats.symbiosis.note">
+          <SkillIcon :skill="{ id: routeIconId('symbiosis', stats.symbiosis.route), spec: 'symbiosis', route: stats.symbiosis.route }" size="inline" />
+          <span><b>{{ stats.symbiosis.name }}</b><small v-if="stats.symbiosis.route">投入 {{ stats.symbiosis.investment }}/4 · {{ stats.symbiosis.ultimate ? `终极：${stats.symbiosis.ultimateName}` : stats.symbiosis.ultimateReady ? '终极已进入随机池' : '终极进度未达标' }}</small><small v-else>随机组队 · {{ stats.symbiosis.normalChoices < 5 ? `还需选卡 ${5 - stats.symbiosis.normalChoices} 次` : stats.symbiosis.routeReady ? '下次选卡确认路线' : '等待第 6 波／第 3 章' }}</small></span>
+        </div>
+        <div v-if="stats.shadow" class="hud-shadow-build" :style="{ '--shadow-color': stats.shadow.routeColor || '#bdacd0' }" :title="stats.shadow.route ? `${stats.shadow.routeName} · ${stats.shadow.routeInvestment}/4 · ${stats.shadow.ultimateName || '互斥终极未获得'}` : '暗影路线探索与锁定进度'">
+          <SkillIcon :skill="{ id: routeIconId('assassin', stats.shadow.route), spec: 'assassin', route: stats.shadow.route }" size="inline" />
+          <span>
+            <b>{{ stats.shadow.route ? stats.shadow.routeName : '暗影路线探索' }}</b>
+            <small v-if="stats.shadow.route">投入 {{ stats.shadow.routeInvestment }}/4 · {{ stats.shadow.ultimate ? `终极：${stats.shadow.ultimateName}` : stats.shadow.ultimateReady ? '终极已进入随机池' : '终极未达门槛' }}{{ stats.shadow.marked ? ' · 猎物已标记' : '' }}{{ stats.shadow.followup ? ' · 免费追击就绪' : '' }}</small>
+            <small v-else>入口 {{ stats.shadow.entryCount }}/3 · {{ stats.shadow.normalChoices < 5 ? `还需选卡 ${5 - stats.shadow.normalChoices} 次` : stats.shadow.routeReady ? '下次选卡确认路线' : '等待第 6 波／第 3 章' }}</small>
+          </span>
+        </div>
         <div v-if="stats.spells" class="hud-spell-build" :title="`当前配色：${stats.spells.palette?.name || '基础元素'}`">
-          <div class="hud-spell-slots">
-            <span v-for="el in stats.spells.elements" :key="el.id" :style="{ '--spell-color': el.color }" :title="`${el.desc} 自动施法间隔 ${el.interval.toFixed(2)} 秒 · ${el.enhancements || '基础法术'} · 核心改造 ${el.rank}/3`"><i>{{ el.icon }}</i><b>{{ el.spell }}</b><small v-if="el.enhancements">{{ el.enhancements }}</small><small v-else-if="el.rank">改造 {{ el.rank }}</small></span>
-            <span v-if="stats.spells.elements.length === 0" class="spell-slot-empty">◇<b>原质飞弹</b><small>Lv.2 选择首个法术</small></span>
-            <span v-if="stats.spells.elements.length === 1" class="spell-slot-empty">◇<small>Lv.5 选择第二系</small></span>
+          <div v-if="stats.spells.route" class="hud-element-route" :style="{ '--element-route-color': stats.spells.routeColor }">
+            <b><SkillIcon :skill="{ id: routeIconId('elemental', stats.spells.route), spec: 'elemental', route: stats.spells.route }" size="inline" /> {{ stats.spells.routeName }}</b><small>投入 {{ stats.spells.routeInvestment }}/4 · {{ stats.spells.routeUltimate ? `终极：${stats.spells.activeName}` : stats.spells.routeInvestment >= 4 ? '终极等待战局门槛与随机出现' : '路线进阶继续成长' }}</small>
           </div>
-          <p v-if="stats.spells.fusion" :title="stats.spells.fusion.desc"><b>{{ stats.spells.fusion.name }}</b><span>核心 {{ stats.spells.cores }} · {{ stats.spells.activeRank >= 3 ? '主动术已进化' : 'Lv.10 主动术进化' }}</span></p>
-          <p v-else><span>基础法术自动施放 · 空格原质释放</span></p>
+          <div v-else class="hud-element-route exploring"><b>{{ stats.spells.buildMode === 'cycle' ? '万象轮转探索中' : stats.spells.buildMode === 'fusion' ? '双系融合探索中' : '单系极化探索中' }}</b><small>{{ stats.spells.normalChoices < 5 ? `还需选卡 ${5 - stats.spells.normalChoices} 次` : '等待第 6 波／第 3 章确认路线' }}</small></div>
+          <div class="hud-spell-slots">
+            <span v-for="el in stats.spells.elements" :key="el.id" :style="{ '--spell-color': el.color }" :title="`${el.desc} 自动施法间隔 ${el.interval.toFixed(2)} 秒 · ${el.enhancements || '基础法术'} · 核心改造 ${el.rank}/3`"><SkillIcon :skill="{ id: el.id, spec: 'elemental', element: el.id }" size="inline" /><b>{{ el.spell }}</b><small v-if="el.enhancements">{{ el.enhancements }}</small><small v-else-if="el.rank">改造 {{ el.rank }}</small></span>
+            <span v-if="stats.spells.elements.length === 0" class="spell-slot-empty">◇<b>原质飞弹</b><small>Lv.2 发现首系</small></span>
+            <span v-if="stats.spells.route === 'cycle' && stats.spells.elements.length < 3" class="spell-slot-empty">◇<small>继续发现第三系</small></span>
+          </div>
+          <p v-if="stats.spells.fusion" :title="stats.spells.fusion.desc"><b>{{ stats.spells.fusion.name }}</b><span>核心 {{ stats.spells.cores }} · {{ stats.spells.activeRank >= 3 ? '融合术已进化' : '融合反应持续成长' }}</span></p>
+          <p v-else><span>{{ stats.spells.buildMode === 'cycle' ? '多系法术按顺序轮转施放' : '基础法术自动施放 · 空格原质释放' }}</span></p>
 
         </div>
         <!-- 元素指示：点亮已吸收的元素并显示等级（评审 Day 2：💧2 ⚡3）
@@ -276,7 +305,7 @@ const primalTitle = computed(() => {
             :class="[el.id, { active: elementLevel(el.id) > 0 }]"
             :title="elementTitle(el.id)"
           >
-            {{ el.icon }}<i v-if="elementLevel(el.id) > 0" class="el-lv">{{ elementLevel(el.id) }}</i>
+            <SkillIcon :skill="{ id: el.id, spec: 'elemental', element: el.id }" size="inline" /><i v-if="elementLevel(el.id) > 0" class="el-lv">{{ elementLevel(el.id) }}</i>
           </span>
         </div>
         <!-- 激活反应徽章（阶段十五）：主形态 ★ 标识，副反应并列，悬停看效果 -->
@@ -321,12 +350,12 @@ const primalTitle = computed(() => {
           <b v-else>{{ stats.primal?.value ?? 0 }}</b>
         </div>
         <!-- 流派专精指示（阶段十八） -->
-        <div v-if="stats.primarySpec || stats.secondarySpec" class="hud-specs">
+        <div v-if="!stats.ricochet && (stats.primarySpec || stats.secondarySpec)" class="hud-specs">
           <span v-if="stats.primarySpec" class="spec-chip primary" :title="'主专精：' + getSpecInfo(stats.primarySpec, stats)?.desc">
-            👑 主: {{ SPEC_INFO[stats.primarySpec]?.icon }} {{ getSpecInfo(stats.primarySpec, stats)?.name }}
+            <SkillIcon :skill="`spec_${stats.primarySpec}`" size="inline" /> 主: {{ getSpecInfo(stats.primarySpec, stats)?.name }}
           </span>
           <span v-if="stats.secondarySpec" class="spec-chip secondary" :title="'副专精：' + SPEC_INFO[stats.secondarySpec]?.desc">
-            🥈 副: {{ SPEC_INFO[stats.secondarySpec]?.icon }} {{ SPEC_INFO[stats.secondarySpec]?.name }}
+            <SkillIcon :skill="`spec_${stats.secondarySpec}`" size="inline" /> 副: {{ SPEC_INFO[stats.secondarySpec]?.name }}
           </span>
         </div>
       </div>
@@ -401,14 +430,14 @@ const primalTitle = computed(() => {
     </div>
     <!-- 空格 角色专属主动技能：仅角色血统渲染（包含原生黏液） -->
 <div v-if="cooldown.spellShield" class="spell-shield-status" :class="{ broken: cooldown.spellShield.points <= 0 }" :title="`法术护盾吸收敌人攻击，破盾后 ${cooldown.spellShield.cooldown} 秒自动重建`" aria-label="法术护盾状态">
-            <span>🛡 法术护盾</span><b>{{ Number(cooldown.spellShield.points.toFixed(1)) }}/{{ cooldown.spellShield.capacity }}</b>
+            <span><SkillIcon skill="spell_shield" size="inline" /> 法术护盾</span><b>{{ Number(cooldown.spellShield.points.toFixed(1)) }}/{{ cooldown.spellShield.capacity }}</b>
             <small>{{ cooldown.spellShield.points > 0 ? '保护中' : `重建 ${Math.ceil(cooldown.spellShield.remaining)} 秒` }}</small>
             <i v-if="cooldown.spellShield.points <= 0"><em :style="{ width: `${100 * (1 - cooldown.spellShield.remaining / cooldown.spellShield.cooldown)}%` }"></em></i>
           </div>
-    <div v-if="hasStrainSkill" role="button" tabindex="0" @click="emit('activate-skill')" @keydown.enter.prevent="emit('activate-skill')" @keydown.space.prevent="!$event.repeat && emit('activate-skill')" :aria-label="cooldown.skillName" :title="cooldown.skillDesc" class="hud-action hud-action--skill" :class="{ ready: cooldown.skillCd <= 0.02 }">
+    <div v-if="hasStrainSkill" role="button" tabindex="0" @click="emit('activate-skill')" @keydown.enter.prevent="emit('activate-skill')" @keydown.space.prevent="!$event.repeat && emit('activate-skill')" :aria-label="skillLabel" :title="cooldown.skillDesc" class="hud-action hud-action--skill" :class="{ ready: skillReady }">
       <div class="hud-action-label">
         <span>SPACE</span>
-        <b>{{ cooldown.skillCd <= 0.02 ? cooldown.skillName : `${cooldown.skillCd.toFixed(1)}s` }}</b>
+        <b><SkillIcon :skill="cooldown.skillId" size="inline" /> {{ skillLabel }}</b>
       </div>
       <i><em :style="{ width: skillPercent + '%' }"></em></i>
     </div>
@@ -421,7 +450,7 @@ const primalTitle = computed(() => {
       :title="gluttonTitle"
     >
       <div class="hud-action-label">
-        <span>SPACE 重咬</span>
+        <span><SkillIcon skill="devour_pulse" size="inline" /> SPACE 重咬</span>
         <b>{{ gluttonDots }} {{ stats.boss ? gluttonCharge.bossProgress : gluttonCharge.progress }}/{{ stats.boss ? gluttonCharge.bossProgressPer : gluttonCharge.progressPer }}</b>
       </div>
       <i><em :style="{ width: Math.round(gluttonProgressRatio * 100) + '%' }"></em></i>
@@ -555,7 +584,21 @@ const primalTitle = computed(() => {
 </template>
 
 <style scoped>
+.hud-ricochet { display:flex; align-items:center; gap:8px; padding:6px 12px; border:1px solid rgba(121,217,238,.3); border-radius:10px; background:rgba(7,17,26,.8); text-align:left; }
+.hud-ricochet b { display:block; font-size:12px; color:#cceff7; }
+.hud-ricochet small { display:block; margin-top:2px; font-size:10px; color:rgba(234,247,255,.65); }
+.hud-glutton-build { display:flex; align-items:center; gap:8px; padding:6px 12px; border:1px solid color-mix(in srgb,var(--glutton-color) 42%,transparent); border-radius:10px; background:rgba(28,13,8,.82); text-align:left; }
+.hud-glutton-build b { display:block; font-size:12px; color:#ffe3ad; }
+.hud-glutton-build small { display:block; margin-top:2px; font-size:10px; color:rgba(255,244,229,.65); }
+.hud-symbiosis-build { display:flex; align-items:center; gap:8px; padding:6px 12px; border:1px solid color-mix(in srgb,var(--symbiosis-color) 42%,transparent); border-radius:10px; background:rgba(13,18,17,.84); text-align:left; }
+.hud-symbiosis-build b { display:block; font-size:12px; color:#e9f6e7; }
+.hud-symbiosis-build small { display:block; margin-top:2px; font-size:10px; color:rgba(238,250,239,.66); }
+.hud-shadow-build { display:flex; align-items:center; gap:9px; padding:6px 12px; border:1px solid color-mix(in srgb,var(--shadow-color) 38%,transparent); border-radius:10px; background:rgba(12,12,20,.84); text-align:left; }
+.hud-shadow-build b { display:block; color:var(--shadow-color); font-size:12px; }
+.hud-shadow-build small { display:block; margin-top:2px; color:rgba(233,232,244,.66); font-size:10px; }
+
 .hud-spell-build { display: flex; flex-direction: column; gap: 5px; }.hud-spell-slots { display: flex; gap: 6px; }
+.hud-element-route { display:flex; flex-direction:column; gap:2px; padding:4px 7px; border-left:2px solid var(--element-route-color,#b6a4ff); background:color-mix(in srgb,var(--element-route-color,#b6a4ff) 8%,transparent); }.hud-element-route b { color:var(--element-route-color,#d4caff); font-size:10px; }.hud-element-route small { color:#a39aac; font-size:9px; }.hud-element-route.exploring { --element-route-color:#aaa0c4; }
 .hud-spell-slots > span { display: flex; gap: 5px; align-items: center; min-height: 30px; padding: 3px 8px; border: 1px solid #494351; border-radius: 5px; background: rgb(18 17 23 / .8); color: var(--spell-color, #82798e); }
 .hud-spell-slots i { font-style: normal; font-size: 14px; }.hud-spell-slots b { font-size: 11px; font-weight: 600; }.hud-spell-slots small { color: #a39aac; font-size: 9px; }.hud-spell-slots .spell-slot-empty { border-style: dashed; }
 .hud-spell-build p { display: flex; gap: 8px; margin: 0; font-size: 10px; color: #98909f; }.hud-spell-build p b { font-weight: 600; color: #c8b9df; }
@@ -1111,6 +1154,7 @@ const primalTitle = computed(() => {
 }
 
 .spec-chip {
+  display: inline-flex; align-items: center; gap: 4px;
   padding: 2px 10px;
   border-radius: 999px;
   font-size: 11.5px;
@@ -1491,7 +1535,7 @@ const primalTitle = computed(() => {
   margin-bottom: 6px;
 }
 
-.hud-action-label span {
+.hud-action-label > span {
   padding: 1px 5px;
   border: 1px solid rgba(255, 255, 255, 0.22);
   border-radius: 4px;

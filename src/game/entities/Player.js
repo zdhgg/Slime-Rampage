@@ -222,6 +222,12 @@ export class Player extends Entity {
     this.volleyMoveTimer = 0
     this.devourAcidBurst = 0 // 暴食：近身酸液爆发等级
     this.isGluttonyLord = false // 暴食：终极觉醒（荒古吞噬领主）
+    this.gluttonMireLevel = 0
+    this.gluttonAftershockLevel = 0
+    this.gluttonCounterLevel = 0
+    this.gluttonJawUltimate = false
+    this.gluttonShellUltimate = false
+    this.gluttonCounterCooldown = 0
     this.devourHeal = false // 暴食共鸣：吞噬必回血
     this.devourDamageReduction = 0 // 暴食共鸣：吞噬减伤
     this.regenInterval = 0 // 通用：自愈周期
@@ -315,6 +321,12 @@ export class Player extends Entity {
     this.volleyMoveTimer = 0
     this.devourAcidBurst = 0
     this.isGluttonyLord = false
+    this.gluttonMireLevel = 0
+    this.gluttonAftershockLevel = 0
+    this.gluttonCounterLevel = 0
+    this.gluttonJawUltimate = false
+    this.gluttonShellUltimate = false
+    this.gluttonCounterCooldown = 0
     this.devourHeal = false
     this.devourDamageReduction = 0
     this.devourDamageReductionTimer = 0
@@ -666,11 +678,14 @@ export class Player extends Entity {
     if (this.devourDamageReductionTimer > 0 && this.devourDamageReduction > 0) {
       damage = Math.max(1, Math.round(damage * (1 - this.devourDamageReduction)))
     }
+    const petRouteReduction = this.game?.weaponSystem?.petCombat?.playerDamageReduction || 0
+    if (petRouteReduction > 0) damage = Math.max(1, Math.round(damage * (1 - petRouteReduction)))
     if (this.gluttonGuard > 0 && this.gluttonGuardTimer > 0 && damage > 0) {
       damage = Math.max(0, damage - this.gluttonGuard)
       this.gluttonGuard = 0
       this.gluttonGuardTimer = 0
       this.game.weaponSystem._ring(this.x, this.y, '#d1efa0', this.radius + 14)
+      this.game.weaponSystem.gluttonCombat?.onGuardBlocked?.()
       if (damage <= 0) {
         this.invincible = 0.18
         return
@@ -724,6 +739,7 @@ export class Player extends Entity {
     if (this.devourDamageReductionTimer > 0) this.devourDamageReductionTimer -= dt
     this.gluttonGuardTimer = Math.max(0, this.gluttonGuardTimer - dt)
     this.gluttonGuardCooldown = Math.max(0, this.gluttonGuardCooldown - dt)
+    this.gluttonCounterCooldown = Math.max(0, this.gluttonCounterCooldown - dt)
     this.gluttonHealCooldown = Math.max(0, this.gluttonHealCooldown - dt)
     if (this.gluttonGuardTimer <= 0) this.gluttonGuard = 0
     this.elapsed += dt

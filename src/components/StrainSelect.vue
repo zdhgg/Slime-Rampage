@@ -93,7 +93,7 @@ function navigate(event, currentIndex) {
             </div>
           </div>
 
-          <p v-if="selected.id === 'elemental'" class="spell-growth-note">Lv.2 选择首个法术 → Lv.5 选择第二系并融合 → Lv.10 融合主动术进化</p>
+          <p v-if="selected.id === 'elemental'" class="spell-growth-note">Lv.2 发现首系 → 前期随机探索 → 第 6 波／第 3 章确认单系、双系或多系路线 → 终极随机出现</p>
 
           <details :key="`${selected.id}-rules`" class="strain-rules">
             <summary>完整血统机制 <ChevronDown :size="13" aria-hidden="true" /></summary>

@@ -73,6 +73,21 @@ export function renderShadowCombat(ctx, c) {
     ctx.save(); ctx.translate(e.x, e.y); ctx.globalAlpha = e.life / 0.18 * 0.22
     paintSlimeFamilySilhouette(ctx, 'shadow', p.radius, { fill: '#b15f7b' }); ctx.restore()
   }
+  for (const domain of c.domains) {
+    const radius = 92 + Math.min(60, c.bladeArcLevel * 6)
+    const lifeAlpha = Math.min(1, domain.life / 0.3)
+    const pulse = 1 - Math.max(0, Math.min(1, domain.timer / 0.42))
+    ctx.save(); ctx.translate(domain.x, domain.y); ctx.globalAlpha = lifeAlpha * 0.58
+    ctx.strokeStyle = '#e78da7'; ctx.lineWidth = 1.5; ctx.setLineDash([5, 7])
+    ctx.beginPath(); ctx.arc(0, 0, radius, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([])
+    ctx.globalAlpha = lifeAlpha * (0.18 + pulse * 0.26); ctx.strokeStyle = '#ffd9e5'; ctx.lineWidth = 2
+    ctx.beginPath(); ctx.arc(0, 0, radius * (0.45 + pulse * 0.55), 0, Math.PI * 2); ctx.stroke()
+    ctx.rotate(domain.angle)
+    for (const sign of [-1, 1]) {
+      ctx.save(); ctx.rotate(sign * Math.PI / 4); blade(ctx, 0, 0, 0, radius * 0.35, radius * 0.78, 5, lifeAlpha * 0.42); ctx.restore()
+    }
+    ctx.restore()
+  }
   if (s) {
     const k = s.elapsed < s.windup ? 0.12 + s.elapsed / s.windup * 0.16 : 0.28 + (s.elapsed - s.windup) / s.strike * 0.72
     blade(ctx, p.x, p.y, s.angle, p.radius, p.radius + (s.reach - p.radius) * k, 9)

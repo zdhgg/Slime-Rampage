@@ -167,6 +167,13 @@ for (const [specKey, tree] of Object.entries(SKILL_DATABASE)) {
   for (const s of list) engine.skillLevels[s.id] = s.maxLevel
 }
 engine.secondarySpec = 'elemental' // 副专精池也满
+// 路线入口等新构筑池不在 SKILL_DATABASE 内，反复抽取并升满，确保场景真的「池空」。
+for (let pass = 0; pass < 20; pass++) {
+  const extra = rollSkills(engine, 50)
+  if (!extra.length) break
+  for (const option of extra) engine.skillLevels[option.id] = option.maxLevel || 1
+}
+assert.equal(rollSkills(engine, 3).length, 0, '测试前提：全部技能（含路线入口）均已满级')
 const hpBefore = engine.player.hp
 engine.player.hp = Math.max(1, engine.player.hp - 2)
 let panelOpened = false

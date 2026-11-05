@@ -1,8 +1,10 @@
 import { shadowTargetAlive as alive, shadowLineClear, traceShadowPath, shadowCircleEntry } from './ShadowGeometry.js'
 import { renderPet, renderPetShot } from './PetVisuals.js'
 import { PET_PARTNER_TYPES, getPetRally } from './PetSkills.js'
+import { SYMBIOSIS_ROUTES, SYMBIOSIS_RULES, symbiosisRouteInvestment, symbiosisProgressReady, symbiosisRouteReady } from './SymbiosisBuild.js'
 import { petSupportStats, petSupportDescription } from './PetSupport.js'
-import { getOriginActiveGrowth, trySpendPrimalOverload, PRIMAL_RALLY_OVERLOAD_DURATION, PRIMAL_RALLY_OVERLOAD_DAMAGE } from './PrimalEnergy.js'
+import { gainOriginMechanism, gainOriginSecondary, onPrimalKill, getOriginActiveGrowth, getPrimalOverloadProfile, trySpendPrimalOverload, PRIMAL_RALLY_OVERLOAD_DURATION, PRIMAL_RALLY_OVERLOAD_DAMAGE } from './PrimalEnergy.js'
+import { triggerOriginSecondaryEcho } from './OriginEchoes.js'
 
 const TYPES = {
   guardian: { name: '岩甲团团', role: '近战', color: '#edc479', hp: 9, speed: 290, interval: 0.85, power: 1.4, range: 85, follow: 65, windup: 0.19 },
@@ -57,16 +59,50 @@ export class PetCombat {
   }
   get rallyStats() {
     const stats = getPetRally(this.level('pet_command'))
+    if (this.route === 'guard') {
+      stats.duration += Math.min(3, this.routeGuardAegisLevel * .5) + (this.routeUltimate === 'guard' ? 2 : 0)
+    }
     if (this.game?.startingStrain === 'origin' && this.game.primarySpec === 'symbiosis') {
       const growth = getOriginActiveGrowth(this.game)
-      stats.duration += growth.rallyDuration + (this.rallyOverloaded ? PRIMAL_RALLY_OVERLOAD_DURATION : 0)
-      stats.damage += growth.rallyDamage + (this.rallyOverloaded ? PRIMAL_RALLY_OVERLOAD_DAMAGE : 0)
+      const overload = getPrimalOverloadProfile(this.game, this.rallyOverloaded)
+      stats.duration += growth.rallyDuration + (this.rallyOverloaded ? PRIMAL_RALLY_OVERLOAD_DURATION + overload.rallyDuration : 0)
+      stats.damage += growth.rallyDamage + (this.rallyOverloaded ? PRIMAL_RALLY_OVERLOAD_DAMAGE + overload.rallyDamage : 0)
     }
     return stats
   }
   get attackRate() { return (1 + this.level('pet_haste') * 0.12) * (this.rallyTime > 0 ? 1 + this.rallyStats.haste : 1) }
   get moveScale() { return (this.rallyTime > 0 ? 1 + this.rallyStats.move : 1) * (1 + this.level('sym_sub_surge') * 0.15) }
-  reset() { this.items = []; this.shots = []; this.rallyTime = 0; this.rallyDuration = 0; this.rallyOverloaded = false; this.rallyFlash = 0; this.serial = 0 }
+  get playerDamageReduction() {
+    if (this.route !== 'guard' || this.rallyTime <= 0) return 0
+    return Math.min(.42, .08 + this.routeGuardLevel * .05 + this.routeGuardAegisLevel * .03 + (this.routeUltimate === 'guard' ? .1 : 0))
+  }
+  reset() {
+    this.items = []; this.shots = []; this.rallyTime = 0; this.rallyDuration = 0; this.rallyOverloaded = false; this.rallyFlash = 0; this.serial = 0
+    this.route = null; this.normalChoices = 0; this.routeUltimate = null; this.routeHitCount = 0; this.routeFieldCooldown = 0
+    this.routeHuntLevel = 0; this.routeHuntChainLevel = 0; this.routeHuntEchoLevel = 0
+    this.routeSporeLevel = 0; this.routeSporeFieldLevel = 0; this.routeSporeBloomLevel = 0
+    this.routeGuardLevel = 0; this.routeGuardAegisLevel = 0; this.routeGuardPulseLevel = 0
+  }
+
+  get routeInfo() { return SYMBIOSIS_ROUTES[this.route] || null }
+  chooseRoute(route) {
+    if (!this.fullRoster || !SYMBIOSIS_ROUTES[route] || !symbiosisRouteReady(this.game) ||
+        !(this.game.skillLevels?.[SYMBIOSIS_ROUTES[route].seed] > 0)) return false
+    this.route = route
+    this.weapon._weaponPulse = .7
+    return true
+  }
+  hudBuild() {
+    const route = this.routeInfo
+    return {
+      route: this.route, name: route?.name || '共生探索', icon: route?.icon || '🐾', color: route?.color || '#edc479',
+      investment: route ? symbiosisRouteInvestment(this.game, this.route) : 0,
+      normalChoices: this.normalChoices, routeReady: symbiosisRouteReady(this.game), progressReady: symbiosisProgressReady(this.game),
+      ultimate: !!(route && this.game.skillLevels?.[route.ultimate]), ultimateName: route?.ultimateName || '',
+      ultimateReady: !!(route && this.game.player?.level >= SYMBIOSIS_RULES.ultimateLevel && symbiosisProgressReady(this.game, true)),
+      note: route ? `${route.name}已锁定 · ${route.ultimateName}为互斥终极` : `前期随机组队 · 选卡满${SYMBIOSIS_RULES.choicesBeforeRoute}次且第${SYMBIOSIS_RULES.routeWave}波／远征第${SYMBIOSIS_RULES.routeStage}章后确认路线`,
+    }
+  }
 
   formationPoint(type) {
     const slot = FORMATION[type]
@@ -115,7 +151,9 @@ export class PetCombat {
 
   hit(pet, damage) {
     if (!this.available || pet.hp <= 0 || damage <= 0 || pet.hurt > 0) return false
-    const armor = pet.type === 'guardian' && this.level('pet_bulwark') ? 0.75 : 1
+    const routeGuard = this.route === 'guard' && this.rallyTime > 0
+      ? Math.min(.25, this.routeGuardLevel * .04 + this.routeGuardAegisLevel * .03 + (this.routeUltimate === 'guard' ? .08 : 0)) : 0
+    const armor = (pet.type === 'guardian' && this.level('pet_bulwark') ? 0.75 : 1) * (1 - routeGuard)
     pet.hp = Math.max(0, pet.hp - damage * armor)
     pet.hurt = 0.35; pet.idle = 0; pet.flash = 0.18
     if (pet.hp <= 0) {
@@ -229,6 +267,10 @@ export class PetCombat {
       this.weapon._burstColor(pet.x, pet.y, '#ffe4a1', 5, false)
     }
     this.weapon._ring(this.player.x, this.player.y, '#edc479', 100)
+    if (this.routeUltimate === 'hunt') this.routeHuntBurst()
+    if (this.routeUltimate === 'spore') this.routeSporeBurst()
+    if ((this.route === 'guard' && this.routeGuardPulseLevel > 0) || this.routeUltimate === 'guard') this.routePulse()
+    if (this.rallyOverloaded) triggerOriginSecondaryEcho(this.game, { overloaded: true })
     this.weapon._burstColor(this.player.x, this.player.y, '#edc479', 12, false)
     this.game.enemyManager.addText(this.player.x, this.player.y - 45, this.rallyOverloaded ? '⚡ 超载鼓舞!' : '共生鼓舞', null, '#ffe4a1', 15)
     this.game.sound?.bite?.(false, false)
@@ -242,17 +284,113 @@ export class PetCombat {
       (this.rallyTime > 0 ? 1 + this.rallyStats.damage : 1)
   }
 
+  routePulse() {
+    const level = Math.max(1, this.routeGuardPulseLevel)
+    const radius = 110 + level * 14 + (this.routeUltimate === 'guard' ? 70 : 0)
+    const damage = this.weapon.damage * this.weapon.levelMul * (0.7 + Math.min(1.1, level * .22))
+    for (const enemy of this.weapon.enemyManager.enemies) {
+      if (!alive(enemy) || enemy.isBoss || Math.hypot(enemy.x - this.player.x, enemy.y - this.player.y) > radius) continue
+      const before = enemy.hp
+      enemy.hit(damage)
+      if (enemy.hp < before) this.weapon.stats.petDamage = (this.weapon.stats.petDamage || 0) + Math.min(before, before - enemy.hp)
+      if (!enemy.active) this.weapon._onKill(enemy)
+    }
+    this.weapon._ring(this.player.x, this.player.y, '#edc479', radius)
+    this.weapon._burstColor(this.player.x, this.player.y, '#ffe4a1', 12, false)
+  }
+
+  routeHuntBurst() {
+    const pets = this.items.filter(pet => pet.hp > 0)
+    if (!pets.length) return
+    const range = 300 + this.routeHuntEchoLevel * 35
+    const targets = this.weapon.enemyManager.enemies.filter(enemy => alive(enemy) &&
+      Math.hypot(enemy.x - this.player.x, enemy.y - this.player.y) <= range)
+      .sort((a, b) => Math.hypot(a.x - this.player.x, a.y - this.player.y) - Math.hypot(b.x - this.player.x, b.y - this.player.y))
+      .slice(0, 12)
+    const damage = this.weapon.damage * this.weapon.levelMul * (1.1 + Math.min(.8, this.routeHuntChainLevel * .12))
+    for (const enemy of targets) {
+      const before = enemy.hp
+      enemy.hit(damage)
+      if (enemy.hp < before) this.weapon.stats.petDamage = (this.weapon.stats.petDamage || 0) + Math.min(before, before - enemy.hp)
+      if (!enemy.active) this.weapon._onKill(enemy)
+    }
+    this.weapon._ring(this.player.x, this.player.y, '#8edacb', range)
+    this.weapon._burstColor(this.player.x, this.player.y, '#d7fff3', Math.min(18, 6 + targets.length), false)
+  }
+
+  routeSporeBurst() {
+    const radius = 170 + this.routeSporeFieldLevel * 18
+    const targets = this.weapon.enemyManager.enemies.filter(enemy => alive(enemy) &&
+      Math.hypot(enemy.x - this.player.x, enemy.y - this.player.y) <= radius).slice(0, 18)
+    const damage = this.weapon.damage * this.weapon.levelMul * (1.15 + Math.min(.9, this.routeSporeBloomLevel * .18))
+    for (const enemy of targets) {
+      const before = enemy.hp
+      enemy.hit(damage)
+      if (enemy.hp < before) this.weapon.stats.petDamage = (this.weapon.stats.petDamage || 0) + Math.min(before, before - enemy.hp)
+      if (!enemy.isBoss && !enemy.isEnraged) enemy.slow = Math.max(enemy.slow || 0, 3.5)
+      if (!enemy.active) this.weapon._onKill(enemy)
+    }
+    this.weapon._ring(this.player.x, this.player.y, '#c3a4dc', radius)
+    this.weapon._burstColor(this.player.x, this.player.y, '#f1ddff', Math.min(20, 7 + targets.length), false)
+  }
+
   dealHit(pet, enemy, damage, boosted = false) {
     if (!this.available || !alive(enemy)) return false
+    if (this.route === 'hunt' && enemy.petHuntMarkTime > 0 && enemy.petHuntMarkDamage > 0) {
+      damage *= 1 + enemy.petHuntMarkDamage
+      enemy.petHuntMarkTime = 0
+      enemy.petHuntMarkDamage = 0
+    }
     const before = enemy.hp
     enemy.hit(damage)
     if (enemy.hp < before) {
+      if (this.game?.startingStrain === 'origin') {
+        if (this.game.primarySpec === 'symbiosis') gainOriginMechanism(this.game, 'symbiosis')
+        if (this.game.secondarySpec === 'symbiosis') gainOriginSecondary(this.game, 'symbiosis')
+      }
+      if (this.route === 'hunt' && this.routeHuntLevel > 0) {
+        enemy.petHuntMarkTime = Math.min(5, 2.5 + this.routeHuntLevel * .5)
+        enemy.petHuntMarkDamage = Math.min(.36, .12 + this.routeHuntLevel * .06)
+      }
+      if (this.route === 'spore' && this.routeSporeLevel > 0 && this.routeFieldCooldown <= 0) {
+        const radius = 55 + this.routeSporeLevel * 10 + this.routeSporeFieldLevel * 14
+        const splash = damage * Math.min(.45, .15 + this.routeSporeLevel * .05)
+        const targets = this.weapon.enemyManager.enemies.filter(other => alive(other) && other !== enemy &&
+          Math.hypot(other.x - enemy.x, other.y - enemy.y) <= radius)
+          .slice(0, Math.min(5, 2 + this.routeSporeBloomLevel))
+        for (const other of targets) {
+          other.hit(splash)
+          if (!other.isBoss && !other.isEnraged) other.slow = Math.max(other.slow || 0, Math.min(3, 1 + this.routeSporeFieldLevel * .4))
+        }
+        this.routeFieldCooldown = Math.max(.2, .8 - this.routeSporeFieldLevel * .08)
+        this.weapon._ring(enemy.x, enemy.y, '#c3a4dc', radius)
+      }
       this.weapon.stats.petDamage = (this.weapon.stats.petDamage || 0) + Math.min(before, before - enemy.hp)
       this.game.enemyManager.addText(enemy.x, enemy.y - 18, String(Math.round(damage * 10) / 10), null, TYPES[pet.type].color, 12)
       this.weapon._burstColor(enemy.x, enemy.y - 6, TYPES[pet.type].color, boosted ? 6 : 4, false)
     }
     if (!enemy.active) this.weapon._onKill(enemy)
     return enemy.hp < before
+  }
+
+  /** 原生副共生超载回响：一次性小范围脉冲，不触发伙伴攻击链、不递归充能。 */
+  primalEchoBurst() {
+    if (this.game?.startingStrain !== 'origin' || this.game.secondarySpec !== 'symbiosis') return 0
+    const targets = this.weapon.enemyManager.enemies.filter(e => alive(e) && !e.devouring &&
+      Math.hypot(e.x - this.player.x, e.y - this.player.y) <= 150)
+      .sort((a, b) => Math.hypot(a.x - this.player.x, a.y - this.player.y) - Math.hypot(b.x - this.player.x, b.y - this.player.y))
+      .slice(0, 5)
+    const damage = this.weapon.damage * this.weapon.levelMul * Math.min(0.65, 0.4 + this.level('sym_sub_echo') * 0.08)
+    for (const enemy of targets) {
+      const before = enemy.hp
+      enemy.hit(damage)
+      if (enemy.hp < before && !enemy.active) { this.weapon._onKill(enemy); onPrimalKill(this.game, enemy) }
+    }
+    if (targets.length) {
+      this.weapon._ring(this.player.x, this.player.y, '#edc479', 150)
+      this.weapon._burstColor(this.player.x, this.player.y, '#ffe4a1', Math.min(10, 3 + targets.length), false)
+    }
+    return targets.length
   }
 
   launchShot(pet, target, damage, offset = 0) {
@@ -357,6 +495,10 @@ export class PetCombat {
   update(dt) {
     this.sync()
     if (!this.available) return
+    if (this.route === 'hunt') for (const enemy of this.weapon.enemyManager.enemies) {
+      if (enemy.petHuntMarkTime > 0) enemy.petHuntMarkTime = Math.max(0, enemy.petHuntMarkTime - dt)
+      if (enemy.petHuntMarkTime === 0) enemy.petHuntMarkDamage = 0
+    }
     this.rallyTime = Math.max(0, this.rallyTime - dt)
     if (this.rallyTime === 0) this.rallyOverloaded = false
     this.rallyFlash = Math.max(0, this.rallyFlash - dt)
@@ -365,6 +507,7 @@ export class PetCombat {
       pet.claims.clear()
       pet.supportCd = Math.max(0, pet.supportCd - dt)
       pet.supportActive = Math.max(0, pet.supportActive - dt)
+      this.routeFieldCooldown = Math.max(0, this.routeFieldCooldown - dt)
       pet.supportFx = Math.max(0, pet.supportFx - dt)
       if (pet.supportFx === 0) pet.supportTargets = []
       if (pet.supportActive === 0) pet.taunted.clear()

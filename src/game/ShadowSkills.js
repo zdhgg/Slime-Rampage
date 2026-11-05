@@ -3,7 +3,9 @@ import { setCritSource } from './CritSources.js'
 export const SHADOW_BASE_EVASION = 0.15
 export const SHADOW_MAX_EVASION = 0.4
 export const SHADOW_CLONE_CHANCES = [0.6, 0.7, 0.8, 0.9]
-export const SHADOW_CLONE_POWERS = [0.4, 0.55, 0.7, 0.85]
+// Baseline + authored ranks through the hardest/endless ceilings. Later ranks
+// taper into a bounded plateau so the clone army never compounds without limit.
+export const SHADOW_CLONE_POWERS = [0.4, 0.55, 0.7, 0.85, 0.92, 0.98, 1.04, 1.09, 1.13, 1.16, 1.18, 1.2, 1.21, 1.22, 1.23]
 export const SHADOW_CLONE_LIFETIMES = [4, 5.5, 7]
 export const SHADOW_CLONE_CAPS = [2, 3, 4]
 export const SHADOW_CLONE_SKILL_IDS = ['ass_echo', 'ass_afterimage', 'ass_execute', 'ass_decoy', 'ass_legion', 'ass_capstone']
@@ -12,10 +14,10 @@ export const SHADOW_SPEC_INFO = {
   name: '暗影幻身', desc: '概率闪避 · 暴击生影 · 群影夹击',
   bonus: '👑 觉醒赋能：基础暴击保底 25% · 基础暴伤保底 3.5 倍 · 分身移速 +15%',
   roadmap: [
-    'T1：致命锋芒（暴击）／虚化身躯（闪避率）／影生共鸣（暴击后分身概率）／影袭留身（空格 起点生影）',
-    'T2：影刃凝实（分身伤害）／长夜留影（持续时间）／裂影横斩（本体群攻）',
-    'T3：群影增殖（分身上限 3／4 个）',
-    '终极：群影共舞（分身贯穿 · 影袭十字夹击）',
+    '前期：随机发现猎杀印记、影生共鸣或裂影横斩，先体验路线入口',
+    '中期：选卡满 5 次并到第 6 波／远征第 3 章后，确认并锁定一条路线',
+    '进阶：追猎步伐、影刃合击或弧刃扩散带来持续成长；公共暗影能力保留',
+    '终极：Lv.14、路线投入 4 级且到第 10 波／远征第 5 章后随机进入选卡池，三者互斥且不保证出现',
   ],
 }
 
@@ -33,7 +35,7 @@ export const SHADOW_SKILL_VARIANTS = {
   },
   ass_execute: {
     name: '影刃凝实', icon: '🗡️', desc: '提高每只分身的攻击伤害，影袭夹击同步增强', tags: ['暗影·T2', '分身强度'], requires: t1,
-    stats(lv) { return `分身攻击 ${Math.round(SHADOW_CLONE_POWERS[lv + 1] * 100)}% · 夹击 ${Math.round(SHADOW_CLONE_POWERS[lv + 1] * 200)}% 攻击力` },
+    stats(lv) { const power = SHADOW_CLONE_POWERS[Math.min(SHADOW_CLONE_POWERS.length - 1, lv + 1)]; return `分身攻击 ${Math.round(power * 100)}% · 夹击 ${Math.round(power * 200)}% 攻击力` },
     apply(game, lv) { game.player.shadowClonePowerLevel = lv },
   },
   ass_decoy: {
@@ -76,7 +78,7 @@ export const SHADOW_EXTRA_SKILLS = [
 export function resolveShadowSkill(skill, game) {
   if (game.startingStrain !== 'shadow') return skill
   const variant = SHADOW_SKILL_VARIANTS[skill.id]
-  if (variant) return { ...skill, ...variant, apply: skill.apply }
+  if (variant) return { ...skill, ...variant, isShadowSkill: true, apply: skill.apply }
   if (skill.id === 'boss_assassin_voidstep') return { ...skill,
     desc: '闪避率提升，影袭结束后储存一次普通攻击必暴', stats: '闪避率 +10 个百分点（上限 40%）· 影袭后普攻必暴' }
   return skill

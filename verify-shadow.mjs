@@ -180,15 +180,24 @@ check('暂停不消耗影袭前摇，死亡、结算与重开清理所有状态'
   assert.ok(g.weaponSystem._projectiles.length > 0)
   assert.equal(c.enabled, false)
 })
-check('裂影横斩在 Lv.5 觉醒且有前置、主树投入 ≥2 级后进入暗影技能池，原生黏液不抽到无效技能', g => {
+check('三路线入口在前期随机出现，方向进阶要在中期路线锁定后开放，原生黏液不抽到暗影技能', g => {
   learn(g, 'ass_lethal')
-  assert.ok(!rollSkills(g, 100).some(s => s.id === 'ass_cleave'))
-  g.player.level = 5; g._ensureRoleAwakening()
-  assert.ok(!rollSkills(g, 100).some(s => s.id === 'ass_cleave'))
-  learn(g, 'ass_stride')
   assert.ok(rollSkills(g, 100).some(s => s.id === 'ass_cleave'))
+  g.player.level = 5; g._ensureRoleAwakening()
+  assert.ok(rollSkills(g, 100).some(s => s.id === 'shadow_hunt_mark'))
+  learn(g, 'ass_stride')
+  learn(g, 'ass_cleave')
+  const c = g.weaponSystem.shadowCombat
+  c.normalChoices = 5; g.enemyManager.wave = 6
+  const routes = rollSkills(g, 3)
+  assert.equal(routes.length, 3)
+  assert.ok(routes.find(s => s.route === 'blade' && !s.locked))
+  assert.ok(routes.find(s => s.route === 'hunt' && s.locked))
+  assert.ok(routes.find(s => s.route === 'swarm' && s.locked))
+  assert.equal(g.applySkill(routes.find(s => s.route === 'blade')), true)
+  assert.ok(rollSkills(g, 100).some(s => s.id === 'shadow_blade_arc'))
   g.applyStartingStrain('origin'); g.reset(); g.player.level = 5; g.primarySpec = 'assassin'; learn(g, 'ass_lethal')
-  assert.ok(!rollSkills(g, 100).some(s => s.id === 'ass_cleave'))
+  assert.ok(!rollSkills(g, 100).some(s => s.isShadowSkill || s.isShadowRoute))
 })
 check('裂影横斩清理目标两侧最多四敌，独立伤害不暴击、不递归，远敌安全', g => {
   learn(g, 'ass_cleave', 2)

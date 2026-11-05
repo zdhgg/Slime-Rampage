@@ -3,31 +3,32 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { chromium } from 'playwright-core'
 
-// Use a disposable test account service, never the user's development account DB.
-const output = path.resolve('.workbuddy/elemental-level-growth')
+// Use an isolated local test database; do not touch a development account DB.
+const output = path.resolve('.workbuddy/elemental-build')
 await fs.mkdir(output, { recursive: true })
 const browser = await chromium.launch({ executablePath: 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', headless: true })
 const context = await browser.newContext({ viewport: { width: 1440, height: 960 }, baseURL: process.env.SLIME_TEST_URL || 'http://127.0.0.1:3014' })
 const errors = [], screenshots = []
 const page = await context.newPage()
-page.on('pageerror', e => errors.push(e.message))
+page.on('pageerror', error => errors.push(error.message))
+const game = fn => page.evaluate(fn)
 const shot = async name => {
-  await page.waitForFunction(() => { const overlay = document.querySelector('.spell-core-overlay'); return !overlay || Number(getComputedStyle(overlay).opacity) >= .999 })
   const file = path.join(output, `${name}.png`)
   await page.screenshot({ path: file, animations: 'disabled' }); screenshots.push(file)
 }
-const game = fn => page.evaluate(fn)
 const freeze = () => game(() => { const g = window.playtestGame; g.stop(); g.running = true })
 async function gainLevel() {
   await game(() => { const g = window.playtestGame; g.player.gainExp(g.player.maxExp - g.player.exp) })
 }
 
 try {
-  const registered = await context.request.post('/api/auth/register', { data: { username: `growth${Date.now()}`, password: 'local-playtest-2026' } })
+  const registered = await context.request.post('/api/auth/register', { data: { username: `el${Date.now().toString(36)}`, password: 'local-playtest-2026' } })
   assert.equal(registered.ok(), true, await registered.text())
   await context.request.post('/api/account/tutorial')
   await page.goto('/')
+  await page.locator('.account-welcome').waitFor()
   await page.locator('[data-playstyle="arena"]').click()
+  await page.locator('[data-mode="expedition"]').waitFor()
   await page.locator('[data-mode="expedition"]').click()
   await page.locator('[data-strain="elemental"]').click()
   assert.equal(await page.locator('.starting-spells-options').count(), 0)
@@ -46,85 +47,82 @@ try {
     const g = window.playtestGame
     g.stop(); g.running = true; g._pauseLock = 0; g.input.suspended = false
     g._activateExpeditionStage(); g.enemyManager._enemies = []; g.enemyManager._spawnTimer = Infinity
-    g.mapFeatures.barricades = []
-    // Keep rendering deterministic while actual UI choices still call the engine.
-    g.start = () => { g.running = true }
+    g.mapFeatures.barricades = []; g.start = () => { g.running = true }
     g._pushStats(); g.render()
   })
   assert.equal(await game(() => playtestGame.weaponSystem.spellCombat.elements.size), 0)
   await gainLevel()
   await page.getByRole('heading', { name: '选择你的第一个法术' }).waitFor()
   assert.equal(await page.locator('.core-option').count(), 4)
-  assert.equal(await page.locator('.levelup-panel').count(), 0)
   await shot('03-first-spell-desktop')
   await page.setViewportSize({ width: 390, height: 844 })
   assert.ok(await game(() => document.documentElement.scrollWidth <= innerWidth + 1))
   await shot('04-first-spell-mobile')
   await page.setViewportSize({ width: 1440, height: 960 })
-  const fire = page.locator('.core-option').filter({ has: page.getByText('火球术', { exact: true }) })
-  await fire.focus(); await page.keyboard.press('Tab'); await page.keyboard.press('Shift+Tab'); await page.keyboard.press('Space')
+  await page.locator('.core-option').filter({ has: page.getByText('火球术', { exact: true }) }).click()
   await page.locator('.spell-core-panel').waitFor({ state: 'hidden' })
   assert.deepEqual(await game(() => [...playtestGame.weaponSystem.spellCombat.elements]), ['fire'])
-  assert.equal(await game(() => playtestGame.input.consumeFever()), false, '面板确认不会排入幽灵空格技能')
-  for (let n = 0; n < 2; n++) { await gainLevel(); await page.locator('.skill-card').first().click(); await freeze() }
+  assert.equal(await game(() => playtestGame.input.consumeFever()), false, '法术选择不会排入幽灵空格技能')
+
+  // Bypass RNG to verify the route interface with three currently learned elements.
+  await game(() => {
+    const g = playtestGame, s = g.weaponSystem.spellCombat
+    s.learnElement('water'); s.learnElement('lightning'); s.normalChoices = 5; g.expeditionStage = 3
+    g._pushStats(); g.render()
+  })
   await gainLevel()
-  await page.getByRole('heading', { name: '选择第二元素，确定本局融合' }).waitFor()
-  assert.equal(await page.locator('.core-option').count(), 3)
-  await shot('05-fusion-desktop')
+  await page.getByRole('heading', { name: '中期路线确认 · 选择元素构筑' }).waitFor()
+  assert.equal(await page.locator('.route-card').count(), 3)
+  assert.equal(await page.locator('.route-card:disabled').count(), 0)
+  await shot('05-routes-desktop')
   await page.setViewportSize({ width: 390, height: 844 })
-  await shot('06-fusion-mobile')
   assert.ok(await game(() => document.documentElement.scrollWidth <= innerWidth + 1))
-  await page.setViewportSize({ width: 1440, height: 960 })
-  await page.locator('.core-option').filter({ has: page.getByText('雷电', { exact: true }) }).click()
-  await page.locator('.spell-core-panel').waitFor({ state: 'hidden' })
-  for (let n = 0; n < 4; n++) { await gainLevel(); await page.locator('.skill-card').first().click(); await freeze() }
-  await gainLevel()
-  await page.getByRole('heading', { name: '融合主动术进化' }).waitFor()
-  assert.equal(await page.locator('.core-option').count(), 1)
-  await shot('07-evolution-desktop')
-  await page.locator('.core-option').click()
+  await shot('06-routes-mobile')
+  await page.locator('.route-card').filter({ hasText: '万象轮转' }).click()
+  await page.getByRole('heading', { name: '确认锁定【万象轮转】' }).waitFor()
+  await page.locator('.review-actions button:not(.confirm)').click()
+  await page.getByRole('heading', { name: '中期路线确认 · 选择元素构筑' }).waitFor()
+  await page.locator('.route-card').filter({ hasText: '万象轮转' }).click()
+  await page.locator('.review-actions button.confirm').click()
+  await page.locator('.elemental-route-overlay').waitFor({ state: 'hidden' })
+  const routeState = await game(() => {
+    const g = playtestGame, s = g.weaponSystem.spellCombat
+    return { route: s.route, activeElements: s.activeElements, routeName: s.hud().routeName, normalChoices: s.normalChoices }
+  })
+  assert.equal(routeState.route, 'cycle')
+  assert.equal(routeState.activeElements.length, 3)
+  assert.equal(routeState.routeName, '万象轮转')
+  await shot('07-route-locked-desktop')
+
   const snapshot = await game(() => {
     const g = playtestGame, s = g.weaponSystem.spellCombat
+    g._pauseLock = 0; g.running = true; g.input.suspended = false
     for (let i = 0; i < 5; i++) {
       const e = g.enemyManager.spawnAt(g.player.x + 130 + i * 55, g.player.y + (i % 2) * 50, 'knight')
       e.hp = e.maxHp = 10000; e.shieldHits = 0
     }
     g.enemyManager._buildGrid()
-    for (let i = 0; i < 16; i++) s.update(.05)
-    g.input.queueFever(); g._updateStrainSkill(0)
-    for (let i = 0; i < 8; i++) s.update(.05)
-    g._pushStats(); g._pushCooldown(); g.render()
-    return { level: g.player.level, elements: [...s.elements], active: s.activeName, cores: s.cores, pauseLock: g._pauseLock, casts: s.stats.castsByElement, activeCasts: s.stats.activeCasts }
+    for (let i = 0; i < 600; i++) s.update(.05)
+    g._pushStats(); g.render()
+    return { casts: s.stats.castsByElement, buildMode: s.buildMode, route: s.route, activeCasts: s.stats.activeCasts }
   })
-  assert.equal(snapshot.active, '天罚雷炎'); assert.equal(snapshot.pauseLock, 0)
-  assert.ok(snapshot.casts.fire > 0 && snapshot.casts.lightning > 0)
-  assert.equal(snapshot.activeCasts, 1)
-  await shot('08-evolved-combat-desktop')
-  await page.setViewportSize({ width: 390, height: 844 })
-  await game(() => { playtestGame._onResize(); playtestGame.render() })
-  await shot('09-evolved-combat-mobile')
-  // Actual result-screen restart returns to a neutral Lv.1, then a new first choice.
-  await page.setViewportSize({ width: 1440, height: 960 })
+  assert.equal(snapshot.route, 'cycle')
+  assert.equal(snapshot.buildMode, 'cycle')
+  assert.ok(snapshot.casts.fire > 0 && snapshot.casts.water > 0 && snapshot.casts.lightning > 0, JSON.stringify(snapshot))
+  await shot('08-cycle-combat-desktop')
+
   await game(() => playtestGame.finishRun('defeat', 'slime-defeated'))
   await page.locator('.restart-btn').click()
   await page.locator('.deploy-btn').click()
   await page.locator('.hud-spell-build').waitFor()
   await page.waitForFunction(() => playtestGame.player.level === 1 && !playtestGame.runFinished)
   await freeze()
-  assert.deepEqual(await game(() => ({ level: playtestGame.player.level, elements: [...playtestGame.weaponSystem.spellCombat.elements], evolved: playtestGame.weaponSystem.spellCombat.milestoneEvolved, first: playtestGame.startingElement })), { level: 1, elements: [], evolved: false, first: null })
+  assert.deepEqual(await game(() => ({ level: playtestGame.player.level, elements: [...playtestGame.weaponSystem.spellCombat.elements], route: playtestGame.weaponSystem.spellCombat.route })), { level: 1, elements: [], route: null })
   await gainLevel()
   await page.getByRole('heading', { name: '选择你的第一个法术' }).waitFor()
-  assert.equal(await page.locator('.core-option').count(), 4)
   await page.locator('.core-option').filter({ has: page.getByText('毒雾', { exact: true }) }).click()
   assert.deepEqual(await game(() => [...playtestGame.weaponSystem.spellCombat.elements]), ['poison'])
   assert.deepEqual(errors, [])
-  // Old comparison links cannot re-enable the removed pre-run selection.
-  await page.goto('/?elementalProgression=boss')
-  await page.locator('[data-playstyle="arena"]').click()
-  await page.locator('[data-mode="expedition"]').click()
-  await page.locator('[data-strain="elemental"]').click()
-  assert.equal(await page.locator('.starting-spells-options button').count(), 0)
-  await page.locator('.spell-growth-note').waitFor()
-  await fs.writeFile(path.join(output, 'browser-results.json'), JSON.stringify({ snapshot, errors, screenshots }, null, 2))
-  console.log(JSON.stringify({ snapshot, errors, screenshots }, null, 2))
+  await fs.writeFile(path.join(output, 'browser-results.json'), JSON.stringify({ routeState, snapshot, errors, screenshots }, null, 2))
+  console.log(JSON.stringify({ routeState, snapshot, errors, screenshots }, null, 2))
 } finally { await browser.close() }

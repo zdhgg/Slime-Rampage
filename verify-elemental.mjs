@@ -33,7 +33,10 @@ const evolve = s => {
   assert.equal(s.applyMilestone(s.milestoneReward().options[0]), true)
 }
 const near = (a, b) => assert.ok(Math.abs(a - b) < 1e-8, `${a} ≈ ${b}`)
-const learnSpell = (g, id) => { const skill = ELEMENTAL_SKILLS.find(s => s.id === id); assert.ok(skill); g.applySkill(skill) }
+const learnSpell = (g, id) => {
+  const skill = ELEMENTAL_SKILLS.find(s => s.id === id); assert.ok(skill)
+  const level = (g.skillLevels[id] || 0) + 1; g.skillLevels[id] = level; skill.apply?.(g, level)
+}
 
 for (const element of SPELL_ELEMENT_IDS) check(`${element}: 学习后等待目标、独立计时与零旧飞弹`, (g, s) => {
   assert.deepEqual([...s.elements], [element]); assert.equal(g.player.elements.size, 1)
@@ -235,13 +238,14 @@ for (const element of SPELL_ELEMENT_IDS) check(`${element}: 连续 20 秒实战�
   assert.ok(s.effects.length <= 100 && s.fields.length <= 5 && s.shots.length <= 48)
 }, element)
 
-check('四系候选只匹配已掌握法术，单系保底两项；冰封要求先选减速', (g, s) => {
+check('前期随机提供已有系强化和新元素；冰封仍要求先选减速', (g, s) => {
   for (const element of SPELL_ELEMENT_IDS) {
     startSchool(s, element); g.skillLevels = {}; g.primarySpec = null; g.player.level = 2
+    const pool = rollSkills(g, 30)
+    assert.ok(pool.some(c => c.element === element), `${element} 已掌握后有本系强化`)
+    assert.ok(pool.some(c => c.isElementalDiscovery && c.element !== element), `${element} 探索期可遇见新元素`)
     for (let i = 0; i < 40; i++) {
       const cards = rollSkills(g, 3)
-      assert.ok(cards.filter(c => c.element === element).length >= 2)
-      assert.ok(cards.every(c => !c.element || c.element === element))
       assert.ok(cards.every(c => c.id !== 'spell_ice_freeze'))
     }
   }
@@ -250,11 +254,10 @@ check('四系候选只匹配已掌握法术，单系保底两项；冰封要求�
   g.skillLevels = {}; startSchool(s, 'fire'); fuse(s, 'lightning')
   for (let i = 0; i < 40; i++) {
     const cards = rollSkills(g, 3)
-    assert.ok(cards.some(c => c.element === 'fire')); assert.ok(cards.some(c => c.element === 'lightning'))
-    assert.ok(cards.every(c => !c.element || ['fire', 'lightning'].includes(c.element)))
+    assert.ok(cards.every(c => !c.isElementalDiscovery || !['fire', 'lightning'].includes(c.element)))
   }
   for (const skill of ELEMENTAL_SKILLS.filter(c => c.element === 'fire')) g.skillLevels[skill.id] = skill.maxLevel
-  const fallback = rollSkills(g, 3); assert.equal(fallback.length, 3); assert.ok(fallback.every(c => c.element !== 'fire'))
+  const fallback = rollSkills(g, 30); assert.ok(fallback.every(c => !ELEMENTAL_SKILLS.some(skill => skill.element === 'fire' && skill.id === c.id)))
 })
 check('火球变大、多弹分时、燃烧可选；融合不重置已学强化', (g, s) => {
   const target = spawn(g, { x: 300, hp: 10000 })
@@ -530,14 +533,17 @@ check('护盾融合保持当前容量与恢复进度，重开、结算及非元�
   g.running = true; g.player.invincible = 0; const hp = g.player.hp
   g.player.hit(1, { enemyAttack: true }); assert.equal(g.player.hp, hp - 1)
 })
-check('元素升级每五级提供护盾强化机会，保留单系和双系法术保底', (g, s) => {
+check('元素升级按周期提供护盾强化机会，已掌握元素强化保留在随机池', (g, s) => {
+  startSchool(s, 'fire')
   g.player.level = 3
   for (let i = 0; i < 20; i++) {
     const options = rollSkills(g); assert.ok(options.some(c => c.id === 'spell_shield'))
-    assert.ok(options.filter(c => c.element === 'fire').length >= 2)
   }
+  const available = rollSkills(g, 30)
+  assert.ok(available.some(c => c.element === 'fire'))
+  assert.ok(available.some(c => c.isElementalDiscovery && c.element !== 'fire'))
   fuse(s, 'poison'); g.player.level = 8; g.primarySpec = 'elemental'
-  const options = rollSkills(g); assert.ok(options.some(c => c.id === 'spell_shield'))
+  const options = rollSkills(g, 30); assert.ok(options.some(c => c.id === 'spell_shield'))
   assert.ok(options.some(c => c.element === 'fire') && options.some(c => c.element === 'poison'))
   learnSpell(g, 'spell_shield'); learnSpell(g, 'spell_shield')
   for (let i = 0; i < 20; i++) assert.ok(rollSkills(g).every(c => c.id !== 'spell_shield'))

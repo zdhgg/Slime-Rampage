@@ -2,8 +2,15 @@ import { PET_SPEC_INFO, PET_SKILLS, PET_BOSS_SKILLS, PET_PARTNER_SKILLS } from '
 import { setCritSource } from './CritSources.js'
 import { ELEMENTAL_SKILLS, ELEMENTAL_SPEC_INFO, resolveElementalSkill } from './SpellRules.js'
 import { spellSkillAvailable, prioritizeSpellChoices } from './ElementalUpgrades.js'
-import { SHADOW_EXTRA_SKILLS, SHADOW_SKILL_VARIANTS, SHADOW_CLONE_SKILL_IDS, SHADOW_SPEC_INFO, resolveShadowSkill } from './ShadowSkills.js'
-import { getOriginActiveGrowth } from './PrimalEnergy.js'
+import { SHADOW_EXTRA_SKILLS, SHADOW_SKILL_VARIANTS, SHADOW_SPEC_INFO, resolveShadowSkill } from './ShadowSkills.js'
+import { SHADOW_ROUTES, getShadowSkill, rollShadowSkills } from './ShadowBuild.js'
+import { getOriginActiveGrowth, getPrimalOverloadProfile } from './PrimalEnergy.js'
+import { rollRicochetSkills, RICOCHET_BOSS_SKILLS, RICOCHET_SPEC_INFO, RICOCHET_ROUTES } from './RicochetRules.js'
+import { CORE_SKILL_RANK_CAPS, getEffectiveSkillMaxLevel, getSoftRankMultiplier, applyRankMultiplier } from './SkillProgression.js'
+import { ENDLESS_SKILLS } from './EndlessSkills.js'
+import { GLUTTON_ROUTES, rollGluttonSkills } from './GluttonBuild.js'
+import { rollSymbiosisSkills } from './SymbiosisBuild.js'
+import { elementalSkillOptions } from './ElementalBuild.js'
 /**
  * 技能池：流派化专精技能体系（阶段式里程碑觉醒架构）
  *
@@ -111,14 +118,19 @@ export const SKILL_DATABASE = {
         desc: '提高吞噬线与吸附范围，加快吞噬和近战命中首领的猎食点获取',
         tags: ['暴食·T1', '吞噬'],
         maxLevel: 3,
+        growthClass: 'core',
         stats(lv, game) {
+          const rank = lv + 1
+          const threshold = Math.min(40, 24 + rank * 4)
+          const radius = Math.min(3, 1 + rank * 0.2)
+          const charge = Math.min(150, rank * 20)
           // 首领充能走近战普攻命中——拟态 origin 无普攻咬击，该通道不生效，不承诺。
-          const bossPart = game?.startingStrain === 'origin' ? '' : ` · 首领充能 +${[33, 66, 100][lv]}%`
-          return `吞噬阈值 ${[28, 32, 36][lv]}% · 吸附 +${[20, 40, 60][lv]}% · 吞噬充能 +${[20, 40, 60][lv]}%${bossPart}`
+          const bossPart = game?.startingStrain === 'origin' ? '' : ` · 首领充能 +${Math.min(200, Math.round(rank * 100 / 3))}%`
+          return `吞噬阈值 ${threshold}% · 吸附 +${Math.round((radius - 1) * 100)}% · 吞噬充能 +${charge}%${bossPart}`
         },
         apply(game, lv) {
-          game.devourThreshold = [0.28, 0.32, 0.36][lv - 1]
-          game.player.devourRadiusBonus = [1.2, 1.4, 1.6][lv - 1]
+          game.devourThreshold = Math.min(0.4, 0.24 + lv * 0.04)
+          game.player.devourRadiusBonus = Math.min(3, 1 + lv * 0.2)
         },
       },
       {
@@ -130,25 +142,27 @@ export const SKILL_DATABASE = {
         desc: '增加生命上限，延长吞噬或重咬命中首领后的一层护甲；护甲抵挡 1 点伤害，每 2.5 秒最多获得一次',
         tags: ['暴食·T1', '体魄'],
         maxLevel: 3,
+        growthClass: 'core',
         stats(lv, game) {
-          return `生命上限 ${game.player.maxHp} → ${game.player.maxHp + 1} · 捕食护甲 ${[2, 2.4, 2.8][lv]} 秒`
+          return `生命上限 ${game.player.maxHp} → ${game.player.maxHp + 1} · 捕食护甲 ${Math.min(4.8, 1.6 + (lv + 1) * 0.4).toFixed(1)} 秒`
         },
         apply(game) {
           game.player.maxHp += 1
           game.player.hp = Math.min(game.player.maxHp, game.player.hp + 1)
-          game.player.gluttonGuardDuration = Math.min(2.8, game.player.gluttonGuardDuration + 0.4)
+          game.player.gluttonGuardDuration = Math.min(4.8, game.player.gluttonGuardDuration + 0.4)
         },
       },
       {
         id: 'glut_ram',
         spec: 'gluttony',
-        tier: 2,
-        requires: ['glut_maw', 'glut_bulk'],
+        // 裂颚路线的种子入口：与深渊胃囊、硬化甲壳同级开放，保证 Lv.1~4 探索期
+        // 三条路线都摸得到 seed。进阶门槛留给胃酸迸发等 T3 技能，不压在入口上。
+        tier: 1,
         name: '腐蚀重碾',
         icon: '🚜',
         desc: '强化重咬的伤害与范围',
-        tags: ['暴食·T2', '重咬'], maxLevel: 3,
-        stats(lv) { return `重咬伤害 +${[15, 30, 45][lv]}% · 范围 +${[10, 20, 30][lv]}%` },
+        tags: ['暴食·T1', '重咬'], maxLevel: 3, growthClass: 'core',
+        stats(lv) { const rank = lv + 1; return `重咬伤害 +${rank * 15}% · 范围 +${rank * 10}%` },
         apply(game, lv) { game.player.gluttonHeavyLevel = lv },
       },
       {
@@ -257,13 +271,16 @@ export const SKILL_DATABASE = {
         desc: '飞弹速度与伤害协同提升',
         tags: ['机枪·T1', '弹速'],
         maxLevel: 3,
+        growthClass: 'core',
         stats(lv, game) {
           const v = Math.round(game.weaponSystem.projectileSpeed)
-          return `弹速 ${v} → ${Math.round(v * 1.2)} · 伤害 +15%`
+          const speedRatio = getSoftRankMultiplier(lv + 1, 0.2, 3, 2.1) / getSoftRankMultiplier(lv, 0.2, 3, 2.1)
+          const damageRatio = getSoftRankMultiplier(lv + 1, 0.15, 3, 1.9) / getSoftRankMultiplier(lv, 0.15, 3, 1.9)
+          return `弹速 ${v} → ${Math.round(v * speedRatio)} · 伤害 ×${damageRatio.toFixed(2)}`
         },
-        apply(game) {
-          game.weaponSystem.projectileSpeed *= 1.2
-          game.weaponSystem.damage *= 1.15
+        apply(game, lv) {
+          applyRankMultiplier(game.weaponSystem, 'projectileSpeed', lv - 1, lv, rank => getSoftRankMultiplier(rank, 0.2, 3, 2.1))
+          applyRankMultiplier(game.weaponSystem, 'damage', lv - 1, lv, rank => getSoftRankMultiplier(rank, 0.15, 3, 1.9))
         },
       },
       {
@@ -405,12 +422,14 @@ export const SKILL_DATABASE = {
         desc: '复合元素反应（蒸汽/酸池/麻痹/毒雷）伤害与范围提升',
         tags: ['元素·T1', '反应'],
         maxLevel: 3,
+        growthClass: 'core',
         stats(lv) {
-          const d = [35, 70, 100][lv] || 100
-          return `反应伤害 +${d}%`
+          const rank = lv + 1
+          const multiplier = rank <= 3 ? [0, 1.35, 1.7, 2][rank] : 2 + (rank - 3) * 0.28
+          return `反应伤害 ×${multiplier.toFixed(2)}`
         },
         apply(game, lv) {
-          game.weaponSystem.reactionDmgMul = [1.35, 1.7, 2.0][lv - 1]
+          game.weaponSystem.reactionDmgMul = lv <= 3 ? [0, 1.35, 1.7, 2][lv] : 2 + (lv - 3) * 0.28
         },
       },
       {
@@ -533,13 +552,17 @@ export const SKILL_DATABASE = {
         desc: '移动速度与主动技能冷却全面强化',
         tags: ['刺客·T1', '机动'],
         maxLevel: 3,
+        growthClass: 'core',
         stats(lv, game) {
           const s = Math.round(game.player.speed)
-          return `移速 ${s} → ${Math.round(s * 1.15)} · 主动技能冷却 -15%`
+          const speedRatio = getSoftRankMultiplier(lv + 1, 0.15, 3, 1.9) / getSoftRankMultiplier(lv, 0.15, 3, 1.9)
+          const cdRatio = getSoftRankMultiplier(lv + 1, -0.15, 3, 0.42) / getSoftRankMultiplier(lv, -0.15, 3, 0.42)
+          return `移速 ${s} → ${Math.round(s * speedRatio)} · 主动冷却 ×${cdRatio.toFixed(2)}`
         },
-        apply(game) {
-          game.player.speed *= 1.15
-          game.player.activeSkillCdMultiplier = (game.player.activeSkillCdMultiplier || 1) * 0.85
+        apply(game, lv) {
+          applyRankMultiplier(game.player, 'speed', lv - 1, lv, rank => getSoftRankMultiplier(rank, 0.15, 3, 1.9))
+          game.player.activeSkillCdMultiplier ||= 1
+          applyRankMultiplier(game.player, 'activeSkillCdMultiplier', lv - 1, lv, rank => getSoftRankMultiplier(rank, -0.15, 3, 0.42))
         },
       },
       {
@@ -552,12 +575,15 @@ export const SKILL_DATABASE = {
         desc: '暴击伤害倍率由 3 倍大幅提升',
         tags: ['刺客·T2', '暴伤'],
         maxLevel: 3,
+        growthClass: 'core',
         stats(lv) {
-          const mul = [0.5, 0.7, 0.8][lv] || 0.8
+          const rank = lv + 1
+          const mul = rank <= 3 ? [0, 0.5, 1.2, 2][rank] : 2 + (rank - 3) * 0.22
           return `暴击倍率 +${mul}（保留觉醒与秘典加成）`
         },
         apply(game, lv) {
-          setCritSource(game, 'execute', { multiplier: [0.5, 1.2, 2][lv - 1] })
+          const multiplier = lv <= 3 ? [0, 0.5, 1.2, 2][lv] : 2 + (lv - 3) * 0.22
+          setCritSource(game, 'execute', { multiplier })
         },
       },
       {
@@ -673,12 +699,16 @@ export const SKILL_DATABASE = {
       desc: '移动速度提升 12%，走位更灵动',
       tags: ['通用', '移速'],
       maxLevel: 5,
+      growthClass: 'endless',
       stats(lv, game) {
+        const rank = lv + 1
+        const before = getSoftRankMultiplier(lv, 0.12, 3, 1.7623)
+        const after = getSoftRankMultiplier(rank, 0.12, 3, 1.7623)
         const s = Math.round(game.player.speed)
-        return `移速 ${s} → ${Math.round(s * 1.12)}`
+        return `移速 ${s} → ${Math.round(s * after / before)}`
       },
-      apply(game) {
-        game.player.speed *= 1.12
+      apply(game, lv) {
+        applyRankMultiplier(game.player, 'speed', lv - 1, lv, rank => getSoftRankMultiplier(rank, 0.12, 3, 1.7623))
       },
     },
     {
@@ -688,12 +718,16 @@ export const SKILL_DATABASE = {
       desc: '经验宝石与道具吸附半径提升 25%',
       tags: ['通用', '磁力'],
       maxLevel: 5,
+      growthClass: 'endless',
       stats(lv, game) {
+        const rank = lv + 1
+        const before = getSoftRankMultiplier(lv, 0.25, 3, 3.0518)
+        const after = getSoftRankMultiplier(rank, 0.25, 3, 3.0518)
         const r = Math.round(game.player.pickupRadius)
-        return `拾取半径 ${r} → ${Math.round(r * 1.25)}`
+        return `拾取半径 ${r} → ${Math.round(r * after / before)}`
       },
-      apply(game) {
-        game.player.pickupRadius *= 1.25
+      apply(game, lv) {
+        applyRankMultiplier(game.player, 'pickupRadius', lv - 1, lv, rank => getSoftRankMultiplier(rank, 0.25, 3, 3.0518))
       },
     },
     {
@@ -729,6 +763,62 @@ export const SKILL_DATABASE = {
       apply() {},
     },
     {
+      id: 'origin_flux',
+      name: '异源校准',
+      icon: '🔄',
+      originOnly: true,
+      desc: '让不同伤害来源之间的拟态能量轮换更高效；同源收益不变，异源收益递减封顶',
+      tags: ['原生·充能', '拟态能量'],
+      maxLevel: 6,
+      growthClass: 'core',
+      stats(lv, game) {
+        const previous = getOriginActiveGrowth({ ...game, skillLevels: { ...(game?.skillLevels || {}), origin_flux: lv } }).foreignBonus
+        const next = getOriginActiveGrowth({ ...game, skillLevels: { ...(game?.skillLevels || {}), origin_flux: lv + 1 } }).foreignBonus
+        return `异源充能额外 +${previous.toFixed(1)} → +${next.toFixed(1)}（上限 +3）`
+      },
+      apply() {},
+    },
+    {
+      id: 'origin_overload',
+      name: '超载棱镜',
+      icon: '🔆',
+      originOnly: true,
+      desc: '强化下一次有效主动的超载倍率；效果只在支付拟态能量后生效，并带硬上限',
+      tags: ['原生·超载', '有限增幅'],
+      maxLevel: 6,
+      growthClass: 'core',
+      stats(lv, game) {
+        const before = getOriginActiveGrowth({ ...game, skillLevels: { ...(game?.skillLevels || {}), origin_overload: lv } })
+        const g = getOriginActiveGrowth({ ...game, skillLevels: { ...(game?.skillLevels || {}), origin_overload: lv + 1 } })
+        return `超载伤害 ×${before.overloadDamageMul.toFixed(2)} → ×${g.overloadDamageMul.toFixed(2)} · 范围 ×${before.overloadRangeMul.toFixed(2)} → ×${g.overloadRangeMul.toFixed(2)}`
+      },
+      apply() {},
+    },
+    {
+      id: 'origin_concord',
+      name: '双相协鸣',
+      icon: '🔗',
+      originOnly: true,
+      desc: '让主专精决定超载形态，副专精追加一次有限回响；不生成第二套终极',
+      tags: ['原生·协同', '主副共鸣'],
+      maxLevel: 3,
+      growthClass: 'core',
+      stats(lv, game) {
+        const profileAt = rank => getPrimalOverloadProfile({
+          ...game,
+          skillLevels: { ...(game?.skillLevels || {}), origin_concord: rank },
+        }, true)
+        const before = profileAt(lv), after = profileAt(lv + 1)
+        if (game?.primarySpec === 'gatling') return `超载追加齐射 ${before.volleyBonus} → ${after.volleyBonus} 轮`
+        if (game?.primarySpec === 'elemental') return `震荡附魔扩散 +${Math.round(before.elementalSpreadBonus * 100)}% → +${Math.round(after.elementalSpreadBonus * 100)}%`
+        if (game?.primarySpec === 'assassin') return `超载隐匿 ${before.assassinStealth.toFixed(2)} → ${after.assassinStealth.toFixed(2)} 秒`
+        if (game?.primarySpec === 'gluttony') return `重咬增幅 ×${before.biteDamageMul.toFixed(2)}/×${before.biteRangeMul.toFixed(2)} → ×${after.biteDamageMul.toFixed(2)}/×${after.biteRangeMul.toFixed(2)}`
+        if (game?.primarySpec === 'symbiosis') return `鼓舞额外延长 ${before.rallyDuration.toFixed(2)} → ${after.rallyDuration.toFixed(2)} 秒 · 攻击加成 +${Math.round(before.rallyDamage * 100)}% → +${Math.round(after.rallyDamage * 100)}%`
+        return `主专精超载回响 ${Math.min(3, lv)} → ${Math.min(3, lv + 1)} 层`
+      },
+      apply() {},
+    },
+    {
       id: 'com_adrenaline',
       name: '肾上腺素',
       icon: '⚡',
@@ -746,6 +836,29 @@ export const SKILL_DATABASE = {
   ],
 }
 
+// Only these audited tracks receive extra high-difficulty ranks. Discrete
+// proc/count/evolution skills retain their authored cap to avoid runaway chains.
+const CORE_GROWTH_IDS = new Set([
+  'glut_maw', 'glut_bulk', 'glut_ram', 'gat_velocity', 'ele_resonance',
+  'ass_stride', 'ass_execute', 'pet_power', 'pet_vitality', 'pet_haste',
+  'origin_flux', 'origin_overload', 'origin_concord',
+])
+for (const [treeKey, tree] of Object.entries(SKILL_DATABASE)) {
+  const entries = [...(tree.primary || []), ...(tree.secondary || []), ...(Array.isArray(tree) ? tree : [])]
+  for (const skill of entries) if (CORE_GROWTH_IDS.has(skill.id)) {
+    skill.growthClass = 'core'
+    skill.rankCaps = CORE_SKILL_RANK_CAPS[skill.id]
+  }
+}
+for (const skill of SKILL_DATABASE.common) {
+  if (skill.id === 'com_swift' || skill.id === 'com_magnet') skill.growthClass = 'endless'
+  else if (skill.originOnly && skill.id !== 'com_shock') {
+    skill.growthClass = 'core'
+    skill.rankCaps = CORE_SKILL_RANK_CAPS[skill.id]
+  }
+  else skill.growthClass = 'common'
+}
+
 // Shared IDs retain origin behavior; the shadow role resolves both effects and presentation.
 SKILL_DATABASE.assassin.primary.push(...SHADOW_EXTRA_SKILLS)
 for (const skill of SKILL_DATABASE.assassin.primary) {
@@ -758,6 +871,21 @@ for (const skill of SKILL_DATABASE.assassin.primary) {
 
 export { resolveShadowSkill }
 export function getSpecInfo(spec, game) {
+  if (spec === 'gatling' && (game?.startingStrain || game?.strainId) === 'ricochet') {
+    const route = game?.weaponSystem?.ricochetCombat?.route || game?.ricochet?.route
+    const r = route && RICOCHET_ROUTES[route]
+    return r ? { ...RICOCHET_SPEC_INFO, name: r.name, icon: r.icon, desc: `${r.desc} ${r.bonus}` } : RICOCHET_SPEC_INFO
+  }
+  if (spec === 'gluttony' && (game?.startingStrain || game?.strainId) === 'glutton') {
+    const route = game?.weaponSystem?.gluttonCombat?.route || game?.glutton?.route
+    const r = route && GLUTTON_ROUTES[route]
+    return r ? { ...SPEC_INFO.gluttony, name: r.name, icon: r.icon, desc: `${r.desc} ${r.bonus}` } : SPEC_INFO.gluttony
+  }
+  if (spec === 'assassin' && (game?.startingStrain || game?.strainId) === 'shadow') {
+    const route = game?.weaponSystem?.shadowCombat?.route
+    const r = route && SHADOW_ROUTES[route]
+    return r ? { ...SHADOW_SPEC_INFO, name: r.name, icon: r.icon, desc: `${r.desc} ${r.bonus}` } : SHADOW_SPEC_INFO
+  }
   const info = SPEC_INFO[spec]
   if (spec === 'elemental' && (game?.startingStrain || game?.strainId) === 'elemental') return { ...info, ...ELEMENTAL_SPEC_INFO }
   return spec === 'assassin' && (game?.startingStrain || game?.strainId) === 'shadow' ? { ...info, ...SHADOW_SPEC_INFO } : info
@@ -854,7 +982,7 @@ export function rollBossSkills(game, count = 3) {
   const spec = game.roleSpec || game.primarySpec
   if (!spec || !BOSS_SKILL_DATABASE[spec]) return []
   const owned = game.bossSkillIds || new Set()
-  const pool = BOSS_SKILL_DATABASE[spec].filter((skill) =>
+  const pool = (strain === 'ricochet' ? RICOCHET_BOSS_SKILLS : BOSS_SKILL_DATABASE[spec]).filter((skill) =>
     !owned.has(skill.id) && (!skill.requiresElementalStrain || strain === 'elemental') &&
     (!skill.partnerSkillId || (effectiveStrain === 'summoner' && !(game.skillLevels?.[skill.partnerSkillId] > 0)))
   )
@@ -928,7 +1056,7 @@ function secondarySkills(specKey, canDevour = true, canUseElements = true, isEle
 /** 里程碑预览与实际授予共用一项合法共鸣；已满级时回退到本系其余可用项。 */
 export function getSecondaryStarter(game, specKey) {
   const skills = secondarySkills(specKey, game.canDevour !== false, game.canUseElements !== false, game.startingStrain === 'elemental')
-    .filter(s => (game.skillLevels?.[s.id] || 0) < s.maxLevel)
+    .filter(s => (game.skillLevels?.[s.id] || 0) < getEffectiveSkillMaxLevel(game, s, 'secondary'))
   return skills.find(s => s.id === SECONDARY_STARTERS[specKey]) || skills[0] || null
 }
 
@@ -941,6 +1069,22 @@ function specSecondaryUsable(specKey, canDevour, canUseElements, isElementalStra
  * 智能抽取算法（支持里程碑觉醒机制）
  */
 export function rollSkills(game, count = 3) {
+  if (game.startingStrain === 'ricochet') return rollRicochetSkills(game, count)
+  if (game.startingStrain === 'glutton') {
+    const gluttonTree = SKILL_DATABASE.gluttony
+    return rollGluttonSkills(game, count, gluttonTree.primary, SKILL_DATABASE.common)
+  }
+  if (game.startingStrain === 'summoner') {
+    const symbiosisTree = SKILL_DATABASE.symbiosis
+    return rollSymbiosisSkills(game, count, symbiosisTree.primary, SKILL_DATABASE.common)
+  }
+  if (game.startingStrain === 'shadow') {
+    const baseSkills = SKILL_DATABASE.assassin.primary.map(skill => resolveShadowSkill(skill, game))
+    return rollShadowSkills(game, count, baseSkills, SKILL_DATABASE.common)
+  }
+  if (game.startingStrain === 'elemental') {
+    return elementalSkillOptions(game, ELEMENTAL_SKILLS, SKILL_DATABASE.common, count)
+  }
   const pLevel = game.player?.level || 1
   const levels = game.skillLevels || {}
   const primarySpec = game.primarySpec
@@ -1040,10 +1184,17 @@ export function rollSkills(game, count = 3) {
   // 通用池技能
   for (const s of SKILL_DATABASE.common) {
     const curLv = levels[s.id] || 0
-    if (curLv >= s.maxLevel) continue
+    const maxLevel = getEffectiveSkillMaxLevel(game, s, 'common')
+    if (curLv >= maxLevel) continue
     // 震荡扩能服务原生的所有主动形态，拟态后继续提供对应强化。
-    if (s.originOnly && game.startingStrain !== 'origin') continue
-    candidatePool.push({ ...s, role: 'common', level: curLv })
+    if (s.originOnly && (game.startingStrain !== 'origin' || !primarySpec)) continue
+    candidatePool.push({ ...s, role: 'common', level: curLv, maxLevel })
+  }
+  if (game.runSelection?.mode === 'endless' && (game.enemyManager?.wave || 1) >= 25) {
+    for (const s of ENDLESS_SKILLS) {
+      const level = levels[s.id] || 0
+      candidatePool.push({ ...s, role: 'common', level, maxLevel: Infinity })
+    }
   }
 
   // 流派技能
@@ -1066,20 +1217,23 @@ export function rollSkills(game, count = 3) {
         if (specKey !== roleSpec) continue
         for (const s of primarySkills.filter((sk) => sk.tier === 1)) {
           const curLv = levels[s.id] || 0
-          if (curLv < s.maxLevel) candidatePool.push({ ...s, role: 'role_t1', level: curLv })
+          const maxLevel = getEffectiveSkillMaxLevel(game, s, 'role_t1')
+          if (curLv < maxLevel) candidatePool.push({ ...s, role: 'role_t1', level: curLv, maxLevel })
         }
       } else {
         if (!isT1Offered(specKey)) continue
         for (const s of primarySkills.filter((sk) => sk.tier === 1)) {
           const curLv = levels[s.id] || 0
-          if (curLv < s.maxLevel) candidatePool.push({ ...s, role: 't1_free', level: curLv })
+          const maxLevel = getEffectiveSkillMaxLevel(game, s, 't1_free')
+          if (curLv < maxLevel) candidatePool.push({ ...s, role: 't1_free', level: curLv, maxLevel })
         }
       }
     } else if (specKey === primarySpec) {
       // 当前是【主专精】：按 T1~T4 深度阶梯展开
       for (const s of primarySkills) {
         const curLv = levels[s.id] || 0
-        if (curLv >= s.maxLevel) continue
+        const maxLevel = getEffectiveSkillMaxLevel(game, s, 'primary')
+        if (curLv >= maxLevel) continue
         if (!skillUsable(s, canDevour, canUseElements, isElementalStrain, effectiveStrain)) continue
         if (s.excludes?.some(id => (levels[id] || 0) > 0)) continue
 
@@ -1109,18 +1263,19 @@ export function rollSkills(game, count = 3) {
         }
 
         if (reqMet) {
-          candidatePool.push({ ...s, role: 'primary', level: curLv })
+          candidatePool.push({ ...s, role: 'primary', level: curLv, maxLevel })
         }
       }
     } else if (secondarySpec && specKey === secondarySpec) {
       // 当前是【副专精】：开放副专精共鸣技能（按权限过滤掉对本角色无效的共鸣）
       for (const s of tree.secondary) {
         const curLv = levels[s.id] || 0
-        if (curLv >= s.maxLevel) continue
+        const maxLevel = getEffectiveSkillMaxLevel(game, s, 'secondary')
+        if (curLv >= maxLevel) continue
         // 第四批：glut_sub_digest 仅在 canDevour 时可用；ele_sub_boost 仅在 canUseElements 时可用。
         // 角色（非 origin）的 secondary 与角色绑定，天然只会看到本树，过滤对它们是恒等变换。
         if (!skillUsable(s, canDevour, canUseElements, isElementalStrain)) continue
-        candidatePool.push({ ...s, role: 'secondary', level: curLv })
+        candidatePool.push({ ...s, role: 'secondary', level: curLv, maxLevel })
       }
     }
   }
@@ -1168,23 +1323,14 @@ export function rollSkills(game, count = 3) {
     }
   }
 
-  // 终极觉醒大招优先排在前列
-  candidatePool.sort((a, b) => {
-    if (a.isCapstone) return -1
-    if (b.isCapstone) return 1
-    return 0
-  })
-
-  const selected = isElementalStrain ? prioritizeSpellChoices(candidatePool, game, count) : candidatePool.slice(0, count)
-  if (game.startingStrain === 'shadow' && count > 0 &&
-      SHADOW_CLONE_SKILL_IDS.some(id => (levels[id] || 0) > 0) &&
-      !selected.some(s => SHADOW_CLONE_SKILL_IDS.includes(s.id))) {
-    const upgrade = candidatePool.find(s => SHADOW_CLONE_SKILL_IDS.includes(s.id))
-    if (upgrade) {
-      const index = selected.findLastIndex(s => !s.isCapstone)
-      if (index >= 0) selected[index] = upgrade
-    }
+  if (game.startingStrain !== 'shadow') {
+    candidatePool.sort((a, b) => {
+      if (a.isCapstone) return -1
+      if (b.isCapstone) return 1
+      return 0
+    })
   }
+  const selected = isElementalStrain ? prioritizeSpellChoices(candidatePool, game, count) : candidatePool.slice(0, count)
   return selected.map((s) => ({
     ...s,
     stats: typeof s.stats === 'function' ? s.stats(s.level, game) : s.stats || '',

@@ -42,8 +42,9 @@ export const resolveCardOptions = (source) =>
 /**
  * @param {import('vue').Ref<Array>|() => Array} optionsSource 卡片选项（数组或返回数组的 getter）
  * @param {(card: object) => void} confirm 确认回调（对选中卡 emit select）
+ * @param {boolean|(()=>boolean)} enabledSource 是否接管键盘（路线二阶段确认时交给子面板）
  */
-export function useCardFocus(optionsSource, confirm) {
+export function useCardFocus(optionsSource, confirm, enabledSource = true) {
   const options = computed(() => resolveCardOptions(optionsSource))
   const selectedIndex = ref(defaultCardIndex(options.value.length))
 
@@ -53,6 +54,7 @@ export function useCardFocus(optionsSource, confirm) {
   const selectedCard = computed(() => options.value[selectedIndex.value] || null)
 
   function onKeydown(e) {
+    if (typeof enabledSource === 'function' ? !enabledSource() : !unref(enabledSource)) return
     if (e.defaultPrevented) return
     const count = options.value.length
     if (!count) return

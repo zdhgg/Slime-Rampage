@@ -22,6 +22,22 @@ function summon(g, target = spawn(g), action = {}) {
   random(0, () => clones.onCritical(target, action))
   return clones.items.at(-1)
 }
+function prepareCloneSkill(g, includeDecoy = false) {
+  if (!(g.skillLevels.ass_lethal > 0)) learn(g, 'ass_lethal')
+  if (!(g.skillLevels.ass_stride > 0)) learn(g, 'ass_stride')
+  if (!(g.skillLevels.ass_execute > 0)) learn(g, 'ass_execute')
+  if (includeDecoy && !(g.skillLevels.ass_decoy > 0)) learn(g, 'ass_decoy')
+}
+function grantSwarmUltimate(g) {
+  if (!(g.skillLevels.ass_echo > 0)) learn(g, 'ass_echo')
+  g.player.level = 14; g._ensureRoleAwakening(); g.enemyManager.wave = 10
+  const combat = g.weaponSystem.shadowCombat
+  combat.normalChoices = 5; combat.route = 'swarm'
+  g.skillLevels.ass_echo = 3; g.skillLevels.shadow_swarm_assault = 1
+  const skill = rollSkills(g, 99).find(entry => entry.id === 'ass_capstone')
+  assert.ok(skill)
+  assert.equal(g.applySkill(skill), true)
+}
 const book = id => BOSS_SKILL_DATABASE.assassin.find(s => s.id === id)
 
 check('开局属性与四项分身成长独立', g => {
@@ -29,6 +45,7 @@ check('开局属性与四项分身成长独立', g => {
   const c = g.weaponSystem.shadowCombat.clones
   near(c.chance, 0.6); near(c.power, 0.4); assert.equal(c.cap, 2); assert.equal(c.duration, 4)
   learn(g, 'ass_echo'); near(c.chance, 0.7); near(c.power, 0.4)
+  learn(g, 'ass_lethal'); learn(g, 'ass_stride')
   learn(g, 'ass_execute'); near(c.power, 0.55); assert.equal(c.duration, 4)
   learn(g, 'ass_decoy'); near(c.duration, 5.5); assert.equal(c.cap, 2)
   learn(g, 'ass_legion', 2); assert.equal(c.cap, 4)
@@ -143,12 +160,14 @@ check('分身真实伤害随强度成长；不复制暴伤、不消费本体必�
   g.weaponSystem.critMul = 50; g.weaponSystem.executeCrit = true; g.player.guaranteedCrit = true
   combat.clones.hit(clone, e, combat.clones.power)
   near(e.hp, 99.6); assert.equal(g.player.guaranteedCrit, true)
+  learn(g, 'ass_lethal'); learn(g, 'ass_stride')
   learn(g, 'ass_execute', 3)
   combat.clones.hit(clone, e, combat.clones.power)
   near(e.hp, 98.75); assert.equal(combat.clones.items.length, 1)
 })
 check('时间升级不延长现存分身；到期销毁', g => {
   const clone = summon(g)
+  prepareCloneSkill(g)
   learn(g, 'ass_decoy', 2); assert.equal(clone.life, 4)
   step(g, 4.1); assert.equal(g.weaponSystem.shadowCombat.clones.items.length, 0)
   assert.equal(summon(g).life, 7)
@@ -156,7 +175,7 @@ check('时间升级不延长现存分身；到期销毁', g => {
 check('F 快照只指挥已有分身，新分身不参与本次夹击', g => {
   const e = spawn(g, { x: 100, hp: 1000 }), c = g.weaponSystem.shadowCombat
   const old = summon(g, e); old.x = g.player.x; old.y = g.player.y - 90
-  c.clones.procCooldown = 0; learn(g, 'ass_echo', 2)
+  c.clones.procCooldown = 0; learn(g, 'ass_echo', 2); prepareCloneSkill(g)
   g.player.facing = 0
   random(0, () => { pressSpace(g); g.player.update(0.26) })
   assert.equal(c.clones.items.length, 2)
@@ -176,12 +195,13 @@ check('分身生成、移动和攻击均不能穿过拒马', g => {
   assert.equal(g.mapFeatures.barricades[0].hp, 3)
 })
 check('终极分身贯穿与十字夹击去重，分身最多四个', g => {
-  learn(g, 'ass_legion', 2); learn(g, 'ass_capstone')
+  prepareCloneSkill(g, true); learn(g, 'ass_legion', 2)
+  grantSwarmUltimate(g)
   const e = spawn(g, { x: 70 }), c = g.weaponSystem.shadowCombat.clones
   const clone = summon(g, e); clone.x = g.player.x; clone.y = g.player.y; clone.angle = 0
   const second = spawn(g, { x: 95 })
   c.sweep(clone, clone.x, clone.y, clone.x + 110, clone.y, c.power, 3)
-  near(e.hp, 99.6); near(second.hp, 99.8)
+  near(e.hp, 100 - c.power); near(second.hp, 100 - c.power * 0.5)
   for (let i = 0; i < 10; i++) summon(g, e)
   assert.equal(c.items.length, 4)
   const hits = new Set(); clone.rush = {}
@@ -213,15 +233,19 @@ check('角色技能显示真实效果，原生黏液不抽到分身技能', g =>
   assert.ok(!cards.some(s => ['ass_echo', 'ass_legion', 'ass_afterimage'].includes(s.id)))
   assert.equal(cards.find(s => s.id === 'ass_stride').name, '暗影疾行')
 })
-check('分身路线选项保底与终极优先同时满足', g => {
+check('达标终极随机出现且同一局只能取得一个', g => {
   learn(g, 'ass_echo'); g.player.level = 14; g.enemyManager.wave = 10; g._ensureRoleAwakening()
-  learn(g, 'ass_execute'); learn(g, 'ass_legion')
-  for (let i = 0; i < 30; i++) {
-    const cards = rollSkills(g)
-    assert.equal(cards[0].id, 'ass_capstone')
-  }
-  learn(g, 'ass_capstone')
-  for (let i = 0; i < 30; i++) assert.ok(rollSkills(g).some(s => ['ass_echo', 'ass_afterimage', 'ass_execute', 'ass_decoy', 'ass_legion'].includes(s.id)))
+  prepareCloneSkill(g, true); learn(g, 'ass_legion')
+  const combat = g.weaponSystem.shadowCombat
+  combat.normalChoices = 5; combat.route = 'swarm'
+  g.skillLevels.ass_echo = 3; g.skillLevels.shadow_swarm_assault = 1
+  const ultimates = rollSkills(g, 99).filter(s => s.kind === 'ultimate')
+  assert.deepEqual(ultimates.map(s => s.id), ['ass_capstone'])
+  random(0, () => assert.ok(!rollSkills(g, 1).some(s => s.kind === 'ultimate')))
+  const skill = rollSkills(g, 99).find(s => s.id === 'ass_capstone')
+  assert.equal(g.applySkill(skill), true)
+  assert.equal(combat.routeUltimate, 'swarm')
+  assert.equal(rollSkills(g, 99).some(s => s.id === 'shadow_hunt_ultimate' || s.id === 'shadow_blade_ultimate'), false)
 })
 check('未升级影袭留身时空放与被动闪避均不生成分身；重开及换场景清理', g => {
   pressSpace(g); g.player.update(0.27)
@@ -372,7 +396,7 @@ check('满额留身刷新并移回最短寿命者，保留冷却、不加入当�
   const c = g.weaponSystem.shadowCombat, e = spawn(g, { x: 100, hp: 1000 })
   const first = summon(g, e), second = summon(g, e)
   first.life = 1; first.cooldown = 0.42; second.life = 2
-  learn(g, 'ass_afterimage'); learn(g, 'ass_decoy', 2)
+  learn(g, 'ass_afterimage'); prepareCloneSkill(g); learn(g, 'ass_decoy', 2)
   g.player.facing = 0; pressSpace(g)
   assert.equal(c.clones.items.length, 2)
   near(first.x, g.player.x); near(first.y, g.player.y)
@@ -383,7 +407,7 @@ check('满额留身刷新并移回最短寿命者，保留冷却、不加入当�
 })
 check('F 留身继承成长可挡弹，命中暴击仍可额外生影', g => {
   const c = g.weaponSystem.shadowCombat, p = g.player
-  learn(g, 'ass_afterimage'); learn(g, 'ass_decoy', 2); learn(g, 'ass_execute', 3)
+  learn(g, 'ass_afterimage'); prepareCloneSkill(g, true); learn(g, 'ass_decoy', 2); learn(g, 'ass_execute', 3)
   spawn(g, { x: 100, hp: 1000 }); p.facing = 0
   pressSpace(g); const clone = c.clones.items[0]
   near(clone.life, 7); near(c.clones.power, 0.85)

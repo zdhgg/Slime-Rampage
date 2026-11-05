@@ -1,7 +1,8 @@
 import { GLUTTON_CHARGE_MAX, gluttonSkillHud } from './GluttonResource.js'
 import { GLUTTON_HEAVY_DAMAGE, GLUTTON_BOSS_HEAVY_DAMAGE } from './GluttonCombat.js'
 import { PET_RALLY_BASE, getPetRally } from './PetSkills.js'
-import { gainPrimalEnergy, trySpendPrimalOverload, getOriginActiveGrowth, hasPrimalEnergy, primalOverloadDescription, PRIMAL_OVERLOAD_COST, PRIMAL_SOURCES } from './PrimalEnergy.js'
+import { gainPrimalEnergy, trySpendPrimalOverload, getOriginActiveGrowth, getPrimalOverloadProfile, hasPrimalEnergy, primalOverloadDescription, PRIMAL_OVERLOAD_COST, PRIMAL_SOURCES } from './PrimalEnergy.js'
+import { triggerOriginSecondaryEcho } from './OriginEchoes.js'
 
 const VOLLEY_SHOTS = 4
 
@@ -85,6 +86,12 @@ export const SHADOW_SKILL = {
   icon: '🗡️',
   cooldown: 5,
   desc: '沿移动方向穿行，首个目标 1.6 倍攻击且必暴，其余沿途目标 0.8 倍。已有分身优先分头突袭后排射手，遇首领集中夹击，造成分身普攻的 2 倍伤害。暴击可生成新分身；本体击杀返还一次 0.5 秒影袭冷却',
+  getDesc(engine) {
+    const shadow = engine.weaponSystem?.shadowCombat
+    return shadow?.canFollowup
+      ? '猎杀终极已就绪：再次按空格可免费追击一次，不刷新影袭冷却'
+      : this.desc
+  },
   use(engine) {
     return engine.weaponSystem?.shadowCombat?.useAssault() || false
   },
@@ -107,7 +114,7 @@ function repel(engine, radius, distance, slow = 0) {
  * 与飞弹命中同口径（chance 独立判定、duration 用吸收等级累积值、DOT 按震荡伤害换算）。
  * 未吸收任何元素时自然为空操作（纯击退）。
  */
-function spreadShockProcs(engine, radius) {
+function spreadShockProcs(engine, radius, chanceBonus = 0) {
   const p = engine.player
   const procs = p._procs
   if (!procs) return
@@ -117,9 +124,9 @@ function spreadShockProcs(engine, radius) {
   for (const e of engine.enemyManager.enemies) {
     if (!e.active || e.devouring || Math.hypot(e.x - p.x, e.y - p.y) > radius) continue
     const fx = {}
-    if (procs.burn?.chance && Math.random() < procs.burn.chance) { fx.burn = procs.burn.duration; fx.burnDmg = tickDmg }
-    if (procs.freeze?.chance && Math.random() < procs.freeze.chance) fx.freeze = procs.freeze.duration
-    if (procs.poison?.chance && Math.random() < procs.poison.chance) { fx.poison = procs.poison.duration; fx.poisonDmg = tickDmg }
+    if (procs.burn?.chance && Math.random() < Math.min(1, procs.burn.chance + chanceBonus)) { fx.burn = procs.burn.duration; fx.burnDmg = tickDmg }
+    if (procs.freeze?.chance && Math.random() < Math.min(1, procs.freeze.chance + chanceBonus)) fx.freeze = procs.freeze.duration
+    if (procs.poison?.chance && Math.random() < Math.min(1, procs.poison.chance + chanceBonus)) { fx.poison = procs.poison.duration; fx.poisonDmg = tickDmg }
     if (Object.keys(fx).length) e.hit(0, fx)
   }
 }
@@ -140,24 +147,25 @@ function originShockDesc(engine) {
   return `${base}；觉醒后保留`
 }
 
-/** 超载版震荡的 HUD 附注（拟态能量 ≥40 时下次释放升档） */
-const OVERLOAD_DESC = `拟态能量 ≥${PRIMAL_OVERLOAD_COST} 时超载释放：半径 ×1.5、伤害 ×2.5、击退翻倍`
+/** 超载版主动说明与 HUD 共用战斗规则派生结果。 */
+const overloadDesc = (engine) => `拟态能量 ≥${PRIMAL_OVERLOAD_COST} 时超载释放：${primalOverloadDescription(engine)}`
 
 export const ORIGIN_SKILL = {
   id: 'slime_shock', name: '黏液震荡', icon: '🫧', cooldown: 7,
-  desc: originShockDesc() + '；' + OVERLOAD_DESC,
-  getDesc: (engine) => originShockDesc(engine) + '；' + OVERLOAD_DESC,
+  desc: originShockDesc() + '；' + overloadDesc(),
+  getDesc: (engine) => originShockDesc(engine) + '；' + overloadDesc(engine),
   use(engine) {
     const ws = engine.weaponSystem, p = engine.player
     if (!ws) return false
     // 拟态能量超载（P0）：≥40 消耗 40，本次震荡升档——半径 ×1.5、伤害 ×2.5、击退翻倍。
     // 能量不足时基础版照常释放：资源是强化油门，不是发动许可。
     const overload = trySpendPrimalOverload(engine)
+    const overloadProfile = getPrimalOverloadProfile(engine, overload)
     // 震荡扩能（com_shock）：每级伤害 +10%、范围 +8px，满级合计伤害约 +30%
     // （成长轨不变；基础倍率 1.9 是早期补强，与成长轨乘算后满级 2.47 倍）
     const growth = getOriginActiveGrowth(engine)
-    const radius = Math.round((120 + growth.rangeBonus) * (overload ? 1.5 : 1))
-    ws._explode(p.x, p.y, ws.damage * ws.levelMul * 1.9 * growth.damageMul * (overload ? 2.5 : 1), null, radius)
+    const radius = Math.round((120 + growth.rangeBonus) * (overload ? 1.5 : 1) * overloadProfile.shockRangeMul)
+    ws._explode(p.x, p.y, ws.damage * ws.levelMul * 1.9 * growth.damageMul * (overload ? 2.5 : 1) * overloadProfile.shockDamageMul, null, radius)
     // 震荡本身计为充能来源②（黏液震荡）：与飞弹交替输出即构成异源轮转
     gainPrimalEnergy(engine, PRIMAL_SOURCES.SHOCK)
     if (p.dead || engine.runFinished) return true
@@ -172,18 +180,22 @@ export const ORIGIN_SKILL = {
       const target = ws._findNearest?.()
       if (target) {
         ws.fire(target)
-        ws.rapidVolley = { remaining: 2, timer: 0.12 }
+        ws.rapidVolley = { remaining: 2 + Math.floor(overloadProfile.volleyBonus), timer: 0.12 }
       }
     } else if (spec === 'elemental') {
       // 元素形态：附魔随冲击波扩散给被击退者
-      spreadShockProcs(engine, radius)
+      spreadShockProcs(engine, radius, overloadProfile.elementalSpreadBonus)
     }
     if (p.shadowDecoyDuration > 0) {
       p._decoys.push({ x: p.x, y: p.y, radius: p.radius * 0.85,
         life: p.shadowDecoyDuration, maxLife: p.shadowDecoyDuration, flash: 0, isDecoy: true })
       if (p._decoys.length > 2) p._decoys.shift()
     }
-    if (ws.isShadowLord || p.shadowBossStep) { p.stealthTimer = 1.5; p.guaranteedCrit = true }
+    if (ws.isShadowLord || p.shadowBossStep || overloadProfile.assassinStealth > 0) {
+      p.stealthTimer = Math.max(p.stealthTimer || 0, 1.5 + overloadProfile.assassinStealth)
+      p.guaranteedCrit = true
+    }
+    if (overload) triggerOriginSecondaryEcho(engine, { overloaded: true })
     return true
   },
 }

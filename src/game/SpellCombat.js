@@ -1,4 +1,5 @@
 import { SPELL_ELEMENTS, getSpellFusion, spellCoreOptions, spellMilestoneReward } from './SpellRules.js'
+import { ELEMENTAL_ROUTES, ELEMENTAL_ROUTE_SKILL_BY_ID } from './ElementalBuild.js'
 import { shadowTargetAlive as alive, shadowCircleEntry, shadowLineClear, traceShadowPath } from './ShadowGeometry.js'
 import { renderSpells } from './SpellVisuals.js'
 import { LightningCasting } from './LightningCasting.js'
@@ -6,6 +7,7 @@ import { SpellShield } from './SpellShield.js'
 import { SpellContagion } from './SpellContagion.js'
 import { iceSlowAmount, iceSlowDuration, iceArrowVisualScale, iceArrowCount, iceMultiDamageMul, iceFanAngle, iceShardCount, iceShardDamageMul, iceShardRange, iceShatterRadius, iceShatterDamageMul, iceBrittleMul } from './IceSpellRules.js'
 import { fireMultiDamageMul, fireBrittleMul } from './FireSpellRules.js'
+import { spellSchoolPower } from './ElementalUpgrades.js'
 import { spellPalette } from './SpellPalette.js'
 
 const distance2 = (a, b) => (a.x - b.x) ** 2 + (a.y - b.y) ** 2
@@ -19,17 +21,42 @@ export class SpellCombat {
   get enabled() { return this.game?.startingStrain === 'elemental' && (!this.game.gameplayId || this.game.gameplayId === 'arena') }
   get available() { return this.enabled && !this.player.dead && !this.game.runFinished }
   get usesBasicProjectile() { return this.enabled && this.elements.size === 0 }
-  get fusion() { return getSpellFusion(this.elements) }
+  get route() { return this._route || null }
+  get activeElements() {
+    const ids = [...this.elements]
+    if (this.route === 'single') return ids.slice(0, 1)
+    if (this.route === 'fusion') return ids.slice(0, 2)
+    return ids
+  }
+  get buildMode() {
+    if (this.route) return this.route
+    if (this.elements.size >= 3) return 'cycle'
+    if (this.elements.size >= 2) return 'fusion'
+    return 'single'
+  }
+  get fusion() { return this.buildMode === 'fusion' && this.activeElements.length >= 2 ? getSpellFusion(new Set(this.activeElements.slice(0, 2))) : null }
   palette(element = [...this.elements][0]) { return this.usesBasicProjectile ? PRIMAL_SPELL_PALETTE : spellPalette(this.fusion?.id, element) }
   level(id) { return this.game?.skillLevels?.[id] || 0 }
   rank(id) { return this.upgrades[id] || 0 }
   get rangeScale() { return Math.min(1.65, 1 + this.level('ele_spread') * .08 + (this.rank('active') === 3 ? .12 : 0)) }
   get baseDamage() { return this.weapon.damage * this.weapon.levelMul * this.weapon.devourDamageMul }
-  get power() { return this.baseDamage * (1 + .18 * this.level('ele_affinity') + .08 * this.rank('power')) * (this.weapon.spellGenePowerMul || 1) * (this.game.primarySpec === 'elemental' ? 1.2 : 1) }
-  get reactionPower() { return this.power * (1 + this.level('ele_resonance') * .2 + this.rank('reaction') * .25 + this.rank('reactionPower') * .1) * (this.weapon.geneReactionDmgMul || 1) * (this.weapon.spellGeneReactionMul || 1) * (this.game.primarySpec === 'elemental' ? 1.35 : 1) }
-  get activePower() { return this.power * (1 + this.level('ele_overload') * .2 + this.rank('active') * .25 + this.rank('activePower') * .1) }
-  get activeCooldown() { return Math.max(6, 10 * (1 - .05 * this.level('ele_overload') - .04 * this.rank('active'))) }
-  get activeName() { return this.fusion ? this.rank('active') >= 3 ? this.fusion.evolved : this.fusion.active : '原质释放' }
+  get power() {
+    const single = this.buildMode === 'single' ? 1 + Math.min(8, this.routeSingleLevel) * .08 : 1
+    const cycle = this.buildMode === 'cycle' ? 1 + Math.min(8, this.routeCycleLevel) * .05 : 1
+    return this.baseDamage * (1 + .18 * this.level('ele_affinity') + .08 * this.rank('power')) * single * cycle * (this.weapon.spellGenePowerMul || 1) * (this.game.primarySpec === 'elemental' ? 1.2 : 1)
+  }
+  get reactionPower() {
+    const route = this.buildMode === 'fusion' ? 1 + Math.min(8, this.routeFusionLevel) * .09 : 1
+    return this.power * route * (1 + this.level('ele_resonance') * .2 + this.rank('reaction') * .25 + this.rank('reactionPower') * .1) * (this.weapon.geneReactionDmgMul || 1) * (this.weapon.spellGeneReactionMul || 1) * (this.game.primarySpec === 'elemental' ? 1.35 : 1)
+  }
+  get activePower() { return this.power * (1 + .2 * this.level('ele_overload') + .25 * this.rank('active') + .1 * this.rank('activePower')) }
+  get activeCooldown() { return Math.max(5.5, 10 * (1 - .05 * this.level('ele_overload') - .04 * this.rank('active'))) }
+  get activeName() {
+    if (this.routeUltimate === 'single') return ELEMENTAL_ROUTES.single.ultimateName
+    if (this.routeUltimate === 'fusion') return ELEMENTAL_ROUTES.fusion.ultimateName
+    if (this.routeUltimate === 'cycle') return ELEMENTAL_ROUTES.cycle.ultimateName
+    return this.fusion ? this.rank('active') >= 3 ? this.fusion.evolved : this.fusion.active : '原质释放'
+  }
   get pose() {
     if (!this.available || !this.poisonThrow || this.poisonThrow.life <= 0) return null
     const age = .34 - this.poisonThrow.life, windup = age < .12
@@ -40,6 +67,11 @@ export class SpellCombat {
   reset() {
     this.milestoneEvolved = false
     this.elements = new Set(); this.upgrades = {}; this.clocks = {}; this.shots = []; this.fields = []
+    this._route = null; this.routeUltimate = null; this.normalChoices = 0
+    this.routeSingleLevel = 0; this.routeSingleOverloadLevel = 0
+    this.routeFusionLevel = 0; this.routeFusionEchoLevel = 0
+    this.routeCycleLevel = 0; this.routeCycleEchoLevel = 0
+    this.cycleIndex = 0; this.cycleClock = 0; this.cycleHits = 0
     this.effects = []; this.delayed = []; this.marks = new Map(); this.time = 0; this.cores = 0
     this.castPulse = 0; this.castColor = '#b6a4ff'; this.castPulses = {}; this.reactionBudget = 8; this.volley = 0
     this.poisonThrow = null
@@ -55,8 +87,30 @@ export class SpellCombat {
   }
   syncElements() {
     const p = this.player
-    p.elements = new Map([...this.elements].map(id => [id, 1 + this.rank(`shape_${id}`)]))
+    p.elements = new Map([...this.activeElements].map(id => [id, 1 + this.rank(`shape_${id}`)]))
     p._primaryReaction = this.fusion?.id || null; p._secondaryIds.clear(); p._refreshElements()
+  }
+  chooseRoute(route) {
+    if (!ELEMENTAL_ROUTES[route] || this.route || this.activeElements.length < (route === 'single' ? 1 : route === 'fusion' ? 2 : 3)) return false
+    this._route = route
+    this.cycleIndex = 0; this.cycleClock = 0
+    this.syncElements()
+    return true
+  }
+  learnElement(element) {
+    if (!SPELL_ELEMENTS[element] || this.elements.has(element)) return false
+    this.elements.add(element)
+    this.clocks[element] = .4
+    this.syncElements()
+    this.game.startingElement ||= element
+    this.weapon._projectiles.length = 0
+    return true
+  }
+  applyElementalSkill(skill, level) {
+    if (skill?.isElementalDiscovery) return this.learnElement(skill.element)
+    const canonical = skill?.id ? (ELEMENTAL_ROUTE_SKILL_BY_ID[skill.id] || skill) : skill
+    canonical.apply?.(this.game, level)
+    return true
   }
   coreOptions() { return spellCoreOptions(this) }
   milestoneReward() { return spellMilestoneReward(this) }
@@ -81,7 +135,6 @@ export class SpellCombat {
     return true
   }
   applyCore(option) {
-    if (!this.fusion) return false
     const current = this.coreOptions().find(card => card.id === option?.id)
     if (!current || !this.available) return false
     this.upgrades[current.id] = this.rank(current.id) + 1
@@ -89,19 +142,23 @@ export class SpellCombat {
       this.lightning.jobs = this.lightning.jobs.filter(job => job.kind === 'strike' && !job.basic)
       this.lightning.charge = 0
     }
+    if (current.kind === 'shield') this.shield.upgrade()
     this.cores++; this.syncElements()
     this.game.sound?.elementUp?.()
     this.fx(this.player.x, this.player.y, 100, this.fusion.color, 'core', .8)
     return true
   }
   hud() {
-    return { palette: this.palette(), elements: [...this.elements].map(id => ({ ...SPELL_ELEMENTS[id], color: this.palette(id).main, spell: id === 'lightning' && this.lightning.storm ? '雷暴落击' : SPELL_ELEMENTS[id].spell,
+    return { palette: this.palette(), elements: [...this.activeElements].map(id => ({ ...SPELL_ELEMENTS[id], color: this.palette(id).main, spell: id === 'lightning' && this.lightning.storm ? '雷暴落击' : SPELL_ELEMENTS[id].spell,
       desc: id === 'lightning' && this.lightning.storm ? '范围内优先选择敌群或精英落雷，命中后继续传导；已学雷系强化保留。' : SPELL_ELEMENTS[id].desc,
       rank: this.rank(`shape_${id}`), interval: this.interval(id), enhancements: this.enhancements(id) })),
-      fusion: this.fusion, cores: this.cores, activeRank: this.rank('active'), activeName: this.activeName }
+      fusion: this.fusion, route: this.route, buildMode: this.buildMode, routeName: ELEMENTAL_ROUTES[this.route]?.name || '',
+      routeColor: ELEMENTAL_ROUTES[this.route]?.color || null, routeUltimate: this.routeUltimate,
+      normalChoices: this.normalChoices, routeInvestment: this.route ? Object.keys(this.upgrades).filter(id => ELEMENTAL_ROUTE_SKILL_BY_ID[id]?.route === this.route).reduce((n, id) => n + this.rank(id), 0) : 0,
+      cores: this.cores, activeRank: this.rank('active'), activeName: this.activeName }
   }
   interval(id) { return Math.max(.5, SPELL_ELEMENTS[id].interval * this.weapon.attackInterval * (1 - this.level('spell_haste') * .08)) }
-  schoolPower(id) { return 1 + Math.min(3, this.level(`spell_${id}_power`)) * .2 }
+  schoolPower(id) { return spellSchoolPower(this.level(`spell_${id}_power`)) }
   enhancements(id) {
     return [this.schoolPower(id) > 1 ? `威力+${Math.round((this.schoolPower(id) - 1) * 100)}%` : '', this.behaviorEnhancements(id)].filter(Boolean).join(' · ')
   }
@@ -299,6 +356,16 @@ export class SpellCombat {
     if (id === 'lightning' && !this.lightning.begin(target, power * 1.3)) return false
     this.castPulse = .25; this.castColor = this.palette(id).main; this.stats.casts++
     this.castPulses[id] = .3; this.stats.castsByElement[id] = (this.stats.castsByElement[id] || 0) + 1
+    if (this.buildMode === 'single' && this.routeSingleOverloadLevel > 0) {
+      this.cycleHits++
+      const threshold = Math.max(3, 7 - this.routeSingleOverloadLevel)
+      if (this.cycleHits >= threshold) {
+        this.cycleHits = 0
+        this.explode(target, 54 + this.routeSingleOverloadLevel * 8,
+          this.power * (.8 + this.routeSingleOverloadLevel * .18), el.color, id,
+          { reaction: true, statuses: false })
+      }
+    }
     if (id === 'lightning') return true
     this.game.sound?.spellCast?.(id)
     const volley = ++this.volley
@@ -378,7 +445,7 @@ export class SpellCombat {
     if (!ready) return
     this.reactionBudget--; this.stats.reactions++
     const rank = this.rank('reaction'), power = this.reactionPower
-    mark.reactionReady = this.time + Math.max(.8, 1.8 - rank * .2)
+    mark.reactionReady = this.time + Math.max(.65, 1.8 - rank * .2 - Math.min(8, this.routeFusionLevel) * .08)
     const radius = (fusion.id === 'acid' ? field.radius : 58) * this.rangeScale * (rank >= 3 ? 1.2 : 1)
     if (fusion.id === 'acid') {
       field.igniteReady = this.time + 2
@@ -396,10 +463,32 @@ export class SpellCombat {
       if (fusion.id === 'corrode' && rank >= 2) this.area(e, radius + 35, power * .25, 'water', { reaction: true })
       if (fusion.id === 'burst' && rank >= 2) this.area(e, radius + 25, power * .35, 'fire', { reaction: true })
     }
+    if (this.routeFusionEchoLevel > 0 && this.available) {
+      const echoRadius = 48 + this.routeFusionEchoLevel * 8
+      this.area(e, echoRadius, power * (.25 + this.routeFusionEchoLevel * .05), element, { reaction: true, statuses: false })
+    }
+  }
+  completeCycle(force = false) {
+    if (!this.available || (!force && this.routeCycleEchoLevel <= 0) || this.activeElements.length < 3) return
+    const echoLevel = Math.max(force ? 1 : 0, this.routeCycleEchoLevel)
+    const radius = 70 + echoLevel * 10
+    const damage = this.power * (.45 + echoLevel * .1)
+    const element = this.activeElements[this.cycleIndex === 0 ? this.activeElements.length - 1 : this.cycleIndex - 1]
+    const targets = this.game.enemyManager.enemies.filter(e => alive(e) && distance2(this.player, e) <= (radius + e.radius) ** 2 && shadowLineClear(this.game, this.player, e)).slice(0, Math.min(6, 2 + echoLevel))
+    this.fx(this.player.x, this.player.y, radius, ELEMENTAL_ROUTES.cycle.color, 'fusion', .42)
+    for (const target of targets) this.damage(target, damage, element, { reaction: true, statuses: false })
   }
   useActive() {
     if (!this.available || this.game.running === false || this.game._pauseLock > 0) return false
-    const target = this.target(this.fusion?.combo.includes('lightning') ? 'lightning' : 'fire')
+    if (this.routeUltimate === 'cycle' && this.activeElements.length >= 3) {
+      const targets = this.activeElements.map(id => ({ id, target: this.target(id) })).filter(entry => entry.target)
+      if (!targets.length) return false
+      this.stats.activeCasts++; this.game.sound?.spellBurst?.(); this.game.shakeScreen?.(4, .18)
+      targets.forEach(({ id, target }) => this.cast(id, target))
+      this.completeCycle(true)
+      return true
+    }
+    const target = this.target(this.fusion?.combo.includes('lightning') ? 'lightning' : this.activeElements[0] || 'fire')
     const near = this.game.enemyManager.enemies.some(e => alive(e) && distance2(e, this.player) < 150 ** 2)
     if ((!this.fusion && !near) || (!target && !near)) return false
     const center = target ? { x: target.x, y: target.y } : { x: this.player.x, y: this.player.y }
@@ -412,8 +501,14 @@ export class SpellCombat {
     }
     this.stats.activeCasts++; this.game.sound?.spellBurst?.(); this.game.shakeScreen?.(4, .18)
     this.fx(this.player.x, this.player.y, 150, this.fusion?.color || '#b6a4ff', 'core', .4)
+    if (this.routeUltimate === 'single') {
+      const element = this.activeElements[0] || 'fire'
+      this.explode(center, 150 + this.routeSingleLevel * 8, this.activePower * (2.4 + this.routeSingleOverloadLevel * .25), SPELL_ELEMENTS[element].color, element, { active: true })
+      return true
+    }
     if (!this.fusion) { this.explode(this.player, 150, Math.round(this.power * 2.4), '#b6a4ff', null, { active: true }); return true }
-    this.activeImpact(center)
+    this.activeImpact(center, this.routeUltimate === 'fusion' ? 1.45 : 1)
+    if (this.routeUltimate === 'fusion') this.delayed.push({ due: this.time + .45, center, power: .7 })
     if (!this.available) return true
     const rank = this.rank('active')
     if (rank >= 3) {
@@ -455,10 +550,22 @@ export class SpellCombat {
       if (!alive(e)) this.marks.delete(e)
       else if (mark.frostUntil < this.time) mark.frost = 0
     }
-    for (const id of this.elements) {
-      this.clocks[id] = Math.max(0, (this.clocks[id] || 0) - dt)
-      if (this.clocks[id] === 0 && this.cast(id)) this.clocks[id] = this.interval(id)
-      if (!this.available) return
+    if (this.buildMode === 'cycle' && this.activeElements.length >= 3) {
+      this.cycleClock = Math.max(0, this.cycleClock - dt)
+      if (this.cycleClock === 0) {
+        const id = this.activeElements[this.cycleIndex % this.activeElements.length]
+        if (this.cast(id)) {
+          this.cycleIndex = (this.cycleIndex + 1) % this.activeElements.length
+          if (this.cycleIndex === 0) this.completeCycle()
+          this.cycleClock = this.interval(id) * Math.max(.5, 1 - Math.min(8, this.routeCycleLevel) * .04)
+        } else this.cycleClock = .12
+      }
+    } else {
+      for (const id of this.activeElements) {
+        this.clocks[id] = Math.max(0, (this.clocks[id] || 0) - dt)
+        if (this.clocks[id] === 0 && this.cast(id)) this.clocks[id] = this.interval(id)
+        if (!this.available) return
+      }
     }
     for (const s of this.shots) {
       if (s.life <= 0) continue

@@ -43,6 +43,7 @@ import {
   RUNNER_TACTICAL_ITEMS,
   createRunnerSeed,
   getRunnerForkTimes,
+  getRunnerFusionCodex,
   getRunnerFusionWeapon,
   getRunnerRoute,
   getRunnerRouteByLane,
@@ -178,6 +179,9 @@ export class RunnerGameplay extends GameplayController {
     this.feverCharges = 0
     this.feverTimer = 0
     this.feverCount = 0
+    this.jumpTimer = 0
+    this.jumpDuration = 0.55
+    this._prevJump = false
     this.bulletTimeTimer = 0
     this.hyperBoostTimer = 0
     this.droneTimer = 0
@@ -393,6 +397,9 @@ export class RunnerGameplay extends GameplayController {
   updateWorld(dt) {
     if (!this.game || dt <= 0 || this.state === 'finished') return
     this.visualTime += dt
+    if (this.jumpTimer > 0) {
+      this.jumpTimer = Math.max(0, this.jumpTimer - dt)
+    }
     this._updateEffects(dt)
     this._updateLaneInput(dt)
 
@@ -463,6 +470,33 @@ export class RunnerGameplay extends GameplayController {
     return true
   }
 
+  jump() {
+    if (this.state !== 'active' || this.isJumping) return false
+    this.jumpTimer = this.jumpDuration
+    this.floatingTexts.push(
+      new FloatingText(
+        this.renderer.lanePositionX(this.lanePosition),
+        this.renderer.playerY - 45,
+        'JUMP!',
+        '',
+        '#79d5e6',
+        14
+      )
+    )
+    this.game?.sound?.dash?.()
+    return true
+  }
+
+  get isJumping() {
+    return this.jumpTimer > 0
+  }
+
+  get jumpOffset() {
+    if (this.jumpTimer <= 0) return 0
+    const progress = 1 - (this.jumpTimer / this.jumpDuration)
+    return Math.sin(progress * Math.PI) * 48
+  }
+
   _updateLaneInput(dt) {
     const input = this.game.input.state
     const left = !!input.left
@@ -471,6 +505,11 @@ export class RunnerGameplay extends GameplayController {
     if (right && !this._prevRight) this.targetLane = Math.min(RUNNER_LANE_COUNT - 1, this.targetLane + 1)
     this._prevLeft = left
     this._prevRight = right
+    const up = !!input.up
+    if (up && !this._prevJump && !this.isJumping && this.state === 'active') {
+      this.jump()
+    }
+    this._prevJump = up
 
 
     const k = this.reducedMotion ? 1 : 1 - Math.pow(1 - RUNNER_LANE_LERP_PER_FRAME, dt * 60)
@@ -1135,6 +1174,9 @@ export class RunnerGameplay extends GameplayController {
       else if (entity.behavior === 'archer' || entity.behavior === 'mage') {
         this._updateRangedEnemy(entity, dt)
       }
+      else if (entity.type === 'carrier_boss') {
+        this._updateCarrierBoss(entity, dt)
+      }
       else entity.depth += this._effectiveSpeed(entity) * dt
       entity.hitFlash = Math.max(0, entity.hitFlash - dt)
 
@@ -1171,6 +1213,29 @@ export class RunnerGameplay extends GameplayController {
       }
       this.entities.splice(i, 1)
       if (this.state === 'finished') return
+    }
+  }
+
+  _updateCarrierBoss(entity, dt) {
+    if (entity.bossHoldTimer == null) {
+      entity.bossHoldTimer = 12.0
+      entity.bossAttackCooldown = 2.4
+    }
+    if (entity.depth >= 0.38 && entity.bossHoldTimer > 0) {
+      entity.depth = Math.min(0.42, entity.depth + this._effectiveSpeed(entity) * dt * 0.15)
+      entity.bossHoldTimer -= dt
+      entity.bossAttackCooldown -= dt
+      if (entity.bossAttackCooldown <= 0) {
+        entity.bossAttackCooldown = 2.4
+        this._spawnEnemyArrow({
+          ...entity,
+          attackLane: this.occupiedLane,
+          projectileDamage: 1,
+          projectileHp: 1,
+        })
+      }
+    } else {
+      entity.depth += this._effectiveSpeed(entity) * dt
     }
   }
 
@@ -1256,6 +1321,21 @@ export class RunnerGameplay extends GameplayController {
       })
     }
     if (lanes.includes(this.occupiedLane)) {
+      if (this.isJumping) {
+        this._registerPerfectDodge(this.occupiedLane, RUNNER_COLLISION_DEPTH)
+        this.floatingTexts.push(
+          new FloatingText(
+            this.renderer.lanePositionX(this.lanePosition),
+            this.renderer.playerY - 60,
+            'MAGIC JUMP DODGE! +200',
+            '',
+            '#c59bf0',
+            14
+          )
+        )
+        this.score += 200
+        return
+      }
       this._takeDamage({
         lane: this.occupiedLane,
         depth: RUNNER_COLLISION_DEPTH,
@@ -1287,6 +1367,25 @@ export class RunnerGameplay extends GameplayController {
     if (this.hyperBoostTimer > 0) {
       this._registerPerfectDodge(entity.lane ?? this.occupiedLane, RUNNER_COLLISION_DEPTH)
       return
+    }
+    const isGroundHazard = entity.type === 'laser_gate' || entity.kind === 'hazard' || entity.type === 'ground_fire' || entity.isGround
+    if (this.isJumping && isGroundHazard) {
+      this._registerPerfectDodge(entity.lane ?? this.occupiedLane, RUNNER_COLLISION_DEPTH)
+      this.floatingTexts.push(
+        new FloatingText(
+          this.renderer.lanePositionX(this.lanePosition),
+          this.renderer.playerY - 60,
+          'JUMP DODGE! +150',
+          '',
+          '#79d5e6',
+          13
+        )
+      )
+      this.score += 150
+      return
+    }
+    if (this.isJumping) {
+      this.jumpTimer = 0
     }
     const incoming = Math.max(1, entity.damage)
     const absorbed = Math.min(this.shield, incoming)
@@ -1756,6 +1855,21 @@ export class RunnerGameplay extends GameplayController {
     )
     this.score += gained
     this.game.sound.kill?.(this.combo)
+    if (entity.type === 'carrier_boss') {
+      this._shake(10, 0.45)
+      this.feverCharges = Math.min(RUNNER_FEVER_MAX_CHARGES, this.feverCharges + 1)
+      this.floatingTexts.push(
+        new FloatingText(
+          this.renderer.lanePositionX(entity.lane),
+          this.renderer.depthToY(entity.depth) - 50,
+          'BOSS ANNIHILATED! +3000',
+          '',
+          '#ffd166',
+          20
+        )
+      )
+      this.score += 3000
+    }
     if (entity.behavior === 'split') {
       const fragments = this.director.createFragments(entity, this.elapsedTime, this.entities.length)
       this.entities.push(...fragments)
@@ -2055,7 +2169,76 @@ export class RunnerGameplay extends GameplayController {
       ? Math.floor(this.elapsedTime * 85)
       : runnerDistanceRemaining(this.elapsedTime, this.duration, this.submodeConfig.distance)
 
+    const sections = this.submodeConfig.sections || []
+    const totalSections = Math.max(1, sections.length)
+    const currentSection = this.section
+    const sectionIndex = currentSection.index ?? 0
+    const sectionStart = currentSection.start || 0
+    const sectionEnd = currentSection.end || this.duration || 60
+    const sectionProgress = isEndless ? 0 : clamp((this.elapsedTime - sectionStart) / Math.max(1, sectionEnd - sectionStart), 0, 1)
+
+    let tacticalObjective = ''
+    if (this.state === 'countdown') {
+      tacticalObjective = '引擎就绪 · 准备突破封锁线！'
+    } else if (this.isFeverActive) {
+      tacticalObjective = '⚡ 暴走超频激活 · 得分翻倍 & 三线贯穿！'
+    } else if (this.weaponChoicePending) {
+      tacticalObjective = '💎 核心变异门接近 · 换道锁定主武器！'
+    } else if (this.secondaryChoicePending) {
+      tacticalObjective = '🧪 元素附魔门接近 · 穿门激活超武融合！'
+    } else if (this.moduleChoicePending) {
+      tacticalObjective = '⑂ 战术模组门接近 · 换道搭载模组！'
+    } else if (fusion) {
+      tacticalObjective = `💥 终极超武 [${fusion.name}] 觉醒 · 轰破一切！`
+    } else if (weapon) {
+      tacticalObjective = `⚔️ ${weapon.name} Lv.${this.weaponLevel} · 歼灭拦截敌群！`
+    } else {
+      tacticalObjective = `🚩 突破第 ${sectionIndex + 1}/${totalSections} 封锁区 · 剩余 ${distance}m`
+    }
+
+    const slots = {
+      core: {
+        equipped: !!this.weaponCore,
+        id: this.weaponCore || null,
+        name: weapon?.name || '凝胶弹',
+        shortName: weapon?.shortName || '凝胶',
+        color: weapon?.color || '#79d5e6',
+        level: this.weaponLevel,
+        nextTime: Math.max(0, Math.ceil((this.submodeConfig.weaponChoiceTime || 10) - this.elapsedTime)),
+      },
+      element: {
+        equipped: !!this.secondaryElement,
+        id: this.secondaryElement || null,
+        name: this.secondaryElement ? (RUNNER_SECONDARY_ELEMENTS[this.secondaryElement]?.name || this.secondaryElement) : null,
+        shortName: this.secondaryElement ? (RUNNER_SECONDARY_ELEMENTS[this.secondaryElement]?.shortLabel || this.secondaryElement) : null,
+        icon: this.secondaryElement ? (RUNNER_SECONDARY_ELEMENTS[this.secondaryElement]?.icon || '⚡') : null,
+        color: this.secondaryElement ? (RUNNER_SECONDARY_ELEMENTS[this.secondaryElement]?.color || '#ffd859') : null,
+        nextTime: Math.max(0, Math.ceil((this.submodeConfig.weaponEvolveTime || 25) - this.elapsedTime)),
+      },
+      fusion: {
+        active: !!fusion,
+        id: fusion?.id || null,
+        name: fusion?.name || null,
+        color: fusion?.color || null,
+        description: fusion?.description || null,
+      },
+      module: {
+        equipped: !!this.moduleWeapon,
+        id: this.moduleWeapon?.id || null,
+        name: this.moduleWeapon?.name || null,
+        shortLabel: this.moduleWeapon?.shortLabel || null,
+        icon: this.moduleWeapon?.icon || '⑂',
+        color: this.moduleWeapon?.color || '#7ce0c3',
+        nextTime: Math.max(0, Math.ceil((this.submodeConfig.weaponModuleTime || 34) - this.elapsedTime)),
+      },
+    }
+
     return {
+      slots,
+      tacticalObjective,
+      sectionProgress,
+      totalSections,
+      fusionCodex: getRunnerFusionCodex(),
       mode: 'runner',
       submode: this.submode,
       submodeName: this.submodeConfig.name,

@@ -90,7 +90,7 @@ export function spendGluttonCharge(player) {
 export function onNormalDevoured(player) {
   if (!player || player.gluttonCharge < 0) return false
   if (player.gluttonCharge >= GLUTTON_CHARGE_MAX) return false
-  player.gluttonDevourProgress = Number((player.gluttonDevourProgress + GLUTTON_MAW_DEVOUR_PROGRESS_MULS[getGluttonMawLevel(player)]).toFixed(6))
+  player.gluttonDevourProgress = Number((player.gluttonDevourProgress + getGluttonMawDevourProgressMultiplier(player)).toFixed(6))
   if (player.gluttonDevourProgress < GLUTTON_DEVOURS_PER_CHARGE) return false
   player.gluttonDevourProgress = Number((player.gluttonDevourProgress - GLUTTON_DEVOURS_PER_CHARGE).toFixed(6))
   player.gluttonCharge += 1
@@ -106,15 +106,30 @@ export function onGluttonFDevoured() {
   return false
 }
 
-/** 读取玩家当前的深渊胃囊（glut_maw）等级（0~3，唯一真源为 skillLevels.glut_maw）。 */
+/** 读取玩家当前的深渊胃囊等级；高难与无尽可继续成长。 */
 export function getGluttonMawLevel(player) {
   const raw = player?.game?.skillLevels?.glut_maw ?? player?.skillLevels?.glut_maw ?? 0
-  return Math.max(0, Math.min(3, Number(raw) || 0))
+  return Math.max(0, Math.floor(Number(raw) || 0))
 }
 
-/** 深渊胃囊对 Boss 普攻猎食进度的加速倍率（M2：Lv.0~3 → 1.0 / 1.33 / 1.66 / 2.0）。 */
+export function getGluttonMawDevourProgressMultiplierAtLevel(level = 0) {
+  const rank = Math.max(0, Math.floor(Number(level) || 0))
+  return rank <= 3 ? GLUTTON_MAW_DEVOUR_PROGRESS_MULS[rank] : 1.6 + Math.min(0.4, (rank - 3) * 0.06)
+}
+
+export function getGluttonMawBossProgressMultiplierAtLevel(level = 0) {
+  const rank = Math.max(0, Math.floor(Number(level) || 0))
+  return rank <= 3 ? GLUTTON_MAW_BOSS_PROGRESS_MULS[rank] : 2 + Math.min(0.4, (rank - 3) * 0.06)
+}
+
+/** 深渊胃囊对正常吞噬进度的加速倍率。 */
+export function getGluttonMawDevourProgressMultiplier(player) {
+  return getGluttonMawDevourProgressMultiplierAtLevel(getGluttonMawLevel(player))
+}
+
+/** 深渊胃囊对 Boss 普攻猎食进度的加速倍率，后续成长封顶为 ×2.4。 */
 export function getGluttonBossProgressMultiplier(player) {
-  return GLUTTON_MAW_BOSS_PROGRESS_MULS[getGluttonMawLevel(player)] ?? 1.0
+  return getGluttonMawBossProgressMultiplierAtLevel(getGluttonMawLevel(player))
 }
 
 /** Boss 普攻猎食进度阈值（默认 10；已学 glut_capstone 降为 8）。 */
@@ -187,7 +202,7 @@ export function gluttonSkillHud(player) {
     progress: Math.round(player.gluttonDevourProgress * 10) / 10,
     bossProgress: Math.round((player.gluttonBossHuntProgress || 0) * 10) / 10,
     bossProgressPer: getGluttonBossProgressThreshold(player),
-    devourGain: GLUTTON_MAW_DEVOUR_PROGRESS_MULS[getGluttonMawLevel(player)],
+    devourGain: getGluttonMawDevourProgressMultiplier(player),
     bossGain: getGluttonBossProgressMultiplier(player),
     progressPer: GLUTTON_DEVOURS_PER_CHARGE,
     ready: player.gluttonCharge > 0 && player.gluttonRecastLock <= 0,

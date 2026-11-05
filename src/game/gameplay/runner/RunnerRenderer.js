@@ -186,6 +186,7 @@ export class RunnerRenderer {
     ctx.save()
     if (shake) ctx.translate(shake * 0.7, -shake * 0.35)
     this._drawRoad(ctx, profile)
+    this._drawSpeedStreaks(ctx, profile)
     this._drawFinishLine(ctx)
     this._drawEnemyThreats(ctx)
     this._drawEntities(ctx)
@@ -361,14 +362,18 @@ export class RunnerRenderer {
     // 2. Object-local threat markers and the player's location ring.
     this._drawInWorldTelemetry(ctx)
 
-    // 3. Glowing neon outer guardrails
-    const railPulse = 0.24 + (this.gameplay.isFeverActive ? 0.12 : 0)
+    // 3. Glowing neon outer guardrails with enhanced aura & edge posts
+    const railPulse = 0.35 + (this.gameplay.isFeverActive ? 0.25 : 0)
+    ctx.save()
     ctx.strokeStyle = profile.accent
-    ctx.globalAlpha = clamp(railPulse, 0.1, 0.42)
-    ctx.lineWidth = 2
+    ctx.shadowColor = profile.accent
+    ctx.shadowBlur = this.gameplay.isFeverActive ? 14 : 7
+    ctx.globalAlpha = clamp(railPulse, 0.15, 0.7)
+    ctx.lineWidth = this.gameplay.isFeverActive ? 3.5 : 2.2
     this._roadOutline(ctx)
     ctx.stroke()
-    ctx.globalAlpha = 1
+    ctx.restore()
+    this._drawRoadsidePylons(ctx, profile)
 
     // 4. Moving lane dashed dividers
     const speedMult = this.gameplay.isFeverActive ? 1.6 : 1
@@ -583,29 +588,55 @@ export class RunnerRenderer {
         const from = this.project(entity.lane, entity.depth)
         const target = this.project(entity.attackLane, RUNNER_COLLISION_DEPTH)
         ctx.save()
-        ctx.strokeStyle = 'rgba(255, 138, 117, ' + (0.35 + progress * 0.5).toFixed(3) + ')'
-        ctx.lineWidth = 1.5
-        ctx.setLineDash([5, 7])
+        // 游侠红外激光瞄准线
+        ctx.shadowColor = '#ff4d4d'
+        ctx.shadowBlur = 8
+        ctx.strokeStyle = `rgba(255, 77, 77, ${(0.45 + progress * 0.5).toFixed(3)})`
+        ctx.lineWidth = 2 + progress * 1.5
+        ctx.setLineDash([8, 6])
         ctx.beginPath()
         ctx.moveTo(from.x, from.y)
         ctx.lineTo(target.x, target.y)
         ctx.stroke()
         ctx.setLineDash([])
+
+        // 准星与战术十字
+        const radius = Math.max(12, (1 - progress * 0.3) * 26)
+        ctx.strokeStyle = '#ff6b4a'
+        ctx.lineWidth = 2
         ctx.beginPath()
-        ctx.ellipse(target.x, target.y + 6, 18 + progress * 10, 8 + progress * 5, 0, 0, TAU)
+        ctx.ellipse(target.x, target.y + 6, radius, radius * 0.45, 0, 0, TAU)
+        ctx.stroke()
+        ctx.beginPath()
+        ctx.moveTo(target.x - radius * 1.3, target.y + 6)
+        ctx.lineTo(target.x + radius * 1.3, target.y + 6)
+        ctx.moveTo(target.x, target.y + 6 - radius * 0.6)
+        ctx.lineTo(target.x, target.y + 6 + radius * 0.6)
         ctx.stroke()
         ctx.restore()
       } else if (entity.behavior === 'mage') {
-        // The cast hits the player plane, not the full road between caster
-        // and player. Each marked lane matches _detonateMageCast exactly.
+        // 法师地面奥术爆破阵 (可按 W / 向上滑跳跃规避)
         for (const lane of entity.attackLanes || []) {
           this._drawDangerZone(ctx, lane, RUNNER_COLLISION_DEPTH - 0.09, RUNNER_COLLISION_DEPTH + 0.045, progress)
           const target = this.project(lane, RUNNER_COLLISION_DEPTH)
           ctx.save()
+          // 旋转奥术法阵光环
+          const rot = this.motionTime * 3 + lane
+          const cr = this.baseUnit * (0.8 + progress * 0.25)
+          ctx.strokeStyle = '#c59bf0'
+          ctx.shadowColor = '#c59bf0'
+          ctx.shadowBlur = 10 * progress
+          ctx.lineWidth = 2
+          ctx.globalAlpha = 0.5 + progress * 0.45
+          ctx.beginPath()
+          ctx.ellipse(target.x, target.y + 6, cr, cr * 0.36, 0, 0, TAU)
+          ctx.stroke()
+
+          // 核心能量符文
           ctx.fillStyle = '#ffb4a5'
-          ctx.font = '700 16px "Segoe UI", sans-serif'
+          ctx.font = '700 13px "Segoe UI", sans-serif'
           ctx.textAlign = 'center'
-          ctx.fillText('!', target.x, target.y + 6)
+          ctx.fillText('⚡ ARCANE (可跳跃)', target.x, target.y - 12)
           ctx.restore()
         }
       }
@@ -1392,18 +1423,95 @@ export class RunnerRenderer {
     ctx.restore()
   }
 
+  _drawRoadsidePylons(ctx, profile) {
+    const scroll = (this.gameplay.scrollDistance || 0) * 1.3
+    const cx = this.width / 2
+    ctx.save()
+    for (let i = 0; i < 9; i++) {
+      const depth = ((i / 9 + scroll * SCROLL_DEPTH_RATE * 1.6) % 1)
+      if (depth < 0.04 || depth > 1.02) continue
+      const y = this.depthToY(depth)
+      const halfW = this.roadWidthAt(depth) / 2
+      const scale = 0.35 + depth * 1.15
+      const alpha = clamp(depth * 0.9, 0, 0.9)
+
+      for (const side of [-1, 1]) {
+        const px = cx + side * (halfW + 10 + depth * 22)
+        ctx.fillStyle = profile.accent
+        ctx.globalAlpha = alpha * 0.65
+        ctx.shadowColor = profile.accent
+        ctx.shadowBlur = 6 * scale
+        ctx.fillRect(px - 2 * scale, y - 8 * scale, 4 * scale, 16 * scale)
+
+        ctx.fillStyle = '#ffffff'
+        ctx.globalAlpha = alpha
+        ctx.beginPath()
+        ctx.arc(px, y - 8 * scale, 2.5 * scale, 0, TAU)
+        ctx.fill()
+      }
+    }
+    ctx.restore()
+  }
+
+  _drawSpeedStreaks(ctx, profile) {
+    const active = this.gameplay.isFeverActive || this.gameplay.rapidFireTimer > 0 || this.gameplay.hyperBoostTimer > 0
+    if (!active || this.gameplay.reducedMotion) return
+
+    const scroll = (this.gameplay.scrollDistance || 0) * 2.8
+    const cx = this.width / 2
+    ctx.save()
+    const color = this.gameplay.isFeverActive ? '#ffe58f' : '#8eeaf8'
+    ctx.strokeStyle = color
+    ctx.lineWidth = 1.8
+    ctx.shadowColor = color
+    ctx.shadowBlur = 8
+
+    for (let i = 0; i < 12; i++) {
+      const depth = ((i / 12 + scroll * 0.14) % 1)
+      if (depth < 0.08 || depth > 0.96) continue
+      const nextDepth = Math.min(1.02, depth + 0.14)
+      const y1 = this.depthToY(depth)
+      const y2 = this.depthToY(nextDepth)
+      const side = (i % 2 === 0 ? -1 : 1)
+      const halfW = this.roadWidthAt(depth) / 2
+      const x1 = cx + side * (halfW * 0.88)
+      const x2 = cx + side * (this.roadWidthAt(nextDepth) / 2 * 0.88)
+
+      ctx.globalAlpha = clamp(depth * 0.42, 0, 0.42)
+      ctx.beginPath()
+      ctx.moveTo(x1, y1)
+      ctx.lineTo(x2, y2)
+      ctx.stroke()
+    }
+    ctx.restore()
+  }
+
   _drawPlayer(ctx) {
     const gameplay = this.gameplay
     const x = this.lanePositionX(gameplay.lanePosition)
     const y = this.playerY
     const r = this.baseUnit * 0.78
     const switching = gameplay.isSwitching
-    const lean = switching ? clamp(gameplay.targetLane - gameplay.lanePosition, -1, 1) * 0.13 : 0
+    const laneDelta = gameplay.targetLane - gameplay.lanePosition
+    const lean = switching ? clamp(laneDelta, -1, 1) * 0.22 : 0
     const bob = gameplay.reducedMotion ? 0 : Math.sin(gameplay.visualTime * 6) * 2
 
+    const jumpY = gameplay.jumpOffset || 0
     ctx.save()
-    ctx.translate(x, y + bob)
+    ctx.translate(x, y + bob - jumpY)
     ctx.rotate(lean)
+
+    // 果冻形变 (Squash & Stretch on lane shift and jump)
+    if (!gameplay.reducedMotion) {
+      if (switching) {
+        const stretch = 1 + Math.min(0.24, Math.abs(laneDelta) * 0.26)
+        const squash = 1 - Math.min(0.16, Math.abs(laneDelta) * 0.18)
+        ctx.scale(stretch, squash)
+      } else if (jumpY > 0) {
+        const jumpRatio = jumpY / 48
+        ctx.scale(1 - jumpRatio * 0.12, 1 + jumpRatio * 0.18)
+      }
+    }
 
     if (gameplay.isFeverActive) {
       ctx.scale(1.22, 1.22)
@@ -1427,9 +1535,10 @@ export class RunnerRenderer {
       }
       ctx.globalAlpha = 1
     }
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.32)'
+    const shadowScale = Math.max(0.4, 1 - (jumpY / 48) * 0.5)
+    ctx.fillStyle = `rgba(0, 0, 0, ${(0.32 * shadowScale).toFixed(3)})`
     ctx.beginPath()
-    ctx.ellipse(0, r * 0.58, r * 0.88, r * 0.28, 0, 0, TAU)
+    ctx.ellipse(0, r * 0.58 + jumpY, r * 0.88 * shadowScale, r * 0.28 * shadowScale, 0, 0, TAU)
     ctx.fill()
 
     const strainId = gameplay.game?.player?.strainId || gameplay.strainId || 'origin'
@@ -1443,6 +1552,34 @@ export class RunnerRenderer {
       paintSlimeFamilySilhouette(ctx, strainId, actorRadius, { stroke: gameplay.weaponDefinition.color, width: 1.4 })
     }
     renderSlimeFamilyFace(ctx, strainId, actorRadius, slimeFamilyFaceState(artTime, { hurt: gameplay.damageFlash > 0.4 }))
+
+    // 专属元素附魔或超武融合光环 (Aura Effect)
+    if (gameplay.fusionWeapon) {
+      const fusion = gameplay.fusionWeapon
+      const pulse = gameplay.reducedMotion ? 1 : 1 + Math.sin(gameplay.visualTime * 7) * 0.08
+      ctx.save()
+      ctx.strokeStyle = fusion.color || '#f2cd79'
+      ctx.lineWidth = 2.4
+      ctx.shadowColor = fusion.color || '#f2cd79'
+      ctx.shadowBlur = 12
+      ctx.beginPath()
+      ctx.arc(0, 0, r * 1.14 * pulse, 0, TAU)
+      ctx.stroke()
+      ctx.restore()
+    } else if (gameplay.secondaryElement) {
+      const elem = gameplay.secondaryElement
+      const pulse = gameplay.reducedMotion ? 1 : 1 + Math.sin(gameplay.visualTime * 6) * 0.05
+      const color = elem === 'lightning' ? '#ffea79' : elem === 'flame' ? '#ff6b4a' : '#7be3ff'
+      ctx.save()
+      ctx.strokeStyle = color
+      ctx.lineWidth = 2
+      ctx.shadowColor = color
+      ctx.shadowBlur = 8
+      ctx.beginPath()
+      ctx.arc(0, 0, r * 1.08 * pulse, 0, TAU)
+      ctx.stroke()
+      ctx.restore()
+    }
 
     if (gameplay.shield > 0 || gameplay.shieldFlash > 0) {
       const alpha = gameplay.shield > 0 ? 0.52 + gameplay.shield * 0.08 : gameplay.shieldFlash * 0.5
