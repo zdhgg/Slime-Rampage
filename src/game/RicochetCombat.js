@@ -97,7 +97,7 @@ export class RicochetCombat {
     const cannon = active && this.route === 'pierce', prism = ultimate && this.route === 'bounce'
     const count = cannon ? 1 : prism ? 3 : ws.projectileCount
     const visual = this.visual(), base = Math.atan2(target.y - p.y, target.x - p.x)
-    const damage = ws.damage * ws.levelMul * ws.devourDamageMul * (this.route === 'pierce' ? 1.35 : 1)
+    const damage = ws.damage * ws.levelMul * ws.devourDamageMul * (options.tomeEcho || 1) * (this.route === 'pierce' ? 1.35 : 1)
     const radiusMul = (this.route === 'pierce' ? 1.3 : 1) * (this.route === 'pierce' && this.ultimate ? 1.5 : 1)
     const baseDamage = damage * (cannon ? ws.projectileCount * (ultimate ? 8 : .85) : prism ? ws.projectileCount * 1.5 : 1)
     const splitLevel = this.level('split')
@@ -121,7 +121,7 @@ export class RicochetCombat {
         life: ultimate ? 5 : 2.5, isBasicAttack: !active,
         pierces: Math.min(12, this.level('pierce') + (this.route === 'pierce' ? 1 : 0) + ws.basePierces + ws.genePierces + (cannon && ultimate ? 6 : 0)),
       }, {
-        main: true, splitChance, volley, sourceDamage: baseDamage,
+        main: true, tomeEcho: !!options.tomeEcho, activeTome: active, splitChance, volley, sourceDamage: baseDamage,
         bounces: prism ? 6 : Math.min(10, this.level('bounce') + (this.route === 'bounce' ? 1 + Number(this.ultimate) : 0)),
         bounceRetention: prism ? .9 : this.route === 'bounce' ? .85 : .75,
         bounceRange: (this.route === 'bounce' ? 320 : 260) + Math.min(360, this.level('extension') * 60),
@@ -138,6 +138,10 @@ export class RicochetCombat {
         childPierces: this.level('split_pierce'), childBounces: this.level('split_bounce'),
       })
       if (projectile) this.metrics.shots++
+    }
+    if (!active && !options.tomeEcho && !options.activeVolley) {
+      const echo = this.game?.bossTomes?.echoMultiplier() || 0
+      if (echo) this.fire(target, { tomeEcho: echo })
     }
     ws._muzzleT = .08; ws._muzzleAngle = base; ws._muzzleVisual = visual
     this.game.sound.shoot(visual.sound, ultimate ? 1.3 : 1)
@@ -165,7 +169,7 @@ export class RicochetCombat {
         life: r.childLife, radius: 4, isSplit: true, visual: this.visual(true),
         pierces: r.childPierces + this.weapon.genePierces,
       }, { main: false, bounces: r.childBounces, bounceRetention: .65, bloom: r.bloom,
-        sourceDamage: r.sourceDamage, volley: r.volley }, parent.hitTargets)
+        sourceDamage: r.sourceDamage, volley: r.volley, tomeEcho: r.tomeEcho, activeTome: r.activeTome }, parent.hitTargets)
       if (child) this.metrics.splits++
     }
   }
@@ -183,12 +187,13 @@ export class RicochetCombat {
   }
   hit(p, e) {
     const r = p.ricochet, ws = this.weapon, first = r.hits === 0
-    const isCrit = Math.random() < p.critChance || ws.player.guaranteedCrit
-    ws.player.guaranteedCrit = false
+    const isCrit = !r.tomeEcho && (Math.random() < p.critChance || ws.player.guaranteedCrit)
+    if (!r.tomeEcho) ws.player.guaranteedCrit = false
     let damage = p.damage * (isCrit ? ws.critMul : 1)
     if (r.main && r.breach && first && e.isBoss) damage *= 1.3
+    if (r.main && !r.tomeEcho && first && this.game?.bossTomes?.rank('rico_stabilizer') === 3) damage *= 1.15
     p.hitTargets.add(e); r.hits++
-    e.hit(damage)
+    e.hit(damage, r.tomeEcho ? { bossTomeDerived: true, preventDevour: true } : { bossTomeContext: { activeRico: r.activeTome } })
     ws._burstColor(p.x, p.y, p.visual.impact, isCrit ? 7 : 3, isCrit)
     this.game.sound.hit(p.visual.sound)
     ws.enemyManager.addText(e.x, e.y, String(Math.round(damage * 10) / 10), null, isCrit ? '#ffd166' : p.visual.core, isCrit ? 21 : 13)
@@ -240,7 +245,7 @@ export class RicochetCombat {
         this.spawn({ x: p.x, y: p.y, target, speed: p.speed, damage: p.damage * .4,
           vx: Math.cos(angle) * p.speed, vy: Math.sin(angle) * p.speed,
           life: 1.5, radius: 4, isSplit: true, visual: this.visual(true),
-        }, { main: false, bounces: 1, bounceRetention: r.bounceRetention }, p.hitTargets)
+        }, { main: false, tomeEcho: r.tomeEcho, activeTome: r.activeTome, bounces: 1, bounceRetention: r.bounceRetention }, p.hitTargets)
       }
     }
     p.destroy()

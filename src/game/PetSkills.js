@@ -1,3 +1,4 @@
+import { BOSS_TOMES } from './BossTomes.js'
 export const PET_RALLY_BASE = { duration: 5, cooldown: 12, damage: 0.3, haste: 0.4, move: 0.35 }
 export function getPetRally(level = 0) {
   return { ...PET_RALLY_BASE, duration: PET_RALLY_BASE.duration + level, damage: PET_RALLY_BASE.damage + level * 0.1 }
@@ -60,19 +61,4 @@ export const PET_SKILLS = {
     },
   ],
 }
-export const PET_BOSS_SKILLS = [
-  ...PET_SKILLS.primary.filter(s => s.isPartnerChoice).map(s => ({
-    ...s, id: `boss_${s.id}`, name: `${s.name}契约`, tier: 5, isBossSkill: true,
-    tags: ['BOSS契约', '在场 +1'],
-    apply(game) {
-      game.skillLevels[s.id] = Math.max(1, game.skillLevels[s.id] || 0)
-      game.weaponSystem.petCombat.sync()
-    },
-  })),
-  { id: 'boss_pet_vitality', spec: 'symbiosis', name: '生命纽带', icon: '🐾', color: '#edc479', tier: 5, isBossSkill: true,
-    desc: '本体生命上限 +2，恢复 2 点生命', stats: '生命上限 +2', tags: ['BOSS秘典', '共生'],
-    apply(game) { game.player.maxHp += 2; game.player.hp = Math.min(game.player.maxHp, game.player.hp + 2) } },
-  { id: 'boss_pet_command', spec: 'symbiosis', name: '疾令契约', icon: '🐾', color: '#edc479', tier: 5, isBossSkill: true,
-    desc: '共生鼓舞冷却缩短 20%', stats: '鼓舞冷却 ×0.8', tags: ['BOSS秘典', '共生'],
-    apply(game) { game.player.activeSkillCdMultiplier *= 0.8 } },
-]
+export const PET_BOSS_SKILLS = BOSS_TOMES.summoner

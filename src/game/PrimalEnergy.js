@@ -12,6 +12,8 @@
  * 引擎 / 测试桩共用同一份事实。
  */
 
+import { getOriginCoreResonance } from './OriginCoreResonance.js'
+
 /** 能量上限（HUD 显示为 5 格 × 20） */
 export const PRIMAL_ENERGY_MAX = 100
 /** 超载释放的消耗（空格技升档价格） */
@@ -128,6 +130,10 @@ export function primalOverloadDescription(engine) {
   if (engine?.primarySpec === 'gluttony') parts.push(`重咬伤害 ×${(PRIMAL_BITE_OVERLOAD_DAMAGE * profile.biteDamageMul).toFixed(2)}、范围 ×${(PRIMAL_BITE_OVERLOAD_RANGE * profile.biteRangeMul).toFixed(2)}（仍需 1 猎食点）`)
   else if (engine?.primarySpec === 'symbiosis') parts.push(`鼓舞额外延长 ${PRIMAL_RALLY_OVERLOAD_DURATION + profile.rallyDuration} 秒、伙伴攻击加成额外 +${Math.round((PRIMAL_RALLY_OVERLOAD_DAMAGE + profile.rallyDamage) * 100)}%`)
   else parts.push(`半径 ×${(1.5 * profile.shockRangeMul).toFixed(2)}、伤害 ×${(2.5 * profile.shockDamageMul).toFixed(2)}、击退翻倍`)
+  if (engine?.primarySpec === 'elemental') {
+    const resonance = getOriginCoreResonance(engine)
+    if (resonance) parts.push(`晶核共鸣：${resonance.icons.join('＋')} ${resonance.effect}`)
+  }
   if (profile.volleyBonus > 0) parts.push(`齐射回响 +${profile.volleyBonus} 轮`)
   if (profile.elementalSpreadBonus > 0) parts.push(`元素扩散 +${Math.round(profile.elementalSpreadBonus * 100)}%`)
   if (profile.assassinStealth > 0) parts.push(`暗影隐匿 +${profile.assassinStealth.toFixed(2)} 秒`)
@@ -178,6 +184,7 @@ export function gainPrimalEnergy(engine, source, now = engine?.elapsed ?? 0) {
   const special = source === PRIMAL_SOURCES.MECHANISM || source === PRIMAL_SOURCES.SECONDARY
   const amount = foreign ? (special ? PRIMAL_GAIN_SPECIAL : PRIMAL_GAIN_FOREIGN) + growth.foreignBonus : PRIMAL_GAIN_SAME
   p.primalEnergy = Math.min(PRIMAL_ENERGY_MAX, p.primalEnergy + amount)
+  engine.bossTomes?.onOriginGain(foreign, amount)
   return amount
 }
 
@@ -219,5 +226,6 @@ export function trySpendPrimalOverload(engine) {
   const p = engine?.player
   if (!canPrimalOverload(p)) return false
   p.primalEnergy -= PRIMAL_OVERLOAD_COST
+  engine.bossTomes?.onOverload()
   return true
 }

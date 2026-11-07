@@ -3,6 +3,7 @@ import { GLUTTON_HEAVY_DAMAGE, GLUTTON_BOSS_HEAVY_DAMAGE } from './GluttonCombat
 import { PET_RALLY_BASE, getPetRally } from './PetSkills.js'
 import { gainPrimalEnergy, trySpendPrimalOverload, getOriginActiveGrowth, getPrimalOverloadProfile, hasPrimalEnergy, primalOverloadDescription, PRIMAL_OVERLOAD_COST, PRIMAL_SOURCES } from './PrimalEnergy.js'
 import { triggerOriginSecondaryEcho } from './OriginEchoes.js'
+import { applyOriginCoreResonance, getOriginCoreResonance } from './OriginCoreResonance.js'
 
 const VOLLEY_SHOTS = 4
 
@@ -142,7 +143,13 @@ function originShockDesc(engine) {
   const power = Math.round(1.9 * growth.damageMul * 100) / 100
   const base = `周围 ${120 + growth.rangeBonus}px 造成 ${power} 倍攻击伤害并击退普通敌人`
   if (spec === 'gatling') return `${base}，并追加 2 轮齐射（机枪形态）`
-  if (spec === 'elemental') return `${base}，并把已吸收元素的附魔扩散给被击退者（元素形态）`
+  if (spec === 'elemental') {
+    const resonance = getOriginCoreResonance(engine)
+    const preview = resonance
+      ? `晶核共鸣：${resonance.icons.join('＋')} ${resonance.name}`
+      : '吸收两种元素后激活晶核共鸣'
+    return `${base}，并把已吸收元素的附魔扩散给被击退者；${preview}（元素形态）`
+  }
   if (spec === 'assassin') return `${base}；替身/隐匿联动已生效（暗影形态）`
   return `${base}；觉醒后保留`
 }
@@ -165,7 +172,8 @@ export const ORIGIN_SKILL = {
     // （成长轨不变；基础倍率 1.9 是早期补强，与成长轨乘算后满级 2.47 倍）
     const growth = getOriginActiveGrowth(engine)
     const radius = Math.round((120 + growth.rangeBonus) * (overload ? 1.5 : 1) * overloadProfile.shockRangeMul)
-    ws._explode(p.x, p.y, ws.damage * ws.levelMul * 1.9 * growth.damageMul * (overload ? 2.5 : 1) * overloadProfile.shockDamageMul, null, radius)
+    const damage = ws.damage * ws.levelMul * 1.9 * growth.damageMul * (overload ? 2.5 : 1) * overloadProfile.shockDamageMul
+    ws._explode(p.x, p.y, damage, null, radius)
     // 震荡本身计为充能来源②（黏液震荡）：与飞弹交替输出即构成异源轮转
     gainPrimalEnergy(engine, PRIMAL_SOURCES.SHOCK)
     if (p.dead || engine.runFinished) return true
@@ -185,6 +193,17 @@ export const ORIGIN_SKILL = {
     } else if (spec === 'elemental') {
       // 元素形态：附魔随冲击波扩散给被击退者
       spreadShockProcs(engine, radius, overloadProfile.elementalSpreadBonus)
+      const resonance = applyOriginCoreResonance(engine, radius, damage)
+      if (resonance) {
+        engine.enemyManager?.addText?.(
+          p.x,
+          p.y - 48,
+          `晶核共鸣：${resonance.icons.join('＋')} ${resonance.effect}`,
+          null,
+          resonance.color,
+          14
+        )
+      }
     }
     if (p.shadowDecoyDuration > 0) {
       p._decoys.push({ x: p.x, y: p.y, radius: p.radius * 0.85,

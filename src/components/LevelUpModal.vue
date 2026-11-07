@@ -2,7 +2,7 @@
 /**
  * LevelUpModal：升级技能与里程碑专精觉醒面板
  */
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, onMounted } from 'vue'
 import SkillIcon from './SkillIcon.vue'
 import { REACTION_SLOT_LEVELS, getReactionSlotLevelBonus } from '../game/entities/Player.js'
 import { useCardFocus } from './useCardFocus.js'
@@ -42,6 +42,8 @@ const canShowSpecRule = (spec) => {
 }
 
 const props = defineProps({
+  embedded: { type: Boolean, default: false },
+  rewardTitle: { type: String, default: '' },
   options: { type: Array, required: true }, // 技能选项数组
   level: { type: Number, required: true }, // 当前等级
   // 角色身份（阶段十九）：非空 = 四角色血统，Lv.1~4 只开放本树；
@@ -51,8 +53,10 @@ const props = defineProps({
   canUseElements: { type: Boolean, default: true },
   // 当前实际副反应槽数（P2 统一口径：基础 + 基因 + 等级里程碑，由 Player 单点汇总）
   secondarySlots: { type: Number, default: 0 },
+  // 备选蓝图（黑市）：本局剩余刷新次数，>0 时在普通选卡面板显示刷新按钮
+  rerolls: { type: Number, default: 0 },
 })
-const emit = defineEmits(['select'])
+const emit = defineEmits(['select', 'reroll'])
 
 const isRicochetRoute = computed(() => !!props.options?.[0]?.isRicochetRoute)
 const isGluttonRoute = computed(() => !!props.options?.[0]?.isGluttonRoute)
@@ -72,6 +76,17 @@ const { selectedIndex } = useCardFocus(
   (card) => emit('select', card),
   () => !isRicochetRoute.value && !isGluttonRoute.value && !isSymbiosisRoute.value && !isElementalRoute.value && !isShadowRoute.value,
 )
+
+// 备选蓝图（黑市）：R 键刷新候选（普通选卡面板，按钮同步展示剩余次数）
+const rerollable = computed(() => props.rerolls > 0 && !isMilestone.value && !isPartnerSelection.value)
+const onRerollKey = (e) => {
+  if (e.code === 'KeyR' && !e.repeat && rerollable.value) {
+    e.preventDefault()
+    emit('reroll')
+  }
+}
+onMounted(() => window.addEventListener('keydown', onRerollKey))
+onBeforeUnmount(() => window.removeEventListener('keydown', onRerollKey))
 
 /**
  * 槽位里程碑提示（等级 → 元素联动的高亮时刻）：
@@ -152,7 +167,7 @@ const visibleTags = (s) => s.isRicochetSkill && s.tags?.[0] === roleLabel(s) ? s
 </script>
 
 <template>
-  <div class="levelup-overlay" role="dialog" aria-modal="true" aria-label="升级选择">
+  <div class="levelup-overlay" :class="{ embedded }" :role="embedded ? 'group' : 'dialog'" :aria-modal="embedded ? undefined : true" aria-label="升级选择">
     <RicochetRouteChoice v-if="isRicochetRoute" :options="options" @select="(route) => emit('select', route)" />
     <GluttonRouteChoice v-else-if="isGluttonRoute" :options="options" @select="(route) => emit('select', route)" />
     <SymbiosisRouteChoice v-else-if="isSymbiosisRoute" :options="options" @select="(route) => emit('select', route)" />
@@ -218,7 +233,7 @@ const visibleTags = (s) => s.isRicochetSkill && s.tags?.[0] === roleLabel(s) ? s
 
     <!-- 2. 常规升级 3 卡面板 (自由探索 / 主副专精深潜 / 通用) -->
     <div v-else class="levelup-panel">
-      <h2 class="levelup-title">{{ isBossReward ? '📜 王级职业秘典 · 选择一项专属强化 📜' : isPartnerSelection ? '招募你的第一位搭档' : `✨ 升级！Lv.${level} · 选择一项基因进化 ✨` }}</h2>
+      <h2 class="levelup-title">{{ rewardTitle || (isBossReward ? '📜 王级职业秘典 · 选择一项专属强化 📜' : isPartnerSelection ? '招募你的第一位搭档' : `✨ 升级！Lv.${level} · 选择一项基因进化 ✨`) }}</h2>
       <div class="levelup-grow">
         {{ options[0]?.buildNote || (isBossReward
           ? (options.some(s => s.isPartnerChoice) ? '选择伙伴契约即可增加一位在场伙伴；每种一只，最多组成四人小队。' : '击败首领获得的职业秘典：不占用升级次数，只能选择当前职业的强力专属技能。')
@@ -267,6 +282,7 @@ const visibleTags = (s) => s.isRicochetSkill && s.tags?.[0] === roleLabel(s) ? s
         </button>
       </div>
       <div class="keyboard-hint" aria-hidden="true">⌨ ← → 切换 · Enter / 空格 确认 · 数字键直选</div>
+      <button v-if="rerollable" class="reroll-btn" title="重抽本组候选（R 键）" @click="emit('reroll')">🔄 刷新候选 ×{{ rerolls }}</button>
     </div>
   </div>
 </template>
@@ -490,6 +506,27 @@ const visibleTags = (s) => s.isRicochetSkill && s.tags?.[0] === roleLabel(s) ? s
   gap: 22px;
   justify-content: center;
 }
+
+/* 备选蓝图（黑市）：刷新候选按钮 */
+.reroll-btn {
+  margin-top: 18px;
+  padding: 9px 22px;
+  border-radius: 999px;
+  border: 1px solid rgba(79, 195, 247, 0.55);
+  background: rgba(20, 42, 54, 0.9);
+  color: #bfe8ff;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.reroll-btn:hover {
+  transform: scale(1.04);
+  border-color: #4fc3f7;
+  box-shadow: 0 6px 22px rgba(79, 195, 247, 0.3);
+}
+.reroll-btn:active { transform: scale(0.97); }
 
 .skill-card {
   position: relative;
@@ -951,4 +988,7 @@ const visibleTags = (s) => s.isRicochetSkill && s.tags?.[0] === roleLabel(s) ? s
     gap: 12px;
   }
 }
+.levelup-overlay.embedded { position: static; inset: auto; padding: 0; background: transparent; backdrop-filter: none; }
+.embedded .levelup-panel { width: 100%; max-width: none; padding: 0; border: 0; background: transparent; box-shadow: none; }
+.embedded .levelup-title { font-size: 17px; }
 </style>

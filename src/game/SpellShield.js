@@ -2,7 +2,7 @@
 export class SpellShield {
   constructor(combat) { this.combat = combat; this.reset() }
   get capacity() { return this.combat.level('spell_shield') >= 2 ? 2 : 1 }
-  get cooldown() { return this.combat.level('spell_shield') > 0 ? 6 : 8 }
+  get cooldown() { return Math.max(4, (this.combat.level('spell_shield') > 0 ? 6 : 8) - (this.combat.game?.bossTomes?.veilReduction || 0)) }
   reset(full = false) {
     this.points = full ? this.capacity : 0; this.remaining = 0; this.flash = 0
     this.previousCapacity = this.capacity; this.previousCooldown = this.cooldown
@@ -18,7 +18,7 @@ export class SpellShield {
     const absorbed = Math.min(this.points, damage)
     this.points = Math.max(0, this.points - absorbed); this.flash = .3
     const broken = this.points < .001
-    if (broken) { this.points = 0; this.remaining = this.cooldown }
+    if (broken) { this.points = 0; this.remaining = this.cooldown; s.game?.bossTomes?.onSpellShieldBroken() }
     const palette = s.palette(), colors = [palette.main, palette.accent]
     s.fx(s.player.x, s.player.y, s.player.radius + 12, palette.main, broken ? 'shield-break' : 'shield-hit', .4, { colors })
     s.stats.shieldAbsorbed += absorbed

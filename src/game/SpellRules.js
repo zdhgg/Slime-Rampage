@@ -60,6 +60,42 @@ function coreCard(id, name, desc, stats, extra = {}) {
   return { id, name, desc, stats, icon: '◆', color: '#b6a4ff', isSpellCore: true, ...extra }
 }
 
+/** Former boss-core shapes now share the ordinary random pool, with the same prerequisites. */
+export function ordinarySpellCoreSkills(game) {
+  const s = game.weaponSystem?.spellCombat
+  if (!s?.available) return []
+  const claims = Math.max(s.cores, Object.values(game.bossSkillLevels || {}).reduce((a, b) => a + b, 0))
+  if (claims < 1) return []
+  const cards = []
+  const add = (key, name, desc, maxLevel, element = null) => {
+    const rank = s.rank(key)
+    if (rank >= maxLevel) return
+    cards.push({ id: `spell_core_${key}`, name, desc, spec: 'elemental', tier: 2,
+      kind: 'core', isSpellCoreUpgrade: true, isElementalSkill: true, maxLevel,
+      level: rank, element, color: element ? SPELL_ELEMENTS[element].color : '#b6a4ff',
+      iconKey: element ? { fire: 'fire', water: 'water', poison: 'poison', lightning: 'lightning' }[element] : 'git_merge',
+      tags: ['元素·法术改造', '随机成长'],
+      stats: key === 'lightning_storm' ? '将雷系自动普攻转为空中落雷；已学强化保留'
+        : key === 'reaction' ? `反应共鸣 Lv.${rank} → ${rank + 1} · 伤害+25%${rank === 1 ? ' · 扩散进化' : rank === 2 ? ' · 范围扩大' : ''}`
+        : `法术改造 Lv.${rank} → ${rank + 1} · 本系伤害+12%`,
+      apply(engine) {
+        const spells = engine.weaponSystem.spellCombat
+        spells.upgrades[key] = Math.min(maxLevel, spells.rank(key) + 1)
+        engine.skillLevels[`spell_core_${key}`] = spells.rank(key)
+        spells.syncElements()
+      },
+    })
+  }
+  for (const element of s.activeElements) add(`shape_${element}`, SPELL_ELEMENTS[element].upgrade,
+    SPELL_ELEMENTS[element].upgradeDesc, 3, element)
+  if (s.fusion && (!s.route || s.route === 'fusion')) {
+    add('reaction', `${s.fusion.name} · 共鸣`, `强化已掌握的融合反应。${REACTION_SPREAD[s.fusion.id]}`, 3)
+    if (s.activeElements.includes('lightning') && claims >= 3 && !s.lightning.storm)
+      add('lightning_storm', '雷暴转化', '雷系自动普攻改为空中落雷；保留传导、另一系法术与融合。', 1, 'lightning')
+  }
+  return cards
+}
+
 /** These rewards replace the normal upgrade at the corresponding level. */
 export function spellMilestoneReward(combat) {
   if (!combat.available) return null

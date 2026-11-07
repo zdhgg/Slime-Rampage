@@ -8,23 +8,12 @@
  *  - 纯展示 + 上报，不持有任何游戏状态。
  */
 import { computed } from 'vue'
-import { MODES, sumDrops } from '../game/RunRules.js'
+import { MODES, POINTS_PER_SCORE } from '../game/RunRules.js'
 
 /** 元素图标（生态档案展示） */
 const EL_ICONS = { fire: '🔥', water: '💧', poison: '☠️', lightning: '⚡' }
 /** 前三名奖牌（分数榜行首） */
 const MEDALS = ['🥇', '🥈', '🥉']
-const LOOT_ICONS = {
-  knight: '🛡️',
-  mage: '📖',
-  archer: '🏹',
-  assassin: '🗡️',
-  priest: '⛪',
-  berserker: '🪓',
-  hound: '🐕',
-  golem: '🗿',
-  wraith: '👻',
-}
 
 const props = defineProps({
   info: { type: Object, required: true },
@@ -38,7 +27,7 @@ const victory = computed(() => props.info?.result === 'victory')
 const extracted = computed(() => props.info?.result === 'extracted')
 const totalStages = computed(() => props.info?.totalStages || 6)
 const resultTitle = computed(() => {
-  if (extracted.value) return '带着战利品安全撤离'
+  if (extracted.value) return '带着战力点安全撤离'
   if (!victory.value) {
     return props.info?.defeatReason === 'nest-destroyed' ? '巢心被净化了' : '史莱姆倒下了'
   }
@@ -99,13 +88,8 @@ const scoreRows = computed(() => {
 /** 分数榜行首标记：前三奖牌，其余 #n */
 const rankBadge = (i) => (i < 3 ? MEDALS[i] : `#${i + 1}`)
 
-/** 本局九类掉落物总数（黑市货币；与 App 结算入账共用 sumDrops 口径） */
-const dropTotal = computed(() => sumDrops(props.info.drops))
-const dropEntries = computed(() =>
-  Object.entries(LOOT_ICONS)
-    .map(([id, icon]) => ({ id, icon, count: props.info.drops?.[id] || 0 }))
-    .filter((entry) => entry.count > 0)
-)
+/** 本局战力点入账（分数 ÷ POINTS_PER_SCORE × 倍率，与服务端入账共用 scoreToPoints 口径） */
+const pointsText = computed(() => `${Math.floor(props.info?.earnedDrops || 0)}`)
 </script>
 
 <template>
@@ -136,20 +120,16 @@ const dropEntries = computed(() =>
         </div>
       </div>
       <div class="gameover-drops">
-        🎒 战利品
-        <span v-if="dropTotal === 0">空空如也…</span>
-        <span v-else class="drop-list">
-          <span v-for="entry in dropEntries" :key="entry.id" class="loot-item">
-            {{ entry.icon }}×{{ entry.count }}
-          </span>
-          <span class="drop-total">（战斗获得 {{ dropTotal }}）</span>
+        🎒 战力点
+        <span class="drop-list">
+          <span class="drop-total">分数 {{ scoreText }} ÷ {{ POINTS_PER_SCORE }} · 入账 <b>{{ pointsText }}</b> 点</span>
         </span>
         <b v-if="info.mode === 'endless'">
-          结算倍率 ×{{ Number(info.lootMultiplier || info.rewardMultiplier || 1).toFixed(2) }} ·
-          {{ info.lootRetention < 1 ? `战败保留 ${Math.round(info.lootRetention * 100)}%` : '安全结算 100%' }} ·
-          实际入账 {{ info.earnedDrops || 0 }} · 完成悬赏 {{ info.bountiesCompleted || 0 }}
+          结算倍率 ×{{ Number(info.effectiveMultiplier || info.rewardMultiplier || 1).toFixed(2) }} ·
+          {{ info.defeatRetention < 1 ? `战败保留 ${Math.round(info.defeatRetention * 100)}%` : '安全结算 100%' }} ·
+          完成悬赏 {{ info.bountiesCompleted || 0 }}
         </b>
-        <b v-else>难度倍率 ×{{ info.rewardMultiplier }} · 实际入账 {{ info.earnedDrops || 0 }}</b>
+        <b v-else>难度倍率 ×{{ info.rewardMultiplier }}</b>
       </div>
       <div class="sync-banner" :class="info.accountSync">{{ accountSyncText }}</div>
       <div v-if="info.unlocked" class="unlock-banner">
@@ -239,7 +219,7 @@ const dropEntries = computed(() =>
         <button class="rules-btn" @click="emit('menu')">返回主页</button>
       </div>
       <button class="market-btn" @click="emit('market')">🏪 去黑市强化基因</button>
-      <div class="gameover-hint">{{ victory ? '新的威胁等级正等待挑战。' : extracted ? '这批战利品已完整入账，可以整备后再次深入。' : info.defeatReason === 'nest-destroyed' ? '净化兵突破了防线，优先拦截奔向巢心的近战单位。' : '调整构筑或规则，再次迎战勇者。' }}</div>
+      <div class="gameover-hint">{{ victory ? '新的威胁等级正等待挑战。' : extracted ? '这批战力点已完整入账，可以整备后再次深入。' : info.defeatReason === 'nest-destroyed' ? '净化兵突破了防线，优先拦截奔向巢心的近战单位。' : '调整构筑或规则，再次迎战勇者。' }}</div>
     </div>
   </div>
 </template>
@@ -553,7 +533,6 @@ const dropEntries = computed(() =>
   vertical-align: middle;
 }
 
-.loot-item,
 .drop-total {
   white-space: nowrap;
 }

@@ -23,24 +23,24 @@ export class LightningCasting {
     const pool = elites.length ? elites : nearby
     return pool.length ? pool[Math.floor(Math.random() * pool.length)] : anchor
   }
-  begin(target, power) {
+  begin(target, power, active = false) {
     const s = this.combat
     if (!s.available || !this.valid(target) || this.jobs.length >= MAX_LIGHTNING_JOBS) return false
     if (this.storm) {
       const selected = this.stormTarget() || target
-      return this.warn(selected, power, { basic: true, target: selected, radius: 25 * s.rangeScale })
+      return this.warn(selected, power, { basic: true, active, target: selected, radius: 25 * s.rangeScale })
     }
     this.charge = LIGHTNING_CHARGE
-    this.jobs.push({ kind: 'charge', due: s.time + LIGHTNING_CHARGE, target, power })
+    this.jobs.push({ kind: 'charge', due: s.time + LIGHTNING_CHARGE, target, power, active })
     s.game.sound?.lightningCharge?.()
     return true
   }
-  warn(point, power, { basic = false, target = null, radius = 100, splash = 0, chainPower = power, bonus = 0 } = {}) {
+  warn(point, power, { basic = false, active = !basic, target = null, radius = 100, splash = 0, chainPower = power, bonus = 0 } = {}) {
     const s = this.combat
     if (!s.available || this.jobs.length >= MAX_LIGHTNING_JOBS) return false
     const center = { x: point.x, y: point.y }
     s.fx(center.x, center.y, basic ? 23 : Math.min(55, radius * .45), '#f0d588', 'lightning-warning', LIGHTNING_WARNING)
-    this.jobs.push({ kind: 'strike', due: s.time + LIGHTNING_WARNING, center, target, basic, radius, power, splash, chainPower, bonus, warning: s.effects.at(-1) })
+    this.jobs.push({ kind: 'strike', due: s.time + LIGHTNING_WARNING, center, target, basic, active, radius, power, splash, chainPower, bonus, warning: s.effects.at(-1) })
     return true
   }
   strike(job) {
@@ -61,7 +61,7 @@ export class LightningCasting {
     const first = job.basic ? job.target : s.game.enemyManager.enemies
       .filter(e => alive(e) && distance2(e, center) <= (job.radius + e.radius) ** 2 && shadowLineClear(s.game, center, e))
       .sort((a, b) => distance2(a, center) - distance2(b, center))[0]
-    if (first) s.chain(first, job.chainPower, { active: !job.basic, bonus: job.bonus, origin: center, sky: true })
+    if (first) s.chain(first, job.chainPower, { active: job.active, bonus: job.bonus, origin: center, sky: true })
     s.game.mapFeatures?.attackBarricades?.(center.x, center.y, job.basic ? 27 : job.radius)
   }
   update(dt) {
@@ -80,7 +80,7 @@ export class LightningCasting {
       if (job.kind === 'charge') {
         const target = this.valid(job.target) && !s.fireReserved(job.target) ? job.target : s.target('lightning')
         if (target) {
-          s.chain(target, job.power)
+          s.chain(target, job.power, { active: !!job.active })
           s.game.sound?.lightningImpact?.(false)
           s.stats.bodyLightningCasts++
         }

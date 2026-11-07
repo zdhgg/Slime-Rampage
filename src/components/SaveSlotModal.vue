@@ -91,7 +91,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
                 <span v-if="slot.id === activeSlotId">当前档案</span>
               </div>
               <dl>
-                <div><dt>战利品</dt><dd>{{ Math.floor(slot.data?.drops || 0) }}</dd></div>
+                <div><dt>战力点</dt><dd>{{ Math.floor(slot.data?.drops || 0) }}</dd></div>
                 <div><dt>基因等级</dt><dd>{{ geneLevels(slot) }}</dd></div>
                 <div><dt>最高进度</dt><dd>{{ progressLabel(slot) }}</dd></div>
               </dl>

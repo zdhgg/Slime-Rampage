@@ -1,11 +1,13 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import {
-  ArrowRight, BookOpen, Check, Coins, Crosshair, Diamond,
-  HeartPulse, Link2, LockKeyhole, Maximize2, Orbit, Split, Wind, X,
+  BookOpen, Coins, Crosshair, Diamond, Dices, Droplets, Egg, Expand, Eye,
+  FlaskConical, Flame, Gauge, Gem, HeartPulse, Layers, Magnet, Maximize2,
+  Package, RefreshCw, Shield, Sword, Syringe, Target, TestTube, Waves, Wind, X, Zap,
 } from 'lucide-vue-next'
 import { GENES, GENE_BRANCHES, getChosenOrigin, getGenePurchaseState } from '../game/GenePool.js'
 import { getGenePresentation } from './blackMarketPresentation.js'
+import BlackMarketGeneNode from './BlackMarketGeneNode.vue'
 
 const props = defineProps({
   drops: { type: Number, required: true },
@@ -13,11 +15,14 @@ const props = defineProps({
 })
 const emit = defineEmits(['buy', 'close'])
 
-const BRANCH_ICONS = { gluttony: HeartPulse, kinetic: Crosshair, elemental: Orbit }
+const BRANCH_ICONS = { flesh: HeartPulse, arms: Crosshair, supply: Package, contraband: FlaskConical }
 const GENE_ICONS = {
-  giant: Maximize2, regen: HeartPulse, predator_origin: Diamond,
-  swift: Wind, split: Split, kinetic_origin: Crosshair,
-  lore: BookOpen, resonance: Link2, element_origin: Orbit,
+  giant: Maximize2, thorns: Shield, regen: HeartPulse, siphon: Waves, leech: Droplets,
+  cocoon: Egg, gorged_origin: Diamond,
+  razor: Sword, rapid: Zap, hunt: Gauge, hunter: Target, fury: Flame, arsenal_origin: Diamond,
+  lore: BookOpen, swift: Wind, expand: Expand, blueprint: RefreshCw, magnet: Magnet,
+  horizon: Layers, flux_origin: Diamond,
+  stim: Syringe, serum: TestTube, greed: Eye, glass: Gem, dicer: Dices,
 }
 const chosenOrigin = computed(() => getChosenOrigin(props.genes))
 const activeBranch = ref(chosenOrigin.value?.branch || GENE_BRANCHES[0].id)
@@ -40,6 +45,10 @@ const branches = computed(() =>
   }))
 )
 
+// 通用货架是黑市主区；违禁品收进底部「暗格」，与货架分开展示。
+const shelves = computed(() => branches.value.filter(branch => branch.layout !== 'strip'))
+const contrabandBranch = computed(() => branches.value.find(branch => branch.layout === 'strip'))
+
 function selectBranch(id) {
   activeBranch.value = id
   if (marketBody.value) marketBody.value.scrollTop = 0
@@ -47,13 +56,13 @@ function selectBranch(id) {
 
 function onTabKeydown(event, index) {
   let next = index
-  if (event.key === 'ArrowRight') next = (index + 1) % branches.value.length
-  else if (event.key === 'ArrowLeft') next = (index + branches.value.length - 1) % branches.value.length
+  if (event.key === 'ArrowRight') next = (index + 1) % shelves.value.length
+  else if (event.key === 'ArrowLeft') next = (index + shelves.value.length - 1) % shelves.value.length
   else if (event.key === 'Home') next = 0
-  else if (event.key === 'End') next = branches.value.length - 1
+  else if (event.key === 'End') next = shelves.value.length - 1
   else return
   event.preventDefault()
-  selectBranch(branches.value[next].id)
+  selectBranch(shelves.value[next].id)
   event.currentTarget.parentElement.querySelectorAll('[role="tab"]')[next]?.focus()
 }
 
@@ -91,7 +100,7 @@ onUnmounted(() => {
         <div class="market-actions">
           <div class="market-wallet" aria-live="polite" aria-atomic="true">
             <Coins :size="18" :stroke-width="1.7" aria-hidden="true" />
-            <span>战利品</span><b>{{ drops }}</b>
+            <span>战力点</span><b>{{ drops }}</b>
           </div>
           <button ref="closeButton" class="market-close" title="返回" aria-label="返回" @click="emit('close')">
             <X :size="20" :stroke-width="1.8" aria-hidden="true" />
@@ -103,12 +112,12 @@ onUnmounted(() => {
         <Diamond :size="16" :stroke-width="1.8" aria-hidden="true" />
         <span>{{ chosenOrigin ? '已激活原核' : '终点原核' }}</span>
         <b>{{ chosenOrigin ? chosenOrigin.name : '尚未选择' }}</b>
-        <p>{{ chosenOrigin ? '其他基础基因仍可升级，原核不可兼得。' : '基础基因可跨路线升级，终点原核只能选择一个。' }}</p>
+        <p>{{ chosenOrigin ? '其他基础基因仍可升级，原核不可兼得。' : '基础基因可跨货架升级，终点原核只能选择一个。' }}</p>
       </div>
 
-      <div class="branch-tabs" role="tablist" aria-label="基因路线">
+      <div class="branch-tabs" role="tablist" aria-label="基因货架">
         <button
-          v-for="(branch, index) in branches"
+          v-for="(branch, index) in shelves"
           :id="`branch-tab-${branch.id}`"
           :key="branch.id"
           type="button"
@@ -125,10 +134,10 @@ onUnmounted(() => {
         </button>
       </div>
 
-      <div ref="marketBody" class="market-body" tabindex="0" aria-label="基因路线与升级">
+      <div ref="marketBody" class="market-body" tabindex="0" aria-label="基因货架与升级">
         <div class="branch-grid">
           <section
-            v-for="branch in branches"
+            v-for="branch in shelves"
             :id="`branch-${branch.id}`"
             :key="branch.id"
             class="gene-branch"
@@ -146,82 +155,41 @@ onUnmounted(() => {
               </div>
             </header>
 
-            <article
+            <BlackMarketGeneNode
               v-for="gene in branch.nodes"
               :key="gene.id"
-              class="gene-node"
-              :data-gene="gene.id"
-              :class="{
-                capstone: gene.isCapstone,
-                selected: gene.activated,
-                locked: gene.locked,
-                maxed: gene.completed,
-                available: gene.canBuy,
-                exclusive: !!gene.exclusiveOwner && !gene.activated,
-              }"
-            >
-              <div class="node-head">
-                <component :is="GENE_ICONS[gene.id]" class="node-icon" :size="22" :stroke-width="1.6" aria-hidden="true" />
-                <div class="node-title">
-                  <small>{{ gene.isCapstone ? '终点原核' : `阶段 0${gene.tier}` }}</small>
-                  <h4>{{ gene.name }}</h4>
-                </div>
-                <div class="node-progress" :aria-label="`${gene.name}，等级 ${gene.level} / ${gene.maxLevel}`">
-                  <span class="node-level">{{ gene.level }}/{{ gene.maxLevel }}</span>
-                  <div class="level-marks" aria-hidden="true">
-                    <i v-for="level in gene.maxLevel" :key="level" :class="{ filled: level <= gene.level }"></i>
-                  </div>
-                </div>
-              </div>
-
-              <div class="node-content">
-                <div v-if="gene.preview" class="node-preview" :aria-label="`${gene.preview.label}：${gene.preview.current}${gene.preview.next ? `，下一级 ${gene.preview.next}` : '，已满级'}`">
-                  <span>{{ gene.preview.label }}</span>
-                  <div>
-                    <b :class="{ current: !!gene.preview.next }">{{ gene.preview.current }}</b>
-                    <template v-if="gene.preview.next">
-                      <ArrowRight :size="15" :stroke-width="1.7" aria-hidden="true" />
-                      <strong>{{ gene.preview.next }}</strong>
-                    </template>
-                  </div>
-                </div>
-                <p v-if="gene.description" class="node-description">{{ gene.description }}</p>
-                <p v-if="gene.note" class="node-note">{{ gene.note }}</p>
-                <p v-if="gene.scope" class="node-scope">{{ gene.scope }}</p>
-              </div>
-
-              <div class="node-action">
-                <p v-if="gene.reason && !gene.completed" :id="`gene-reason-${gene.id}`" class="node-reason">{{ gene.reason }}</p>
-                <div class="node-footer">
-                  <span v-if="gene.completed" class="node-status complete" role="status">
-                    <Check :size="16" :stroke-width="2" aria-hidden="true" />
-                    {{ gene.isCapstone ? '已激活' : '已满级' }}
-                  </span>
-                  <template v-else-if="gene.locked || gene.exclusiveOwner">
-                    <span class="node-status">
-                      <LockKeyhole :size="15" :stroke-width="1.7" aria-hidden="true" />
-                      {{ gene.exclusiveOwner ? '原核互斥' : '未解锁' }}
-                    </span>
-                    <span v-if="!gene.exclusiveOwner" class="node-cost" :aria-label="`${gene.cost} 战利品`">
-                      <Coins :size="14" :stroke-width="1.7" aria-hidden="true" />{{ gene.cost }}
-                    </span>
-                  </template>
-                  <button
-                    v-else
-                    class="gene-buy"
-                    :disabled="!gene.canBuy"
-                    :aria-label="`${gene.affordable ? (gene.level > 0 ? '升级' : '解锁') : '战利品不足'}：${gene.name}，${gene.cost} 战利品`"
-                    :aria-describedby="gene.reason ? `gene-reason-${gene.id}` : undefined"
-                    @click="emit('buy', gene.id)"
-                  >
-                    <span>{{ !gene.affordable ? '战利品不足' : gene.level > 0 ? '升级基因' : '解锁基因' }}</span>
-                    <span class="buy-cost"><Coins :size="15" :stroke-width="1.7" aria-hidden="true" />{{ gene.cost }}</span>
-                  </button>
-                </div>
-              </div>
-            </article>
+              :gene="gene"
+              :icon="GENE_ICONS[gene.id]"
+              @buy="emit('buy', $event)"
+            />
           </section>
         </div>
+
+        <section
+          v-if="contrabandBranch"
+          class="contraband-section"
+          :style="{ '--branch-color': contrabandBranch.color }"
+          :aria-labelledby="`branch-title-${contrabandBranch.id}`"
+        >
+          <header class="branch-header contraband-header">
+            <span class="branch-icon">
+              <component :is="BRANCH_ICONS[contrabandBranch.id]" :size="24" :stroke-width="1.6" aria-hidden="true" />
+            </span>
+            <div>
+              <h3 :id="`branch-title-${contrabandBranch.id}`">{{ contrabandBranch.name }}</h3>
+              <p>{{ contrabandBranch.desc }}</p>
+            </div>
+          </header>
+          <div class="contraband-grid">
+            <BlackMarketGeneNode
+              v-for="gene in contrabandBranch.nodes"
+              :key="gene.id"
+              :gene="gene"
+              :icon="GENE_ICONS[gene.id]"
+              @buy="emit('buy', $event)"
+            />
+          </div>
+        </section>
       </div>
     </main>
   </div>
@@ -268,9 +236,9 @@ onUnmounted(() => {
 .market-wallet b { font-size: 20px; font-variant-numeric: tabular-nums; }
 .market-close { display: grid; place-items: center; flex: none; width: 42px; height: 42px; padding: 0; border: 1px solid #475449; border-radius: 7px; color: var(--secondary); background: #1c261f; cursor: pointer; }
 .market-close:hover { color: #fff; background: #29362c; }
-.market-close, .gene-buy, .branch-tabs button { transition: background-color 120ms ease, border-color 120ms ease; }
-.market-close:active, .gene-buy:active:not(:disabled) { transform: scale(0.98); }
-.market-close:focus-visible, .gene-buy:focus-visible, .branch-tabs button:focus-visible { outline: 2px solid var(--gold); outline-offset: 3px; }
+.market-close, .branch-tabs button { transition: background-color 120ms ease, border-color 120ms ease; }
+.market-close:active { transform: scale(0.98); }
+.market-close:focus-visible, .branch-tabs button:focus-visible { outline: 2px solid var(--gold); outline-offset: 3px; }
 
 .origin-status { display: flex; flex: none; align-items: center; gap: 9px; margin: 0 26px; padding: 10px 0; border-block: 1px solid var(--border); color: var(--muted); font-size: 12px; line-height: 1.5; }
 .origin-status > svg { flex: none; }
@@ -285,51 +253,18 @@ onUnmounted(() => {
 .market-body::-webkit-scrollbar-track { background: #111813; }
 .market-body::-webkit-scrollbar-thumb { background: #55645a; border: 2px solid #111813; border-radius: 5px; }
 .branch-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 18px; }
-.gene-branch { display: grid; grid-template-rows: auto 1fr 1fr auto; gap: 10px; min-width: 0; }
+.gene-branch { display: grid; grid-template-rows: auto repeat(6, 1fr) auto; gap: 10px; min-width: 0; }
 @supports (grid-template-rows: subgrid) {
-  .gene-branch { grid-template-rows: subgrid; grid-row: span 4; }
+  .gene-branch { grid-template-rows: subgrid; grid-row: span 8; }
 }
 .branch-header { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 1px 2px 8px; border-bottom: 2px solid color-mix(in srgb, var(--branch-color) 65%, #303c33); }
 .branch-icon { display: grid; place-items: center; width: 34px; flex: none; color: var(--branch-color); }
 .branch-header h3 { margin: 0 0 4px; font-size: 17px; line-height: 1.3; }
 .branch-header p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
 
-.gene-node { display: flex; flex-direction: column; gap: 9px; min-width: 0; padding: 12px 16px 11px; border: 1px solid var(--border); border-radius: 8px; background: #1a231d; }
-.gene-node.selected { border-color: color-mix(in srgb, var(--branch-color) 62%, #303c33); box-shadow: inset 3px 0 0 var(--branch-color); }
-.gene-node.capstone { background: #1e271f; }
-.gene-node.exclusive { background: #18201b; }
-.node-head { display: flex; align-items: center; gap: 10px; }
-.node-icon { flex: none; color: var(--secondary); }
-.maxed .node-icon, .selected .node-icon { color: var(--branch-color); }
-.node-title { min-width: 0; }
-.node-title small { display: block; margin-bottom: 3px; color: var(--muted); font-size: 12px; line-height: 1.2; }
-.node-title h4 { margin: 0; font-size: 15px; line-height: 1.4; }
-.node-progress { display: grid; justify-items: end; gap: 6px; margin-left: auto; flex: none; }
-.node-level { color: var(--secondary); font-size: 12px; font-variant-numeric: tabular-nums; line-height: 1; }
-.level-marks { display: flex; gap: 3px; }
-.level-marks i { width: 7px; height: 3px; border-radius: 1px; background: #526156; }
-.level-marks i.filled { background: var(--branch-color); }
-.node-content { color: var(--secondary); }
-.node-preview { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; line-height: 1.5; }
-.node-preview > div { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; font-variant-numeric: tabular-nums; }
-.node-preview b, .node-preview strong { color: var(--text); font-size: 17px; font-weight: 600; }
-.node-preview b.current { color: var(--muted); font-size: 14px; font-weight: 400; }
-.node-preview svg { color: var(--muted); }
-.node-description { margin: 0; color: var(--secondary); font-size: 13px; line-height: 1.7; }
-.node-note, .node-scope { margin: 5px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
-.node-action { display: grid; gap: 6px; margin-top: auto; }
-.node-reason { margin: 0; color: #d9c49a; font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
-.exclusive .node-reason { color: var(--muted); }
-.node-footer { display: flex; align-items: center; justify-content: space-between; min-height: 36px; gap: 8px; }
-.node-status, .node-cost { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
-.node-status.complete { color: #b5d4b3; font-weight: 600; }
-.selected .node-status.complete { color: var(--branch-color); }
-.node-cost { font-variant-numeric: tabular-nums; }
-.gene-buy { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; min-height: 36px; padding: 7px 11px; border: 1px solid #65745e; border-radius: 5px; color: #eef0d6; background: #35432f; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
-.buy-cost { display: inline-flex; align-items: center; gap: 6px; color: #f0d29b; font-variant-numeric: tabular-nums; }
-.gene-buy:hover:not(:disabled) { background: #43533b; border-color: #91a07c; }
-.gene-buy:disabled { color: var(--muted); background: #222c25; border-color: #3b493e; cursor: not-allowed; }
-.gene-buy:disabled .buy-cost { color: var(--muted); }
+.contraband-section { margin-top: 18px; padding-top: 14px; border-top: 1px dashed #4a3232; }
+.contraband-header { border-bottom-color: color-mix(in srgb, var(--branch-color) 55%, #303c33); border-bottom-style: dashed; }
+.contraband-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 18px; margin-top: 10px; }
 
 @media (max-width: 900px) {
   .market-overlay { padding: 14px; }
@@ -347,8 +282,7 @@ onUnmounted(() => {
   .gene-branch { grid-row: auto; grid-template-rows: none; gap: 12px; }
   .gene-branch:not(.active) { display: none; }
   .branch-header { border-bottom: 0; padding-bottom: 3px; }
-  .gene-node { padding: 15px 16px; }
-  .node-footer, .gene-buy { min-height: 40px; }
+  .contraband-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
 @media (max-width: 480px) {
@@ -363,15 +297,16 @@ onUnmounted(() => {
   .market-wallet b { font-size: 18px; }
   .market-close { width: 40px; height: 40px; }
   .origin-status { margin-inline: 15px; gap: 6px 8px; padding-block: 10px; }
-  .branch-tabs { padding: 10px 15px 0; gap: 5px; }
+  .branch-tabs { grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 10px 15px 0; gap: 5px; }
+  .branch-tabs button { gap: 3px; padding-inline: 2px; font-size: 11px; }
+  .branch-tabs button svg { width: 14px; height: 14px; }
   .market-body { padding: 13px 11px 16px 15px; }
   .branch-header { gap: 9px; }
   .branch-header h3 { font-size: 16px; }
-  .gene-node { padding: 13px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .market-close, .gene-buy, .branch-tabs button { transition: none; }
-  .market-close:active, .gene-buy:active:not(:disabled) { transform: none; }
+  .market-close, .branch-tabs button { transition: none; }
+  .market-close:active { transform: none; }
 }
 </style>

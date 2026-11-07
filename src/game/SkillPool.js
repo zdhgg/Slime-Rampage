@@ -1,11 +1,12 @@
-import { PET_SPEC_INFO, PET_SKILLS, PET_BOSS_SKILLS, PET_PARTNER_SKILLS } from './PetSkills.js'
+import { BOSS_TOMES, rollBossTomes } from './BossTomes.js'
+import { PET_SPEC_INFO, PET_SKILLS, PET_PARTNER_SKILLS } from './PetSkills.js'
 import { setCritSource } from './CritSources.js'
 import { ELEMENTAL_SKILLS, ELEMENTAL_SPEC_INFO, resolveElementalSkill } from './SpellRules.js'
 import { spellSkillAvailable, prioritizeSpellChoices } from './ElementalUpgrades.js'
 import { SHADOW_EXTRA_SKILLS, SHADOW_SKILL_VARIANTS, SHADOW_SPEC_INFO, resolveShadowSkill } from './ShadowSkills.js'
 import { SHADOW_ROUTES, getShadowSkill, rollShadowSkills } from './ShadowBuild.js'
 import { getOriginActiveGrowth, getPrimalOverloadProfile } from './PrimalEnergy.js'
-import { rollRicochetSkills, RICOCHET_BOSS_SKILLS, RICOCHET_SPEC_INFO, RICOCHET_ROUTES } from './RicochetRules.js'
+import { rollRicochetSkills, RICOCHET_SPEC_INFO, RICOCHET_ROUTES } from './RicochetRules.js'
 import { CORE_SKILL_RANK_CAPS, getEffectiveSkillMaxLevel, getSoftRankMultiplier, applyRankMultiplier } from './SkillProgression.js'
 import { ENDLESS_SKILLS } from './EndlessSkills.js'
 import { GLUTTON_ROUTES, rollGluttonSkills } from './GluttonBuild.js'
@@ -891,107 +892,12 @@ export function getSpecInfo(spec, game) {
   return spec === 'assassin' && (game?.startingStrain || game?.strainId) === 'shadow' ? { ...info, ...SHADOW_SPEC_INFO } : info
 }
 
-/**
- * BOSS 专属职业秘典：不进入普通升级池，也不占用等级升级次数。
- * 这些技能只从当前角色可用的职业池中抽取；元素共鸣秘典额外要求
- * startingStrain === 'elemental'，原生黏液选择元素主专精也不能获得。
- */
+/** Bounded, starting-identity tome pools; ordinary skill ranks stay separate. */
 export const BOSS_SKILL_DATABASE = {
-  symbiosis: PET_BOSS_SKILLS,
-  gluttony: [
-    {
-      id: 'boss_glutton_radiance', spec: 'gluttony', tier: 5, isBossSkill: true,
-      name: '辉胃', icon: '☀️', color: '#ffd166',
-      desc: '每 4 秒释放一次近身光辉，对 150px 内敌人造成伤害并短暂灼烧。',
-      stats: '光辉伤害 ×1.5 · 半径 150 · 冷却 4 秒', tags: ['BOSS秘典', '暴食·光辉'],
-      apply(game) { game.player.gluttonRadiance = Math.max(game.player.gluttonRadiance || 0, 1.5) },
-    },
-    {
-      id: 'boss_glutton_thorns', spec: 'gluttony', tier: 5, isBossSkill: true,
-      name: '荆棘胃壁', icon: '🛡️', color: '#ff9f43',
-      desc: '受击时反震周围敌人，反伤提高；同一次无敌帧只触发一次。',
-      stats: '反震伤害 4 · 半径 160 · 受击触发', tags: ['BOSS秘典', '暴食·反伤'],
-      apply(game) { game.player.thornsPulse = true; game.player.thornsDamage = Math.max(game.player.thornsDamage || 0, 4) },
-    },
-  ],
-  gatling: [
-    {
-      id: 'boss_gatling_overdrive', spec: 'gatling', tier: 5, isBossSkill: true,
-      name: '裂空弹仓', icon: '🌀', color: '#00d2d3',
-      desc: '强化连续射击：每轮追加一枚弹丸，并缩短射击间隔。',
-      stats: '齐射 +1 · 射击间隔 ×0.78', tags: ['BOSS秘典', '弹射·火力'],
-      apply(game) { game.weaponSystem.projectileCount += 1; game.weaponSystem.fireInterval *= 0.78 },
-    },
-    {
-      id: 'boss_gatling_ricochet', spec: 'gatling', tier: 5, isBossSkill: true,
-      name: '弹道回响', icon: '🔷', color: '#74e8f7',
-      desc: '飞弹获得额外穿透，并提高分裂概率，形成持续弹射链。',
-      stats: '基础穿透 +2 · 分裂概率 +25%', tags: ['BOSS秘典', '弹射·穿透'],
-      apply(game) { game.weaponSystem.basePierces += 2; game.weaponSystem.splitChance += 0.25 },
-    },
-  ],
-  elemental: [
-    {
-      id: 'boss_elemental_grimoire', spec: 'elemental', tier: 5, isBossSkill: true,
-      name: '元素法典', icon: '📖', color: '#a29bfe',
-      desc: '四系法术强化：元素附加更稳定，反应伤害显著提高。',
-      stats: '三系附加概率 +15% · 反应伤害 ×1.35', tags: ['BOSS秘典', '元素·法术'],
-      apply(game) {
-        const ws = game.weaponSystem
-        ws.freezeChance += 0.15; ws.burnChance += 0.15; ws.poisonChance += 0.15
-        ws.reactionDmgMul *= 1.35
-      },
-    },
-    {
-      id: 'boss_elemental_resonance', spec: 'elemental', tier: 5, isBossSkill: true,
-      requiresElementalStrain: true,
-      name: '共鸣催化剂', icon: '✦', color: '#d7c9ff',
-      desc: '只有元素史莱姆可以掌握。元素反应范围扩大，并获得额外反应伤害。',
-      stats: '反应伤害 ×1.6 · 反应范围 +25%', tags: ['BOSS秘典', '元素·共鸣'],
-      apply(game) {
-        if (game.startingStrain !== 'elemental') return
-        game.weaponSystem.reactionDmgMul *= 1.6
-        game.player.elementalResonance = true
-      },
-    },
-  ],
-  assassin: [
-    {
-      id: 'boss_assassin_mark', spec: 'assassin', tier: 5, isBossSkill: true,
-      name: '处决印记', icon: '🎯', color: '#ff5656',
-      desc: '暴击率与暴击倍率提升，对残血敌人造成额外暴击伤害。',
-      stats: '暴击率 +18% · 暴击倍率至少 4.2x · 残血暴伤翻倍', tags: ['BOSS秘典', '暗影·处决'],
-      apply(game) { setCritSource(game, 'boss_mark', { chance: 0.18, multiplierFloor: 4.2 }); game.weaponSystem.executeCrit = true },
-    },
-    {
-      id: 'boss_assassin_voidstep', spec: 'assassin', tier: 5, isBossSkill: true,
-      name: '虚空步', icon: '🌑', color: '#b879ff',
-      desc: '主动技能冷却大幅缩短，释放主动技能后下一次攻击必定暴击。',
-      stats: '主动技能冷却 ×0.65 · 释放主动技能后必暴', tags: ['BOSS秘典', '暗影·突袭'],
-      apply(game) { if (game.startingStrain !== 'shadow') game.player.activeSkillCdMultiplier *= 0.65; game.player.shadowBossStep = true },
-    },
-  ],
+  origin: BOSS_TOMES.origin, gluttony: BOSS_TOMES.glutton, gatling: BOSS_TOMES.ricochet,
+  elemental: BOSS_TOMES.elemental, assassin: BOSS_TOMES.shadow, symbiosis: BOSS_TOMES.summoner,
 }
-
-/** 取当前角色可获得的 BOSS 秘典候选。 */
-export function rollBossSkills(game, count = 3) {
-  const strain = game.startingStrain || game.player?.strainId || 'origin'
-  // 拟态血统（祖细胞拟态）：requiresElementalStrain 仍认真血统（元素史莱姆独占），
-  // 伙伴契约认拟态——origin 拟态共生后招募秘典必须可达。
-  const effectiveStrain = game.mimicryStrain || strain
-  const spec = game.roleSpec || game.primarySpec
-  if (!spec || !BOSS_SKILL_DATABASE[spec]) return []
-  const owned = game.bossSkillIds || new Set()
-  const pool = (strain === 'ricochet' ? RICOCHET_BOSS_SKILLS : BOSS_SKILL_DATABASE[spec]).filter((skill) =>
-    !owned.has(skill.id) && (!skill.requiresElementalStrain || strain === 'elemental') &&
-    (!skill.partnerSkillId || (effectiveStrain === 'summoner' && !(game.skillLevels?.[skill.partnerSkillId] > 0)))
-  )
-  const shuffled = pool.slice().sort(() => Math.random() - 0.5)
-  // 未招募的伙伴至少出现一项，让击败首领始终有组队的机会。
-  const recruit = shuffled.find(s => s.partnerSkillId)
-  const choices = recruit ? [recruit, ...shuffled.filter(s => s !== recruit)] : shuffled
-  return choices.slice(0, Math.min(count, pool.length)).map(s => resolveShadowSkill(s, game))
-}
+export const rollBossSkills = rollBossTomes
 
 /**
  * 技能的「角色权限」前提（第四批）：把依赖独占能力的技能标出来，

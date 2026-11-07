@@ -22,7 +22,6 @@ import { resolveWeaponVisual, splitWeaponVisual, tintedWeaponVisual } from './We
 import { getEndlessSkillBonus } from './EndlessSkills.js'
 
 const TAU = Math.PI * 2
-export const COMMON_LOOT_CHANCE = 0.1
 
 /**
  * 消化进度（吞噬 → 元素联动）：
@@ -33,16 +32,6 @@ export const COMMON_LOOT_CHANCE = 0.1
 export const DIGEST_CHARGE_MAX = 100
 export const DIGEST_GAIN_NORMAL = 6
 export const DIGEST_GAIN_ELITE = 14
-
-export function getLootDropCount(enemy, random = Math.random) {
-  if (enemy.isBoss) {
-    if (enemy.isExpeditionStageBoss && !enemy.isExpeditionBoss) return 1
-    if (enemy.isBossSquadMember) return Math.max(0, enemy.bossLootDrops ?? 1)
-    return 3
-  }
-  if (enemy.isElite) return 1
-  return random() < COMMON_LOOT_CHANCE ? 1 : 0
-}
 
 /**
  * 等级攻击力成长（阶段十二）：每次升级自动 ×1.08（乘算）。
@@ -99,7 +88,6 @@ export class WeaponSystem extends Entity {
     // 连杀计数（阶段十二）：1.8s 窗口内连续击杀数，驱动击杀音高爬升
     this._combo = 0
     this._comboTimer = 0
-    this.drops = { knight: 0, mage: 0, archer: 0, assassin: 0, priest: 0, berserker: 0, hound: 0, golem: 0, wraith: 0 } // 本局勇者掉落物计数
     this.berserkBuffTimer = 0 // 狂暴连击 BUFF（吞噬狂战士获得）
 
     // —— 专精系统字段（阶段十八：流派体系） ——
@@ -113,9 +101,11 @@ export class WeaponSystem extends Entity {
     this.executeCrit = false // 刺客共鸣：残血暴伤翻倍
     this.splitPierces = 0 // 机枪：分裂弹穿透数
     this.basePierces = 0 // 机枪共鸣：基础飞弹穿透数
-    this.genePierces = 0 // 黑市动能原核：所有飞弹额外穿透
+    this.genePierces = 0 // 黑市兵工原核：所有飞弹额外穿透
+    this.geneRangeMul = 1 // 黑市扩张基因：攻击范围倍率（飞弹航程/近战触及/法术半径共用）
     this.geneReactionDmgMul = 1 // 黑市共鸣原核：与局内反应倍率独立乘算
     this.devourDamageMul = 1 // 黑市捕食原核：每次吞噬 +3% 攻击（封顶 2.0，本局内滚雪球）
+    this.geneHuntHaste = 0 // 黑市狩猎亢奋：击杀后 2.5 秒攻速窗口（0 = 未习得）
     // —— 专精 → 元素联动（主专精改写元素玩法规则，不加数值） ——
     this.splitInherit = 0.5 // 分裂弹继承母弹附魔/暴击概率的比例（机枪主专精抬到 100%）
     // 刺客觉醒的「暴击保证触发元素 proc」——只在角色有元素权限时才赋值
@@ -167,9 +157,23 @@ export class WeaponSystem extends Entity {
   get muzzleKick() { return this._muzzleT > 0 ? this._muzzleT / 0.08 : 0 }
   get muzzleAngle() { return this._muzzleAngle }
 
+  /**
+   * 困兽基因（黑市）：每缺失 1 点生命上限，全伤害源 +geneFuryPerMissing。
+   * 乘区做成读时生效：damage 读取 = 基础值 × 残血倍率，写入时折算回基础值——
+   * 「*=」类乘算更新不会被残血状态污染，所有伤害路径（飞弹/近战/法术/伙伴）零改动接入。
+   */
+  get _furyMul() {
+    const p = this.player
+    return p?.geneFuryPerMissing > 0 ? 1 + Math.max(0, p.maxHp - p.hp) * p.geneFuryPerMissing : 1
+  }
+  get damage() { return (this._baseDamage ?? 1) * this._furyMul }
+  set damage(value) { this._baseDamage = value / this._furyMul }
+
   get attackInterval() {
     const formationMul = this.game?.endlessFormationBreakTimer > 0 ? ENDLESS_FORMATION_BREAK_ATTACK_INTERVAL_MUL : 1
-    return this.fireInterval * (this.berserkBuffTimer > 0 ? 0.6 : 1) * formationMul
+    // 狩猎亢奋（黑市）：击杀窗口内攻速提升，近战远程共用同一攻击周期
+    const huntMul = this.player?._huntRushTimer > 0 ? this.geneHuntHaste || 1 : 1
+    return this.fireInterval * (this.berserkBuffTimer > 0 ? 0.6 : 1) * formationMul * huntMul / (this.game?.bossTomes?.biteHaste || 1)
   }
 
   /** 重置武器属性与弹幕（游戏重开时由引擎调用） */
@@ -178,7 +182,7 @@ export class WeaponSystem extends Entity {
     this._critBase = null
     this.fireInterval = 1.0
     this.cooldown = 0.5
-    this.damage = 1
+    this._baseDamage = 1 // damage 的底层基础值（getter 附带困兽残血乘区）
     this.levelMul = 1 // 等级攻击力成长归 1（重开即全新曲线）
     this.projectileCount = 1
     this.projectileSpeed = 520
@@ -193,7 +197,6 @@ export class WeaponSystem extends Entity {
     this.bossKills = 0
     this._combo = 0
     this._comboTimer = 0
-    this.drops = { knight: 0, mage: 0, archer: 0, assassin: 0, priest: 0, berserker: 0, hound: 0, golem: 0, wraith: 0 }
     this.berserkBuffTimer = 0
     this.reactionDmgMul = 1.0
     this.reactionShockwave = 0
@@ -206,8 +209,10 @@ export class WeaponSystem extends Entity {
     this.splitPierces = 0
     this.basePierces = 0
     this.genePierces = 0
+    this.geneRangeMul = 1
     this.geneReactionDmgMul = 1
     this.devourDamageMul = 1
+    this.geneHuntHaste = 0
     // 专精改写标记归位（元素专精的附魔封顶在 Player.resetRunState）
     this.splitInherit = 0.5
     this.critGuaranteesElement = false
@@ -410,13 +415,14 @@ export class WeaponSystem extends Entity {
           isBasicAttack: true,
           pierces: this.basePierces + this.genePierces,
           visual,
-          life: this.isGatlingMother ? 5 : 2.5,
+          life: (this.isGatlingMother ? 5 : 2.5) * (this.geneRangeMul || 1),
         })
       )
     }
   }
 
   update(dt) {
+    this.game?.bossTomes?.update(dt)
     // 玩家死亡（gameOver 已触发，仅本帧残差）：停止射击与结算，
     // 防止结算快照（击杀/掉落物）之后的数据继续变动
     if (this.player.dead || this.game.runFinished) { this.gluttonCombat.reset(); this.shadowCombat.reset(); this.petCombat.reset(); this.spellCombat.reset(); this.rapidVolley = null; return }
@@ -438,7 +444,7 @@ export class WeaponSystem extends Entity {
       this.rapidVolley.timer -= dt
       while (this.rapidVolley.remaining > 0 && this.rapidVolley.timer <= 0) {
         const target = this._findNearest()
-        if (target) this.fire(target, this.rapidVolley)
+        if (target) this.fire(target, { ...this.rapidVolley, activeVolley: true })
         this.rapidVolley.remaining--
         this.rapidVolley.timer += 0.12
       }
@@ -759,9 +765,25 @@ export class WeaponSystem extends Entity {
   }
 
   /**
+   * 噬血基因（黑市通用）：击杀计数满额回复 1 点生命。
+   * 阈值 = geneLeechKills × geneLeechKillsMul（饕餮原核折扣），最低 8；
+   * 满血时不计数（不为溢出浪费猎物），回复间隔至少 5 秒防密集波次连奶。
+   * 即时击杀与吞噬结算共用一个入口（_settleKill / onDevoured 分别调用）。
+   */
+  _tickLeech() {
+    const p = this.player
+    const threshold = Math.max(8, Math.round((p.geneLeechKills || 0) * (p.geneLeechKillsMul || 1)))
+    if ((p.geneLeechKills || 0) <= 0 || p._leechHealCd > 0 || p.hp >= p.maxHp) return
+    if (++p._leechProgress < threshold) return
+    p._leechProgress = 0
+    p._leechHealCd = 5
+    p.heal(1)
+  }
+
+  /**
    * DOT 致死入口（阶段十二修复）：燃烧/中毒跳伤在 Enemy 内部定时触发，
    * 施伤方无法即时感知（延迟死亡），由 Enemy._tickStatus 在致死时回调本方法，
-   * 与即时击杀走同一结算通道——击杀计数 / 宝石掉落 / 战利品 / Boss 大爆不再被跳过。
+   * 与即时击杀走同一结算通道——击杀计数 / 宝石掉落 / Boss 大爆不再被跳过。
    */
   onDOTKill(e) {
     this._settleKill(e)
@@ -782,17 +804,20 @@ export class WeaponSystem extends Entity {
     return this.game.gemManager.spawn(x, y, 0, type)
   }
 
-  /** 击杀结算唯一汇聚点：计数 + 连杀 + 音效 + 掉落（Boss 大爆 / 精英必掉 / 普通概率） */
+  /** 击杀结算唯一汇聚点：计数 + 连杀 + 音效 + 掉落（Boss 大爆 / 精英核心） */
   _settleKill(e) {
     // _settled 防重复结算：吞噬中（onDevoured 已结算）或 DOT 已结算的敌人
-    // 再被飞弹/雷击/酸液命中致死时，不再重复发放击杀数/宝石/战利品
+    // 再被飞弹/雷击/酸液命中致死时，不再重复发放击杀数/宝石/核心
     if (e._settled) return
     e._settled = true
     this.kills++
+    this._tickLeech()
     if (e.isBoss) this.bossKills++
     else if (e.isElite) this.eliteKills++
     this.game.worldEvents?.onEnemyDefeated(e)
     this.player.triggerKillRush?.(2)
+    // 狩猎亢奋（黑市）：击杀刷新 2.5 秒攻速窗口
+    if (this.geneHuntHaste > 0) this.player._huntRushTimer = 2.5
     // 死亡扩散环（阶段十五美化）：Boss 金色大环，普通怪制服色小环
     this._ring(e.x, e.y, e.isBoss ? '#ffd166' : getPaletteMid(e.paletteKey), e.isBoss ? 48 : 26)
     // 连杀窗口内递增 → 击杀音高爬升（清屏叠加爽感）；窗口外重新起数
@@ -807,7 +832,7 @@ export class WeaponSystem extends Entity {
       const squadLast = squadMember &&
         this.game.enemyManager.activeBossCount === 0 &&
         this.game.enemyManager.pendingBossCount === 0
-      // 每关守将采用轻量战利品，避免连续 Boss 的秘籍与核心把成长曲线推爆；
+      // 每关守将采用轻量掉落预算，避免连续 Boss 的秘籍与核心把成长曲线推爆；
       // 首领编队按整队共享旧单 Boss 预算，秘籍只由最后一名成员掉落。
       const gemCount = chapterGuardian
         ? 3
@@ -824,32 +849,20 @@ export class WeaponSystem extends Entity {
       if (!this.spellCombat.enabled && !chapterGuardian && (!squadMember || squadLast)) {
         this.game.gemManager.spawn(e.x, e.y, 0, 'tome')
       }
-      // 职业秘典：章节守将必掉，普通首领与编队末王高概率掉落。
-      // 它与王级秘籍分开拾取，打开当前职业专属三选一，不占用等级升级。
-      const canDropMastery = !this.spellCombat.enabled && !!(this.game.roleSpec || this.game.primarySpec)
-      const masteryChance = chapterGuardian ? 1 : squadMember ? (squadLast ? 0.85 : 0) : 0.65
-      if (canDropMastery && Math.random() < masteryChance) {
-        this.game.gemManager.spawn(e.x + 12, e.y - 8, 0, 'tome', { mastery: true })
-      }
+      // 职业秘典：章节守将必得；其他首领沿用概率，并按整场遭遇去重。
+      // Career tomes are delivered by the encounter settlement.
       this.game.sound.bossDeath()
       this.game.shakeScreen(8, 0.45) // Boss 阵亡大震动（阶段十五美化）
     } else {
       this.game.gemManager.spawn(e.x, e.y, e.expValue) // 经验宝石
       // 元素核心（阶段十六经济重设计）：击杀仅精英掉落——
-      // 核心回归「狩猎精英/Boss」的战利品定位（Boss 大爆 3 个在 Boss 分支）；
+      // 核心回归「狩猎精英/Boss」的掉落定位（Boss 大爆 3 个在 Boss 分支）；
       // 吞噬路径（法师/精英必掉、其他 12%）仍是主动获取核心的技巧型途径。
       // 第三批：非元素角色（暴食/弹射/暗影）不产出核心。
       if (e.isElite) {
         const els = ['fire', 'water', 'poison', 'lightning']
         this._spawnElementCore(e.x, e.y, els[(Math.random() * els.length) | 0])
       }
-    }
-
-    // 勇者物品（黑市货币，按职业计数）：单 Boss 3、编队共享至多 3、精英必掉、普通 10%。
-    const dropKey = e.isBoss ? e.dropType || e.type.slice(5) : e.type // 复合 Boss 使用指定职业战利品
-    const dropCount = getLootDropCount(e)
-    if (dropCount > 0) {
-      this.drops[dropKey] = (this.drops[dropKey] || 0) + dropCount
     }
 
     // 精英词缀死亡特效（阶段十三）：吞噬路径（onDevoured）不经过这里——
@@ -949,7 +962,7 @@ export class WeaponSystem extends Entity {
 
             const rMul = (this.reactionDmgMul || 1.0) * (this.geneReactionDmgMul || 1.0)
             const tickDmg = Math.max(1, Math.round(damage * 0.4 * rMul))
-            const effects = {}
+            const effects = { bossTomeContext: { basic: p.isBasicAttack && !p.isSplit } }
             let elementProcApplied = false // 拟态能量：本次命中是否触发了元素附魔（来源③）
             if (p.freezeChance > 0 && Math.random() < p.freezeChance) effects.freeze = 1.5
             if (p.burnChance > 0 && Math.random() < p.burnChance) {
@@ -1064,6 +1077,7 @@ export class WeaponSystem extends Entity {
     if (e._settled) return // 防御：已结算的敌人不再重复发放（_checkDevour 已过滤，双保险）
     e._settled = true // 吞噬路径独立结算，标记防止与 DOT/即时路径重复
     this.kills++
+    this._tickLeech()
     this.devours++
     // 猎食点进度：只有普通吞噬计入（F 主动捕食走 onGluttonFDevoured，恒不增加进度）
     if (ctx?.source === DEVOUR_SOURCE_GLUTTON) {
@@ -1081,6 +1095,8 @@ export class WeaponSystem extends Entity {
     if (e.isElite) this.eliteKills++
     this.game.worldEvents?.onEnemyDefeated(e)
     this.player.triggerKillRush?.(2)
+    // 狩猎亢奋（黑市）：击杀刷新 2.5 秒攻速窗口
+    if (this.geneHuntHaste > 0) this.player._huntRushTimer = 2.5
     this.player.triggerDevourGuard?.(3)
     this.gluttonCombat.grantGuard()
     if (this.gluttonCombat.biteUnlocked) this.gluttonCombat.onDevoured(e)
@@ -1124,9 +1140,6 @@ export class WeaponSystem extends Entity {
     if (this.game.canUseElements) {
       this.addDigestCharge(e.isElite ? DIGEST_GAIN_ELITE : DIGEST_GAIN_NORMAL)
     }
-
-    // 战利品必掉（黑市货币）
-    this.drops[e.type] = (this.drops[e.type] || 0) + 1
 
     // 职业吞噬特有即时增益：
     if (e.type === 'assassin') {
@@ -1332,7 +1345,7 @@ export class WeaponSystem extends Entity {
           target: t,
           speed: 420,
           damage: Math.max(1, Math.round(parent.damage * 0.5)),
-          life: 1.2,
+          life: 1.2 * (this.geneRangeMul || 1),
           radius: 4,
           splitChance: 0,
           critChance: (parent.critChance || 0) * inherit,

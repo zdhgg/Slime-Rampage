@@ -5,7 +5,6 @@ import assert from 'node:assert/strict'
 import { EnemyManager } from './src/game/EnemyManager.js'
 import { getEndlessBossFormation } from './src/game/EndlessMode.js'
 import { getBossWavePlan, getRunProfile } from './src/game/RunRules.js'
-import { getLootDropCount } from './src/game/WeaponSystem.js'
 
 let n = 0
 const ok = (message) => console.log(`  ✓ ${++n}. ${message}`)
@@ -100,7 +99,7 @@ function createManager(selection = timed) {
   assert.equal(manager.activeBossCount, 3)
   assert.equal(manager.pendingBossCount, 2)
   assert.equal(manager.bossInfo.total, 5)
-  assert.deepEqual(manager._bosses.map((boss) => boss.bossLootDrops), [1, 1, 1])
+  assert.deepEqual(manager._bosses.map((boss) => boss.isBossSquadMember), [true, true, true])
   assert.equal(manager.spawnBoss({ type: 'boss-knight', allowMultiple: true }), undefined)
 
   const defeated = manager._bosses.find((boss) => boss.active)
@@ -118,8 +117,8 @@ function createManager(selection = timed) {
   }
   assert.equal(complete, true)
   assert.equal(manager.pendingBossCount, 0)
-  assert.equal(manager._bosses.reduce((sum, boss) => sum + getLootDropCount(boss), 0), 3)
-  ok('无尽首领同屏封顶三名、后备立即补位，整队战利品预算封顶三份')
+  assert.equal(manager._bosses.length, 5)
+  ok('无尽首领同屏封顶三名、后备立即补位，整队清空才算遭遇完成')
 }
 
 {
@@ -134,12 +133,10 @@ function createManager(selection = timed) {
   assert.equal(manager.activeBossCount, 3)
   assert.equal(manager.pendingBossCount, 1)
   const encounterMembers = [survivor, ...manager._bosses.slice(3), ...manager._bossEncounter.pending]
-  const assignedLoot = encounterMembers.reduce(
-    (sum, member) => sum + Math.max(0, member.bossLootDrops ?? 0),
-    0
-  )
-  assert.equal(assignedLoot, 3)
-  ok('跨首领波仍存活的成员计入新编队，后续增援不会突破三份预算')
+  assert.equal(encounterMembers.length, 4)
+  assert.equal(survivor.bossGroupSize, 4)
+  assert.ok(encounterMembers.every((member) => member.bossGroupSize === 4 || member.expMul))
+  ok('跨首领波仍存活的成员计入新编队，增援按新编队总人数补位')
 }
 
 {

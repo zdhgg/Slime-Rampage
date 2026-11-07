@@ -50,7 +50,7 @@ const runStatusText = computed(() => {
     if (run.state === 'expedition-intro') return '章节部署'
     return `第 ${run.stage || 1} / ${run.totalStages || 6} 章`
   }
-  const multiplier = Number(run.lootMultiplier || run.rewardMultiplier || 1).toFixed(2)
+  const multiplier = Number(run.effectiveMultiplier || run.rewardMultiplier || 1).toFixed(2)
   return run.disasterTier > 0
     ? `灾变 ${run.disasterTier} · 收益×${multiplier}`
     : `深入中 · 收益×${multiplier}`
@@ -324,6 +324,16 @@ const primalTitle = computed(() => {
             <i v-if="r.id === stats.primaryReaction" class="chip-star">★</i>{{ r.name }}
           </span>
         </div>
+        <div
+          v-if="stats.coreResonance && stats.primarySpec === 'elemental' && !stats.spells"
+          class="hud-core-resonance"
+          :style="{ '--resonance-color': stats.coreResonance.color }"
+          :title="`${stats.coreResonance.name}：${stats.coreResonance.effect} · 两种元素等级 ${stats.coreResonance.levels.join(' / ')}`"
+        >
+          <span>晶核共鸣</span>
+          <b>{{ stats.coreResonance.icons.join('＋') }}</b>
+          <small>{{ stats.coreResonance.effect }} · Lv.{{ stats.coreResonance.strength }}</small>
+        </div>
         <!-- 消化进度（吞噬 → 元素联动）：吃下去的血肉正在变成元素养分 -->
         <div
           v-if="digestRatio > 0 && !stats.spells"
@@ -358,6 +368,11 @@ const primalTitle = computed(() => {
             <SkillIcon :skill="`spec_${stats.secondarySpec}`" size="inline" /> 副: {{ SPEC_INFO[stats.secondarySpec]?.name }}
           </span>
         </div>
+    <div v-if="stats.bossTomes?.length" class="hud-tomes" aria-label="已学BOSS秘典">
+      <span v-for="tome in stats.bossTomes" :key="tome.id" :title="`${tome.name} Lv.${tome.level}/3 · ${tome.desc} · ${tome.stats}`"><SkillIcon :skill="tome" size="inline" />{{ tome.name }} <b>{{ tome.level }}/3</b></span>
+      <span v-if="cooldown.tomeShield > 0">秘典护盾 {{ cooldown.tomeShield }}</span>
+    </div>
+
       </div>
     </div>
     <div
@@ -378,12 +393,12 @@ const primalTitle = computed(() => {
       </div>
     </div>
     <div class="hud-hint">
-      WASD / 方向键移动<template v-if="stats.spells"> · 法术自动施放</template><template v-else-if="stats.canUseElements"> · E 吸收元素核心</template><template v-if="hasStrainSkill"> · 空格 {{ cooldown.skillName }}<template v-if="cooldown.skillName === '影袭'">（沿移动方向）</template></template><template v-else-if="gluttonCharge"> · 空格 暴食重咬（消耗猎食点）</template> · Esc 暂停
+      WASD / 方向键移动<template v-if="stats.spells"> · 法术自动施放</template><template v-else-if="stats.canUseElements"> · 元素核心靠近后自动吸收</template><template v-if="hasStrainSkill"> · 空格 {{ cooldown.skillName }}<template v-if="cooldown.skillName === '影袭'">（沿移动方向）</template></template><template v-else-if="gluttonCharge"> · 空格 暴食重咬（消耗猎食点）</template> · Esc 暂停
     </div>
     <div class="hud-stats">
       <span>攻击 <b>{{ stats.dmg }}</b></span>
       <span>击杀 <b>{{ stats.kills }}</b></span>
-      <span>战利品 <b>{{ stats.loot }}</b></span>
+      <span>分数 <b>{{ (stats.score || 0).toLocaleString('en-US') }}</b></span>
       <!-- 吞噬线：只有暴食角色能吞噬（stats.canDevour），其余角色整项隐藏 -->
       <span v-if="stats.canDevour"
         >吞噬线
@@ -1001,6 +1016,41 @@ const primalTitle = computed(() => {
   display: flex;
   flex: none;
   gap: 5px;
+}
+
+.hud-core-resonance {
+  display: grid;
+  grid-template-columns: auto auto;
+  align-items: center;
+  column-gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--resonance-color) 48%, transparent);
+  border-radius: 7px;
+  color: color-mix(in srgb, var(--resonance-color) 86%, white 14%);
+  background: color-mix(in srgb, var(--resonance-color) 8%, rgba(19, 27, 23, 0.88));
+  white-space: nowrap;
+}
+
+.hud-core-resonance span,
+.hud-core-resonance small {
+  grid-column: 1 / -1;
+}
+
+.hud-core-resonance span {
+  font-size: 9px;
+  letter-spacing: 0.8px;
+  opacity: 0.76;
+}
+
+.hud-core-resonance b {
+  font-size: 13px;
+  letter-spacing: 1px;
+}
+
+.hud-core-resonance small {
+  margin-top: 1px;
+  font-size: 9px;
+  color: rgba(255, 255, 255, 0.64);
 }
 
 .reaction-chip {
@@ -2304,4 +2354,7 @@ const primalTitle = computed(() => {
     animation: none;
   }
 }
+.hud-tomes { display:flex; flex-wrap:wrap; gap:6px 12px; max-width:560px; margin:6px 0; color:#c2d2b4; font-size:10px; }
+.hud-tomes > span { display:inline-flex; align-items:center; gap:4px; }.hud-tomes b { color:#e0cf92; font-weight:500; }
+@media(max-width:650px) { .hud-tomes { max-width:230px; font-size:9px; gap:3px 8px; } }
 </style>

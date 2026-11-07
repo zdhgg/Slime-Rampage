@@ -57,12 +57,14 @@ check('远征使用章节门槛；定向替代当次秘籍奖励且正确推进�
   g.expeditionStage = 2; g.enemyManager.wave = 40
   assert.ok(!rollSkills(g).some(s => s.isRicochetRoute))
   g.expeditionStage = 3
-  g.runState = 'stage-reward'; g.pause()
-  let cards
-  g.onLevelUp = choices => { cards = choices }
+  g.runState = 'stage-reward'
+  g.onExpeditionReward = () => {}
+  g._beginBossSettlement(true)
+  g.resolveExpeditionReward(g._chapterSettlement.options[0].id)
   g.resolveExpeditionReward('tome')
+  const cards = g._chapterSettlement.options
   assert.ok(cards.every(s => s.isRicochetRoute))
-  g.applySkill(cards.find(s => s.route === 'split'))
+  g.resolveExpeditionReward(cards.find(s => s.route === 'split').id)
   assert.equal(g.expeditionStage, 4)
   assert.equal(g._pendingExpeditionStage, 0)
   assert.equal(g._pauseLock, 0)
@@ -120,9 +122,10 @@ for (const route of Object.keys(routes)) check(`${routes[route].name}：锁定�
 check('首领秘典不赠送路线或入口；重复应用无叠加；混搭必须在定向前取得两个入口', g => {
   g.player.level = 5; g._ensureRoleAwakening()
   const pool = rollBossSkills(g, 99)
-  assert.equal(pool.length, 3)
+  assert.equal(pool.length, 4)
   for (const s of pool) { g.applySkill(s); const n = g.weaponSystem.projectileCount; g.applySkill(s); assert.equal(g.weaponSystem.projectileCount, n) }
   assert.equal(g.weaponSystem.ricochetCombat.normalChoices, 0)
+  for (let rank = 0; rank < 2; rank++) for (const card of rollBossSkills(g, 99)) assert.equal(g.applySkill(card), true)
   assert.equal(rollBossSkills(g).length, 0)
   assert.deepEqual(g.skillLevels, {})
   prepare(g, 'split', false)
@@ -249,7 +252,7 @@ check('随机分布：可错过目标入口，终极不会固定置顶或保证�
     }
     if (!fake.skillLevels.rico_split) absent++
   }
-  assert.ok(absent > 200 && absent < 1000, `5 抽未遇分裂：${absent}/2000`)
+  assert.ok(absent > 5 && absent < 150, `5 抽未遇分裂：${absent}/2000`)
   prepare(g, 'bounce'); learn(g, 'bounce'); learn(g, 'extension', 2)
   g.player.level = 14; g.enemyManager.wave = 10
   const positions = [0, 0, 0]; let missed = 0

@@ -14,6 +14,12 @@ export const GLUTTON_MAW_DEVOUR_PROGRESS_MULS = [1, 1.2, 1.4, 1.6]
 export const GLUTTON_CHARGE_MAX = 2
 /** 再次释放锁（秒）：只防同帧/瞬时连点两次，**不是**技能主冷却 */
 export const GLUTTON_RECAST_LOCK = 0.3
+/**
+ * 吞噬惯性（近战补偿·机制层）：捕食/咬杀后的短时移速，缩短两波猎物之间的
+ * 纯跑路空窗。只由本体咬合链触发——酸沼/余波/反击等衍生伤害不置时。
+ */
+export const GLUTTON_FEAST_SPEED = 0.35
+export const GLUTTON_FEAST_DURATION = 1.5
 /** 吞噬来源标记：普通咬击、冲撞和自动吞噬。 */
 export const DEVOUR_SOURCE_NORMAL = 'normal'
 /** 吞噬来源标记：暴食 空格 主动捕食 */
@@ -94,6 +100,7 @@ export function onNormalDevoured(player) {
   if (player.gluttonDevourProgress < GLUTTON_DEVOURS_PER_CHARGE) return false
   player.gluttonDevourProgress = Number((player.gluttonDevourProgress - GLUTTON_DEVOURS_PER_CHARGE).toFixed(6))
   player.gluttonCharge += 1
+  player.game?.bossTomes?.onCharge()
   player.gluttonLastGainPulse = 0.6
   return true
 }
@@ -162,6 +169,7 @@ export function onGluttonBossBasicHit(player, target) {
     Number((player.gluttonBossHuntProgress - threshold).toFixed(6))
   )
   player.gluttonCharge = Math.min(GLUTTON_CHARGE_MAX, player.gluttonCharge + 1)
+  player.game?.bossTomes?.onCharge()
   player.gluttonLastGainPulse = 0.6
   return true
 }

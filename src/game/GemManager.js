@@ -10,6 +10,7 @@ const MERGE_CELL = 24 // 宝石合并网格单元（≥ 合并半径 16px）
 const MERGE_R2 = 16 * 16 // 合并判定距离平方：同位置（<16px）宝石并入一颗
 const MERGE_INTERVAL = 0.5 // 合并轮间隔（秒）：低频执行，O(n) 分桶不占热路径
 const CORE_INTERACT_RADIUS = 82
+const CORE_MAGNET_RADIUS = 110
 export const ELEMENT_CORE_LIFETIME = 30
 export const ELEMENT_CORE_WARNING = 5
 export const MAX_ELEMENT_CORES = 36
@@ -22,7 +23,8 @@ const isElementCore = (g) => g.type !== 'exp' && g.type !== 'tome'
  * 宝石管理器：掉落入池 → 磁力吸附 → 拾取结算
  *
  * 磁力吸附算法（update）：
- *  - idle → magnet：宝石与玩家距离平方 < pickupRadius² 时切换状态
+   *  - idle → magnet：经验/秘籍使用 pickupRadius，元素核心使用较短的
+   *    CORE_MAGNET_RADIUS，靠近后自动吸附；
  *    （平方比较免开方）；
  *  - magnet 移动：每帧把速度向量向「指向玩家的单位向量」方向叠加
  *    MAGNET_ACC × dt（加速度模型），并夹在速度上限内——宝石不是被
@@ -46,7 +48,7 @@ export class GemManager extends Entity {
     this._frame = 0 // 分帧检测轮转计数
     this._mergeTimer = MERGE_INTERVAL // 合并轮计时（阶段十三）
     this._heldGem = null // 首融确认中持住的宝石（阶段十六）
-    this._nearCore = null // 当前可主动吸收的最近元素核心
+    this._nearCore = null // 当前进入自动吸收提示范围的最近元素核心
   }
 
   /** 当前场上宝石数量（HUD 显示用） */
@@ -79,7 +81,7 @@ export class GemManager extends Entity {
   /**
    * 首融确认结果（引擎回调）：
    *  - accepted：移除宝石（随后由引擎执行 absorbElement 触发首融进化）；
-   *  - 拒绝：吐回地上（随机弹开 80px + 2s 拾取冷却，防原地重复弹窗）。
+   *  - 拒绝：吐回地上（随机弹开 80px + 3s 自动吸收冷却，防原地重复弹窗）。
    */
   resolveHeld(accepted) {
     const g = this._heldGem
@@ -97,8 +99,8 @@ export class GemManager extends Entity {
       g.vy = 0
       g.x += (Math.random() * 2 - 1) * 80
       g.y += (Math.random() * 2 - 1) * 80
-      g.rejectedUntil = this.game.elapsed + 2
-      g.life = Math.max(g.life, ELEMENT_CORE_WARNING + 2)
+      g.rejectedUntil = this.game.elapsed + 3
+      g.life = Math.max(g.life, ELEMENT_CORE_WARNING + 3)
     }
   }
 
@@ -171,15 +173,13 @@ export class GemManager extends Entity {
     }
   }
 
-  /** 查找并主动吸收最近的元素核心；经验与秘籍仍使用自动磁吸。 */
-  _updateCoreInteraction() {
+  /** 找到最近的元素核心，仅用于渲染自动吸收提示，不消费输入。 */
+  _updateCoreHint() {
     const list = this._gems
-    // 元素权限（第三批角色化）：非元素角色 E 不进行元素交互，
-    // 也不点亮「E」提示气泡（_nearCore 保持 null）。
+    // 元素权限（第三批角色化）：非元素角色不吸收核心，也不显示提示。
     if (this.game?.canUseElements === false || this.game?.weaponSystem?.spellCombat?.enabled) {
-      this.player.input.consumeInteract?.() // 消费掉按键，避免队列残留
       this._nearCore = null
-      return false
+      return
     }
     const px = this.player.x
     const py = this.player.y
@@ -187,6 +187,7 @@ export class GemManager extends Entity {
     let bestD2 = CORE_INTERACT_RADIUS * CORE_INTERACT_RADIUS
     for (const g of list) {
       if (g.type === 'exp' || g.type === 'tome' || g.state === 'held') continue
+      if (g.rejectedUntil > this.game.elapsed) continue
       const dx = px - g.x
       const dy = py - g.y
       const d2 = dx * dx + dy * dy
@@ -196,33 +197,6 @@ export class GemManager extends Entity {
       }
     }
     this._nearCore = best
-
-    if (!this.player.input.consumeInteract?.() || !best) return false
-    if (best.rejectedUntil > 0 && this.game.elapsed < best.rejectedUntil) return false
-    if (this.player.shouldConfirmElement(best.type)) {
-      this.askFusion(best)
-      return true
-    }
-
-    this.player.absorbElement(best.type)
-    const el = getElement(best.type)
-    if (el) {
-      this.game.enemyManager.addText(
-        this.player.x,
-        this.player.y - 26,
-        `${el.icon} ${el.name} +1`,
-        null,
-        best.color,
-        15
-      )
-    }
-    const i = list.indexOf(best)
-    if (i >= 0) {
-      list[i] = list[list.length - 1]
-      list.pop()
-    }
-    this._nearCore = null
-    return !this.game.running
   }
 
   /**
@@ -329,19 +303,22 @@ export class GemManager extends Entity {
     const list = this._gems
     if (list.length === 0) {
       this._nearCore = null
-      this.player.input.consumeInteract?.()
       return
     }
     const px = this.player.x
     const py = this.player.y
-    const pickupR2 = this.player.pickupRadius * this.player.pickupRadius
+    // 全域磁感（黑市）：拾取半径视为全屏——半径平方取世界对角线即可覆盖任意距离
+    const pickupR = this.player.geneMagnetAll
+      ? Math.hypot(this.game.worldWidth || 4000, this.game.worldHeight || 4000)
+      : this.player.pickupRadius
+    const pickupR2 = pickupR * pickupR
     const absorbR2 = this.player.radius * this.player.radius
     this._pickupSoundCd = Math.max(0, (this._pickupSoundCd || 0) - dt)
 
     this._updateCoreLifetimes(dt)
 
-    // 元素核心是构筑选择：靠近后按 E 主动吸收，不再自动磁吸。
-    if (this._updateCoreInteraction()) return
+    // 元素核心也进入自动磁吸，但半径小于经验宝石，避免远处核心突然打断路线选择。
+    this._updateCoreHint()
 
     // ⓪ 同位置宝石合并（阶段十三）：低频轮询，缓解长局宝石膨胀
     this._mergeTimer -= dt
@@ -354,13 +331,19 @@ export class GemManager extends Entity {
     // ① 分帧 idle → magnet 检测（每帧 1/3，降低全量距离检测开销）
     const offset = this._frame % 3
     this._frame++
+    const canAutoAbsorbCore = this.game?.canUseElements !== false && !this.game?.weaponSystem?.spellCombat?.enabled
+    const corePickupR2 = CORE_MAGNET_RADIUS * CORE_MAGNET_RADIUS
     for (let i = offset; i < list.length; i += 3) {
       const g = list[i]
       if (g.state !== 'idle') continue
-      if (g.type !== 'exp' && g.type !== 'tome') continue
+      const isCore = isElementCore(g)
+      if (isCore && !canAutoAbsorbCore) continue
+      if (!isCore && g.type !== 'exp' && g.type !== 'tome') continue
       const dx = px - g.x
       const dy = py - g.y
-      if (dx * dx + dy * dy < pickupR2) g.state = 'magnet'
+      const radius2 = isCore ? corePickupR2 : pickupR2
+      if (g.rejectedUntil > this.game.elapsed) continue
+      if (dx * dx + dy * dy < radius2) g.state = 'magnet'
     }
 
     // ② magnet 移动 + 拾取结算（吸附中的宝石数量少，全量遍历）
@@ -404,8 +387,8 @@ export class GemManager extends Entity {
           list.pop()
           break
         } else {
-          // 元素核心（阶段十六追加）：首颗元素 / 首次融合不可逆——先确认再吃；
-          // 刚被吐掉的核心进入 2s 冷却：本帧不拾取（防原地重复弹窗、防误吸）
+          // 元素核心：自动吸收；首颗元素 / 首次融合不可逆——先确认再吃；
+          // 刚被吐掉的核心进入冷却：本帧不拾取（防原地重复弹窗）
           if (g.rejectedUntil > 0 && this.game.elapsed < g.rejectedUntil) continue
           if (this.player.shouldConfirmElement(g.type)) {
             this.askFusion(g)
@@ -477,10 +460,10 @@ export class GemManager extends Entity {
       ctx.fill()
       ctx.stroke()
       ctx.fillStyle = '#ffffff'
-      ctx.font = '700 12px sans-serif'
+      ctx.font = '700 10px sans-serif'
       ctx.textAlign = 'center'
       ctx.textBaseline = 'middle'
-      ctx.fillText('E', 0, 0)
+      ctx.fillText('自动', 0, 0)
       ctx.restore()
     }
   }

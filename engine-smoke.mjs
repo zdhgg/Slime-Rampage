@@ -372,6 +372,9 @@ const finishStageClearing = () => {
   engine._stageClearT = 10
   engine.update(0.001)
   assert.equal(engine.runState, 'stage-reward')
+  assert.equal(engine._chapterSettlement.phase, 'boss')
+  engine.resolveExpeditionReward(engine._chapterSettlement.options[0].id)
+  assert.equal(engine._chapterSettlement.phase, 'supply')
 }
 
 const defeatStageGuardian = () => {
@@ -434,9 +437,10 @@ engine.update(0)
 defeatStageGuardian()
 finishStageClearing()
 engine.resolveExpeditionReward('tome')
-assert.ok(offeredSkills?.length > 0)
-assert.equal(engine._pendingExpeditionStage, 6)
-engine.applySkill(offeredSkills[0])
+assert.ok(engine._chapterSettlement.options.length > 0)
+assert.equal(engine._chapterSettlement.phase, 'study')
+assert.equal(engine.expeditionStage, 5)
+engine.resolveExpeditionReward(engine._chapterSettlement.options[0].id)
 // 普通难度为 8 章：第 6/7 章是「被藏起的圣物」「燃尽的圣殿」，第 8 章才揭开王庭真相
 assert.equal(engine.expeditionStage, 6)
 assert.equal(engine._mapThemeId, 'royal')

@@ -12,12 +12,10 @@ import { Enemy } from './src/game/entities/Enemy.js'
 import { Boss } from './src/game/entities/Boss.js'
 import { EnemyManager } from './src/game/EnemyManager.js'
 import {
-  COMMON_LOOT_CHANCE,
   DIGEST_CHARGE_MAX,
   DIGEST_GAIN_ELITE,
   DIGEST_GAIN_NORMAL,
   WeaponSystem,
-  getLootDropCount,
 } from './src/game/WeaponSystem.js'
 import {
   ELEMENT_CORE_LIFETIME,
@@ -43,7 +41,6 @@ import {
   FINAL_WARNING_AT,
   RUN_DURATION,
   applyEnemyBias,
-  calculateMaterialReward,
   getEndlessDisasterTier,
   getExpeditionStage,
   getExpeditionStages,
@@ -54,6 +51,7 @@ import {
   getWaveModifiers,
   isDifficultyUnlocked,
   isModeUnlocked,
+  scoreToPoints,
 } from './src/game/RunRules.js'
 import { CHARACTER_IDS, STRAINS, STRAIN_IDS, canDevour, getStrainSkill } from './src/game/Strains.js'
 import { getRunIntro } from './src/game/RunIntro.js'
@@ -155,11 +153,10 @@ e1.attach(game)
 enemyManager._enemies.push(e1)
 e1.hp = 1
 e1.devourable = true
-const lootBeforeDevour = weaponSystem.drops.knight
 enemyManager._startDevour(e1) // onDevoured 结算一次
 const killsAfterDevour = weaponSystem.kills
 assert.equal(killsAfterDevour, 1)
-assert.equal(weaponSystem.drops.knight, lootBeforeDevour + 1)
+assert.equal(weaponSystem.devours, 1)
 weaponSystem._settleKill(e1) // 吞噬中再被「击杀」→ 应被 _settled 拦下
 weaponSystem.onDevoured(e1)
 assert.equal(weaponSystem.kills, killsAfterDevour)
@@ -571,29 +568,23 @@ gm2.spawn(500, 500, 0, 'water')
 const heldCalls = []
 game.askFusionConfirm = (type) => heldCalls.push(type)
 const gHeld = gm2._gems[0]
-gm2.update(0.016) // 元素核心不再自动磁吸
-assert.deepEqual(heldCalls, [])
-assert.equal(gHeld.state, 'idle')
-input.queueInteract()
-gm2.update(0.016) // 近距离按 E → 首融确认
+gm2.update(0.016) // 元素核心自动磁吸并进入首融确认
 assert.deepEqual(heldCalls, ['water'])
 assert.equal(gHeld.state, 'held') // 宝石被持住，不吸收不删除
 gm2.resolveHeld(false) // 吐掉
 assert.equal(gHeld.state, 'idle')
-assert.ok(gHeld.rejectedUntil > 0) // 2s 冷却防原地重复弹窗
-input.queueInteract()
-gm2.update(0.016) // 冷却未过 → 按 E 也不触发确认
+assert.ok(gHeld.rejectedUntil > 0) // 3s 冷却防原地重复弹窗
+gm2.update(0.016) // 冷却未过 → 自动吸附也不触发确认
 assert.equal(heldCalls.length, 1)
 assert.equal(gm2.count, 1)
 gHeld.rejectedUntil = 0
 gHeld.x = p4.x
-gHeld.y = p4.y // 玩家重新靠近后才能再次主动吸收
-input.queueInteract()
-gm2.update(0.016) // 冷却过后主动吸收 → 再次确认
+gHeld.y = p4.y // 玩家重新靠近后自动吸收
+for (let i = 0; i < 3 && heldCalls.length < 2; i++) gm2.update(0.016) // 分帧检测后自动吸收 → 再次确认
 assert.equal(heldCalls.length, 2)
 gm2.resolveHeld(true) // 确认吃下 → 宝石移除
 assert.equal(gm2.count, 0)
-ok('元素核心主动拾取：不自动磁吸，按 E 确认，吐回带冷却且不再追人')
+ok('元素核心自动拾取：靠近后磁吸，首融需确认，吐回带冷却且不再重复弹窗')
 
 // 21) 离散血量吞噬线：小体型敌人剩 1 HP 时也必须可吞噬
 const eSmall = new Enemy({ x: 600, y: 600, speed: 80, hp: 1, type: 'knight' }) // 实际 2 HP
@@ -724,7 +715,7 @@ globalThis.localStorage = {
 }
 const migratedSave = loadSave()
 const migratedRecord = getRunRecord(migratedSave, { mode: 'endless', difficulty: 'normal' })
-assert.equal(migratedSave.version, 4)
+assert.equal(migratedSave.version, 6)
 assert.deepEqual(migratedSave.preferences, { mode: 'endless', difficulty: 'normal' })
 assert.equal(migratedSave.progression.highestMode, 'endless')
 assert.equal(migratedRecord.board[0].scoreVersion, 3)
@@ -818,9 +809,9 @@ assert.ok(STRAINS.shadow.critChance > 0 && STRAINS.shadow.maxHp < 0)
 const strainIntro = getRunIntro({ mode: 'timed', difficulty: 'normal' }, 'glutton')
 assert.ok(strainIntro.strainNote.includes('暴食史莱姆'))
 assert.equal(getRunIntro({ mode: 'timed', difficulty: 'normal' }, 'origin').strainNote, null)
-assert.equal(calculateMaterialReward(10, { difficulty: 'easy' }), 8)
-assert.equal(calculateMaterialReward(10, { difficulty: 'hard' }), 14)
-assert.equal(calculateMaterialReward(10, { difficulty: 'hell' }), 18)
+assert.equal(scoreToPoints(30000, { difficulty: 'easy' }), 800)
+assert.equal(scoreToPoints(30000, { difficulty: 'hard' }), 1350)
+assert.equal(scoreToPoints(30000, { difficulty: 'hell' }), 1800)
 ok('模式规则：新档默认普通闯关、12 分钟节点与灾变阶级一致')
 ok('血统设计护栏：特化血统各有代价、原生黏液纯净基线、简报展示血统行')
 
@@ -939,24 +930,26 @@ assert.equal(timedHardIntro.rewardMultiplier, 1.35)
 assert.match(endlessHellIntro.signal, /第二十波/)
 ok('战前简报随模式与难度组合生成地点、目标、信号和威胁情报')
 
-// 28) 永久基因路线：前置、旧档兼容和终点互斥使用同一购买判定
-assert.equal(getGenePurchaseState('regen', {}, 999).locked, true)
-assert.equal(getGenePurchaseState('regen', { giant: 1 }, 999).canBuy, true)
-assert.equal(getGenePurchaseState('split', { split: 1 }, 999).locked, false) // 旧档已购节点可继续升级
+// 28) 永久基因路线：前置、下架基因拒购和新终点互斥使用同一购买判定
+assert.equal(getGenePurchaseState('regen', {}, 99999).locked, true)
+assert.equal(getGenePurchaseState('regen', { giant: 1 }, 99999).canBuy, true)
+const retiredSplit = getGenePurchaseState('split', { split: 1 }, 99999)
+assert.equal(retiredSplit.locked, true) // 旧血统基因已下架：旧档生效但不再出售
+assert.equal(retiredSplit.hidden, true)
 const originReady = {
   giant: 2,
-  regen: 2,
-  swift: 2,
-  split: 1,
+  leech: 1,
+  razor: 2,
+  rapid: 2,
   lore: 2,
-  resonance: 1,
+  expand: 1,
 }
-assert.equal(getGenePurchaseState('predator_origin', originReady, 999).canBuy, true)
-const chosenGenes = { ...originReady, predator_origin: 1 }
-assert.equal(getChosenOrigin(chosenGenes).id, 'predator_origin')
-assert.equal(getGenePurchaseState('kinetic_origin', chosenGenes, 999).locked, true)
-assert.ok(getGenePurchaseState('kinetic_origin', chosenGenes, 999).reason.includes('捕食原核'))
-ok('永久基因路线：前置解锁、旧档祖父兼容与终点原核互斥')
+assert.equal(getGenePurchaseState('gorged_origin', originReady, 99999).canBuy, true)
+const chosenGenes = { ...originReady, gorged_origin: 1 }
+assert.equal(getChosenOrigin(chosenGenes).id, 'gorged_origin')
+assert.equal(getGenePurchaseState('arsenal_origin', chosenGenes, 99999).locked, true)
+assert.ok(getGenePurchaseState('arsenal_origin', chosenGenes, 99999).reason.includes('饕餮原核'))
+ok('永久基因路线：前置解锁、旧基因下架拒购与终点原核互斥')
 
 // 29) 原核效果实际进入战斗数据，applyGenes 重复调用保持幂等
 player.resetRunState()
@@ -995,7 +988,7 @@ weaponSystem.reset()
 applyGenes(game, { lore: 2, resonance: 1, element_origin: 1 })
 assert.equal(player.secondarySlots, 4)
 assert.equal(weaponSystem.geneReactionDmgMul, 1.25)
-assert.equal(getGene('element_origin').isCapstone, true)
+assert.equal(getGene('gorged_origin').isCapstone, true)
 applyGenes(game, {
   giant: 2,
   regen: 2,
@@ -1005,7 +998,7 @@ applyGenes(game, {
   kinetic_origin: 1,
 })
 assert.equal(player.geneDevourHeal, 1)
-assert.equal(weaponSystem.genePierces, 0)
+assert.equal(weaponSystem.genePierces, 1) // 旧原核摘除互斥标记：旧存档多原核按等级共存
 ok('终点原核：捕食恢复、动能穿透与共鸣倍率均进入实际战斗属性')
 
 // 30) Boss 强招：固定预警、三职业差异化、强招后破绽增伤
@@ -1183,14 +1176,23 @@ assert.equal(compactedExp.length, MAX_EXP_GEMS)
 assert.equal(compactedExp.reduce((sum, g) => sum + g.value, 0), expTotal)
 ok('掉落预算：元素核心封顶 36 个，经验宝石封顶 180 个且经验总值守恒')
 
-// 34) 黑市战利品：普通击杀 10% 边界明确，主动吞噬仍保持必掉。
-assert.equal(COMMON_LOOT_CHANCE, 0.1)
-const commonLootProbe = new Enemy({ x: 100, y: 100, speed: 80, hp: 1, type: 'knight' })
-const eliteLootProbe = new Enemy({ x: 120, y: 100, speed: 80, hp: 1, type: 'knight', elite: true })
-assert.equal(getLootDropCount(commonLootProbe, () => COMMON_LOOT_CHANCE - 0.001), 1)
-assert.equal(getLootDropCount(commonLootProbe, () => COMMON_LOOT_CHANCE), 0)
-assert.equal(getLootDropCount(eliteLootProbe, () => 1), 1)
-ok('黑市战利品：普通击杀降至 10%，吞噬与精英的确定性收益保留')
+// 34) 黑市战力点：由本局分数统一折算（掉落物通道已移除），锚定困难通关 ~10 点。
+// 远征困难通关样本：~450 杀、40 精英、8 守将、8 章推进 + 通关奖励 ≈ 2.6 万分 ×1.35 ÷3000 ≈ 12 点
+const hardClearScore = computeScore({
+  mode: 'expedition', difficulty: 'hard', result: 'victory',
+  stage: 8, wave: 20, kills: 450, devours: 40, eliteKills: 40, bossKills: 8,
+  eventsCompleted: 3, time: 1400,
+})
+assert.ok(hardClearScore > 20000, `困难通关分数应达 2 万档（实际 ${hardClearScore}）`)
+assert.ok(
+  scoreToPoints(hardClearScore, { mode: 'expedition', difficulty: 'hard' }) >= 900 &&
+  scoreToPoints(hardClearScore, { mode: 'expedition', difficulty: 'hard' }) <= 1400,
+  `困难通关战力点应锚定 1100 点左右（实际 ${scoreToPoints(hardClearScore, { mode: 'expedition', difficulty: 'hard' })}）`
+)
+// 中途暴毙自动低保（分数低 → 点数低），无需单独保留率规则
+const midRunScore = computeScore({ mode: 'expedition', difficulty: 'normal', result: 'defeat', stage: 4, wave: 10, kills: 200, eliteKills: 8, bossKills: 3 })
+assert.ok(scoreToPoints(midRunScore, { mode: 'expedition', difficulty: 'normal' }) <= 500)
+ok('黑市战力点：分数统一折算，困难通关 ≈1100 点、暴毙局自动低保')
 
 // 35) 等级 → 元素联动：副反应槽随等级里程碑扩张，并自动接入被满槽挤掉的反应
 assert.deepEqual(REACTION_SLOT_LEVELS, [4, 8])

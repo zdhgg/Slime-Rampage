@@ -1,3 +1,4 @@
+import { rollBossTomes } from '../src/game/BossTomes.js'
 const gradient = { addColorStop() {} }
 export const ctx2d = new Proxy({}, {
   get(_target, name) {
@@ -79,4 +80,12 @@ export function dispose(game) {
   game.pause()
   clearTimeout(game._evolutionTimer)
   game.destroy?.()
+}
+
+/** Learn an actual current-rank offer, including recruitment snapshots. */
+export function learnTome(game, id, count = 1) {
+  for (let rank = 0; rank < count; rank++) {
+    const card = rollBossTomes(game, 99).find(card => card.id === id)
+    if (!card || !game.applySkill(card)) throw new Error(`Unable to learn tome: ${id}`)
+  }
 }

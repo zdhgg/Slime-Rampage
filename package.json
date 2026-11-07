@@ -1,7 +1,7 @@
 {
   "name": "slime-rampage",
   "private": true,
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "史莱姆大暴走 Slime Rampage - 俯视角动作肉鸽割草游戏",
   "type": "module",
   "engines": {
@@ -15,12 +15,15 @@
     "lan": "npm start",
     "lan:serve": "npm run serve",
     "lan:backup": "node server/backup.mjs",
-    "test": "node verify-skill-icons.mjs && node verify-skill-progression.mjs && node verify-ricochet.mjs && node verify-ricochet-icons.mjs && node verify-glutton-icons.mjs && node verify-symbiosis-icons.mjs && node verify-active-skill-icons.mjs && node verify-elemental-build.mjs && node verify-elemental-icons.mjs && node verify-elemental.mjs && node verify-pets.mjs && node verify-symbiosis-routes.mjs && node verify-single-action.mjs && node smoke-test.mjs && node save-slots-test.mjs && node engine-smoke.mjs && node gameplay-smoke.mjs && node runner-ui-smoke.mjs && node runner-fusion-smoke.mjs && node tower-defense-smoke.mjs && node tower-defense-campaign-smoke.mjs && node tower-defense-miniboss-smoke.mjs && node tower-defense-layout-smoke.mjs && node tower-defense-difficulty-smoke.mjs && node verify-path-alignment.mjs && node verify-tower-defense-scenery.mjs && node verify-tower-defense-balance.mjs && node verify-changes.mjs && node verify-shadow.mjs && node verify-shadow-clones.mjs && node verify-shadow-build.mjs && node verify-shadow-icons.mjs && node verify-shadow-ranged.mjs && node verify-shadow-regression.mjs && node verify-glutton.mjs && node verify-glutton-regression.mjs && node verify-glutton-routes.mjs && node verify-origin-mimicry.mjs && node verify-primal-energy.mjs && node verify-origin-progression.mjs && node verify-origin-build.mjs && node verify-levelup-keyboard.mjs && node verify-p1.mjs && node verify-p2.mjs && node verify-content.mjs && node verify-expedition-bosses.mjs && node verify-border-warden.mjs && node verify-art-v1.mjs && node verify-arena-knight-mage.mjs && node verify-boss-art.mjs && node verify-boss-animation.mjs && node verify-boss-arena.mjs && node verify-boss-squads.mjs && node verify-balance.mjs && node verify-map-features.mjs && node verify-frontier-scenery.mjs && node verify-chapter-scenery.mjs && node verify-endless-decisions.mjs && node lan-server-test.mjs && node account-system-test.mjs && node verify-runner-scenery.mjs",
+    "test": "node verify-boss-tomes.mjs && node verify-skill-icons.mjs && node verify-skill-progression.mjs && node verify-ricochet.mjs && node verify-ricochet-icons.mjs && node verify-glutton-icons.mjs && node verify-symbiosis-icons.mjs && node verify-active-skill-icons.mjs && node verify-elemental-build.mjs && node verify-elemental-icons.mjs && node verify-elemental.mjs && node verify-black-market.mjs && node verify-pets.mjs && node verify-symbiosis-routes.mjs && node verify-single-action.mjs && node smoke-test.mjs && node save-slots-test.mjs && node engine-smoke.mjs && node gameplay-smoke.mjs && node runner-ui-smoke.mjs && node runner-fusion-smoke.mjs && node tower-defense-smoke.mjs && node tower-defense-campaign-smoke.mjs && node tower-defense-miniboss-smoke.mjs && node tower-defense-layout-smoke.mjs && node tower-defense-difficulty-smoke.mjs && node verify-path-alignment.mjs && node verify-tower-defense-scenery.mjs && node verify-tower-defense-balance.mjs && node verify-changes.mjs && node verify-shadow.mjs && node verify-shadow-clones.mjs && node verify-shadow-build.mjs && node verify-shadow-icons.mjs && node verify-shadow-ranged.mjs && node verify-shadow-regression.mjs && node verify-glutton.mjs && node verify-glutton-regression.mjs && node verify-glutton-routes.mjs && node verify-origin-mimicry.mjs && node verify-primal-energy.mjs && node verify-origin-progression.mjs && node verify-origin-build.mjs && node verify-origin-core-resonance.mjs && node verify-levelup-keyboard.mjs && node verify-p1.mjs && node verify-p2.mjs && node verify-content.mjs && node verify-expedition-bosses.mjs && node verify-border-warden.mjs && node verify-art-v1.mjs && node verify-arena-knight-mage.mjs && node verify-boss-art.mjs && node verify-boss-animation.mjs && node verify-boss-arena.mjs && node verify-boss-squads.mjs && node verify-balance.mjs && node verify-map-features.mjs && node verify-frontier-scenery.mjs && node verify-chapter-scenery.mjs && node verify-endless-decisions.mjs && node verify-melee-compensation.mjs && node lan-server-test.mjs && node account-system-test.mjs && node verify-runner-scenery.mjs",
     "serve": "node server/index.mjs",
+    "test:boss-tomes-browser": "node verify-boss-tomes-browser.mjs",
+    "test:boss-tomes": "node verify-boss-tomes.mjs",
     "test:warden": "node verify-border-warden.mjs",
     "test:elemental-milestones": "node verify-elemental-build.mjs",
     "test:elemental-build": "node verify-elemental-build.mjs",
     "test:elemental-icons": "node verify-elemental-icons.mjs",
+    "test:black-market": "node verify-black-market.mjs",
     "test:elemental-browser": "node verify-elemental-browser.mjs",
     "test:startup": "node frontend-startup-test.mjs",
     "test:arena-knight-mage": "node verify-arena-knight-mage.mjs",
@@ -38,7 +41,7 @@
     "test:active-skill-icons": "node verify-active-skill-icons.mjs",
     "test:skill-icons": "node verify-skill-icons.mjs",
     "test:skill-icons-browser": "node verify-skill-icons-browser.mjs",
-    "test:origin": "node verify-origin-mimicry.mjs && node verify-primal-energy.mjs && node verify-origin-progression.mjs && node verify-origin-build.mjs",
+    "test:origin": "node verify-origin-mimicry.mjs && node verify-primal-energy.mjs && node verify-origin-progression.mjs && node verify-origin-build.mjs && node verify-origin-core-resonance.mjs",
     "test:ricochet-browser": "node verify-ricochet-browser.mjs"
   },
   "dependencies": {

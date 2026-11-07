@@ -15,9 +15,9 @@ import {
 } from './src/game/EndlessMode.js'
 import { GameEngine } from './src/game/GameEngine.js'
 import {
-  calculateMaterialReward,
   getBossWavePlan,
   getRunProfile,
+  scoreToPoints,
 } from './src/game/RunRules.js'
 import { defaultSave, pushScore } from './src/game/SaveManager.js'
 
@@ -50,10 +50,13 @@ assert.equal(modifiers.bossExtraMembers, 2)
 assert.equal(getBossWavePlan(endless, 45, modifiers.bossExtraMembers).total, 8)
 ok('灾变按等级叠加，刷怪/攻速/精英率受控封顶，王级后备把六人团扩到八人')
 
-assert.equal(calculateMaterialReward(100, endless, { result: 'extracted', endlessRewardBonus: 0.3 }), 130)
-assert.equal(calculateMaterialReward(100, endless, { result: 'defeat', endlessRewardBonus: 0.3 }), 91)
-assert.equal(calculateMaterialReward(100, { mode: 'timed', difficulty: 'hard' }, { result: 'defeat', endlessRewardBonus: 1 }), 135)
-ok('无尽安全撤离完整结算，战败保留 70%，其他模式不受无尽规则污染')
+// 战力点换算：分数 ÷30 × 难度倍率；无尽撤离 100%、战败 70%、2000 点后减半
+assert.equal(scoreToPoints(30000, endless, { result: 'extracted', endlessRewardBonus: 0.3 }), 1300)
+assert.equal(scoreToPoints(30000, endless, { result: 'defeat', endlessRewardBonus: 0.3 }), 910)
+assert.equal(scoreToPoints(30000, { mode: 'timed', difficulty: 'hard' }, { result: 'defeat', endlessRewardBonus: 1 }), 1350)
+assert.equal(scoreToPoints(200000, endless, { result: 'extracted' }), 4334) // 6667 → 软顶 2000+2334
+assert.equal(scoreToPoints(26000, { mode: 'expedition', difficulty: 'hard' }, { result: 'victory' }), 1170) // 困难通关锚点 ~1100 点
+ok('战力点按分数折算：困难通关约 1100 点，撤离全额/战败 70%，深层无尽软顶减半')
 
 const firstBounties = getEndlessBountyChoices(1)
 const deepBounties = getEndlessBountyChoices(20)
@@ -82,8 +85,10 @@ function createDirector() {
     _pendingEndlessBountyReward: false,
     _pauseLock: 0,
     elapsed: 300,
-    weaponSystem: { drops: { knight: 100 }, kills: 200, devours: 20, eliteKills: 10 },
-    enemyManager: { beginWave(wave) { director.beganWave = wave } },
+    expeditionStage: 1,
+    weaponSystem: { kills: 600, devours: 60, eliteKills: 30, bossKills: 6 },
+    enemyManager: { wave: 30, beginWave(wave) { director.beganWave = wave } },
+    worldEvents: { completed: 0 },
     onEndlessDecision(payload) { director.decisions.push(payload) },
     onRunState(payload) { director.runEvents.push(payload) },
     decisions: [],
@@ -112,8 +117,9 @@ assert.deepEqual(director.runEvents[0], {
 ok('破阵追击计时可暂停式递减，并通过事件桥接到 HUD')
 assert.equal(director.handleWaveAdvanced(30), true)
 assert.equal(director.decisions[0].kind, 'checkpoint')
-assert.equal(director.decisions[0].safeLoot, 100)
-assert.equal(director.decisions[0].defeatLoot, 70)
+assert.equal(director.decisions[0].liveScore, 15050)
+assert.equal(director.decisions[0].extractPoints, 502)
+assert.equal(director.decisions[0].defeatPoints, 351)
 assert.equal(director.resolveEndlessCheckpoint('continue'), true)
 assert.equal(director.decisions[1].kind, 'bounty')
 assert.equal(director.endlessContinues, 1)

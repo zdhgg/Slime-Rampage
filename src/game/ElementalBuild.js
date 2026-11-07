@@ -1,5 +1,5 @@
 import { getEffectiveSkillMaxLevel } from './SkillProgression.js'
-import { SPELL_ELEMENTS, SPELL_ELEMENT_IDS, getSpellFusion, resolveElementalSkill } from './SpellRules.js'
+import { SPELL_ELEMENTS, SPELL_ELEMENT_IDS, getSpellFusion, resolveElementalSkill, ordinarySpellCoreSkills } from './SpellRules.js'
 
 export const ELEMENTAL_BUILD_RULES = Object.freeze({
   choicesBeforeRoute: 5, routeWave: 6, routeStage: 3,
@@ -148,7 +148,8 @@ function discoveryCards(game) {
 
 export function elementalSkillAvailable(game, skill) {
   const state = game.weaponSystem?.spellCombat
-  if (!skill || game.startingStrain !== 'elemental') return false
+  if (!skill || game.startingStrain !== 'elemental' || skill.originOnly) return false
+  if (skill.isSpellCoreUpgrade) return ordinarySpellCoreSkills(game).some(card => card.id === skill.id)
   const level = game.skillLevels?.[skill.id] || 0
   const role = skill.kind === 'discovery' || skill.kind === 'common' ? 'common' : skill.kind === 'ultimate' || skill.growthClass === 'core' ? 'primary' : 'common'
   if (level >= getEffectiveSkillMaxLevel(game, skill, role)) return false
@@ -178,6 +179,7 @@ export function elementalSkillOptions(game, elementSkills, commonSkills, count =
   const pool = [
     ...elementSkills.filter(skill => !['ele_resonance', 'ele_overload'].includes(skill.id)),
     ...discoveryCards(game),
+    ...ordinarySpellCoreSkills(game),
     ...commonSkills.map(skill => ({ ...skill, kind: 'common' })),
   ].filter(skill => elementalSkillAvailable(game, skill))
   if (state?.fusion && (!state?.route || state.route === 'fusion')) {

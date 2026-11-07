@@ -101,7 +101,6 @@ export class Boss extends Enemy {
     this.isFinalBoss = finalBoss || type === 'boss-final'
     this.isExpeditionBoss = expeditionBoss || type === 'boss-expedition'
     this.isCompositeBoss = this.isFinalBoss || this.isExpeditionBoss
-    this.dropType = type === 'boss-mage' ? 'mage' : type === 'boss-archer' ? 'archer' : 'knight'
     this.patternBonus = Math.max(0, Math.round(patternBonus))
     this.specialPattern = this.isCompositeBoss ? 'boss-knight' : type
     this._patternIndex = 0

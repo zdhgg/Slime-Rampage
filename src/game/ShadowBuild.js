@@ -12,7 +12,7 @@ export const SHADOW_ROUTES = Object.freeze({
     seed: 'shadow_hunt_mark', seedName: '猎杀印记',
     desc: '影袭锁定猎物，本体与分身随后集中追斩，击杀后继续切入下一群。',
     bonus: '影袭首击留下猎杀印记；印记目标受到本体与分身的额外伤害。',
-    skills: ['追猎步伐', '致命回势'], ultimate: 'shadow_hunt_ultimate', ultimateName: '无间影袭',
+    skills: ['追猎步伐', '致命回势', '猎手直觉'], ultimate: 'shadow_hunt_ultimate', ultimateName: '无间影袭',
     ultimateDesc: '影袭命中后短时间获得一次免费追击，可连续穿过两条敌阵；追击不刷新冷却。',
   },
   swarm: {
@@ -48,6 +48,8 @@ const swarmRecoveryAt = level => Math.min(1.5, Math.min(6, level) * .2 + Math.ma
 const bladeRangeAt = level => Math.min(90, Math.min(8, level) * 9 + Math.max(0, level - 8) * 3)
 const bladeTargetsAt = level => Math.min(10, 4 + Math.min(6, level))
 const bladeEchoAt = level => Math.min(.68, .3 + Math.min(6, level) * .05 + Math.max(0, level - 6) * .02)
+/** 「猎手直觉」：本体击杀射手/法师时返还的影袭冷却（秒），软封顶 1.6。 */
+export const shadowHuntRangedRefundAt = level => Math.min(1.6, .65 + Math.max(0, Math.floor(Number(level) || 0)) * .15)
 
 export const SHADOW_ROUTE_SKILLS = [
   {
@@ -66,6 +68,10 @@ export const SHADOW_ROUTE_SKILLS = [
     lv => `击杀返还 ${huntRefundAt(lv).toFixed(2)} 秒 · 每次最多一次`,
     (game, level) => { game.weaponSystem.shadowCombat.huntReapLevel = level },
     { rankCaps: { expedition: { hard: 8, hell: 10 }, timed: 8, endless: 10 } }),
+  make('shadow_hunt_refund', '猎手直觉', 'hunt', 4,
+    '本体击杀射手或法师时额外返还影袭冷却；分身、横斩与余波击杀不产生返还。',
+    lv => `击杀远程敌人返还影袭 ${shadowHuntRangedRefundAt(lv + 1).toFixed(2)} 秒`,
+    (game, level) => { game.weaponSystem.shadowCombat.huntRefundLevel = level }),
   make('shadow_swarm_assault', '影刃合击', 'swarm', 8,
     '提高影袭指挥分身突袭的伤害；突袭不触发暴击生影。',
     lv => `分身夹击伤害 ${Math.round(swarmMultiplierAt(lv) * 100)}%`,
@@ -112,7 +118,7 @@ export const SHADOW_ROUTE_SKILLS = [
 export const SHADOW_ROUTE_SKILL_BY_ID = Object.fromEntries(SHADOW_ROUTE_SKILLS.map(skill => [skill.id, skill]))
 
 const investmentIds = Object.freeze({
-  hunt: ['shadow_hunt_mark', 'shadow_hunt_pursuit', 'shadow_hunt_reap'],
+  hunt: ['shadow_hunt_mark', 'shadow_hunt_pursuit', 'shadow_hunt_reap', 'shadow_hunt_refund'],
   swarm: ['ass_echo', 'shadow_swarm_assault', 'shadow_swarm_reap'],
   blade: ['ass_cleave', 'shadow_blade_arc', 'shadow_blade_echo'],
 })

@@ -43,7 +43,7 @@ export class PetCombat {
   get enabled() { return this.fullRoster || this.level('sym_sub_echo') > 0 }
   get available() { return this.enabled && !this.player.dead && !this.game.runFinished }
   level(id) { return this.game?.skillLevels?.[id] || 0 }
-  get recovery() { return Math.max(4, 8 - this.level('pet_recovery')) }
+  get recovery() { return Math.max(3, 8 - this.level('pet_recovery') - (this.player.genePetRecoveryBonus || 0)) }
   get rosterTypes() {
     const types = this.fullRoster ? ['guardian'] : []
     for (const [id, type] of Object.entries(PET_PARTNER_TYPES)) if (this.level(id)) types.push(type)
@@ -54,7 +54,7 @@ export class PetCombat {
   /** 残响投影按挂件等级缩放（lv1 基底，lv2 +50%） */
   typeScale(type) { return type === 'echo' ? 1 + 0.5 * (this.level('sym_sub_echo') - 1) : 1 }
   get damageScale() {
-    return (1 + this.level('pet_power') * 0.2 + this.level('sym_sub_surge') * 0.4) *
+    return (1 + this.level('pet_power') * 0.2 + this.level('sym_sub_surge') * 0.4) * (this.player.genePetDamageMul || 1) *
       (this.game.primarySpec === 'symbiosis' ? 1.2 : 1)
   }
   get rallyStats() {
@@ -118,7 +118,7 @@ export class PetCombat {
     }
     for (const type of types) {
       let pet = this.items.find(p => p.type === type)
-      const maxHp = Math.round((TYPES[type].hp + this.level('pet_vitality') * 3) * this.typeScale(type))
+      const maxHp = Math.round((TYPES[type].hp + this.level('pet_vitality') * 3 + (this.player.genePetHpBonus || 0)) * this.typeScale(type) * (1 + .1 * (this.game?.bossTomes?.rank('pet_roster') || 0)))
       if (!pet) {
         const end = this.formationPoint(type)
         pet = { ...end, id: ++this.serial, type, name: TYPES[type].name, radius: 17, isPet: true,
@@ -154,7 +154,7 @@ export class PetCombat {
     const routeGuard = this.route === 'guard' && this.rallyTime > 0
       ? Math.min(.25, this.routeGuardLevel * .04 + this.routeGuardAegisLevel * .03 + (this.routeUltimate === 'guard' ? .08 : 0)) : 0
     const armor = (pet.type === 'guardian' && this.level('pet_bulwark') ? 0.75 : 1) * (1 - routeGuard)
-    pet.hp = Math.max(0, pet.hp - damage * armor)
+    pet.hp = Math.max(0, pet.hp - damage * armor * ((pet.tomeReviveUntil || 0) > this.game.elapsed ? .75 : 1))
     pet.hurt = 0.35; pet.idle = 0; pet.flash = 0.18
     if (pet.hp <= 0) {
       pet.down = this.recovery; pet.attack = null; pet.attackFx = 0; pet.target = null
@@ -256,6 +256,7 @@ export class PetCombat {
     this.rallyOverloaded = this.game.startingStrain === 'origin' && this.game.primarySpec === 'symbiosis' && trySpendPrimalOverload(this.game)
     this.rallyTime = this.rallyDuration = this.rallyStats.duration
     this.rallyFlash = 0.55
+    this.game?.bossTomes?.onRally(pets)
     for (const pet of pets) {
       // 加速正在进行的攻击，保持动作进度连续，不取消或追加一次攻击。
       pet.cooldown /= 1 + this.rallyStats.haste
@@ -281,7 +282,7 @@ export class PetCombat {
   attackDamage(pet) {
     const teamwork = this.level('pet_capstone') && this.items.filter(p => p.hp > 0).length >= 2 ? 1.3 : 1
     return this.weapon.damage * this.weapon.levelMul * TYPES[pet.type].power * this.typeScale(pet.type) * this.damageScale * teamwork *
-      (this.rallyTime > 0 ? 1 + this.rallyStats.damage : 1)
+      (this.rallyTime > 0 ? 1 + this.rallyStats.damage : 1) * (this.game?.bossTomes?.petAttackMultiplier(pet, this.rallyTime > 0) || 1)
   }
 
   routePulse() {
@@ -516,6 +517,7 @@ export class PetCombat {
         if (pet.down === 0) {
           Object.assign(pet, this.formationPoint(pet.type))
           pet.hp = pet.maxHp; pet.hurt = 0.8
+          if (this.game?.bossTomes?.rank('pet_roster') === 3) pet.tomeReviveUntil = this.game.elapsed + 2
         }
         continue
       }

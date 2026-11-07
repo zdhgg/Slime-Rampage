@@ -48,7 +48,7 @@ const emit = defineEmits(['resolve'])
         <button class="fusion-eat" @click="emit('resolve', true)">🍽️ 吃下{{ info.firstElement ? '' : '并融合' }}</button>
         <button class="fusion-spit" @click="emit('resolve', false)">🤢 吐掉（放回地上）</button>
       </div>
-      <div class="fusion-hint">之后靠近核心按 E 主动吸收；入槽/替换另有面板选择</div>
+      <div class="fusion-hint">之后靠近核心会自动吸收；入槽/替换另有面板选择</div>
     </div>
   </div>
 </template>

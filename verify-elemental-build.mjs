@@ -37,6 +37,13 @@ check('探索期可以保留单系，也能随机发现第二、第三元素', (
   assert.equal(s.fusion, null)
 })
 
+check('元素史莱姆不会抽到原生黏液专属成长', g => {
+  const cards = rollSkills(g, 30)
+  assert.ok(cards.length > 0)
+  assert.ok(cards.every(card => !card.originOnly), '元素卡池不应包含 originOnly 技能')
+  assert.ok(!cards.some(card => ['com_shock', 'origin_flux', 'origin_overload', 'origin_concord'].includes(card.id)))
+})
+
 check('Lv.2 首系教学保留，第二系与 Lv.10 进化不会强制弹出核心面板', (g, s) => {
   g.player.level = ELEMENTAL_MILESTONE_LEVELS.first
   assert.equal(s.milestoneReward()?.stage, 'first')

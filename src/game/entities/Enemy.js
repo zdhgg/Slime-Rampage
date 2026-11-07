@@ -95,7 +95,7 @@ export class Enemy extends Entity {
     this.x = x
     this.y = y
     this.type = type // 'knight' | 'mage' | 'archer'
-    this.isElite = elite // 精英怪：属性 ×3、金色光环、必掉战利品
+    this.isElite = elite // 精英怪：属性 ×3、金色光环、必掉元素核心
     this.affixes = Array.from(new Set((affixes || (affix ? [affix] : [])).filter(Boolean)))
     this.affix = this.affixes[0] || null // 兼容旧调用；新逻辑用 hasAffix 支持双词缀
     // 职业系数在此应用（速度/血量），spawn 只需传基础值
@@ -127,6 +127,9 @@ export class Enemy extends Entity {
 
     // —— 状态效果（冰冻/燃烧/染毒/减速） ——
     this.gluttonStagger = 0
+    this.gluttonCow = 0 // 咬合震慑剩余时间（饕甲路线卡）：期间出手伤害打折
+    this.gluttonCowMul = 0 // 震慑减伤系数（随卡等级写入）
+    this._devourPullT = 0 // 捕食引力拖拽反馈计时（渲染可读）
     this.freeze = 0 // 冻结剩余时间：期间完全定身
     this.primeSlow = 0
     this.elementStun = 0
@@ -196,11 +199,14 @@ export class Enemy extends Entity {
    * 残血（≤25%）且非 Boss → 进入可吞噬状态（吞噬是核心爽点）
    */
   hit(damage, effects = null) {
+    damage *= this.game?.bossTomes?.hitMultiplier(this, effects) ?? 1
+    const tomeHp = this.hp
     if (this.shieldHits > 0 && damage > 0) {
       this.shieldHits-- // 护盾吸收本次伤害
       damage = 0
     }
     this.hp -= damage
+    this.game?.bossTomes?.afterHit(this, tomeHp, effects)
     this.flash = 0.12
 
     // 近战捕食在扣血/护盾之后、死亡之前衔接吞噬，攻击成长不会丢失捕食收益。
@@ -270,6 +276,8 @@ export class Enemy extends Entity {
     this.flash = Math.max(0, this.flash - dt)
     if (this.freeze > 0) this.freeze -= dt
     this.gluttonStagger = Math.max(0, (this.gluttonStagger || 0) - dt)
+    this.gluttonCow = Math.max(0, (this.gluttonCow || 0) - dt)
+    this._devourPullT = Math.max(0, (this._devourPullT || 0) - dt)
     this.primeSlow = Math.max(0, (this.primeSlow || 0) - dt)
     this.elementStun = Math.max(0, (this.elementStun || 0) - dt)
     this.spellSlowTime = this.isEnraged ? 0 : Math.max(0, (this.spellSlowTime || 0) - dt)
@@ -315,7 +323,10 @@ export class Enemy extends Entity {
     this._shootFlash = 0.12 // 射击闪光
   }
 
-  outgoingDamage(damage) { return damage * (this.petWeakenTime > 0 ? 1 - this.petWeakenAmount : 1) }
+  outgoingDamage(damage) {
+    return damage * (this.petWeakenTime > 0 ? 1 - this.petWeakenAmount : 1) *
+      (this.gluttonCow > 0 ? 1 - (this.gluttonCowMul || 0) : 1)
+  }
 
   _hitTarget(target, player, damage) {
     damage = this.outgoingDamage(damage)

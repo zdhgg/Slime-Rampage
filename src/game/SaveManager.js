@@ -1,18 +1,27 @@
 import {
   DIFFICULTY_IDS,
   MODE_IDS,
-  getExpeditionStages,
+  computeScore,
+  computeScoreBreakdown,
   isModeUnlocked,
   normalizeRunSelection,
   runKey,
+  sanitizeRun,
   unlockedDifficultyAfterRun,
   unlockedModeAfterRun,
 } from './RunRules.js'
 
+// 分数公式与局数据清洗归口 RunRules（引擎实时预估分也要用）；此处 re-export 保持旧 import 路径可用。
+export { computeScore, computeScoreBreakdown, sanitizeRun }
+
 const KEY = 'slime-rampage-save'
-const CATALOG_VERSION = 5
+const CATALOG_VERSION = 6
 export const BOARD_SIZE = 8
 export const SAVE_SLOT_COUNT = 3
+/** 旧战利品 → 战力点迁移比率：version<5 的存档按购买力 ÷15 折算（黑市货架同步 ÷15 重定价）。 */
+const LEGACY_DROPS_DIVISOR = 15
+/** V6 展示尺度：产出与定价同步 ×100，存量战力点同乘保持购买力不变。 */
+const POINTS_SCALE = 100
 
 const emptyBest = () => ({
   score: 0,
@@ -37,7 +46,7 @@ function emptyRecords() {
 }
 
 export const defaultSave = () => ({
-  version: 4,
+  version: 6,
   drops: 0,
   genes: {},
   records: emptyRecords(),
@@ -45,63 +54,6 @@ export const defaultSave = () => ({
   preferences: { mode: 'expedition', difficulty: 'normal' },
   sound: { muted: false },
 })
-
-export function sanitizeRun(run, selection = run) {
-  const selected = normalizeRunSelection(selection)
-  return {
-    mode: selected.mode,
-    difficulty: selected.difficulty,
-    result: ['victory', 'extracted'].includes(run?.result) ? run.result : 'defeat',
-    // 远征关数随难度递增（6/8/10/12 关），按本局难度的实际关卡表截断
-    stage: Math.max(
-      1,
-      Math.min(
-        getExpeditionStages(selected.difficulty).length,
-        Math.round(run?.stage || run?.expeditionStage || 1)
-      )
-    ),
-    wave: Math.max(1, Math.round(run?.wave || 1)),
-    kills: Math.max(0, Math.round(run?.kills || 0)),
-    time: Math.max(0, Math.round(run?.time ?? run?.elapsed ?? 0)),
-    finaleTime: Math.max(0, Number(run?.finaleTime || 0)),
-    devours: Math.max(0, Math.round(run?.devours || 0)),
-    eliteKills: Math.max(0, Math.round(run?.eliteKills || 0)),
-    bossKills: Math.max(0, Math.round(run?.bossKills || 0)),
-    eventsCompleted: Math.max(0, Math.round(run?.eventsCompleted || 0)),
-    species: typeof run?.species === 'string' ? run.species : '',
-  }
-}
-
-export function computeScoreBreakdown(run) {
-  const clean = sanitizeRun(run)
-  const progressWave = clean.mode === 'timed' ? Math.min(24, clean.wave) : clean.wave
-  const breakdown = {
-    combat: clean.kills * 10,
-    devour: clean.devours * 15,
-    elite: clean.eliteKills * 75,
-    boss: clean.bossKills * 500,
-    events: clean.eventsCompleted * 350,
-    progress: clean.mode === 'expedition' ? (clean.stage - 1) * 800 : (progressWave - 1) * 100,
-    victory:
-      (clean.mode === 'timed' || clean.mode === 'expedition') && clean.result === 'victory'
-        ? clean.mode === 'expedition' ? 6000 : 4000
-        : 0,
-    finaleSpeed:
-      clean.mode === 'timed' && clean.result === 'victory'
-        ? Math.max(0, Math.round((180 - clean.finaleTime) * 10))
-        : 0,
-    clearSpeed:
-      clean.mode === 'expedition' && clean.result === 'victory'
-        ? Math.max(0, Math.round((1500 - clean.time) * 2))
-        : 0,
-  }
-  breakdown.total = Object.values(breakdown).reduce((sum, value) => sum + value, 0)
-  return breakdown
-}
-
-export function computeScore(run) {
-  return computeScoreBreakdown(run).total
-}
 
 function sanitizeEntry(value, selection) {
   const clean = sanitizeRun(value, selection)
@@ -152,7 +104,8 @@ function sanitizeRecord(record, selection) {
 
 function migrateLegacy(source) {
   const save = defaultSave()
-  save.drops = Number(source?.drops) > 0 ? Number(source.drops) : 0
+  // V3 前的战利品是旧货币，按购买力折算为战力点
+  save.drops = Math.max(0, Math.round((Number(source?.drops) || 0) / LEGACY_DROPS_DIVISOR) * POINTS_SCALE)
   save.genes = source?.genes && typeof source.genes === 'object' ? source.genes : {}
   save.sound.muted = !!source?.sound?.muted
   save.preferences = { mode: 'endless', difficulty: 'normal' }
@@ -217,6 +170,10 @@ export function sanitizeSave(source) {
 
   const save = defaultSave()
   save.drops = Number(source.drops) > 0 ? Number(source.drops) : 0
+  // V5 前 drops 是旧战利品货币，惰性迁移为战力点（sanitizeSave 是读档唯一收口，只折一次）
+  if (Number(source.version || 0) < 5) save.drops = Math.round(save.drops / LEGACY_DROPS_DIVISOR)
+  // V6：战力点产出/定价同步 ×100，存量同乘保持购买力（V4 档先 ÷15 再 ×100，等价于 ÷0.15）
+  if (Number(source.version || 0) < 6) save.drops = Math.round(save.drops * POINTS_SCALE)
   save.genes = source.genes && typeof source.genes === 'object' ? source.genes : {}
   save.sound.muted = !!source.sound?.muted
   save.preferences = normalizeRunSelection(source.preferences)
@@ -257,7 +214,8 @@ function makeSlot(index, data = defaultSave(), metadata = {}) {
 }
 
 export function normalizeCatalog(source) {
-  if (Number(source?.version) === CATALOG_VERSION && Array.isArray(source.slots)) {
+  // 以 slots 数组识别目录格式（而非版本号）：旧版多槽目录逐槽走 sanitizeSave 迁移，不丢槽位
+  if (Array.isArray(source?.slots)) {
     const slots = Array.from({ length: SAVE_SLOT_COUNT }, (_, index) => {
       const stored = source.slots[index]
       return stored?.data ? makeSlot(index, stored.data, stored) : null
@@ -422,6 +380,6 @@ export function pushScore(save, selection, run) {
 
 export function saveSave(save) {
   const catalog = loadSaveCatalog()
-  updateActiveSave(catalog, { ...save, version: 4 })
+  updateActiveSave(catalog, { ...save, version: 6 })
   saveSaveCatalog(catalog)
 }

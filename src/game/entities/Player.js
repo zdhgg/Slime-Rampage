@@ -6,6 +6,7 @@ import { AssetManager } from '../AssetManager.js'
 import { renderSlimeFamilyBody, renderSlimeFamilyFace, paintSlimeFamilySilhouette, slimeFamilyBodyState, slimeFamilyFaceState } from '../SlimeFamilyArtRenderer.js'
 import { getSlimeFamilyArt } from '../SlimeFamilyArt.js'
 import { resetPrimalEnergy } from '../PrimalEnergy.js'
+import { GLUTTON_FEAST_SPEED } from '../GluttonResource.js'
 
 const TAU = Math.PI * 2
 
@@ -170,6 +171,21 @@ export class Player extends Entity {
     this._regenTimer = 10
     this.geneDevourHeal = 0
     this.geneDevourExpMul = 1
+    // 黑市通用基因（噬血/无敌帧）：阈值由基因写入，进度与冷却为局内运行态
+    this.geneLeechKills = 0 // 噬血基因：击杀计数阈值（0 = 未习得）
+    this.geneLeechKillsMul = 1 // 饕餮原核：阈值乘数
+    this._leechProgress = 0
+    this._leechHealCd = 0
+    this.geneIFramesMul = 1 // 受击无敌帧倍率
+    this.geneSiphonRate = 0 // 涌泉基因：经验阈值比例（0 = 未习得）
+    this._siphonProgress = 0
+    this.geneCocoon = 0 // 复苏茧：免死一次（每局刷新）
+    this._cocoonUsed = false
+    this.geneFuryPerMissing = 0 // 困兽基因：每缺失 1 点生命的伤害加成
+    this.geneRerolls = 0 // 备选蓝图：本局选卡刷新次数
+    this.geneExtraOptions = 0 // 扩容视界：选卡面板候选 +N
+    this.geneMagnetAll = 0 // 全域磁感：拾取半径扩展为全屏
+    this._huntRushTimer = 0 // 狩猎亢奋：击杀攻速窗口剩余秒数
 
     // —— 本体异变与软体反馈（评审改造） ——
     this._devourPulse = 0 // 吞噬膨胀脉冲（衰减）
@@ -204,6 +220,8 @@ export class Player extends Entity {
     this.gluttonGuardDuration = 1.6
     this.gluttonHealCooldown = 0
     this.gluttonLastGainPulse = 0 // 获得猎食点瞬间的 HUD 反馈脉冲（秒）
+    this.gluttonFeastTimer = 0 // 吞噬惯性：捕食/咬杀后的短时移速剩余（秒）
+    this.gluttonCowLevel = 0 // 饕甲路线卡「咬合震慑」等级：咬中的敌人出手减伤
     // —— 肾上腺素（通用技能：受击转机动） ——
     this.adrenalineSpeed = 0 // 受击后移速加成（0 = 未习得）
     this.adrenalineTimer = 0 // 剩余爆发时间（秒）
@@ -218,6 +236,7 @@ export class Player extends Entity {
     this.gluttonRadiance = 0 // 暴食 BOSS 秘典：近身光辉倍率；0 = 未获得
     this._gluttonRadianceTimer = 4
     this.activeSkillCdMultiplier = 1
+    this.geneActiveSkillCdMultiplier = 1
     this.gluttonHeavyLevel = 0
     this.volleyMoveTimer = 0
     this.devourAcidBurst = 0 // 暴食：近身酸液爆发等级
@@ -237,6 +256,9 @@ export class Player extends Entity {
     this.shadowDecoyDuration = 0 // 刺客：替身假人持续时间
     this.shadowBossStep = false // 暗影 BOSS 秘典：主动技能后必暴
     this.shadowEvasionBonus = 0
+    this.geneShadowEvasionBonus = 0
+    this.geneShadowCloneLifeBonus = 0
+    this.geneShadowClonePowerBonus = 0
     this.shadowCloneChanceLevel = 0
     this.shadowClonePowerLevel = 0
     this.shadowCloneLifeLevel = 0
@@ -247,6 +269,9 @@ export class Player extends Entity {
     this.evasionCount = 0
     this._dodgedAttacks = new WeakSet()
     this.shadowCleaveLevel = 0 // 暗影 T2：暴击触发短距横斩。
+    this.genePetDamageMul = 1
+    this.genePetHpBonus = 0
+    this.genePetRecoveryBonus = 0
     this._decoys = [] // 刺客：主动技能后留下的嘲讽替身
     this.killRushSpeed = 0 // 刺客共鸣：击杀后移速爆发
     this.killRushTimer = 0
@@ -317,6 +342,7 @@ export class Player extends Entity {
     this.gluttonRadiance = 0
     this._gluttonRadianceTimer = 4
     this.activeSkillCdMultiplier = 1
+    this.geneActiveSkillCdMultiplier = 1
     this.gluttonHeavyLevel = 0
     this.volleyMoveTimer = 0
     this.devourAcidBurst = 0
@@ -338,10 +364,27 @@ export class Player extends Entity {
     this.shadowDecoyDuration = 0
     this.shadowBossStep = false
     this.shadowEvasionBonus = 0
+    this.geneShadowEvasionBonus = 0
+    this.geneShadowCloneLifeBonus = 0
+    this.geneShadowClonePowerBonus = 0
     this.shadowCloneChanceLevel = 0
     this.shadowClonePowerLevel = 0
     this.shadowCloneLifeLevel = 0
     this.shadowCloneCapLevel = 0
+    this.geneLeechKills = 0
+    this.geneLeechKillsMul = 1
+    this._leechProgress = 0
+    this._leechHealCd = 0
+    this.geneIFramesMul = 1
+    this.geneSiphonRate = 0
+    this._siphonProgress = 0
+    this.geneCocoon = 0
+    this._cocoonUsed = false
+    this.geneFuryPerMissing = 0
+    this.geneRerolls = 0
+    this.geneExtraOptions = 0
+    this.geneMagnetAll = 0
+    this._huntRushTimer = 0
     this.shadowCloneLord = false
     this.shadowAssaultClone = false
     this.evasionFlash = 0
@@ -350,6 +393,9 @@ export class Player extends Entity {
     this.evasionCount = 0
     this._dodgedAttacks = new WeakSet()
     this.shadowCleaveLevel = 0
+    this.genePetDamageMul = 1
+    this.genePetHpBonus = 0
+    this.genePetRecoveryBonus = 0
     this._decoys.length = 0
     this.killRushSpeed = 0
     this.killRushTimer = 0
@@ -372,6 +418,8 @@ export class Player extends Entity {
     this.gluttonGuardDuration = 1.6
     this.gluttonHealCooldown = 0
     this.gluttonLastGainPulse = 0
+    this.gluttonFeastTimer = 0
+    this.gluttonCowLevel = 0
     this.elementProcCap = ELEMENT_PROC_CHANCE_CAP // 专精改写的附魔封顶归位
   }
 
@@ -460,7 +508,7 @@ export class Player extends Entity {
     if (this.game?.weaponSystem?.spellCombat?.enabled) return
     if (this.dead) return // 死亡帧残差：不再吸收（防进化演出与结算面板叠加）
     // 元素权限（第三批角色化）：暴食/弹射/暗影不使用元素系统。
-    // 这是防御性兜底闸门——上游（核心生成、E 交互、吞噬消化）已按同一权限
+    // 这是防御性兜底闸门——上游（核心生成、自动吸收、吞噬消化）已按同一权限
     // 拦截，这里保证任何未来新增的调用路径都不会绕过权限白拿到元素。
     if (this.game?.canUseElements === false) return
     const beforeSat = new Set(getActiveReactions(this.elements).map((r) => r.id)) // 吸收前满足的组合
@@ -599,7 +647,18 @@ export class Player extends Entity {
    */
   gainExp(amount) {
     if (this.dead) return false // 死亡帧残差：不再结算经验/升级（防面板叠加、暂停锁失衡）
-    this.exp += Math.round(amount * this.expGainMul) // 经验基因倍率
+    const gained = Math.round(amount * this.expGainMul) // 经验基因倍率
+    this.exp += gained
+    // 涌泉基因：累计吸收经验达当前升级阈值比例时回血
+    // （阈值随等级膨胀自动缩放；满血不计数，与噬血共用 5 秒回复间隔）
+    if (this.geneSiphonRate > 0 && this.hp < this.maxHp) {
+      this._siphonProgress += gained
+      if (this._leechHealCd <= 0 && this._siphonProgress >= this.maxExp * this.geneSiphonRate) {
+        this._siphonProgress = 0
+        this._leechHealCd = 5
+        this.heal(1)
+      }
+    }
     if (this.exp >= this.maxExp) {
       this.settleLevelUp()
       return true
@@ -654,7 +713,7 @@ export class Player extends Entity {
    */
   get evasionChance() {
     return this.game?.startingStrain === 'shadow'
-      ? Math.min(SHADOW_MAX_EVASION, SHADOW_BASE_EVASION + this.shadowEvasionBonus + (this.shadowBossStep ? 0.1 : 0)) : 0
+      ? Math.min(SHADOW_MAX_EVASION, SHADOW_BASE_EVASION + this.shadowEvasionBonus + (this.geneShadowEvasionBonus || 0) + (this.shadowBossStep ? 0.1 : 0)) : 0
   }
 
   hit(damage, attack = null) {
@@ -669,7 +728,7 @@ export class Player extends Entity {
       if (this._dodgedAttacks.has(attack)) return false
       this._dodgedAttacks.add(attack)
       if (Math.random() < this.evasionChance) {
-        this.evasionFlash = 0.2
+        this.evasionFlash = this.game?.bossTomes?.onEvade() ?? 0.2
         this.evasionCount++
         this.game.enemyManager.addText(this.x, this.y - 38, '闪避', null, '#d0baff', 16)
         return false
@@ -680,6 +739,7 @@ export class Player extends Entity {
     }
     const petRouteReduction = this.game?.weaponSystem?.petCombat?.playerDamageReduction || 0
     if (petRouteReduction > 0) damage = Math.max(1, Math.round(damage * (1 - petRouteReduction)))
+    if (attack?.enemyAttack) this.game?.bossTomes?.onHurt()
     if (this.gluttonGuard > 0 && this.gluttonGuardTimer > 0 && damage > 0) {
       damage = Math.max(0, damage - this.gluttonGuard)
       this.gluttonGuard = 0
@@ -691,11 +751,12 @@ export class Player extends Entity {
         return
       }
     }
+    damage = this.game?.bossTomes?.absorb(damage, attack) ?? damage
     const shield = this.game?.weaponSystem?.spellCombat?.shield
     damage = shield ? shield.absorb(damage, attack) : damage
     if (damage <= 0) { this.invincible = .18; return false }
     this.hp -= damage
-    this.invincible = 0.5 // 0.5 秒无敌：仍防贴脸每帧连击，但持续受压会稳定掉血——走位有收益
+    this.invincible = 0.5 * (this.geneIFramesMul || 1) // 0.5 秒无敌（饕餮原核可延长）：仍防贴脸每帧连击，但持续受压会稳定掉血——走位有收益
     this.flash = 0.25 // 受击红闪
     this._ripple = 0.5 // 受击内部波纹（软体反馈）
     this.game.sound.hurt()
@@ -721,6 +782,16 @@ export class Player extends Entity {
     }
 
     if (this.hp <= 0) {
+      // 复苏茧（黑市）：每局一次，致命伤害转为 1 点生命 + 2 秒无敌
+      if (this.geneCocoon && !this._cocoonUsed) {
+        this._cocoonUsed = true
+        this.hp = 1
+        this.invincible = 2
+        this.game.weaponSystem?._ring?.(this.x, this.y, '#7fe08c', 150)
+        this.game.enemyManager?.addText?.(this.x, this.y - 42, '🥚 复苏茧', null, '#7fe08c', 18)
+        this.game.sound?.levelUp?.()
+        return true
+      }
       this.hp = 0
       this.dead = true
       this.game.gameOver() // 引擎暂停 + 回调 Vue 弹结算面板
@@ -731,16 +802,19 @@ export class Player extends Entity {
   update(dt) {
     if (this.dead) return // 死亡后不再更新（引擎随即暂停）
     this.invincible = Math.max(0, this.invincible - dt)
+    this._leechHealCd = Math.max(0, this._leechHealCd - dt)
     this.flash = Math.max(0, this.flash - dt)
     this.evasionFlash = Math.max(0, this.evasionFlash - dt)
     this.volleyMoveTimer = Math.max(0, this.volleyMoveTimer - dt)
     if (this.stealthTimer > 0) this.stealthTimer -= dt
     if (this.killRushTimer > 0) this.killRushTimer -= dt
+    this._huntRushTimer = Math.max(0, this._huntRushTimer - dt)
     if (this.devourDamageReductionTimer > 0) this.devourDamageReductionTimer -= dt
     this.gluttonGuardTimer = Math.max(0, this.gluttonGuardTimer - dt)
     this.gluttonGuardCooldown = Math.max(0, this.gluttonGuardCooldown - dt)
     this.gluttonCounterCooldown = Math.max(0, this.gluttonCounterCooldown - dt)
     this.gluttonHealCooldown = Math.max(0, this.gluttonHealCooldown - dt)
+    this.gluttonFeastTimer = Math.max(0, this.gluttonFeastTimer - dt)
     if (this.gluttonGuardTimer <= 0) this.gluttonGuard = 0
     this.elapsed += dt
 
@@ -853,12 +927,13 @@ export class Player extends Entity {
       if (this.speedBuffTimer > 0) this.speedBuffTimer -= dt
       const rushBonus = this.killRushTimer > 0 ? this.killRushSpeed : 0
       const adrenaline = this.adrenalineTimer > 0 ? this.adrenalineSpeed : 0
+      const feast = this.gluttonFeastTimer > 0 ? GLUTTON_FEAST_SPEED : 0
       const terrainMul = this.game.mapFeatures?.speedMultiplierAt(this.x, this.y, 'player') || 1
       const formationMul = this.game.endlessFormationBreakTimer > 0
         ? ENDLESS_FORMATION_BREAK_SPEED_MUL
         : 1
       const curSpeed = this.speed * (this.speedBuffTimer > 0 ? 1.25 : 1) *
-        (1 + rushBonus + adrenaline) * terrainMul * formationMul * (this.volleyMoveTimer > 0 ? 1.2 : 1)
+        (1 + rushBonus + adrenaline + feast) * terrainMul * formationMul * (this.volleyMoveTimer > 0 ? 1.2 : 1) * (this.game?.bossTomes?.moveMultiplier || 1)
       this.x += dir.x * curSpeed * dt
       this.y += dir.y * curSpeed * dt
       // 面朝方向平滑转向（dt 归一化，帧率无关）

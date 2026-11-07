@@ -76,7 +76,8 @@ try {
     },
   })
   assert.equal(response.status, 200)
-  assert.equal(response.payload.catalog.slots[1].data.drops, 100)
+  // V4 导入档战利品按购买力 ÷15 迁移为战力点、V6 尺度 ×100：round(100/15)×100 = 700
+  assert.equal(response.payload.catalog.slots[1].data.drops, 700)
 
   response = await api('/api/profile/genes/giant/purchase', {
     method: 'POST',
@@ -84,7 +85,7 @@ try {
   })
   assert.equal(response.status, 200)
   assert.equal(response.payload.catalog.slots[1].data.genes.giant, 1)
-  assert.equal(response.payload.catalog.slots[1].data.drops, 88)
+  assert.equal(response.payload.catalog.slots[1].data.drops, 500)
 
   const start = await api('/api/runs/start', {
     method: 'POST',
@@ -103,7 +104,6 @@ try {
     eliteKills: 0,
     bossKills: 0,
     eventsCompleted: 0,
-    drops: { knight: 1 },
     species: { name: '测试史莱姆' },
     score: 99999999,
   }
@@ -113,8 +113,9 @@ try {
     body: { run: summary },
   })
   assert.equal(finish.status, 200)
+  // 分数由服务端按统计重算（30 + 15 = 45），战利品改由分数派生：round(45/30) = 2 点
   assert.equal(finish.payload.result.score, 45)
-  assert.equal(finish.payload.result.earnedDrops, 1)
+  assert.equal(finish.payload.result.earnedDrops, 2)
   assert.equal(finish.payload.leaderboard.entries[0].username, 'Alice')
 
   const repeated = await api(`/api/runs/${start.payload.ticket.id}/finish`, {
@@ -124,7 +125,7 @@ try {
   })
   assert.equal(repeated.status, 200)
   assert.equal(repeated.payload.result.runId, finish.payload.result.runId)
-  assert.equal(repeated.payload.catalog.slots[1].data.drops, 89)
+  assert.equal(repeated.payload.catalog.slots[1].data.drops, 502)
 
   const bobRegistration = await api('/api/auth/register', {
     method: 'POST',

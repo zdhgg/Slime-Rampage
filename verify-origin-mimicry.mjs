@@ -166,20 +166,20 @@ check('共生共鸣·残响伙伴：非共生拟态也可获得弱化伙伴投�
   assert.ok(g.weaponSystem.petCombat.damageScale > 1.39, '兽灵回响提升伙伴伤害')
 })
 
-check('共鸣催化剂（requiresElementalStrain）对 origin 永不可达：元素血统独占，apply 双保险', g => {
+check('原生拟态后仍抽原生秘典，元素四本保持职业隔离', g => {
   // P2 结论：维持元素血统独占（从 origin 卡池过滤），不改为拟态/专精判定——
   // 与 com_shock 的 originOnly 同向，保护血统终局身份；origin 拟态已拿机制层。
   awaken(g, 'elemental') // origin 主专精走元素树也不行
   for (let i = 0; i < 30; i++) {
     const picks = rollBossSkills(g, 5)
-    assert.ok(picks.every(s => s.id !== 'boss_elemental_resonance'), 'origin 不应抽到元素血统独占秘典')
+    assert.ok(picks.every(s => s.strain === 'origin'), 'origin 不应抽到元素血统独占秘典')
   }
   const ele = createArena('elemental')
   try {
     ele.primarySpec = 'elemental'
     let seen = false
-    for (let i = 0; i < 60 && !seen; i++) seen = rollBossSkills(ele, 5).some(s => s.id === 'boss_elemental_resonance')
-    assert.ok(seen, '元素史莱姆本家应能抽到共鸣催化剂')
+    for (let i = 0; i < 60 && !seen; i++) seen = rollBossSkills(ele, 5).some(s => s.id === 'boss_elemental_sigil')
+    assert.ok(seen, '元素史莱姆应能抽到余辉法印')
   } finally { dispose(ele) }
 })
 

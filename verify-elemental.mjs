@@ -121,28 +121,32 @@ check('核心选择不可伪造、不会引入第三元素；强化耗尽有无�
   const fallback = s.coreOptions(); assert.equal(fallback.length, 3); assert.ok(fallback.every(o => o.kind === 'power'))
   const power = s.power; s.applyCore(fallback.find(o => o.id === 'power')); assert.ok(s.power > power)
 })
-check('单个 BOSS 奖励一次，普通怪与精英零属性核心，职业秘籍合并', (g, s) => {
+check('单个BOSS只排队一次职业秘典，不再发地面秘籍或旧核心', (g, s) => {
   fuse(s, 'poison')
-  let reward
-  g.onSpellCore = r => { reward = r }
+  g.runSelection.mode = 'timed'
+  let reward; g.onExpeditionReward = payload => { reward = payload }
   const elite = spawn(g, { hp: 1 }); elite.isElite = true
   s.damage(elite, 10, 'fire'); assert.ok(g.gemManager._gems.every(gem => gem.type === 'exp'))
-  const boss = spawnBoss(g, 1)
-  s.damage(boss, 10, 'fire'); g.weaponSystem._settleKill(boss)
-  assert.equal(g._spellCoreQueue.length, 1); assert.ok(g.gemManager._gems.every(gem => gem.type === 'exp'))
-  g._openPendingSpellCore(); assert.equal(reward.first, false); assert.equal(g._pauseLock, 1)
-  assert.equal(g.resolveSpellCore('invalid'), false); assert.equal(g._pauseLock, 1)
-  assert.equal(g.resolveSpellCore(reward.options[0].id), true)
-  assert.equal(g._pauseLock, 0); assert.equal(s.cores, 1); assert.equal(s.elements.size, 2)
-  assert.equal(g.queueSpellCore(boss), false)
+  const boss = spawnBoss(g, 1), random = Math.random
+  Math.random = () => 0
+  try { s.damage(boss, 10, 'fire'); g.weaponSystem._settleKill(boss) } finally { Math.random = random }
+  assert.equal(g._bossRewardQueue.length, 1); assert.equal(g._spellCoreQueue.length, 0)
+  g._openPendingBossReward(); assert.equal(reward.phase, 'boss'); assert.equal(g._pauseLock, 1)
+  assert.equal(g.resolveExpeditionReward('invalid'), false)
+  assert.equal(g.resolveExpeditionReward(reward.options[0].id), true)
+  assert.equal(g._pauseLock, 0); assert.equal(s.cores, 0); assert.equal(s.elements.size, 2)
+  assert.equal(g.queueBossReward(boss), false)
 })
-check('首领编队全队结束才发一颗核心', (g, s) => {
+check('首领编队全队结束才判定一份秘典奖励', (g, s) => {
+  g.runSelection.mode = 'timed'
   g.enemyManager.spawnBossGroup({ label: '测试双首领', types: ['boss-knight', 'boss-archer'], memberHpMul: 1 })
-  const bosses = g.enemyManager._enemies.filter(e => e.isBoss)
-  assert.equal(bosses.length, 2)
-  s.damage(bosses[0], 1e6, 'lightning'); assert.equal(g._spellCoreQueue.length, 0)
-  s.damage(bosses[1], 1e6, 'lightning'); assert.equal(g._spellCoreQueue.length, 1)
-  assert.equal(g.queueSpellCore(bosses[0]), false)
+  const bosses = g.enemyManager._enemies.filter(e => e.isBoss), random = Math.random
+  Math.random = () => 0
+  try {
+    s.damage(bosses[0], 1e6, 'lightning'); assert.equal(g._bossRewardQueue.length, 0)
+    s.damage(bosses[1], 1e6, 'lightning'); assert.equal(g._bossRewardQueue.length, 1)
+  } finally { Math.random = random }
+  assert.equal(g.queueBossReward(bosses[0]), false)
 })
 check('升级与核心串行：恢复进入核心选择，暂停锁与溢出经验正确', (g, s) => {
   fuse(s, 'poison')
@@ -153,17 +157,18 @@ check('升级与核心串行：恢复进入核心选择，暂停锁与溢出经�
   g.applySkill(ELEMENTAL_SKILLS[0]); assert.ok(reward); assert.equal(g._pauseLock, 1); assert.equal(levels, 1)
   g.resolveSpellCore(reward.options[0].id); assert.equal(g._pauseLock, 0); assert.equal(s.cores, 1)
 })
-check('远征核心先于补给，转场清理不会丢失奖励', (g, s) => {
+check('远征秘典先于补给，转场不会丢失奖励或重复发核心', (g, s) => {
   fuse(s, 'poison')
-  let reward, supplies = 0
-  g.onSpellCore = info => { reward = info }; g.onExpeditionReward = () => supplies++
+  let reward
+  g.onExpeditionReward = info => { reward = info }
   g.configureRun({ mode: 'expedition', difficulty: 'normal' })
   g.runState = 'expedition-guardian'
   const boss = spawnBoss(g, 1); boss.isExpeditionStageBoss = true
   s.damage(boss, 10, 'fire'); assert.equal(g.runState, 'stage-clearing')
-  g._updateRunState(.7); assert.ok(reward); assert.equal(supplies, 0)
-  g.resolveSpellCore(reward.options[0].id); g._updateRunState(.7)
-  assert.equal(supplies, 1); assert.equal(g.runState, 'stage-reward'); assert.equal(s.cores, 1)
+  g._updateRunState(.7); assert.equal(reward.phase, 'boss')
+  g.resolveExpeditionReward(reward.options[0].id)
+  assert.equal(reward.phase, 'supply'); assert.equal(s.cores, 0); assert.equal(g._pauseLock, 1)
+  g.resolveExpeditionReward('rest'); assert.equal(g.expeditionStage, 2); assert.equal(g._pauseLock, 0)
 })
 check('终局与死亡结算优先，不弹无用途核心；DOT 击杀只结算一次', (g, s) => {
   let rewards = 0; g.onSpellCore = () => rewards++

@@ -233,10 +233,10 @@ const record = computed(() => props.records[runKey(selection.value)] || {
   board: [],
 })
 
-/** 难度卡副标题：远征展示关卡数（随难度变化），其余模式只展示战利品倍率。 */
+/** 难度卡副标题：远征展示关卡数（随难度变化），其余模式只展示战力点倍率。 */
 function difficultyMeta(difficulty) {
   const info = DIFFICULTIES[difficulty]
-  const reward = `战利品 ×${info.rewardMul}`
+  const reward = `战力点 ×${info.rewardMul}`
   if (selection.value.mode !== 'expedition') return reward
   return `${getExpeditionStages(difficulty).length} 章 · ${reward}`
 }

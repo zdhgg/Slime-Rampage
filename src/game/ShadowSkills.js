@@ -76,7 +76,7 @@ export const SHADOW_EXTRA_SKILLS = [
 
 /** Keep IDs stable while presenting the actual role-specific mechanics. */
 export function resolveShadowSkill(skill, game) {
-  if (game.startingStrain !== 'shadow') return skill
+  if (skill.bossTome || game.startingStrain !== 'shadow') return skill
   const variant = SHADOW_SKILL_VARIANTS[skill.id]
   if (variant) return { ...skill, ...variant, isShadowSkill: true, apply: skill.apply }
   if (skill.id === 'boss_assassin_voidstep') return { ...skill,

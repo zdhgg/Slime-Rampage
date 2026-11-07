@@ -1,4 +1,4 @@
-// P2 批次验证脚本（stats 快照形状一致性 / 捕食原核滚雪球 / sumDrops）。运行：node verify-p2.mjs
+// P2 批次验证脚本（stats 快照形状一致性 / 捕食原核滚雪球 / scoreToPoints）。运行：node verify-p2.mjs
 import assert from 'node:assert/strict'
 
 const gradient = { addColorStop() {} }
@@ -32,7 +32,7 @@ globalThis.cancelAnimationFrame = () => {}
 
 const { GameEngine, createDefaultStats } = await import('./src/game/GameEngine.js')
 const { Enemy } = await import('./src/game/entities/Enemy.js')
-const { sumDrops } = await import('./src/game/RunRules.js')
+const { scoreToPoints } = await import('./src/game/RunRules.js')
 const { applyGenes, GENES, getGeneCost } = await import('./src/game/GenePool.js')
 
 const engine = GameEngine.create(canvasStub)
@@ -97,27 +97,63 @@ engine.reset()
 assert.equal(ws.devourDamageMul, 1, '重开复位')
 ok('捕食原核：吞噬永久 +3% 攻击（封顶 ×2），未购不生效，重开复位')
 
-// —— 3. sumDrops：空值安全 + 与九类口径一致 ——
-assert.equal(sumDrops(null), 0)
-assert.equal(sumDrops({}), 0)
+// —— 3. scoreToPoints：空值安全 + 难度倍率 + 无尽保留/加成/软顶 ——
+assert.equal(scoreToPoints(0, { mode: 'expedition', difficulty: 'normal' }), 0)
+assert.equal(scoreToPoints(null, { mode: 'timed', difficulty: 'normal' }), 0)
+assert.equal(scoreToPoints(30000, { mode: 'expedition', difficulty: 'easy' }), 800)
+assert.equal(scoreToPoints(30000, { mode: 'expedition', difficulty: 'normal' }), 1000)
+assert.equal(scoreToPoints(30000, { mode: 'expedition', difficulty: 'hard' }), 1350)
+assert.equal(scoreToPoints(30000, { mode: 'expedition', difficulty: 'hell' }), 1800)
+// 无尽战败保留 70%、撤离满额、继续加成参与换算
+assert.equal(scoreToPoints(30000, { mode: 'endless', difficulty: 'normal' }, { result: 'defeat' }), 700)
+assert.equal(scoreToPoints(30000, { mode: 'endless', difficulty: 'normal' }, { result: 'extracted' }), 1000)
 assert.equal(
-  sumDrops({ knight: 2, mage: 1, archer: 3, assassin: 0, priest: 1, berserker: 4, hound: 5, golem: 6, wraith: 7 }),
-  29
+  scoreToPoints(30000, { mode: 'endless', difficulty: 'normal' }, { result: 'extracted', endlessRewardBonus: 0.5 }),
+  1500
 )
-ok('sumDrops：空值安全，九类求和正确')
+// 软顶 2000 点：超出部分减半（raw 3000 → 2000 + 500）
+assert.equal(scoreToPoints(90000, { mode: 'endless', difficulty: 'normal' }, { result: 'extracted' }), 2500)
+ok('scoreToPoints：空值安全、难度倍率正确、无尽保留/加成/软顶生效')
 
-// —— 4. 黑市成本后段加速：首级可触达，高级节点与原核承担长期消耗 ——
+// —— 4. 黑市成本后段加速：首级 2 点起步可触达，高级节点与原核承担长期消耗 ——
 {
   const expectedCosts = {
-    giant: [12, 24, 40, 64],
-    regen: [18, 36, 60],
-    predator_origin: [120],
-    swift: [10, 20, 34, 52],
-    split: [24, 50],
-    kinetic_origin: [120],
-    lore: [12, 24, 40, 64],
-    resonance: [30, 60, 100],
-    element_origin: [140],
+    giant: [200, 300, 500, 600],
+    thorns: [200, 300, 500, 600],
+    regen: [200, 300, 600],
+    siphon: [300, 500, 900],
+    leech: [300, 600, 1000],
+    cocoon: [1400],
+    gorged_origin: [2500],
+    razor: [200, 300, 500, 800],
+    rapid: [200, 300, 500, 800],
+    hunt: [200, 300, 500, 600],
+    hunter: [300, 600, 900],
+    fury: [300, 500, 900],
+    arsenal_origin: [2500],
+    lore: [200, 300, 500, 600],
+    swift: [200, 200, 300, 400],
+    expand: [300, 500, 900],
+    blueprint: [500, 900],
+    magnet: [1300],
+    horizon: [1600],
+    flux_origin: [2200],
+    stim: [800],
+    serum: [800],
+    greed: [600],
+    glass: [1000],
+    dicer: [800],
+    split: [300, 500],
+    resonance: [300, 600, 1000],
+    shadow_step: [200, 300, 600],
+    shadow_echo: [300, 600, 900],
+    symbiosis_bond: [200, 300, 600],
+    symbiosis_vital: [300, 600, 900],
+    predator_origin: [2000],
+    kinetic_origin: [2000],
+    element_origin: [2200],
+    shadow_origin: [2500],
+    symbiosis_origin: [2500],
   }
   for (const gene of GENES) {
     assert.deepEqual(
@@ -126,13 +162,16 @@ ok('sumDrops：空值安全，九类求和正确')
       `${gene.name} 逐级价格`
     )
   }
-  const basicTotal = GENES.filter((gene) => !gene.isCapstone)
+  // 货架总价只算在售通用基因：legacy 已下架，违禁品互斥只计最贵一件
+  const shelfTotal = GENES.filter((gene) => !gene.hidden && !gene.isCapstone && !gene.isContraband)
     .reduce((sum, gene) => sum + gene.costs.reduce((branch, cost) => branch + cost, 0), 0)
-  assert.equal(basicTotal, 774)
-  assert.equal(basicTotal + expectedCosts.predator_origin[0], 894)
-  assert.equal(basicTotal + expectedCosts.kinetic_origin[0], 894)
-  assert.equal(basicTotal + expectedCosts.element_origin[0], 914)
-  ok('黑市基础路线总价 774，选择终点原核后总价为 894～914')
+  assert.equal(shelfTotal, 26700)
+  const contrabandCost = Math.max(...GENES.filter((gene) => gene.isContraband).map((gene) => gene.costs[0]))
+  assert.equal(contrabandCost, 1000)
+  assert.equal(shelfTotal + contrabandCost + expectedCosts.gorged_origin[0], 30200)
+  assert.equal(shelfTotal + contrabandCost + expectedCosts.arsenal_origin[0], 30200)
+  assert.equal(shelfTotal + contrabandCost + expectedCosts.flux_origin[0], 29900)
+  ok('黑市货架总价 26700＋一件违禁品 1000，选择终点原核后总价为 29900～30200')
 }
 
 engine.destroy()

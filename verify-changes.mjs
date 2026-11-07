@@ -414,7 +414,7 @@ ok('元素权限：元素按等级学法术、原生吸收属性核心，其余�
     boss.isBoss = true
     engine.weaponSystem._settleKill(boss)
     assert.equal(countCores() > 0, allowed, `Boss 核心产出与权限一致：${tag}`)
-    if (strainId === 'elemental') assert.equal(engine._spellCoreQueue.length, 1, '元素 BOSS 改为一颗法术核心奖励')
+    if (strainId === 'elemental') assert.equal(engine._spellCoreQueue.length, 0, '元素 BOSS 不再重复发旧核心，统一职业秘典结算')
 
     // ③ 吞噬（法师必掉核心那条分支）
     engine.gemManager.reset()
@@ -641,7 +641,7 @@ ok('槽位里程碑提示：canUseElements 随角色正确下发，非元素角�
   const { STRAIN_IDS } = await import('./src/game/Strains.js')
   const richDrops = 100000
   // 对每个角色重复同一组判定：结果必须与角色无关（黑市是档案级永久成长）
-  for (const geneId of ['predator_origin', 'element_origin', 'resonance', 'giant']) {
+  for (const geneId of ['gorged_origin', 'expand', 'giant']) {
     const gene = GENES.find((g) => g.id === geneId)
     const perStrain = STRAIN_IDS.map((strainId) => {
       engine.applyStartingStrain(strainId)
@@ -657,25 +657,28 @@ ok('槽位里程碑提示：canUseElements 随角色正确下发，非元素角�
       assert.ok(!String(p.reason || '').includes('史莱姆'), `${geneId}：reason 不得引入角色限制（${p.strainId}）`)
     }
   }
-  // 只加了「适用范围提示」，不动购买/exclusiveGroup 规则
-  for (const geneId of ['predator_origin', 'resonance', 'element_origin']) {
-    const gene = GENES.find((g) => g.id === geneId)
-    assert.ok(
-      typeof gene.scope === 'string' && gene.scope.length > 0,
-      `${geneId} 必须有适用范围提示文案`
-    )
-  }
-  assert.equal(GENES.find((g) => g.id === 'giant').scope, undefined, '通用基因不需要适用范围提示')
-  // exclusiveGroup 规则不变：买到捕食原核后，另两个原核仍被互斥挡住
-  const afterPredator = getGenePurchaseState(
-    GENES.find((g) => g.id === 'kinetic_origin'),
-    { predator_origin: 1 },
+  // 全盘通用化后在售基因不再需要血统适用范围提示
+  assert.ok(
+    GENES.filter((g) => !g.hidden).every((g) => g.scope === undefined),
+    '在售通用基因不得携带适用范围提示'
+  )
+  // 旧血统基因全部下架隐藏：服务端拒绝购买，旧存档等级仍然生效
+  assert.ok(
+    GENES.filter((g) => g.branch === 'legacy').every(
+      (g) => g.hidden && getGenePurchaseState(g, { [g.id]: 1 }, richDrops).locked
+    ),
+    '旧血统基因必须全部下架且不可购买'
+  )
+  // exclusiveGroup 规则迁移到新原核：买到饕餮原核后，兵工原核仍被互斥挡住
+  const afterGorged = getGenePurchaseState(
+    GENES.find((g) => g.id === 'arsenal_origin'),
+    { gorged_origin: 1 },
     richDrops
   )
-  assert.equal(afterPredator.locked, true, 'exclusiveGroup 互斥规则保持不变')
-  assert.ok(afterPredator.reason.includes('捕食原核'), '互斥原因文案保持不变')
+  assert.equal(afterGorged.locked, true, 'exclusiveGroup 互斥规则保持不变')
+  assert.ok(afterGorged.reason.includes('饕餮原核'), '互斥原因文案保持不变')
 }
-ok('黑市永久基因：购买与互斥规则完全不随当前角色变化，仅新增适用范围提示')
+ok('黑市永久基因：购买与互斥规则不随角色变化，货架全盘通用化且旧基因下架')
 
 // —— 2j. 刺客觉醒的「暴击保证触发元素 proc」受能力闸门控制（第五批）——
 // 关键区分：critGuaranteesElement 只作用于 player._procs（已吸收元素的等级累积附魔），

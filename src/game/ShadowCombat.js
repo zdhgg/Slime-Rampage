@@ -1,7 +1,7 @@
 import { renderShadowCombat, shadowPose } from './effects/ShadowBladeVisual.js'
 import { ShadowClones } from './ShadowClones.js'
-import { shadowTargetAlive as alive, inShadowPath, traceShadowPath } from './ShadowGeometry.js'
-import { SHADOW_ROUTES, shadowProgressReady, shadowRouteReady } from './ShadowBuild.js'
+import { shadowTargetAlive as alive, inShadowPath, traceShadowPath, shadowRangedEnemy } from './ShadowGeometry.js'
+import { SHADOW_ROUTES, shadowHuntRangedRefundAt, shadowProgressReady, shadowRouteReady } from './ShadowBuild.js'
 export { inShadowPath } from './ShadowGeometry.js'
 
 export const SHADOW_BLADE_REACH = 72
@@ -17,6 +17,11 @@ export const SHADOW_ASSAULT_WIDTH = 12
 export const SHADOW_ASSAULT_DAMAGE = 1.6
 export const SHADOW_ASSAULT_SPLASH = 0.8
 export const SHADOW_DASH_REFUND = 0.5
+/** 刃隙微步（近战补偿·机制层）：刺击起手向目标小步进，停在目标边缘前，不扩大判定面。 */
+export const SHADOW_BLADE_STEP = 26
+/** 刺杀残影（近战补偿·机制层）：本体击杀在击杀点留下短命替身，供本体脱身。 */
+export const SHADOW_KILL_ECHO_LIFE = 1.2
+export const SHADOW_KILL_ECHO_CAP = 3
 export const SHADOW_CLEAVE = [
   { damage: 0.85, reach: 52, width: 14, cooldown: 0.9 },
   { damage: 1.2, reach: 66, width: 16, cooldown: 0.65 },
@@ -27,14 +32,14 @@ export class ShadowCombat {
   reset({ preserveBuild = false } = {}) {
     const build = preserveBuild ? {
       route: this.route, routeUltimate: this.routeUltimate, normalChoices: this.normalChoices,
-      huntMarkLevel: this.huntMarkLevel, huntPursuitLevel: this.huntPursuitLevel, huntReapLevel: this.huntReapLevel,
+      huntMarkLevel: this.huntMarkLevel, huntPursuitLevel: this.huntPursuitLevel, huntReapLevel: this.huntReapLevel, huntRefundLevel: this.huntRefundLevel,
       swarmAssaultLevel: this.swarmAssaultLevel, swarmReapLevel: this.swarmReapLevel,
       bladeArcLevel: this.bladeArcLevel, bladeEchoLevel: this.bladeEchoLevel,
     } : null
     this.swing = null; this.assault = null; this.flash = null
     this.clones?.reset()
     this.route = build?.route || null; this.routeUltimate = build?.routeUltimate || null; this.normalChoices = build?.normalChoices || 0
-    this.huntMarkLevel = build?.huntMarkLevel || 0; this.huntPursuitLevel = build?.huntPursuitLevel || 0; this.huntReapLevel = build?.huntReapLevel || 0
+    this.huntMarkLevel = build?.huntMarkLevel || 0; this.huntPursuitLevel = build?.huntPursuitLevel || 0; this.huntReapLevel = build?.huntReapLevel || 0; this.huntRefundLevel = build?.huntRefundLevel || 0
     this.swarmAssaultLevel = build?.swarmAssaultLevel || 0; this.swarmReapLevel = build?.swarmReapLevel || 0
     this.bladeArcLevel = build?.bladeArcLevel || 0; this.bladeEchoLevel = build?.bladeEchoLevel || 0
     this.huntTarget = null; this.huntMarkTimer = 0
@@ -55,7 +60,7 @@ export class ShadowCombat {
   get bladeRangeBonus() { return Math.min(90, Math.min(8, this.bladeArcLevel) * 9 + Math.max(0, this.bladeArcLevel - 8) * 3) }
   get bladeMaxTargets() { return Math.min(10, 4 + Math.min(6, this.bladeArcLevel)) }
   get bladeEchoMultiplier() { return Math.min(.68, .3 + Math.min(6, this.bladeEchoLevel) * .05 + Math.max(0, this.bladeEchoLevel - 6) * .02) }
-  get reach() { return this.player.radius + SHADOW_BLADE_REACH + (this.route === 'blade' ? this.bladeRangeBonus : 0) }
+  get reach() { return this.player.radius + (SHADOW_BLADE_REACH + (this.route === 'blade' ? this.bladeRangeBonus : 0)) * (this.weapon.geneRangeMul || 1) }
 
   chooseRoute(route) {
     if (!this.enabled || !SHADOW_ROUTES[route] || !shadowRouteReady(this.game) || !(this.game.skillLevels?.[SHADOW_ROUTES[route].seed] > 0)) return false
@@ -99,8 +104,14 @@ export class ShadowCombat {
     if (!this.available || this.swing || this.assault || !alive(target)) return false
     if (Math.hypot(target.x - this.player.x, target.y - this.player.y) > this.reach + (target.radius || 0)) return false
     const pace = Math.max(0.55, Math.min(1, this.weapon.attackInterval / 0.3))
-    this.swing = { angle: Math.atan2(target.y - this.player.y, target.x - this.player.x),
-      elapsed: 0, windup: SHADOW_WINDUP * pace, strike: SHADOW_STRIKE * pace, reach: this.reach }
+    const angle = Math.atan2(target.y - this.player.y, target.x - this.player.x)
+    // 刃隙微步：起手先向目标小步进，挥空前先看距离够不够得着。
+    const gap = Math.hypot(target.x - this.player.x, target.y - this.player.y) - (target.radius || 0) - this.player.radius
+    if (gap > 4) {
+      const end = traceShadowPath(this.game, this.player, angle, Math.min(SHADOW_BLADE_STEP, gap - 4))
+      this.player.x = end.x; this.player.y = end.y
+    }
+    this.swing = { angle, elapsed: 0, windup: SHADOW_WINDUP * pace, strike: SHADOW_STRIKE * pace, reach: this.reach }
     this.flash = null
     return true
   }
@@ -183,6 +194,7 @@ export class ShadowCombat {
     if (a.elapsed >= SHADOW_ASSAULT_TIME - 1e-8) {
       this.weapon.game.mapFeatures?.attackBarricades(p.x, p.y, this.reach)
       this.assault = null
+      if (!a.isFollowup && this.game?.bossTomes?.rank('assassin_voidstep') === 3) this.game.bossTomes.until.shadowCrit = this.game?.bossTomes.time + 3
       if (p.shadowBossStep) p.guaranteedCrit = true
       this.weapon.cooldown = Math.min(this.weapon.cooldown, 0.10)
       if (this.routeUltimate === 'hunt' && a.primaryUsed && !a.isFollowup) {
@@ -204,14 +216,16 @@ export class ShadowCombat {
     if (!this.available || !alive(enemy)) return { landed: false, killed: false }
     const ws = this.weapon, p = this.player
     const markMultiplier = this.route === 'hunt' && enemy === this.huntTarget && this.huntMarkTimer > 0 ? 1 + this.huntMarkBonus : 1
-    const crit = !secondary && (guaranteed || (!action?.hitTargets && p.guaranteedCrit) || Math.random() < ws.critChance)
+    const tomeCrit = !secondary && !action?.hitTargets && (ws.game?.bossTomes?.until.shadowCrit || 0) > (ws.game?.bossTomes?.time || 0)
+    const crit = !secondary && (tomeCrit || guaranteed || (!action?.hitTargets && p.guaranteedCrit) || Math.random() < ws.critChance)
     let power = crit ? (ws.critMul || 3) : 1
     if (crit && ws.executeCrit && enemy.hp <= enemy.maxHp * 0.5) power *= 2
     const before = enemy.hp
-    enemy.hit(ws.damage * ws.levelMul * ws.devourDamageMul * multiplier * markMultiplier * power)
+    enemy.hit(ws.damage * ws.levelMul * ws.devourDamageMul * multiplier * markMultiplier * power, { bossTomeContext: { shadowBody: !secondary, clone } })
     const landed = enemy.hp < before
     // Shields and misses do not waste the stored critical strike from dash upgrades.
     if (landed) {
+      if (tomeCrit) ws.game.bossTomes.until.shadowCrit = 0
       if (!secondary && !action?.hitTargets && p.guaranteedCrit) p.guaranteedCrit = false
       if (!secondary) p.stealthTimer = 0
       this.impacts.push({ x: enemy.x, y: enemy.y, angle, crit, clone, life: 0.18 })
@@ -220,12 +234,33 @@ export class ShadowCombat {
       ws.game.sound.shadowBlade?.(false, true)
     }
     const killed = !enemy.active
-    if (killed) ws._onKill(enemy)
+    if (killed) {
+      ws._onKill(enemy)
+      // 本体击杀（刺击/影袭）：留残影替身脱身 + 「猎手直觉」射手返还。
+      // 横斩、余波、刃域、分身均为 secondary，不产生这两项收益。
+      if (!secondary) {
+        this.leaveEcho(enemy)
+        if (shadowRangedEnemy(enemy) && this.huntRefundLevel > 0) {
+          const refund = shadowHuntRangedRefundAt(this.huntRefundLevel)
+          p.strainSkillCd = Math.max(0, p.strainSkillCd - refund)
+          ws.enemyManager.addText(p.x, p.y - 42, `猎手直觉 · 影袭 −${refund.toFixed(2)}秒`, null, '#84d6e8', 13)
+        }
+      }
+    }
     if (landed && crit && !secondary && this.available) {
       this.clones.onCritical(enemy, action)
       this.cleave(enemy, angle)
     }
     return { landed, killed }
+  }
+
+  /** 刺杀残影：在击杀点留下短命替身；与主动替身共用 _decoys 池，总上限 3。 */
+  leaveEcho(enemy) {
+    const p = this.player
+    p._decoys = (p._decoys || []).filter(d => d.life > 0)
+    if (p._decoys.length >= SHADOW_KILL_ECHO_CAP) return
+    p._decoys.push({ x: enemy.x, y: enemy.y, radius: p.radius * 0.8,
+      life: SHADOW_KILL_ECHO_LIFE, maxLife: SHADOW_KILL_ECHO_LIFE, flash: 0, isDecoy: true, echo: true })
   }
 
   onCloneKill(clone, enemy) {

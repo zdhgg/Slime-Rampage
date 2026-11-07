@@ -28,7 +28,7 @@ export const GLUTTON_ROUTES = Object.freeze({
     seed: 'glut_bulk', seedName: '硬化甲壳', ultimate: 'glut_shell_ultimate',
     desc: '培养甲壳与捕食续航；护甲挡住攻击时反击近身敌群。',
     bonus: '反击共享护甲触发节奏，不叠加护甲，也不额外生成猎食点。',
-    skills: ['硬化甲壳', '消化代谢', '反胃脉冲'], ultimateName: '不灭胃铠',
+    skills: ['硬化甲壳', '消化代谢', '反胃脉冲', '咬合震慑'], ultimateName: '不灭胃铠',
     ultimateDesc: '重咬命中后补上一次捕食护甲；护甲挡伤时释放更强的近身反击。',
   },
 })
@@ -36,7 +36,7 @@ export const GLUTTON_ROUTES = Object.freeze({
 const routeSkillIds = Object.freeze({
   mire: ['glut_maw', 'glut_eruption', 'glut_mire'],
   jaw: ['glut_ram', 'glut_aftershock'],
-  shell: ['glut_bulk', 'glut_counter'],
+  shell: ['glut_bulk', 'glut_counter', 'glut_cow'],
 })
 const sharedCoreIds = new Set(['glut_maw', 'glut_bulk', 'glut_ram'])
 
@@ -60,6 +60,10 @@ export const GLUTTON_ROUTE_SKILLS = [
     '捕食护甲挡下攻击时，对周围敌人释放一次反击；伤害不触发吞噬与猎食点。',
     lv => `反击半径 ${92 + Math.min(6, lv) * 8}px · 伤害 ${Math.round((0.4 + Math.min(5, lv - 1) * 0.08) * 100)}%`,
     (game, level) => { game.player.gluttonCounterLevel = level }),
+  makeRouteSkill('glut_cow', '咬合震慑', 'shell', 4,
+    '本体咬中的非首领敌人在短时间内出手伤害降低；重复咬中刷新时长，不叠加。',
+    lv => `出手伤害 −${Math.round(gluttonCowPowerAt(lv + 1) * 100)}% · 持续 ${gluttonCowDurationAt(lv + 1).toFixed(1)} 秒`,
+    (game, level) => { game.player.gluttonCowLevel = level }),
   {
     id: 'glut_jaw_ultimate', name: '🌟 断岳暴食', spec: 'gluttony', route: 'jaw', kind: 'ultimate',
     maxLevel: 1, desc: GLUTTON_ROUTES.jaw.ultimateDesc, stats: '互斥终极 · 重咬后两道前向余震',
@@ -99,6 +103,10 @@ export function getGluttonHeavyReachMultiplier(level = 0) {
   const rank = Math.max(0, Math.floor(Number(level) || 0))
   return rank <= 3 ? 1 + rank * 0.1 : 1.3 + 0.7 * (1 - 0.9 ** (rank - 3))
 }
+
+/** 「咬合震慑」（饕甲进阶卡）：被本体咬中的敌人出手伤害折扣与持续时间。 */
+export const gluttonCowPowerAt = level => Math.min(0.58, 0.34 + Math.max(0, Math.floor(Number(level) || 0)) * 0.06)
+export const gluttonCowDurationAt = level => 1.2 + Math.max(0, Math.floor(Number(level) || 0)) * 0.2
 
 export function gluttonRouteInvestment(game, route) {
   return (routeSkillIds[route] || []).reduce((sum, id) => sum + (game.skillLevels?.[id] || 0), 0)

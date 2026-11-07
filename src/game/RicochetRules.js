@@ -1,3 +1,4 @@
+import { BOSS_TOMES } from './BossTomes.js'
 // 弹射血统独立的随机构筑。原生的 gatling 主/副专精仍使用旧技能树。
 import { getEffectiveSkillMaxLevel, getSoftRankMultiplier, applyRankMultiplier } from './SkillProgression.js'
 import { getEndlessSkillChoices } from './EndlessSkills.js'
@@ -145,10 +146,17 @@ export function rollRicochetSkills(game, count = 3, random = Math.random) {
   const weight = s => s.weight * Math.min(RICOCHET_RULES.maxWeightBoost,
     (levels[s.id] ? RICOCHET_RULES.ownedWeight : 1) *
     (route && (s.route === route || s.routes?.includes(route)) ? RICOCHET_RULES.routeWeight : 1))
+  const drawWeighted = from => {
+    let ticket = random() * from.reduce((sum, s) => sum + weight(s), 0), i = 0
+    while (i < from.length - 1 && (ticket -= weight(from[i])) > 0) i++
+    return from[i]
+  }
   while (rest.length && choices.length < count) {
-    let ticket = random() * rest.reduce((sum, s) => sum + weight(s), 0), i = 0
-    while (i < rest.length - 1 && (ticket -= weight(rest[i])) > 0) i++
-    const s = rest.splice(i, 1)[0], level = levels[s.id] || 0
+    const entrances = !route && choices.length === 0 ? rest.filter(s => s.kind === 'seed') : []
+    const unowned = entrances.filter(s => !levels[s.id])
+    const s = drawWeighted(unowned.length ? unowned : entrances.length ? entrances : rest)
+    rest.splice(rest.indexOf(s), 1)
+    const level = levels[s.id] || 0
     const growthRole = s.growthClass === 'core' ? 'primary' : s.kind === 'common' ? 'common' : 'primary'
     choices.push({ ...s, level, maxLevel: getEffectiveSkillMaxLevel(game, s, growthRole), progressionRole: growthRole, role: s.kind === 'common' ? 'common' : 'primary',
       tags: [...s.tags, ...(s.route ? [RICOCHET_ROUTES[s.route].short] : [])],
@@ -160,11 +168,7 @@ export function rollRicochetSkills(game, count = 3, random = Math.random) {
 }
 
 // 首领秘典只强化公共底盘，不能替玩家授予方向入口或稀有联动。
-export const RICOCHET_BOSS_SKILLS = [
-  { id: 'boss_rico_chamber', name: '扩容弹仓', desc: '齐射数 +1，并缩短普通攻击间隔。', stats: '齐射 +1 · 射击间隔 ×0.90', apply(g) { g.weaponSystem.projectileCount++; g.weaponSystem.fireInterval *= .9 } },
-  { id: 'boss_rico_stabilizer', name: '稳压原核', desc: '提高单弹伤害与飞行速度，保留本局弹道组合。', stats: '单弹伤害 ×1.20 · 弹速 ×1.15', apply(g) { g.weaponSystem.damage *= 1.2; g.weaponSystem.projectileSpeed *= 1.15 } },
-  { id: 'boss_rico_recharge', name: '冷凝弹腺', desc: '缩短空格技能冷却并恢复生命，路线终极继承冷却收益。', stats: '空格冷却 ×0.85 · 恢复 2 点生命', apply(g) { g.player.activeSkillCdMultiplier *= .85; g.player.heal(2) } },
-].map(s => ({ ...s, spec: 'gatling', tier: 5, isBossSkill: true, icon: '◈', color: '#79d9ee', tags: ['BOSS秘典', '弹射·公共'] }))
+export const RICOCHET_BOSS_SKILLS = BOSS_TOMES.ricochet
 
 export const RICOCHET_SPEC_INFO = {
   name: '随机弹道', icon: '✦', desc: '前期混搭弹道 · 中期确认路线 · 后期互斥终极',

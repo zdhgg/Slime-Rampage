@@ -38,19 +38,21 @@ export class SpellCombat {
   palette(element = [...this.elements][0]) { return this.usesBasicProjectile ? PRIMAL_SPELL_PALETTE : spellPalette(this.fusion?.id, element) }
   level(id) { return this.game?.skillLevels?.[id] || 0 }
   rank(id) { return this.upgrades[id] || 0 }
-  get rangeScale() { return Math.min(1.65, 1 + this.level('ele_spread') * .08 + (this.rank('active') === 3 ? .12 : 0)) }
+  // 黑市扩张基因在局内范围成长（ele_spread/主动术 rank）之外乘算——外源修饰不参与 1.65 上限
+  get rangeScale() { return Math.min(1.65, 1 + this.level('ele_spread') * .08 + (this.rank('active') === 3 ? .12 : 0)) * (this.weapon.geneRangeMul || 1) }
   get baseDamage() { return this.weapon.damage * this.weapon.levelMul * this.weapon.devourDamageMul }
   get power() {
     const single = this.buildMode === 'single' ? 1 + Math.min(8, this.routeSingleLevel) * .08 : 1
     const cycle = this.buildMode === 'cycle' ? 1 + Math.min(8, this.routeCycleLevel) * .05 : 1
-    return this.baseDamage * (1 + .18 * this.level('ele_affinity') + .08 * this.rank('power')) * single * cycle * (this.weapon.spellGenePowerMul || 1) * (this.game.primarySpec === 'elemental' ? 1.2 : 1)
+    const routeGene = this.buildMode === 'fusion' ? 1 : (this.weapon.spellGeneRoutePowerMul || 1)
+    return this.baseDamage * (1 + .18 * this.level('ele_affinity') + .08 * this.rank('power')) * single * cycle * (this.weapon.spellGenePowerMul || 1) * routeGene * (this.game.primarySpec === 'elemental' ? 1.2 : 1)
   }
   get reactionPower() {
     const route = this.buildMode === 'fusion' ? 1 + Math.min(8, this.routeFusionLevel) * .09 : 1
     return this.power * route * (1 + this.level('ele_resonance') * .2 + this.rank('reaction') * .25 + this.rank('reactionPower') * .1) * (this.weapon.geneReactionDmgMul || 1) * (this.weapon.spellGeneReactionMul || 1) * (this.game.primarySpec === 'elemental' ? 1.35 : 1)
   }
-  get activePower() { return this.power * (1 + .2 * this.level('ele_overload') + .25 * this.rank('active') + .1 * this.rank('activePower')) }
-  get activeCooldown() { return Math.max(5.5, 10 * (1 - .05 * this.level('ele_overload') - .04 * this.rank('active'))) }
+  get activePower() { return (this.game?.bossTomes?.activeSpellMultiplier || 1) * this.power * (1 + .2 * this.level('ele_overload') + .25 * this.rank('active') + .1 * this.rank('activePower')) }
+  get activeCooldown() { return Math.max(5.5, 10 * (1 - .05 * this.level('ele_overload') - .04 * this.rank('active')) * (this.game?.bossTomes?.spellCooldownMultiplier || 1)) }
   get activeName() {
     if (this.routeUltimate === 'single') return ELEMENTAL_ROUTES.single.ultimateName
     if (this.routeUltimate === 'fusion') return ELEMENTAL_ROUTES.fusion.ultimateName
@@ -233,7 +235,7 @@ export class SpellCombat {
   damage(e, amount, element, { reaction = false, active = false, statuses = true, contagion = false, volley = 0 } = {}) {
     if (!alive(e) || !this.available) return
     if (element && !reaction) amount *= this.schoolPower(element)
-    const mark = this.mark(e), effects = { replaceInactiveDots: true }
+    const mark = this.mark(e), effects = { replaceInactiveDots: true, bossTomeContext: { autoSpell: !reaction && !active } }
     const brittle = element === 'water' && !reaction ? this.level('spell_ice_brittle') : 0
     if (brittle > 0 && (mark.frostUntil > this.time || e.freeze > 0)) amount *= iceBrittleMul(brittle)
     const blazing = element === 'fire' && !reaction ? this.level('spell_fire_brittle') : 0
@@ -308,11 +310,11 @@ export class SpellCombat {
     }
   }
   fieldAt(point) { return this.fields.find(f => f.life > 0 && distance2(point, f) <= f.radius ** 2) }
-  field(center, { active = false, icy = false, storm = false, rain = false } = {}) {
+  field(center, { active = false, icy = false, storm = false, rain = false, tomePower = 1 } = {}) {
     if (!this.available) return null
     const rank = this.rank('shape_poison'), life = (3.6 + rank * .25) * (1 + this.level('ele_spread') * .1 + this.level('spell_poison_duration') * .25) * (active ? 1.25 : 1)
     const f = { x: center.x, y: center.y, radius: Math.min(220, (active ? 105 : 62 + this.weapon.genePierces * 8) * this.rangeScale * (1 + this.level('spell_poison_area') * .2)), life, maxLife: life,
-      damage: (active ? this.activePower * .55 : this.power * (.4 + rank * .05)), tick: 0, igniteReady: 0,
+      damage: (active ? this.activePower * .55 : this.power * (.4 + rank * .05) * tomePower), tick: 0, igniteReady: 0,
       active, icy, storm, rain, corePulse: 0, createdAt: this.time, target: alive(center) ? center : null }
     this.fields.push(f)
     if (this.fields.length > 5) this.fields.shift()
@@ -350,10 +352,12 @@ export class SpellCombat {
     while (lanes.length < count) lanes.push(primary)
     return lanes
   }
-  cast(id, target = this.target(id)) {
+  cast(id, target = this.target(id), activeCast = false) {
     if (!this.available || !target || !alive(target)) return false
-    const el = SPELL_ELEMENTS[id], rank = this.rank(`shape_${id}`), power = this.power * (1 + rank * .12)
-    if (id === 'lightning' && !this.lightning.begin(target, power * 1.3)) return false
+    const tomePower = activeCast ? this.game?.bossTomes?.activeSpellMultiplier || 1 : this.game?.bossTomes?.autoCastMultiplier() || 1
+    const el = SPELL_ELEMENTS[id], rank = this.rank(`shape_${id}`), power = this.power * (1 + rank * .12) * tomePower
+    if (id === 'lightning' && !this.lightning.begin(target, power * 1.3, activeCast)) return false
+    if (!activeCast) this.game?.bossTomes?.onAutoCast()
     this.castPulse = .25; this.castColor = this.palette(id).main; this.stats.casts++
     this.castPulses[id] = .3; this.stats.castsByElement[id] = (this.stats.castsByElement[id] || 0) + 1
     if (this.buildMode === 'single' && this.routeSingleOverloadLevel > 0) {
@@ -376,7 +380,7 @@ export class SpellCombat {
       this.shots.push({ element: 'poison', x: this.player.x, y: this.player.y, angle, target,
         start: { x: this.player.x, y: this.player.y }, aim: { x: target.x, y: target.y },
         duration, elapsed: 0, life: duration, delay: .12, launched: false,
-        arcHeight: Math.max(32, Math.min(70, distance * .18)), lift: this.player.radius * .65 })
+        tomePower, active: activeCast, arcHeight: Math.max(32, Math.min(70, distance * .18)), lift: this.player.radius * .65 })
       if (this.shots.length > 48) this.shots.splice(0, this.shots.length - 48)
     }
     else {
@@ -389,7 +393,7 @@ export class SpellCombat {
         const a = base + (id === 'water' ? lane * iceFanAngle : 0), size = id === 'fire' ? 10 * (1 + .2 * this.level('spell_fire_size')) : 5
         this.shots.push({ x: this.player.x - Math.sin(a) * spread, y: this.player.y + Math.cos(a) * spread, angle: a, speed: id === 'fire' ? 330 : 660,
           element: id, target: aim, aim: { x: aim.x, y: aim.y }, size, volley, visualScale: id === 'water' ? iceArrowVisualScale(this.level('spell_water_power')) : 1,
-          power: power * powerMul, life: 2.6, delay: i * .09, hit: new Set(), pierces: id === 'water' ? 2 + this.level('spell_ice_pierce') + this.weapon.genePierces : 1 })
+          active: activeCast, power: power * powerMul, life: 2.6, delay: i * .09, hit: new Set(), pierces: id === 'water' ? 2 + this.level('spell_ice_pierce') + this.weapon.genePierces : 1 })
       }
       if (this.shots.length > 48) this.shots.splice(0, this.shots.length - 48)
     }
@@ -405,7 +409,7 @@ export class SpellCombat {
       .sort((a, b) => distance2(enemy, a) - distance2(enemy, b)).slice(0, iceShardCount(level))
     for (const e of nearby) this.shots.push({
       x: enemy.x, y: enemy.y, angle: Math.atan2(e.y - enemy.y, e.x - enemy.x), speed: 520, element: 'water', target: e, aim: { x: e.x, y: e.y },
-      size: 3.5, visualScale: .62, volley: shot.volley, power: shot.power * iceShardDamageMul, life: .5, delay: 0, hit: new Set([enemy]), pierces: 1, shard: true,
+      size: 3.5, visualScale: .62, volley: shot.volley, active: shot.active, power: shot.power * iceShardDamageMul, life: .5, delay: 0, hit: new Set([enemy]), pierces: 1, shard: true,
     })
     if (this.shots.length > 48) this.shots.splice(0, this.shots.length - 48)
   }
@@ -422,7 +426,7 @@ export class SpellCombat {
   fireImpact(point, shot) {
     const rank = this.rank('shape_fire'), radius = (48 + this.weapon.genePierces * 8) * this.rangeScale * (1 + this.level('spell_fire_size') * .2)
     this.stats.fireExplosions++
-    this.explode(point, radius, shot.power * 1.5, SPELL_ELEMENTS.fire.color, 'fire')
+    this.explode(point, radius, shot.power * 1.5, SPELL_ELEMENTS.fire.color, 'fire', { active: !!shot.active })
     if (rank > 0 && this.fusion) {
       const other = this.fusion.combo.find(id => id !== 'fire')
       const nearby = this.game.enemyManager.enemies.filter(e => alive(e) && distance2(point, e) < 150 ** 2 && shadowLineClear(this.game, point, e)).slice(0, Math.min(3, rank + 1))
@@ -483,8 +487,9 @@ export class SpellCombat {
     if (this.routeUltimate === 'cycle' && this.activeElements.length >= 3) {
       const targets = this.activeElements.map(id => ({ id, target: this.target(id) })).filter(entry => entry.target)
       if (!targets.length) return false
+      this.game?.bossTomes?.onSpellActive()
       this.stats.activeCasts++; this.game.sound?.spellBurst?.(); this.game.shakeScreen?.(4, .18)
-      targets.forEach(({ id, target }) => this.cast(id, target))
+      targets.forEach(({ id, target }) => this.cast(id, target, true))
       this.completeCycle(true)
       return true
     }
@@ -499,6 +504,7 @@ export class SpellCombat {
       e.x = end.x; e.y = end.y
       if (!e.isEnraged) e.primeSlow = Math.max(e.primeSlow || 0, 1.5)
     }
+    this.game?.bossTomes?.onSpellActive()
     this.stats.activeCasts++; this.game.sound?.spellBurst?.(); this.game.shakeScreen?.(4, .18)
     this.fx(this.player.x, this.player.y, 150, this.fusion?.color || '#b6a4ff', 'core', .4)
     if (this.routeUltimate === 'single') {
@@ -506,7 +512,7 @@ export class SpellCombat {
       this.explode(center, 150 + this.routeSingleLevel * 8, this.activePower * (2.4 + this.routeSingleOverloadLevel * .25), SPELL_ELEMENTS[element].color, element, { active: true })
       return true
     }
-    if (!this.fusion) { this.explode(this.player, 150, Math.round(this.power * 2.4), '#b6a4ff', null, { active: true }); return true }
+    if (!this.fusion) { this.explode(this.player, 150, Math.round(this.power * 2.4) * (this.game?.bossTomes?.activeSpellMultiplier || 1), '#b6a4ff', null, { active: true }); return true }
     this.activeImpact(center, this.routeUltimate === 'fusion' ? 1.45 : 1)
     if (this.routeUltimate === 'fusion') this.delayed.push({ due: this.time + .45, center, power: .7 })
     if (!this.available) return true
@@ -589,7 +595,7 @@ export class SpellCombat {
         const blocked = Math.hypot(end.x - point.x, end.y - point.y) > .5
         if (s.life <= 0 || blocked) {
           s.life = 0
-          const field = this.field(s)
+          const field = this.field(s, { active: !!s.active, tomePower: s.tomePower || 1 })
           if (field) { field.target = alive(s.target) ? s.target : null; field.createdAt = this.time - (travelTime - used) }
           if (blocked) this.game.mapFeatures?.attackBarricades?.(s.x, s.y, 24)
           this.game.sound?.poisonBloom?.()
@@ -613,7 +619,7 @@ export class SpellCombat {
         if (s.element === 'fire') {
           this.fireImpact(e, s)
         } else {
-          this.damage(e, s.power * 1.25, 'water', { volley: s.volley, statuses: !s.shard })
+          this.damage(e, s.power * 1.25, 'water', { volley: s.volley, statuses: !s.shard, active: !!s.active })
           if (!s.shard) {
             this.fx(e.x, e.y, 20, SPELL_ELEMENTS.water.color, 'crystal')
             if (this.rank('shape_water') > 0 && this.fusion) this.fusionBurst(e, (28 + this.rank('shape_water') * 8) * this.rangeScale, s.power * .25, this.fusion.combo.find(id => id !== 'water'))

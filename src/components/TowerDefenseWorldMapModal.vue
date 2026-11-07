@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref, onMounted } from 'vue'
 import {
+  ArrowLeft,
   Star,
   Shield,
   Lock,
@@ -9,6 +10,8 @@ import {
   Gift,
   Sparkles,
   Play,
+  Infinity as InfinityIcon,
+  Map as MapIcon,
   X,
   ChevronRight,
   Compass,
@@ -24,7 +27,12 @@ import { CHAPTERS_META, getStageConfig } from '../game/gameplay/tower-defense/To
 import { loadCampaignSave } from '../game/gameplay/tower-defense/TowerDefenseSave.js'
 import { TOWER_DEFENSE_TOWER_TYPES, TOWER_UNLOCK_MAP } from '../game/gameplay/tower-defense/TowerDefenseRules.js'
 
+const props = defineProps({
+  context: { type: String, default: 'menu' },
+})
 const emit = defineEmits(['start-stage', 'start-endless', 'close'])
+
+const isGameplayContext = computed(() => props.context === 'gameplay')
 
 const save = ref(loadCampaignSave())
 const activeChapterId = ref(1)
@@ -146,21 +154,36 @@ function selectChapter(chapterId) {
   <div class="world-map-overlay" role="dialog" aria-modal="true" aria-label="母巢防卫战闯关地图">
     <!-- Top Global Bar -->
     <header class="map-header">
-      <div class="header-branding">
-        <span class="branding-icon">🗺️</span>
-        <div>
-          <h1>母巢防线 · 99关战役大地图</h1>
-          <p>驱逐帝国军团，收复五大母巢生态领地</p>
+      <div class="header-leading">
+        <button
+          v-if="!isGameplayContext"
+          class="map-back-btn"
+          type="button"
+          title="返回玩法选择"
+          aria-label="返回玩法选择"
+          @click="emit('close')"
+        >
+          <ArrowLeft :size="17" :stroke-width="1.8" aria-hidden="true" />
+          <span>返回玩法选择</span>
+        </button>
+
+        <div class="header-branding">
+          <MapIcon class="branding-icon" :size="24" :stroke-width="1.7" aria-hidden="true" />
+          <div>
+            <span class="branding-kicker">塔防 · TOWER DEFENSE</span>
+            <h1>母巢防线 · 99关战役大地图</h1>
+            <p>驱逐帝国军团，收复五大母巢生态领地</p>
+          </div>
         </div>
       </div>
 
       <div class="header-actions">
         <button class="endless-btn" type="button" :title="save.endlessBestWave ? `无尽试炼 · 最佳纪录第 ${save.endlessBestWave} 波` : '无尽试炼 · 挑战最高波次纪录'" @click="emit('start-endless')">
-          <span>♾️</span>
+          <InfinityIcon :size="16" :stroke-width="1.8" aria-hidden="true" />
           <span>无尽试炼</span>
           <b v-if="save.endlessBestWave" class="star-chip">第 {{ save.endlessBestWave }} 波</b>
         </button>
-        <button class="close-map-btn" type="button" @click="emit('close')" aria-label="关闭大地图">
+        <button v-if="isGameplayContext" class="close-map-btn" type="button" @click="emit('close')" aria-label="关闭大地图" title="关闭大地图">
           <X :size="20" />
         </button>
       </div>
@@ -420,14 +443,22 @@ function selectChapter(chapterId) {
 
 <style scoped>
 .world-map-overlay {
+  --map-accent: #d7a657;
+  --map-accent-bright: #ecc477;
+  --map-surface: #12100d;
+  --map-surface-hover: #17130f;
+  --map-text: #f4eee6;
+  --map-text-muted: rgba(244, 238, 230, 0.56);
+  --map-text-faint: rgba(244, 238, 230, 0.38);
+  --map-border: rgba(238, 214, 180, 0.15);
   position: fixed;
   inset: 0;
   z-index: 50;
   display: flex;
   flex-direction: column;
-  background: #080f14;
-  color: #eef5f2;
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: #090806;
+  color: var(--map-text);
+  font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
   overflow: hidden;
 }
 
@@ -436,39 +467,112 @@ function selectChapter(chapterId) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 24px;
-  background: rgba(10, 18, 24, 0.96);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  gap: 20px;
+  min-height: 80px;
+  padding: 16px 24px;
+  background: rgba(9, 8, 6, 0.96);
+  border-bottom: 1px solid var(--map-border);
   z-index: 10;
+}
+
+.header-leading {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
 }
 
 .header-branding {
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
 }
 
 .branding-icon {
-  font-size: 26px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border: 1px solid rgba(145, 220, 140, 0.42);
+  border-radius: 5px;
+  color: #91dc8c;
+  background: rgba(145, 220, 140, 0.08);
+}
+
+.branding-kicker {
+  display: block;
+  margin-bottom: 2px;
+  color: #91dc8c;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
 }
 
 .header-branding h1 {
   margin: 0;
-  font-size: 17px;
-  color: #ffeaa7;
+  overflow: hidden;
+  color: var(--map-text);
+  font-size: 18px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: 800;
 }
 
 .header-branding p {
   margin: 2px 0 0;
   font-size: 11px;
-  color: rgba(238, 245, 242, 0.65);
+  color: var(--map-text-muted);
 }
 
 .header-actions {
   display: flex;
   align-items: center;
   gap: 12px;
+  flex: none;
+}
+
+.map-back-btn,
+.close-map-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 36px;
+  border: 1px solid var(--map-border);
+  border-radius: 5px;
+  color: rgba(244, 238, 230, 0.74);
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease;
+}
+
+.map-back-btn {
+  padding: 0 11px;
+  white-space: nowrap;
+}
+
+.map-back-btn:hover,
+.close-map-btn:hover {
+  border-color: rgba(215, 166, 87, 0.48);
+  color: var(--map-accent-bright);
+  background: rgba(215, 166, 87, 0.07);
+}
+
+.map-back-btn:focus-visible,
+.close-map-btn:focus-visible,
+.endless-btn:focus-visible,
+.chapter-tab:focus-visible,
+.stage-landmark-btn:focus-visible,
+.modal-start-btn:focus-visible,
+.modal-cancel-btn:focus-visible {
+  outline: 2px solid #a9e8a0;
+  outline-offset: 3px;
 }
 
 .gene-tree-btn {
@@ -493,24 +597,27 @@ function selectChapter(chapterId) {
 }
 
 .endless-btn {
-  display: flex;
+  display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 8px;
-  padding: 6px 14px;
-  border: 1px solid #a55eea;
-  border-radius: 8px;
-  background: rgba(165, 94, 234, 0.15);
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid rgba(165, 94, 234, 0.42);
+  border-radius: 5px;
+  background: rgba(165, 94, 234, 0.08);
   color: #cda9f5;
+  font: inherit;
   font-size: 12px;
   font-weight: 700;
   cursor: pointer;
-  box-shadow: 0 0 12px rgba(165, 94, 234, 0.2);
-  transition: all 0.15s ease;
+  transition: border-color 0.14s ease, background 0.14s ease, color 0.14s ease;
 }
 
 .endless-btn:hover {
-  background: #a55eea;
-  color: #12061d;
+  border-color: #c99bff;
+  background: rgba(165, 94, 234, 0.16);
+  color: #e4d2ff;
 }
 
 .star-chip {
@@ -526,17 +633,8 @@ function selectChapter(chapterId) {
 }
 
 .close-map-btn {
-  padding: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  border-radius: 6px;
-  background: transparent;
-  color: #dcdde1;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-
-.close-map-btn:hover {
-  background: rgba(255, 255, 255, 0.12);
+  width: 36px;
+  padding: 0;
 }
 
 /* Chapter Tabs */
@@ -544,8 +642,8 @@ function selectChapter(chapterId) {
   display: flex;
   gap: 8px;
   padding: 10px 24px;
-  background: rgba(8, 14, 20, 0.95);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(18, 16, 13, 0.96);
+  border-bottom: 1px solid var(--map-border);
   overflow-x: auto;
   z-index: 10;
 }
@@ -554,25 +652,27 @@ function selectChapter(chapterId) {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 16px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.04);
-  color: #eef5f2;
+  min-height: 54px;
+  padding: 8px 14px;
+  border: 1px solid var(--map-border);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--map-text);
+  font: inherit;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: border-color 0.14s ease, background 0.14s ease, color 0.14s ease;
   white-space: nowrap;
 }
 
 .chapter-tab:hover:not(.locked) {
-  background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.055);
+  border-color: rgba(236, 196, 119, 0.38);
 }
 
 .chapter-tab.active {
   border-color: var(--ch-color, #2ecc71);
-  background: rgba(255, 255, 255, 0.12);
-  box-shadow: 0 0 16px rgba(46, 204, 113, 0.25);
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 -2px 0 var(--ch-color, #2ecc71);
 }
 
 .chapter-tab.locked {
@@ -592,7 +692,7 @@ function selectChapter(chapterId) {
 
 .tab-copy small {
   font-size: 10px;
-  color: rgba(238, 245, 242, 0.55);
+  color: var(--map-text-muted);
 }
 
 /* Map Viewport */
@@ -645,13 +745,12 @@ function selectChapter(chapterId) {
 .map-content-area {
   position: relative;
   z-index: 2;
-  padding: 24px 32px 40px;
+  width: min(1180px, calc(100% - 48px));
+  padding: 28px 0 40px;
   display: flex;
   flex-direction: column;
   gap: 20px;
-  max-width: 1440px;
   margin: 0 auto;
-  width: 100%;
 }
 
 /* Chapter Overview Card */
@@ -660,12 +759,12 @@ function selectChapter(chapterId) {
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-  padding: 18px 24px;
-  background: rgba(10, 18, 22, 0.88);
-  border-left: 5px solid #2ecc71;
-  border-radius: 12px;
-  backdrop-filter: blur(10px);
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+  padding: 18px 20px;
+  background: rgba(18, 16, 13, 0.88);
+  border-left: 3px solid #2ecc71;
+  border-radius: 6px;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.24);
 }
 
 .chapter-title-row {
@@ -773,21 +872,21 @@ function selectChapter(chapterId) {
   width: 100%;
   background: rgba(14, 24, 28, 0.88);
   border: 1.5px solid rgba(255, 255, 255, 0.14);
-  border-radius: 14px;
+  border-radius: 6px;
   padding: 14px 12px;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 10px;
   cursor: pointer;
-  transition: all 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
+  transition: border-color 0.14s ease, background 0.14s ease, transform 0.12s ease, box-shadow 0.14s ease;
   backdrop-filter: blur(8px);
 }
 
 .stage-landmark-btn:hover {
-  transform: translateY(-5px) scale(1.02);
+  transform: translateY(-2px);
   border-color: rgba(255, 255, 255, 0.4);
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.6);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
 }
 
 .stage-landmark-btn.unlocked {
@@ -952,9 +1051,9 @@ function selectChapter(chapterId) {
   max-width: 520px;
   background: #0f1922;
   border: 1.5px solid rgba(88, 201, 165, 0.45);
-  border-radius: 16px;
+  border-radius: 8px;
   padding: 24px 28px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8), 0 0 30px rgba(46, 204, 113, 0.15);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.58), 0 0 20px rgba(46, 204, 113, 0.1);
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -1202,15 +1301,15 @@ function selectChapter(chapterId) {
   font-weight: 800;
   padding: 12px 20px;
   border: none;
-  border-radius: 10px;
+  border-radius: 5px;
   cursor: pointer;
-  box-shadow: 0 4px 16px rgba(243, 156, 18, 0.45);
-  transition: all 0.2s ease;
+  box-shadow: 0 4px 12px rgba(243, 156, 18, 0.28);
+  transition: background 0.14s ease, border-color 0.14s ease, transform 0.12s ease;
 }
 
 .modal-start-btn:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 6px 24px rgba(243, 156, 18, 0.65);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(243, 156, 18, 0.4);
 }
 
 .modal-locked-btn {
@@ -1225,7 +1324,7 @@ function selectChapter(chapterId) {
   font-size: 13px;
   font-weight: 700;
   padding: 12px 16px;
-  border-radius: 10px;
+  border-radius: 5px;
 }
 
 .modal-cancel-btn {
@@ -1236,12 +1335,72 @@ function selectChapter(chapterId) {
   font-size: 13px;
   font-weight: 700;
   padding: 12px 16px;
-  border-radius: 10px;
+  border-radius: 5px;
   cursor: pointer;
   transition: background 0.15s;
 }
 
 .modal-cancel-btn:hover {
   background: rgba(255, 255, 255, 0.14);
+}
+
+@media (max-width: 720px) {
+  .map-header {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding: 14px 16px;
+  }
+
+  .header-leading {
+    width: 100%;
+  }
+
+  .header-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .map-back-btn {
+    order: 2;
+    margin-left: auto;
+  }
+
+  .header-branding {
+    order: 1;
+    min-width: 0;
+  }
+
+  .header-branding h1 {
+    font-size: 16px;
+  }
+
+  .map-content-area {
+    width: min(calc(100% - 28px), 1180px);
+    padding-top: 18px;
+  }
+
+  .chapter-overview-card {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .overview-right {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .adventure-trail-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stage-landmark-btn,
+  .modal-start-btn,
+  .map-back-btn,
+  .close-map-btn,
+  .endless-btn,
+  .chapter-tab { transition: none; }
 }
 </style>

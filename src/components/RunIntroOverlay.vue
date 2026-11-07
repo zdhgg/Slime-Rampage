@@ -18,7 +18,7 @@ const emit = defineEmits(['deploy', 'back'])
       <section class="briefing-content">
         <header>
           <span>{{ intro.location }}</span>
-          <em>{{ intro.difficultyName }} · 战利品 ×{{ intro.rewardMultiplier }}</em>
+          <em>{{ intro.difficultyName }} · 战力点 ×{{ intro.rewardMultiplier }}</em>
         </header>
         <p class="briefing-mode">{{ intro.modeName }}</p>
         <h2>{{ intro.title }}</h2>

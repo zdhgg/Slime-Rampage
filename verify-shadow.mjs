@@ -1,3 +1,4 @@
+import { learnTome } from './test-support/arena-fixture.mjs'
 import assert from 'node:assert/strict'
 import { createArena, spawn, spawnBoss, pressSpace, learn, dispose, ctx2d, rollSkills } from './test-support/arena-fixture.mjs'
 import { inShadowPath, SHADOW_BLADE_DAMAGE, SHADOW_ASSAULT_DISTANCE, SHADOW_ASSAULT_DAMAGE, SHADOW_ASSAULT_SPLASH } from './src/game/ShadowCombat.js'
@@ -158,12 +159,12 @@ check('F 与 Shift 无效，空格影袭会取消普攻；秘典必暴在影袭�
   g._updateStrainSkill(0)
   assert.equal(c.assault, null)
   learn(g, 'ass_decoy')
-  BOSS_SKILL_DATABASE.assassin.find(s => s.id === 'boss_assassin_voidstep').apply(g)
+  learnTome(g, 'boss_assassin_voidstep', 3)
   c.stab(e); pressSpace(g)
   assert.equal(c.swing, null)
   g.player.update(0.27)
   assert.equal(p._decoys.length, 0)
-  assert.equal(p.guaranteedCrit, true)
+  assert.ok(g.bossTomes.until.shadowCrit > g.bossTomes.time)
 })
 check('暂停不消耗影袭前摇，死亡、结算与重开清理所有状态', g => {
   const c = g.weaponSystem.shadowCombat

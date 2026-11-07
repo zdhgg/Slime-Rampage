@@ -1,11 +1,12 @@
 import {
-  DEVOUR_SOURCE_GLUTTON, DEVOUR_SOURCE_NORMAL, GLUTTON_CHARGE_MAX,
+  DEVOUR_SOURCE_GLUTTON, DEVOUR_SOURCE_NORMAL, GLUTTON_CHARGE_MAX, GLUTTON_FEAST_DURATION,
   hasGluttonCharge, isGluttonLocked, onGluttonBossBasicHit, spendGluttonCharge,
 } from './GluttonResource.js'
 import { bitePose, renderBiteMotion, renderBiteFeedback } from './effects/GluttonBiteVisual.js'
 import { canPrimalOverload, gainPrimalEnergy, getPrimalOverloadProfile, trySpendPrimalOverload, getOriginActiveGrowth, PRIMAL_SOURCES, PRIMAL_BITE_OVERLOAD_DAMAGE, PRIMAL_BITE_OVERLOAD_RANGE } from './PrimalEnergy.js'
 import { triggerOriginSecondaryEcho } from './OriginEchoes.js'
-import { GLUTTON_ROUTES, GLUTTON_RULES, getGluttonEndlessDamageMultiplier, getGluttonHeavyDamageMultiplier, getGluttonHeavyReachMultiplier, gluttonProgressReady, gluttonRouteReady, gluttonRouteInvestment } from './GluttonBuild.js'
+import { GLUTTON_ROUTES, GLUTTON_RULES, getGluttonEndlessDamageMultiplier, getGluttonHeavyDamageMultiplier, getGluttonHeavyReachMultiplier, gluttonCowDurationAt, gluttonCowPowerAt, gluttonProgressReady, gluttonRouteReady, gluttonRouteInvestment } from './GluttonBuild.js'
+import { traceShadowPath } from './ShadowGeometry.js'
 
 const TAU = Math.PI * 2
 /** 从 a 转到 b 的最短有符号角差。 */
@@ -31,6 +32,13 @@ export const GLUTTON_HEAVY_DAMAGE = 4
 export const GLUTTON_BOSS_HEAVY_DAMAGE = 6
 export const GLUTTON_GUARD_COOLDOWN = 2.5
 export const GLUTTON_HEAL_COOLDOWN = 4
+/**
+ * 重咬突进（近战补偿·机制层）：重咬进入出手帧时向前扑一小段，吃腐蚀重碾等级，
+ * 停在目标身位前——扑食的手感与贴脸的门槛一起解决，普攻咬击不带位移。
+ */
+export const GLUTTON_HEAVY_LUNGE_BASE = 36
+export const GLUTTON_HEAVY_LUNGE_PER_LEVEL = 8
+export const GLUTTON_HEAVY_LUNGE_MAX = 64
 
 /** 前方候选范围：正前方左右各 100°。范围内优先选最近目标。 */
 export const GLUTTON_FORWARD_HALF_ARC = Math.PI * 5 / 9
@@ -125,7 +133,7 @@ export class GluttonCombat {
   // 吞噬吸入口（_startDevour 的 _devourAngle）仍只认 enabled，不受影响。
   get pose() { return this.biteUnlocked && !this.player.dead ? bitePose(this.swing, this.flash) : null }
   reach(heavy = false) {
-    const base = this.player.radius + (heavy ? GLUTTON_HEAVY_REACH * getGluttonHeavyReachMultiplier(this.player.gluttonHeavyLevel) : GLUTTON_BITE_REACH) * (this.player.isGluttonyLord ? 1.25 : 1)
+    const base = this.player.radius + (heavy ? GLUTTON_HEAVY_REACH * getGluttonHeavyReachMultiplier(this.player.gluttonHeavyLevel) : GLUTTON_BITE_REACH) * (this.player.isGluttonyLord ? 1.25 : 1) * (this.weapon.geneRangeMul || 1)
     if (!heavy || !this.mimicry) return base
     const overloaded = canPrimalOverload(this.player)
     const profile = getPrimalOverloadProfile(this.weapon.game, overloaded)
@@ -198,7 +206,7 @@ export class GluttonCombat {
     if (heavy && (!hasGluttonCharge(this.player) || isGluttonLocked(this.player))) return false
     // 前摇与出手占用既有攻击周期；高攻速优先压缩收势，仍保留可见张嘴。
     const pace = Math.min(1, Math.max(0.55, this.weapon.attackInterval / 0.4))
-    const windup = heavy ? GLUTTON_HEAVY_WINDUP : GLUTTON_BITE_WINDUP * pace
+    const windup = heavy ? GLUTTON_HEAVY_WINDUP * (this.game?.bossTomes?.heavyWindup() || 1) : GLUTTON_BITE_WINDUP * pace
     const strike = heavy ? GLUTTON_HEAVY_STRIKE : GLUTTON_BITE_STRIKE * pace
     const gap = Math.abs(angleDelta(this.aimAngle, desired))
     const needsTurn = gap > GLUTTON_AIM_SNAP_LIMIT
@@ -207,6 +215,7 @@ export class GluttonCombat {
     if (!needsTurn) this.aimAngle = desired
     // 猎食点在起手时扣除：转头/前摇都算已起手，目标随后离开仍按挥空处理。
     if (heavy && !spendGluttonCharge(this.player)) return false
+    if (heavy && this.game?.bossTomes) this.game.bossTomes.fastBite = false
     // 与猎食点一起在有效起手后扣费；索敌失败、释放锁和重复输入都不会丢失能量。
     const overloaded = heavy && this.mimicry && trySpendPrimalOverload(this.weapon.game)
     const overloadProfile = getPrimalOverloadProfile(this.weapon.game, overloaded)
@@ -253,6 +262,7 @@ export class GluttonCombat {
 
   onDevoured(enemy) {
     if (!this.biteUnlocked || this.player.dead) return
+    this.player.gluttonFeastTimer = GLUTTON_FEAST_DURATION
     const angle = this.swing?.angle ?? this.flash?.angle ?? Math.atan2(enemy.y - this.player.y, enemy.x - this.player.x)
     this.morsels.push({ x: enemy.x, y: enemy.y, angle, life: 0.3, maxLife: 0.3 })
     if (this.morsels.length > 20) this.morsels.shift()
@@ -349,7 +359,7 @@ export class GluttonCombat {
     if (this.player.dead || this.weapon.game.runFinished) return false
     if (!enemy.active || enemy.devouring || enemy._settled) return false
     const before = enemy.hp
-    enemy.hit(damage, { devourOnHit: true, devourSource: source, devourExecute: execute })
+    enemy.hit(damage, { devourOnHit: true, devourSource: source, devourExecute: execute, bossTomeContext: { heavy: source === DEVOUR_SOURCE_GLUTTON, biteBasic: basic } })
     const landed = enemy.hp < before
     if (landed && basic && enemy.isBoss && onGluttonBossBasicHit(this.player, enemy)) {
       this.weapon.enemyManager.addText(this.player.x, this.player.y - 46,
@@ -359,6 +369,11 @@ export class GluttonCombat {
       this.weapon.enemyManager.addText(enemy.x, enemy.y - 14, String(Math.round((before - enemy.hp) * 10) / 10), null, '#eaffc9', 15)
       if (!enemy.isBoss && !enemy.isEnraged && enemy.active) {
         enemy.gluttonStagger = Math.max(enemy.gluttonStagger || 0, 0.14)
+        // 咬合震慑（饕甲进阶卡）：本体咬中的普通敌人出手伤害短时打折。
+        if (this.player.gluttonCowLevel > 0) {
+          enemy.gluttonCow = gluttonCowDurationAt(this.player.gluttonCowLevel)
+          enemy.gluttonCowMul = gluttonCowPowerAt(this.player.gluttonCowLevel)
+        }
         const dx = enemy.x - this.player.x
         const dy = enemy.y - this.player.y
         const d = Math.hypot(dx, dy) || 1
@@ -366,8 +381,26 @@ export class GluttonCombat {
         enemy.y += dy / d * 6
       }
     }
-    if (!enemy.active) this.weapon._onKill(enemy)
+    if (!enemy.active) {
+      this.weapon._onKill(enemy)
+      this.player.gluttonFeastTimer = GLUTTON_FEAST_DURATION
+    }
     return landed
+  }
+
+  /** 重咬前扑：沿锁定咬合方向小步突进，不越过目标身位；路障与世界边界照常约束。 */
+  lunge(swing) {
+    const p = this.player
+    const target = swing.target
+    let distance = Math.min(GLUTTON_HEAVY_LUNGE_MAX,
+      GLUTTON_HEAVY_LUNGE_BASE + GLUTTON_HEAVY_LUNGE_PER_LEVEL * (p.gluttonHeavyLevel || 0))
+    if (target?.active && !target.devouring && target.hp > 0) {
+      const gap = Math.hypot(target.x - p.x, target.y - p.y) - (target.radius || 0) - p.radius
+      distance = Math.min(distance, Math.max(0, gap - 2))
+    }
+    if (distance <= 0) return
+    const end = traceShadowPath(this.game, p, swing.angle, distance)
+    p.x = end.x; p.y = end.y
   }
 
   update(dt) {
@@ -418,6 +451,8 @@ export class GluttonCombat {
         if (this.swing.phase === 'windup' && this.swing.remaining <= 0) {
           this.swing.phase = 'strike'
           this.swing.remaining += this.swing.strike
+          // 重咬出手帧前扑：前摇读招阶段不位移，扑食动作才带身位。
+          if (this.swing.heavy) this.lunge(this.swing)
         }
         if (this.swing.remaining <= 0) {
           const swing = this.swing

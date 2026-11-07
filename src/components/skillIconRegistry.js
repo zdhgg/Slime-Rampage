@@ -1,5 +1,5 @@
 import {
-  Activity, Aperture, Asterisk, Atom, AudioLines, BatteryCharging, BetweenHorizontalStart, Biohazard, Blend, Bomb, Boxes, Brain, Cable, CircleDot, CircleGauge, CircleHelp, Cloud, CloudFog, CloudSnow, Crosshair, Crown, Diamond, Dna, Droplets, FireExtinguisher, Flame, Flower2, Focus, Gauge, Gem, GitMerge, HeartHandshake, HeartPulse, Hexagon, Infinity, Layers2, Link2, Magnet, Maximize2, MoveRight, MoveUpRight, Network, Orbit, PanelsTopLeft, Radar, Radio, RadioTower, RefreshCcw, RefreshCw, Repeat2, RotateCw, Route, Shell, Shield, ShieldAlert, ShieldCheck, ShieldPlus, Siren, Skull, Snowflake, Sparkles, Split, Sprout, Sun, Swords, Target, TimerReset, Trophy, UsersRound, WandSparkles, Waves, Waypoints, Wind, Zap
+  Activity, Aperture, Asterisk, Atom, AudioLines, BatteryCharging, BetweenHorizontalStart, Biohazard, Blend, Bomb, Boxes, Brain, Cable, CircleDot, CircleGauge, CircleHelp, Cloud, CloudFog, CloudSnow, Crosshair, Crown, Diamond, Dna, Droplets, FireExtinguisher, Flame, Flower2, Focus, Gauge, Gem, GitMerge, HeartHandshake, HeartPulse, Hexagon, Infinity, Layers2, Link2, Magnet, Maximize2, MoveRight, MoveUpRight, Network, Orbit, PanelsTopLeft, Radar, Radio, RadioTower, RefreshCcw, RefreshCw, Repeat2, RotateCw, Route, Shell, Shield, ShieldAlert, ShieldCheck, ShieldOff, ShieldPlus, Siren, Skull, Snowflake, Sparkles, Split, Sprout, Sun, Swords, Target, TimerReset, Trophy, UsersRound, WandSparkles, Waves, Waypoints, Wind, Zap
 } from 'lucide-vue-next'
 
 export const RICOCHET_ROUTE_COLORS = Object.freeze({
@@ -22,6 +22,7 @@ export const GLUTTON_ICON_ROUTES = Object.freeze({
   glut_mire: 'mire',
   glut_aftershock: 'jaw',
   glut_counter: 'shell',
+  glut_cow: 'shell',
   glut_jaw_ultimate: 'jaw',
   glut_shell_ultimate: 'shell',
   glut_endless_hunger: 'common',
@@ -43,7 +44,7 @@ export const SYMBIOSIS_ICON_ROUTES = Object.freeze({
 export const SYMBIOSIS_ICON_COLORS = Object.freeze({ hunt: '#8edacb', spore: '#c3a4dc', guard: '#edc479', common: '#d8c7e8' })
 
 export const SHADOW_ICON_ROUTES = Object.freeze({
-  shadow_hunt_mark: 'hunt', shadow_hunt_pursuit: 'hunt', shadow_hunt_reap: 'hunt', shadow_hunt_ultimate: 'hunt',
+  shadow_hunt_mark: 'hunt', shadow_hunt_pursuit: 'hunt', shadow_hunt_reap: 'hunt', shadow_hunt_refund: 'hunt', shadow_hunt_ultimate: 'hunt',
   ass_echo: 'swarm', ass_legion: 'swarm', shadow_swarm_assault: 'swarm', shadow_swarm_reap: 'swarm', ass_capstone: 'swarm',
   ass_cleave: 'blade', shadow_blade_arc: 'blade', shadow_blade_echo: 'blade', shadow_blade_ultimate: 'blade',
 })
@@ -114,6 +115,7 @@ export const SKILL_ICON_GLYPHS = Object.freeze({
   shield: Shield,
   shield_alert: ShieldAlert,
   shield_check: ShieldCheck,
+  shield_off: ShieldOff,
   shield_plus: ShieldPlus,
   siren: Siren,
   poison: Skull,
@@ -136,6 +138,16 @@ export const SKILL_ICON_GLYPHS = Object.freeze({
 })
 
 export const SKILL_ICON_KEYS = Object.freeze({
+  spell_core_shape_fire: 'fire', spell_core_shape_water: 'water', spell_core_shape_lightning: 'lightning',
+  spell_core_shape_poison: 'poison', spell_core_reaction: 'git_merge', spell_core_lightning_storm: 'lightning',
+
+  boss_origin_conduit: 'battery_charging', boss_origin_reservoir: 'gem',
+  boss_origin_aftershock: 'shockwave', boss_origin_membrane: 'shield_check',
+  boss_glutton_rhythm: 'activity', boss_glutton_jaw: 'swords', boss_rico_echo: 'repeat2',
+  boss_elemental_circuit: 'refresh_cw', boss_elemental_sigil: 'sparkles', boss_elemental_veil: 'shield_plus',
+  boss_shadow_pact: 'users_round', boss_shadow_cloak: 'cloud_fog',
+  boss_pet_unity: 'network', boss_pet_roster: 'heart_handshake',
+
   activePower: 'shockwave',
   ass_afterimage: 'radio',
   ass_capstone: 'crown',
@@ -216,6 +228,7 @@ export const SKILL_ICON_KEYS = Object.freeze({
   glut_bulk: 'shield_check',
   glut_capstone: 'sparkles',
   glut_counter: 'shield_alert',
+  glut_cow: 'shield_off',
   glut_endless_hunger: 'battery_charging',
   glut_eruption: 'bomb',
   glut_jaw_ultimate: 'aperture',
@@ -296,6 +309,7 @@ export const SKILL_ICON_KEYS = Object.freeze({
   shadow_hunt_mark: 'focus',
   shadow_hunt_pursuit: 'route',
   shadow_hunt_reap: 'cooldown',
+  shadow_hunt_refund: 'radar',
   shadow_hunt_ultimate: 'move_up_right',
   shadow_strike: 'swords',
   shadow_swarm_assault: 'layers2',
@@ -391,6 +405,7 @@ export const RICOCHET_ICON_MAP = iconMap([
   'boss_rico_chamber',
   'boss_rico_stabilizer',
   'boss_rico_recharge',
+  'boss_rico_echo',
 ])
 export const GLUTTON_ICON_MAP = iconMap([
   'glut_maw',
@@ -403,6 +418,7 @@ export const GLUTTON_ICON_MAP = iconMap([
   'glut_mire',
   'glut_aftershock',
   'glut_counter',
+  'glut_cow',
   'glut_jaw_ultimate',
   'glut_shell_ultimate',
   'glut_endless_hunger',
@@ -453,6 +469,7 @@ export const SHADOW_ICON_MAP = iconMap([
   'shadow_hunt_mark',
   'shadow_hunt_pursuit',
   'shadow_hunt_reap',
+  'shadow_hunt_refund',
   'shadow_hunt_ultimate',
   'shadow_swarm_assault',
   'shadow_swarm_reap',

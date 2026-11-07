@@ -1,3 +1,4 @@
+import { learnTome } from './test-support/arena-fixture.mjs'
 import assert from 'node:assert/strict'
 import { createArena, spawn, spawnBoss, learn, pressSpace, dispose, rollSkills, SKILL_DATABASE, ctx2d } from './test-support/arena-fixture.mjs'
 import { BOSS_SKILL_DATABASE, resolveShadowSkill } from './src/game/SkillPool.js'
@@ -50,7 +51,7 @@ check('开局属性与四项分身成长独立', g => {
   learn(g, 'ass_decoy'); near(c.duration, 5.5); assert.equal(c.cap, 2)
   learn(g, 'ass_legion', 2); assert.equal(c.cap, 4)
   learn(g, 'ass_stride', 3); near(g.player.evasionChance, 0.3)
-  book('boss_assassin_voidstep').apply(g); near(g.player.evasionChance, 0.4)
+  learnTome(g, 'boss_shadow_cloak', 3); near(g.player.evasionChance, 0.3); near(g.bossTomes.onEvade(), 0.4)
   g.player.shadowEvasionBonus = 1; near(g.player.evasionChance, 0.4)
 })
 check('被动闪避边界、一次攻击去重、短暂虚化与无受击奖励', g => {
@@ -214,12 +215,12 @@ check('终极分身贯穿与十字夹击去重，分身最多四个', g => {
 check('升级与秘典顺序无关，原生黏液觉醒后首级暴伤有收益', g => {
   const snapshot = reverse => {
     g.reset()
-    if (reverse) book('boss_assassin_mark').apply(g)
+    if (reverse) learnTome(g, 'boss_assassin_mark', 3)
     learn(g, 'ass_lethal', 2); g.player.level = 5; g._ensureRoleAwakening()
-    if (!reverse) book('boss_assassin_mark').apply(g)
+    if (!reverse) learnTome(g, 'boss_assassin_mark', 3)
     return [g.weaponSystem.critChance, g.weaponSystem.critMul]
   }
-  assert.deepEqual(snapshot(false), snapshot(true)); near(snapshot(true)[0], 0.59)
+  assert.deepEqual(snapshot(false), snapshot(true)); near(snapshot(true)[0], 0.41)
   g.applyStartingStrain('origin'); g.reset(); g.primarySpec = 'assassin'; g._applyPrimarySpecBonus('assassin')
   const before = g.weaponSystem.critMul; learn(g, 'ass_execute')
   assert.ok(g.weaponSystem.critMul > before)
@@ -228,7 +229,7 @@ check('角色技能显示真实效果，原生黏液不抽到分身技能', g =>
   let cards = rollSkills(g, 99)
   assert.ok(cards.some(s => s.id === 'ass_echo'))
   assert.equal(cards.find(s => s.id === 'ass_stride').name, '虚化身躯')
-  assert.equal(resolveShadowSkill(book('boss_assassin_voidstep'), g).stats.includes('闪避率'), true)
+  assert.equal(resolveShadowSkill({ ...book('boss_assassin_voidstep'), stats: book('boss_assassin_voidstep').ranks[0] }, g).stats.includes('影袭冷却'), true)
   g.applyStartingStrain('origin'); g.reset(); cards = rollSkills(g, 99)
   assert.ok(!cards.some(s => ['ass_echo', 'ass_legion', 'ass_afterimage'].includes(s.id)))
   assert.equal(cards.find(s => s.id === 'ass_stride').name, '暗影疾行')

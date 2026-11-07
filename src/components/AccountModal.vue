@@ -30,7 +30,7 @@ const localSummary = computed(() => {
   if (!save) return '暂无可导入的本地档案'
   const drops = Math.floor(save.drops || 0)
   const geneLevels = Object.values(save.genes || {}).reduce((sum, level) => sum + Number(level || 0), 0)
-  return `${props.localSlot.name} · 战利品 ${drops} · 基因等级 ${geneLevels}`
+  return `${props.localSlot.name} · 战力点 ${drops} · 基因等级 ${geneLevels}`
 })
 
 function submit() {
@@ -76,7 +76,7 @@ watch(
           <span>主战场成长档案</span>
           <strong>{{ activeSlot?.name || '史莱姆档案' }}</strong>
           <p>
-            战利品 {{ Math.floor(activeSlot?.data?.drops || 0) }} ·
+            战力点 {{ Math.floor(activeSlot?.data?.drops || 0) }} ·
             最高进度 {{ MODES[activeSlot?.data?.progression?.highestMode || 'expedition']?.name }} /
             {{ DIFFICULTIES[activeSlot?.data?.progression?.highestDifficulty || 'normal']?.name }}
           </p>

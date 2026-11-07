@@ -33,6 +33,14 @@ const CLEAR_RATE_WINDOW = 3
  */
 const EXPEDITION_WIND_DOWN_AT = 0.75
 const EXPEDITION_WIND_DOWN_MUL = 0.9
+/**
+ * 捕食引力场（近战补偿·机制层）：已被标记进吞线的猎物在更大的半径内被拖向口部，
+ * 只影响「已经该死」的敌人，不扩大处决半径本身。半径与拖拽速度吃同一
+ * devourRadiusBonus（深渊胃囊等级越高吸得越远越快），并封顶 1.5× 防半屏牵引。
+ */
+const GLUTTON_PULL_RANGE = 110
+const GLUTTON_PULL_SPEED = 100
+const GLUTTON_PULL_MUL_CAP = 1.5
 
 /**
  * 早期元素入口（第二批）：第 2 波保底放出一只精英。
@@ -722,7 +730,6 @@ export class EnemyManager extends Entity {
     boss.bossMemberId = `${boss.bossGroupId}-${this._bosses.length + 1}`
     boss.bossGroupSize = options.groupTotal || 1
     boss.isBossSquadMember = boss.bossGroupSize > 1
-    boss.bossLootDrops = Number.isFinite(options.bossLootDrops) ? options.bossLootDrops : null
     boss.bossEncounterFinal = !!options.bossEncounterFinal
     boss.encounterLabel = options.encounterLabel || boss.name
     if (options.expMul) boss.expValue = Math.max(20, Math.round(boss.expValue * options.expMul))
@@ -756,7 +763,6 @@ export class EnemyManager extends Entity {
       total: target,
       pending: [],
       maxActive,
-      lootSlotsAssigned: 0,
       final: false,
       formation: plan.formation || null,
       formationWave: this.wave,
@@ -768,7 +774,6 @@ export class EnemyManager extends Entity {
     this._bossEncounter.label = plan.label
     this._bossEncounter.total = target
     this._bossEncounter.maxActive = maxActive
-    this._bossEncounter.lootSlotsAssigned = 0
     if (formationChanged) {
       this._bossEncounter.formation = plan.formation || null
       this._bossEncounter.formationWave = this.wave
@@ -781,16 +786,12 @@ export class EnemyManager extends Entity {
       boss.bossGroupId = groupId
       boss.bossGroupSize = target
       boss.isBossSquadMember = target > 1
-      boss.bossLootDrops = this._bossEncounter.lootSlotsAssigned < 3 ? 1 : 0
-      this._bossEncounter.lootSlotsAssigned++
       boss.encounterLabel = plan.label
     }
 
     for (const member of this._bossEncounter.pending) {
       member.memberHpMul = plan.memberHpMul
       member.expMul = target > 1 ? 1.2 / target : 1
-      member.bossLootDrops = this._bossEncounter.lootSlotsAssigned < 3 ? 1 : 0
-      this._bossEncounter.lootSlotsAssigned++
     }
 
     const occupied = new Set([
@@ -834,7 +835,6 @@ export class EnemyManager extends Entity {
       total: members.length,
       pending: members.map((member) => ({ ...member })),
       maxActive,
-      lootSlotsAssigned: 0,
       final: true,
     }
     this._fillBossEncounter()
@@ -848,17 +848,12 @@ export class EnemyManager extends Entity {
     if (!encounter) return spawned
     while (this.activeBossCount < encounter.maxActive && encounter.pending.length > 0) {
       const member = encounter.pending.shift()
-      const bossLootDrops = Number.isFinite(member.bossLootDrops)
-        ? member.bossLootDrops
-        : encounter.lootSlotsAssigned < 3 ? 1 : 0
-      encounter.lootSlotsAssigned++
       const boss = this.spawnBoss({
         ...member,
         allowMultiple: true,
         groupId: encounter.id,
         groupTotal: encounter.total,
         encounterLabel: encounter.label,
-        bossLootDrops,
         bossEncounterFinal: encounter.final,
         expMul: member.expMul ?? (encounter.final ? 0.4 : 1),
       })
@@ -1057,7 +1052,7 @@ export class EnemyManager extends Entity {
     this._updateBullets(dt)
 
     // 2.6) 吞噬系统：残血敌人吸入 + 溶解动画推进 + 溃散推进 + 浮动文本
-    this._checkDevour()
+    this._checkDevour(dt)
     this._updateDevouring(dt)
     this._updateRouting(dt)
     for (const t of this._texts) t.update(dt)
@@ -1114,19 +1109,31 @@ export class EnemyManager extends Entity {
    * 阶段十九：吞噬是暴食史莱姆的独占机制——非暴食角色（含 origin）直接短路。
    * Enemy.hit 侧也做了同一判定（标记层），这里是吸收层的唯一闸门。
    */
-  _checkDevour() {
+  _checkDevour(dt = 0) {
     // game.canDevour：引擎侧是 getter（布尔）；桩对象通常没这个字段，缺省按「可吞噬」处理
     if (this.game.canDevour === false) return
     const player = this.game.player
     const reach = (player.radius + 12) * (player.devourRadiusBonus || 1.0)
     const reach2 = reach * reach
+    const pullMul = Math.min(GLUTTON_PULL_MUL_CAP, player.devourRadiusBonus || 1)
+    const pullReach = reach + GLUTTON_PULL_RANGE * pullMul
+    const pull2 = pullReach * pullReach
+    const pullStep = GLUTTON_PULL_SPEED * pullMul * dt
     for (const e of this._enemies) {
       if (!e.active || !e.devourable || e.devouring) continue
       const dx = player.x - e.x
       const dy = player.y - e.y
-      if (dx * dx + dy * dy < reach2) {
+      const d2 = dx * dx + dy * dy
+      if (d2 < reach2) {
         this._startDevour(e, { source: e._devourSource })
         break
+      }
+      // 吞线以外的猎物被引力拖向口部；已到吸附口径的交给下一帧的吸收判定。
+      if (pullStep > 0 && d2 < pull2) {
+        const d = Math.sqrt(d2) || 1
+        e.x += (dx / d) * pullStep
+        e.y += (dy / d) * pullStep
+        e._devourPullT = 0.12 // 拖拽反馈计时（渲染层可读）
       }
     }
   }

@@ -24,37 +24,37 @@ const bountyTarget = (choice) => {
         <h2>{{ isCheckpoint ? '收兵，还是继续深入' : isBounty ? '签下一份深层悬赏' : '选择下一项灾变' }}</h2>
         <p v-if="isCheckpoint">带走全部结算，或用更高倍率押注下一段战场。</p>
         <p v-else-if="isBounty">限时完成战斗契约，换取一次王级秘籍选择。</p>
-        <p v-else>灾变立即叠加；更危险的战场会提高本局战利品倍率。</p>
+        <p v-else>灾变立即叠加；更危险的战场会提高本局收益倍率。</p>
       </header>
 
       <template v-if="isCheckpoint">
         <div class="checkpoint-ledger">
           <div>
-            <span>战斗所得</span>
-            <b>{{ info.rawDrops }}</b>
+            <span>当前分数</span>
+            <b>{{ info.liveScore }}</b>
           </div>
           <div class="safe-value">
             <span>现在撤离入账</span>
-            <b>{{ info.safeLoot }}</b>
+            <b>{{ info.extractPoints }} 点</b>
           </div>
           <div class="risk-value">
             <span>此刻战败预计</span>
-            <b>{{ info.defeatLoot }}</b>
+            <b>{{ info.defeatPoints }} 点</b>
           </div>
         </div>
         <div class="depth-line">
-          <span>当前收益 ×{{ fmtMultiplier(info.currentLootMultiplier) }}</span>
-          <strong>继续后 ×{{ fmtMultiplier(info.nextLootMultiplier) }}</strong>
+          <span>当前收益 ×{{ fmtMultiplier(info.currentRewardMultiplier) }}</span>
+          <strong>继续后 ×{{ fmtMultiplier(info.nextRewardMultiplier) }}</strong>
           <span>战败仅保留 70%</span>
         </div>
         <div class="checkpoint-actions">
           <button class="extract-btn" type="button" @click="emit('resolve-checkpoint', 'extract')">
             <span>安全撤离</span>
-            <small>完整结算 {{ info.safeLoot }} 战利品</small>
+            <small>完整结算 {{ info.extractPoints }} 战力点</small>
           </button>
           <button class="continue-btn" type="button" @click="emit('resolve-checkpoint', 'continue')">
             <span>继续深入</span>
-            <small>下一段收益提升至 ×{{ fmtMultiplier(info.nextLootMultiplier) }}</small>
+            <small>下一段收益提升至 ×{{ fmtMultiplier(info.nextRewardMultiplier) }}</small>
           </button>
         </div>
       </template>
@@ -83,7 +83,7 @@ const bountyTarget = (choice) => {
 
       <template v-else>
         <div class="multiplier-line">
-          当前战利品倍率 <b>×{{ fmtMultiplier(info.currentLootMultiplier) }}</b>
+          当前收益倍率 <b>×{{ fmtMultiplier(info.currentRewardMultiplier) }}</b>
         </div>
         <div class="calamity-grid">
           <button
@@ -101,7 +101,7 @@ const bountyTarget = (choice) => {
             <span class="calamity-effect">{{ choice.effect }}</span>
             <span class="calamity-brief">{{ choice.brief }}</span>
             <span class="calamity-reward">
-              选择后收益 <b>×{{ fmtMultiplier(choice.lootMultiplier) }}</b>
+              选择后收益 <b>×{{ fmtMultiplier(choice.rewardMultiplier) }}</b>
             </span>
           </button>
         </div>

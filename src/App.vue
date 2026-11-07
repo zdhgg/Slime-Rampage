@@ -46,7 +46,7 @@ import {
   pushScore,
   saveSaveCatalog,
 } from './game/SaveManager.js'
-import { calculateMaterialReward, normalizeRunSelection, sumDrops } from './game/RunRules.js'
+import { normalizeRunSelection, scoreToPoints } from './game/RunRules.js'
 import { createDefaultStats } from './game/GameEngine.js'
 import { getRunIntro } from './game/RunIntro.js'
 import { accountApi } from './services/AccountClient.js'
@@ -247,6 +247,7 @@ const gameplayResult = ref(null)
 const runnerActive = computed(() => activeGameplay.value === 'runner')
 const towerDefenseActive = computed(() => activeGameplay.value === 'tower-defense')
 const showTowerDefenseMap = ref(false)
+const towerDefenseMapContext = ref('menu')
 const reactionChoice = ref(null) // 副反应替换面板数据（null = 不显示；阶段十六槽位经济）
 const fusionConfirm = ref(null) // 首融确认面板数据（null = 不显示；阶段十六追加设计）
 const expeditionReward = ref(null)
@@ -291,10 +292,10 @@ function applyAccountPayload(payload) {
 
 function previewGameOver(info) {
   const targetSave = cloneSave(save.value)
-  const rawDrops = sumDrops(info.drops)
-  const earnedDrops = calculateMaterialReward(rawDrops, selectedRun.value, info)
   const scored = pushScore(targetSave, selectedRun.value, { ...info, species: info.species?.name || '' })
-  return { ...info, rawDrops, earnedDrops, score: scored.entry.score, scoreBreakdown: scored.entry.breakdown,
+  // 战力点入账预览：与服务端结算共用 scoreToPoints（分数已由 pushScore 重算）
+  const earnedDrops = scoreToPoints(scored.entry.score, selectedRun.value, info)
+  return { ...info, earnedDrops, score: scored.entry.score, scoreBreakdown: scored.entry.breakdown,
     entry: scored.entry, best: scored.best, board: scored.board, accountSync: 'pending' }
 }
 
@@ -698,6 +699,7 @@ async function onStartRunner(submode = 'marathon') {
 function onStartTowerDefense() {
   if (!requireAccount()) return
   snd()?.uiSelect()
+  towerDefenseMapContext.value = 'menu'
   showTowerDefenseMap.value = true
 }
 
@@ -840,6 +842,11 @@ async function onBuyGene(geneId) {
   }
 }
 
+/** 备选蓝图（黑市）：消耗刷新次数重抽当前选卡 */
+function onRerollSkill() {
+  engine.value?.rerollSkillOptions()
+}
+
 /** 点击技能卡片：应用技能 → 关面板 → 恢复引擎主循环 */
 function onSelectSkill(skill) {
   const options = levelUpOptions.value
@@ -877,7 +884,6 @@ function onResolveFusion(accepted) {
 
 function onSelectExpeditionReward(rewardId) {
   snd()?.select()
-  expeditionReward.value = null
   engine.value?.resolveExpeditionReward(rewardId)
 }
 
@@ -1081,7 +1087,7 @@ onUnmounted(() => {
       @toggle-mute="onToggleMute"
       @toggle-pause="onPause"
       @toggle-resume="onResume"
-      @open-map="showTowerDefenseMap = true"
+      @open-map="towerDefenseMapContext = 'gameplay'; showTowerDefenseMap = true"
       @menu="onChangeRules"
       @next-stage="onStartTowerDefenseStage"
       @restart-stage="onRestartTowerDefense"
@@ -1093,7 +1099,7 @@ onUnmounted(() => {
 
     <!-- 升级面板：覆盖层之上，点击卡片应用技能并恢复游戏 -->
     <Transition name="modal-fade">
-      <LevelUpModal v-if="levelUpOptions" :options="levelUpOptions" :level="stats.level" :role-spec="stats.roleSpec" :can-use-elements="stats.canUseElements" :secondary-slots="stats.secondarySlots" @select="onSelectSkill" />
+      <LevelUpModal v-if="levelUpOptions" :options="levelUpOptions" :level="stats.level" :role-spec="stats.roleSpec" :can-use-elements="stats.canUseElements" :secondary-slots="stats.secondarySlots" :rerolls="stats.skillRerolls || 0" @select="onSelectSkill" @reroll="onRerollSkill" />
     </Transition>
     <Transition name="modal-fade" mode="out-in">
       <SpellCoreModal v-if="spellCoreReward" :key="stats.spells?.cores" :info="spellCoreReward" @select="onSelectSpellCore" />
@@ -1223,6 +1229,7 @@ onUnmounted(() => {
     <Transition name="modal-fade">
       <TowerDefenseWorldMapModal
         v-if="showTowerDefenseMap"
+        :context="towerDefenseMapContext"
         @start-stage="onStartTowerDefenseStage"
         @start-endless="onStartTowerDefenseEndless"
         @close="showTowerDefenseMap = false"

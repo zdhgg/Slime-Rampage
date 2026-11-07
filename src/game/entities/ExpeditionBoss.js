@@ -23,7 +23,6 @@ export class ExpeditionBoss extends Boss {
     this.isExpeditionBoss = !!encounter.final
     this.isCompositeBoss = false
     this.specialPattern = encounter.mechanic
-    this.dropType = encounter.archetype
     this.summonCd = Infinity
     if (!encounter.final) this.expValue = Math.max(30, Math.round(this.expValue * 0.35))
     this.specialCd = 2.6

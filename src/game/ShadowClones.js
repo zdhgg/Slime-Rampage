@@ -1,10 +1,10 @@
-import { shadowTargetAlive as alive, inShadowPath, traceShadowPath, shadowLineClear } from './ShadowGeometry.js'
+import { shadowTargetAlive as alive, inShadowPath, traceShadowPath, shadowLineClear, shadowRangedEnemy } from './ShadowGeometry.js'
 import { SHADOW_CLONE_CHANCES, SHADOW_CLONE_POWERS, SHADOW_CLONE_LIFETIMES, SHADOW_CLONE_CAPS } from './ShadowSkills.js'
 
 export const SHADOW_CLONE_INTERVAL = 0.7
 export const SHADOW_CLONE_PROC_INTERVAL = 0.35
 const WINDUP = 0.15
-const ranged = e => e && !e.isBoss && (e.type === 'mage' || e.type === 'archer')
+const ranged = shadowRangedEnemy
 export const SHADOW_HUNT_RANGE = 420 // 覆盖法师 340px 的开火距离。
 const HUNT_LEASH = 520
 
@@ -13,15 +13,20 @@ export class ShadowClones {
   get player() { return this.combat.player }
   get game() { return this.combat.weapon.game }
   get chance() { return SHADOW_CLONE_CHANCES[this.player.shadowCloneChanceLevel || 0] }
-  get power() { return SHADOW_CLONE_POWERS[Math.min(SHADOW_CLONE_POWERS.length - 1, this.player.shadowClonePowerLevel || 0)] }
-  get duration() { return SHADOW_CLONE_LIFETIMES[this.player.shadowCloneLifeLevel || 0] }
+  get power() {
+    return SHADOW_CLONE_POWERS[Math.min(SHADOW_CLONE_POWERS.length - 1, this.player.shadowClonePowerLevel || 0)] *
+      (1 + (this.player.geneShadowClonePowerBonus || 0))
+  }
+  get duration() {
+    return SHADOW_CLONE_LIFETIMES[this.player.shadowCloneLifeLevel || 0] + (this.player.geneShadowCloneLifeBonus || 0)
+  }
   get cap() { return SHADOW_CLONE_CAPS[this.player.shadowCloneCapLevel || 0] }
   reset() { this.items = []; this.procCooldown = 0; this.serial = 0; this.focus = null }
 
   createAt(spot, angle, target = this.nearest(spot)) {
     const c = { x: spot.x, y: spot.y, id: ++this.serial, radius: this.player.radius * 0.78, angle,
       life: this.duration, maxLife: this.duration, birth: 0.2, cooldown: 0, target,
-      retarget: 0, attack: null, flash: 0, rush: null }
+      retarget: 0, attack: null, flash: 0, rush: null, tomeFirst: true }
     this.items.push(c)
     const stats = this.combat.weapon.stats
     stats.shadowSummons = (stats.shadowSummons || 0) + 1
@@ -130,7 +135,9 @@ export class ShadowClones {
   hit(c, enemy, multiplier) {
     if (!this.combat.available || !alive(enemy) || !shadowLineClear(this.game, c, enemy)) return
     const before = enemy.hp
-    this.combat.hit(enemy, multiplier, { secondary: true, angle: c.angle, clone: true })
+    const first = !c.rush && c.tomeFirst && this.game?.bossTomes?.rank('shadow_pact') === 3
+    this.combat.hit(enemy, multiplier * (first ? 1.5 : 1), { secondary: true, angle: c.angle, clone: true })
+    if (!c.rush && enemy.hp < before) c.tomeFirst = false
     if (!enemy.active) this.combat.onCloneKill(c, enemy)
     const stats = this.combat.weapon.stats
     stats.shadowDamage = (stats.shadowDamage || 0) + Math.max(0, before - Math.max(0, enemy.hp))

@@ -280,7 +280,7 @@ export const EXPEDITION_REWARDS = [
   },
   {
     id: 'tome',
-    name: '勇者秘籍',
+    name: '基因研习',
     description: '从三个技能中选择一个。',
   },
   {
@@ -703,24 +703,75 @@ export function formatRunClock(seconds) {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
 }
 
-/** 战利品九类求和（App 结算入账与 GameOver 面板展示共用，防两处口径漂移） */
-export function sumDrops(drops) {
-  if (!drops) return 0
-  return (
-    (drops.knight || 0) +
-    (drops.mage || 0) +
-    (drops.archer || 0) +
-    (drops.assassin || 0) +
-    (drops.priest || 0) +
-    (drops.berserker || 0) +
-    (drops.hound || 0) +
-    (drops.golem || 0) +
-    (drops.wraith || 0)
-  )
+export function sanitizeRun(run, selection = run) {
+  const selected = normalizeRunSelection(selection)
+  return {
+    mode: selected.mode,
+    difficulty: selected.difficulty,
+    result: ['victory', 'extracted'].includes(run?.result) ? run.result : 'defeat',
+    // 远征关数随难度递增（6/8/10/12 关），按本局难度的实际关卡表截断
+    stage: Math.max(
+      1,
+      Math.min(
+        getExpeditionStages(selected.difficulty).length,
+        Math.round(run?.stage || run?.expeditionStage || 1)
+      )
+    ),
+    wave: Math.max(1, Math.round(run?.wave || 1)),
+    kills: Math.max(0, Math.round(run?.kills || 0)),
+    time: Math.max(0, Math.round(run?.time ?? run?.elapsed ?? 0)),
+    finaleTime: Math.max(0, Number(run?.finaleTime || 0)),
+    devours: Math.max(0, Math.round(run?.devours || 0)),
+    eliteKills: Math.max(0, Math.round(run?.eliteKills || 0)),
+    bossKills: Math.max(0, Math.round(run?.bossKills || 0)),
+    eventsCompleted: Math.max(0, Math.round(run?.eventsCompleted || 0)),
+    species: typeof run?.species === 'string' ? run.species : '',
+  }
 }
 
-export function calculateMaterialReward(rawDrops, selection, context = {}) {
-  const total = Math.max(0, Math.round(rawDrops || 0))
+export function computeScoreBreakdown(run) {
+  const clean = sanitizeRun(run)
+  const progressWave = clean.mode === 'timed' ? Math.min(24, clean.wave) : clean.wave
+  const breakdown = {
+    combat: clean.kills * 10,
+    devour: clean.devours * 15,
+    elite: clean.eliteKills * 75,
+    boss: clean.bossKills * 500,
+    events: clean.eventsCompleted * 350,
+    progress: clean.mode === 'expedition' ? (clean.stage - 1) * 800 : (progressWave - 1) * 100,
+    victory:
+      (clean.mode === 'timed' || clean.mode === 'expedition') && clean.result === 'victory'
+        ? clean.mode === 'expedition' ? 6000 : 4000
+        : 0,
+    finaleSpeed:
+      clean.mode === 'timed' && clean.result === 'victory'
+        ? Math.max(0, Math.round((180 - clean.finaleTime) * 10))
+        : 0,
+    clearSpeed:
+      clean.mode === 'expedition' && clean.result === 'victory'
+        ? Math.max(0, Math.round((1500 - clean.time) * 2))
+        : 0,
+  }
+  breakdown.total = Object.values(breakdown).reduce((sum, value) => sum + value, 0)
+  return breakdown
+}
+
+export function computeScore(run) {
+  return computeScoreBreakdown(run).total
+}
+
+/**
+ * 战力点（黑市货币）：由本局分数按难度倍率折算，客户端预览与服务端入账共用同一公式。
+ * 锚点：POINTS_PER_SCORE = 30（即旧口径 ÷3000 的 ×100 展示尺度）→ 困难通关（~2.6 万分 ×1.35）
+ * 约 1100 点、普通通关约 800 点；通关奖励已计入分数，暴毙局自动低保（约 200~400 点），
+ * 无需单独保留率规则。三位数面值只为成就感，收支同比例缩放不改变经济实质。
+ * 无尽沿用灾变/继续加成与战败 70% 保留；POINTS_SOFT_CAP 后收益减半，
+ * 防止深层无尽单局打穿黑市货架（限时/远征分数天然封顶，几乎碰不到软顶）。
+ */
+export const POINTS_PER_SCORE = 30
+export const POINTS_SOFT_CAP = 2000
+
+export function scoreToPoints(score, selection, context = {}) {
   const selected = normalizeRunSelection(selection)
   const endlessBonus = selected.mode === 'endless'
     ? Math.max(0, Number(context.endlessRewardBonus) || 0)
@@ -728,8 +779,8 @@ export function calculateMaterialReward(rawDrops, selection, context = {}) {
   const retention = selected.mode === 'endless' && context.result === 'defeat'
     ? ENDLESS_DEFEAT_RETENTION
     : 1
-  return Math.max(
-    0,
-    Math.round(total * getRunProfile(selected).rewardMul * (1 + endlessBonus) * retention)
-  )
+  const scaled = Math.max(0, Number(score) || 0) *
+    getRunProfile(selected).rewardMul * (1 + endlessBonus) * retention
+  const raw = Math.max(0, Math.round(scaled / POINTS_PER_SCORE))
+  return raw > POINTS_SOFT_CAP ? POINTS_SOFT_CAP + Math.round((raw - POINTS_SOFT_CAP) / 2) : raw
 }

@@ -13,12 +13,11 @@ import {
   DIFFICULTY_IDS,
   MODE_IDS,
   RUN_DURATION,
-  calculateMaterialReward,
   getExpeditionStages,
   isDifficultyUnlocked,
   isModeUnlocked,
   normalizeRunSelection,
-  sumDrops,
+  scoreToPoints,
 } from '../src/game/RunRules.js'
 import { withTransaction } from './database.mjs'
 import { getLeaderboard } from './leaderboard.mjs'
@@ -50,7 +49,6 @@ import {
 
 const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60
 const RUN_TTL_MS = 30 * 24 * 60 * 60 * 1000 // 给断线结算保留补交窗口
-const DROP_TYPES = ['knight', 'mage', 'archer', 'assassin', 'priest', 'berserker', 'hound', 'golem', 'wraith']
 
 class HttpError extends Error {
   constructor(status, code, message, details = null) {
@@ -102,12 +100,6 @@ function setSessionCookie(req, res, token, ttl = SESSION_TTL_SECONDS) {
   res.setHeader('Set-Cookie', sessionCookie(token, ttl, req.secure))
 }
 
-function sanitizeDrops(value) {
-  return Object.fromEntries(
-    DROP_TYPES.map((type) => [type, Math.max(0, Math.min(10000, Math.round(Number(value?.[type]) || 0)))])
-  )
-}
-
 function sanitizeSubmission(raw, ticket) {
   if (!raw || typeof raw !== 'object') throw new HttpError(400, 'invalid_run', '缺少本局结算数据')
   if (!['victory', 'extracted', 'defeat'].includes(raw.result)) {
@@ -144,22 +136,15 @@ function sanitizeSubmission(raw, ticket) {
   ) {
     throw new HttpError(422, 'implausible_run', '远征尚未到达最终章节')
   }
-  const drops = sanitizeDrops(raw.drops)
-  const rawDrops = sumDrops(drops)
-  if (rawDrops > clean.kills * 3 + clean.bossKills * 20 + 50) {
-    throw new HttpError(422, 'implausible_run', '本局战利品数量超出合理范围')
-  }
   const species = typeof raw.species === 'string'
     ? raw.species.slice(0, 80)
     : String(raw.species?.name || '').slice(0, 80)
   return {
     ...clean,
     elapsed: clean.time,
-    drops,
-    rawDrops,
     species,
     level: Math.max(1, Math.min(999, Math.round(Number(raw.level) || 1))),
-    endlessRewardBonus: Math.max(0, Math.min(2, Number(raw.endlessRewardBonus) || 0)),
+    endlessRewardBonus: Math.max(0, Math.min(2.5, Number(raw.endlessRewardBonus) || 0)),
   }
 }
 
@@ -461,16 +446,16 @@ export function createGameApp({ db, distDir = null, registration = null }) {
         const data = parseProfileData(profile)
         const selection = { mode: ticket.mode, difficulty: ticket.difficulty }
         const previousScore = getRunRecord(data, selection).best.score || 0
-        const earnedDrops = calculateMaterialReward(run.rawDrops, selection, run)
-        data.drops += earnedDrops
         const scoreResult = pushScore(data, selection, run)
+        // 战力点由服务端重算的分数派生：客户端不再上报掉落数量，结算输入面收窄
+        const earnedDrops = scoreToPoints(scoreResult.entry.score, selection, run)
+        data.drops += earnedDrops
         writeProfileData(db, profile, data)
 
         const runId = randomUUID()
         const submittedAt = new Date().toISOString()
         const result = {
           runId,
-          rawDrops: run.rawDrops,
           earnedDrops,
           score: scoreResult.entry.score,
           scoreBreakdown: scoreResult.entry.breakdown,

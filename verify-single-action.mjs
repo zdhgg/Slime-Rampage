@@ -1,3 +1,4 @@
+import { learnTome } from './test-support/arena-fixture.mjs'
 import assert from 'node:assert/strict'
 import { createArena, spawn, spawnBoss, learn, dispose, pressSpace } from './test-support/arena-fixture.mjs'
 import { BOSS_SKILL_DATABASE } from './src/game/SkillPool.js'
@@ -42,9 +43,8 @@ check('origin', '震荡伤害、范围、首领不击退、自由构筑联动', 
   near(e.hp, before - 1.9); near(e.x, g.player.x + 106)
   assert.equal(outside.hp, 100); assert.equal(boss.x, bossX)
   learn(g, 'ass_stride'); learn(g, 'ass_decoy'); learn(g, 'ass_capstone')
-  BOSS_SKILL_DATABASE.assassin.find(s => s.id === 'boss_assassin_voidstep').apply(g)
   g.player.strainSkillCd = 0; pressSpace(g)
-  near(g.player.strainSkillCd, 7 * 0.85 * 0.65)
+  near(g.player.strainSkillCd, 7 * 0.85)
   assert.equal(g.player._decoys.length, 1); assert.equal(g.player.guaranteedCrit, true)
   assert.equal(g.player.stealthTimer, 1.5)
   g.reset(); assert.equal(g.player.activeSkillCdMultiplier, 1); assert.equal(g.player._decoys.length, 0)
@@ -97,14 +97,14 @@ check('glutton', '重碾三级范围、护甲成长、资源边界及重置', g 
   g.player.gluttonCharge = 1; pressSpace(g); assert.equal(g.player.gluttonCharge, 0)
   g.reset(); assert.equal(g.player.gluttonHeavyLevel, 0)
 })
-check('shadow', '影袭结束储存普攻必暴，不被下一次影袭消耗', g => {
-  BOSS_SKILL_DATABASE.assassin.find(s => s.id === 'boss_assassin_voidstep').apply(g)
+check('shadow', '三级虚空步储存短时普攻必暴，不被下一次影袭消耗', g => {
+  learnTome(g, 'boss_assassin_voidstep', 3)
   spawn(g, { hp: 1000 }); pressSpace(g); g.player.update(0.27)
-  assert.equal(g.player.guaranteedCrit, true)
+  assert.ok(g.bossTomes.until.shadowCrit > g.bossTomes.time)
   const c = g.weaponSystem.shadowCombat, e = spawn(g, { hp: 1000 })
   c.hit(e, 1, { action: { hitTargets: new Set() } })
-  assert.equal(g.player.guaranteedCrit, true)
-  c.hit(e, 1, { action: {} }); assert.equal(g.player.guaranteedCrit, false)
+  assert.ok(g.bossTomes.until.shadowCrit > g.bossTomes.time)
+  c.hit(e, 1, { action: {} }); assert.equal(g.bossTomes.until.shadowCrit, 0)
 })
 for (const strain of ['origin', 'glutton', 'ricochet', 'elemental', 'shadow', 'summoner']) {
   check(strain, `${strain}: 旧动能原核有效且幂等，普攻能从碰撞线外清理拒马`, g => {

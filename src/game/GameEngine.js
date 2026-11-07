@@ -1,6 +1,6 @@
 import { setCritSource } from './CritSources.js'
 import { resolveShadowSkill } from './ShadowSkills.js'
-import { resolveElementalSkill } from './SpellRules.js'
+import { resolveElementalSkill, ordinarySpellCoreSkills } from './SpellRules.js'
 import { InputManager } from './InputManager.js'
 import { ELEMENTAL_SPEC_PROC_CAP, Player, STARTING_EXP_THRESHOLD } from './entities/Player.js'
 import { EnemyManager } from './EnemyManager.js'
@@ -8,7 +8,7 @@ import { WeaponSystem } from './WeaponSystem.js'
 import { GemManager } from './GemManager.js'
 import { SoundManager } from './SoundManager.js'
 import { rollSkills, rollBossSkills, getSpecInfo, getSecondaryStarter, SPEC_INFO, SKILL_DATABASE } from './SkillPool.js'
-import { RICOCHET_ROUTES, RICOCHET_SKILL_BY_ID, ricochetSkillAvailable, ricochetRouteReady, RICOCHET_BOSS_SKILLS } from './RicochetRules.js'
+import { RICOCHET_ROUTES, RICOCHET_SKILL_BY_ID, ricochetSkillAvailable, ricochetRouteReady } from './RicochetRules.js'
 import { GLUTTON_ROUTES, GLUTTON_SKILL_BY_ID, gluttonSkillAvailable, gluttonRouteReady } from './GluttonBuild.js'
 import { SYMBIOSIS_ROUTES, SYMBIOSIS_SKILL_BY_ID, symbiosisSkillAvailable, symbiosisRouteReady } from './SymbiosisBuild.js'
 import { ELEMENTAL_ROUTES, ELEMENTAL_ROUTE_SKILL_BY_ID, elementalSkillAvailable, elementalRouteReady } from './ElementalBuild.js'
@@ -28,6 +28,8 @@ import { createGameplay, normalizeGameplayId } from './gameplay/GameplayFactory.
 import { AmbientLayer } from './effects/AmbientLayer.js'
 import { STRAINS, STRAIN_IDS, applyStrain, canDevour, canUseElements, getStrainSkill, mimicryStrain } from './Strains.js'
 import { PRIMAL_ENERGY_MAX, PRIMAL_OVERLOAD_COST, resetPrimalEnergy, primalOverloadDescription } from './PrimalEnergy.js'
+import { getOriginCoreResonance } from './OriginCoreResonance.js'
+import { BossTomeCombat } from './BossTomeCombat.js'
 import { BossArena } from './BossArena.js'
 import {
   GLUTTON_CHARGE_MAX,
@@ -41,7 +43,7 @@ import {
   EVENT_LOCK_AT,
   FINAL_WARNING_AT,
   RUN_DURATION,
-  calculateMaterialReward,
+  computeScore,
   getEndlessDisasterTier,
   getExpeditionBoss,
   getExpeditionStage,
@@ -49,7 +51,7 @@ import {
   getProgressionStage,
   getRunProfile,
   normalizeRunSelection,
-  sumDrops,
+  scoreToPoints,
 } from './RunRules.js'
 import {
   ENDLESS_DEFEAT_RETENTION,
@@ -131,17 +133,20 @@ export function createDefaultStats() {
     director: null,
     objective: null,
     eventsCompleted: 0,
-    loot: 0,
+    score: 0,
     elements: [],
     reactions: [],
+    coreResonance: null,
     primaryReaction: null,
     secondaryCount: 0,
     secondarySlots: 2,
+    skillRerolls: 0,
     primarySpec: null,
     secondarySpec: null,
     roleSpec: null,
     ricochet: null,
     symbiosis: null,
+    bossTomes: [],
     strainId: 'origin',
     canDevour: false,
     canUseElements: true,
@@ -163,7 +168,7 @@ export function createDefaultStats() {
       finaleTime: 0,
       rewardMultiplier: 1,
       endlessRewardBonus: 0,
-      lootMultiplier: 1,
+      effectiveMultiplier: 1,
       disasterTier: 0,
       calamities: [],
       endlessContinues: 0,
@@ -300,7 +305,13 @@ export class GameEngine {
     // 升级桥接（事件驱动，非轮询）：升级时回调 Vue，传入 3 个技能选项
     this.onLevelUp = null // (options) => void
     this.skillLevels = {} // 技能已选次数（SkillPool 过滤满级用），普通对象不走响应式
-    this.bossSkillIds = new Set() // BOSS 职业秘典已获得的技能（每局最多一次）
+    this.bossSkillIds = new Set()
+    this.bossSkillLevels = {}
+    this.bossTomes = new BossTomeCombat(this)
+    this._bossRewardQueue = []
+    this._bossRewardSeen = new Set()
+    this._chapterSettlement = null
+    this._settlementApplying = false
     this.primarySpec = null // 主专精（'gluttony' | 'gatling' | 'elemental' | 'assassin'）
     this.secondarySpec = null // 副专精
     this.startingStrain = 'origin' // 开局血统预选（先天属性，reset 末尾叠加应用）
@@ -474,7 +485,7 @@ export class GameEngine {
       : 0
   }
 
-  get endlessLootMultiplier() {
+  get endlessRewardMultiplier() {
     return this.runProfile.rewardMul * (1 + this.endlessRewardBonus)
   }
 
@@ -557,7 +568,7 @@ export class GameEngine {
   /**
    * 该角色能否使用元素系统（第三批角色化）。
    * 只有 elemental / origin 为真；暴食/弹射/暗影下：
-   * 核心不生成、E 不交互、元素 HUD 不显示、absorbElement 直接短路。
+   * 核心不生成、自动吸收不生效、元素 HUD 不显示、absorbElement 直接短路。
    */
   get canUseElements() {
     return canUseElements(this.startingStrain)
@@ -629,7 +640,7 @@ export class GameEngine {
       p.strainSkillMax = 0
       p.strainSkillCd = 0
     } else {
-      p.strainSkillMax = skill.cooldown * (p.activeSkillCdMultiplier || 1)
+      p.strainSkillMax = skill.cooldown * (p.activeSkillCdMultiplier || 1) * (p.geneActiveSkillCdMultiplier || 1)
       p.strainSkillCd = Math.max(0, p.strainSkillCd - dt)
     }
     if (p.strainSkillReadyPulse > 0) p.strainSkillReadyPulse -= dt
@@ -688,9 +699,11 @@ export class GameEngine {
    * 否则进化演出期间按 Esc 后，演出定时器会把暂停面板下的游戏悄悄恢复。
    */
   resume() {
+    if (this._settlementApplying) return
     this._pauseLock = Math.max(0, this._pauseLock - 1)
     if (this._pauseLock > 0) return
     if (this.runFinished || this.player?.dead) return
+    if (this._openPendingBossReward?.()) return
     if (this._openPendingSpellCore?.()) return
     if (this._pendingEndlessBountyReward) {
       this._pendingEndlessBountyReward = false
@@ -727,12 +740,17 @@ export class GameEngine {
    * 技能选择面板（升级 / 王级秘籍共用）：
    * 暂停主循环 → 抽取 3 个流派/通用技能 → onLevelUp 回调 → 选择后应用
    */
+  /** 扩容视界（黑市）：技能选卡面板候选数 +1 */
+  _skillOptionCount() {
+    return 3 + (this.player?.geneExtraOptions || 0)
+  }
+
   openFreeSkillPanel() {
     this.pause()
     // 角色觉醒必须在抽卡之前统一执行一次：Lv.5 到达时自动确立 primarySpec，
     // 之后的候选池才会从「本角色 T1」切到「本角色 T2+」，且不会弹出四选一面板。
     this._ensureRoleAwakening()
-    const options = rollSkills(this, 3)
+    const options = rollSkills(this, this._skillOptionCount())
     if (options.length === 0) {
       this._pauseLock = Math.max(0, this._pauseLock - 1)
       this.start()
@@ -742,25 +760,105 @@ export class GameEngine {
       this.enemyManager?.addText?.(this.player.x, this.player.y - 42, '🧬 基因已臻完美', null, '#ffd166', 16)
       return
     }
+    // 备选蓝图（黑市）：里程碑觉醒 / 路线确认 / 伙伴招募不是「抽不到想要的卡」，
+    // 而是剧情节点——重抽等于跳过里程碑，标记为不可刷新。
+    const head = options[0]
+    this._skillPanelRerollable = !head.isMilestone && !head.isRicochetRoute && !head.isGluttonRoute
+      && !head.isSymbiosisRoute && !head.isElementalRoute && !head.isShadowRoute && !head.isPartnerChoice
     this.sound.levelUp()
     this._pushStats()
     this.onLevelUp?.(options)
   }
 
-  /** BOSS 职业秘典：免费三选一，不走普通升级池，也不增加等级。 */
-  openBossSkillPanel() {
-    this.pause()
-    this._ensureRoleAwakening()
-    const options = rollBossSkills(this, 3)
-    if (options.length === 0) {
-      this._pauseLock = Math.max(0, this._pauseLock - 1)
-      this.start()
-      this.enemyManager?.addText?.(this.player.x, this.player.y - 42, '📜 本职业秘典已收集完', null, '#ffd166', 16)
-      return
-    }
-    this.sound.wave()
+  /**
+   * 备选蓝图（黑市）：消耗一次刷新次数，重抽当前选卡面板候选。
+   * 只作用于 openFreeSkillPanel 弹出的普通选卡（升级/秘典/悬赏共用入口）；
+   * 抽取失败不扣次数（候选池枯竭时按无效处理）。
+   */
+  rerollSkillOptions() {
+    const p = this.player
+    if (!p || (p.geneRerolls || 0) <= 0 || !this._skillPanelRerollable) return false
+    const options = rollSkills(this, this._skillOptionCount())
+    if (!options.length) return false
+    p.geneRerolls--
+    this.sound.levelUp()
     this._pushStats()
     this.onLevelUp?.(options)
+    return true
+  }
+
+  /** Legacy pickups use the same serialized settlement. */
+  openBossSkillPanel() {
+    if (!this._chapterSettlement && !this.runFinished) this._beginBossSettlement(false, '首领战利品')
+  }
+
+  queueBossReward(boss) {
+    const key = boss.bossGroupId || boss
+    if (this._bossRewardSeen.has(key)) return false
+    this._bossRewardSeen.add(key)
+    if (Math.random() >= (boss.isBossSquadMember ? .85 : .65)) return false
+    this._bossRewardQueue.push(boss.encounterLabel || boss.name || '首领')
+    return true
+  }
+
+  _openPendingBossReward() {
+    if (this.runFinished || this.player?.dead || this._pauseLock > 0 || this._chapterSettlement || !this._bossRewardQueue?.length || !this.onExpeditionReward) return false
+    this._beginBossSettlement(false, this._bossRewardQueue.shift())
+    return true
+  }
+
+  _beginBossSettlement(chapter, source = this._lastChapterBoss || '章节首领') {
+    if (this._chapterSettlement || this.runFinished || this.player.dead) return false
+    this.pause()
+    this._chapterSettlement = { chapter, source, summary: null, phase: 'boss', options: rollBossSkills(this, 3) }
+    if (!this._chapterSettlement.options.length) {
+      this._chapterSettlement.phase = 'compensation'
+      this._chapterSettlement.options = rollSkills(this, this._skillOptionCount())
+      if (!this._chapterSettlement.options.length) {
+        this.player.heal(1)
+        this._chapterSettlement.summary = '秘典与技能已满级 · 恢复1点生命'
+        return this._advanceSettlement()
+      }
+    }
+    this.sound.wave()
+    this._publishSettlement()
+    return true
+  }
+
+  _publishSettlement() {
+    const session = this._chapterSettlement
+    if (!session) { this.onExpeditionReward?.(null); return }
+    const current = getExpeditionStage(this.runSelection.difficulty, this.expeditionStage)
+    const next = getExpeditionStage(this.runSelection.difficulty, this.expeditionStage + 1)
+    this._pushStats()
+    this.onExpeditionReward?.({ ...session,
+      stage: this.expeditionStage, nextStage: this.expeditionStage + 1, stageTitle: current.title,
+      nextTitle: next.title, nextRegion: next.region,
+      level: this.player.level, roleSpec: this.roleSpec, canUseElements: this.canUseElements,
+      secondarySlots: this.player.secondarySlots,
+      rewards: EXPEDITION_REWARDS.map(reward => ({ ...reward,
+        disabled: reward.id === 'blood' && this.player.maxHp <= 1,
+        preview: reward.id === 'rest' ? `生命 ${this.player.hp}/${this.player.maxHp} → ${this.player.maxHp}/${this.player.maxHp}${this.player.hp === this.player.maxHp ? ' · 当前已满血' : ''}`
+          : reward.id === 'blood' ? this.player.maxHp <= 1 ? '生命上限不足，无法献祭' : `生命上限 ${this.player.maxHp} → ${this.player.maxHp - 1} · 攻击 ×1.20`
+          : '普通技能三选一 · 不增加等级',
+      })),
+    })
+  }
+
+  _advanceSettlement() {
+    if (this._chapterSettlement.chapter) {
+      this._chapterSettlement.phase = 'supply'; this._chapterSettlement.options = []
+      this._publishSettlement()
+    } else this._finishSettlement()
+    return true
+  }
+
+  _finishSettlement() {
+    const chapter = this._chapterSettlement?.chapter
+    this._chapterSettlement = null
+    this.onExpeditionReward?.(null)
+    if (chapter) this._enterExpeditionStage(this.expeditionStage + 1)
+    this.resume()
   }
 
   /** 应用技能；成功返回 true，无效选择返回 false，让 UI 保留选卡面板。 */
@@ -841,16 +939,10 @@ export class GameEngine {
     skill = resolveShadowSkill(skill, this)
     skill = resolveElementalSkill(skill, this)
 
-    // 1. BOSS 职业秘典：只记录一次，不能通过普通升级重复取得
+    // 1. BOSS 职业秘典：独立等级，校验本次候选的旧等级，拒绝重复提交
     if (skill.isBossSkill) {
-      if (this.startingStrain === 'ricochet') {
-        skill = RICOCHET_BOSS_SKILLS.find(s => s.id === skill.id)
-        if (!skill) return false
-      }
-      if (this.bossSkillIds.has(skill.id)) return false
-      this.bossSkillIds.add(skill.id)
-      skill.apply?.(this)
-      this.enemyManager?.addText?.(this.player.x, this.player.y - 20, `📜 BOSS秘典：${skill.name}`, null, skill.color || '#ffd166', 16)
+      if (!this.bossTomes.learn(skill)) return false
+      this.enemyManager?.addText?.(this.player.x, this.player.y - 20, `📜 ${skill.name} Lv.${this.bossSkillLevels[skill.id]}`, null, skill.color || '#ffd166', 16)
       this.sound.wave()
     } else if (skill.isMilestone) {
       if (this.startingStrain === 'ricochet') return false
@@ -904,7 +996,7 @@ export class GameEngine {
       } else if (this.startingStrain === 'elemental') {
         const offered = skill
         const common = SKILL_DATABASE.common.find(entry => entry.id === skill.id)
-        const canonical = common ? { ...common, kind: 'common' } : ELEMENTAL_ROUTE_SKILL_BY_ID[skill.id] || skill
+        const canonical = common ? { ...common, kind: 'common' } : skill.isSpellCoreUpgrade ? ordinarySpellCoreSkills(this).find(card => card.id === skill.id) : ELEMENTAL_ROUTE_SKILL_BY_ID[skill.id] || skill
         if (!canonical || ((canonical.isElementalSkill || common) && !elementalSkillAvailable(this, canonical))) return false
         const role = common ? 'common' : offered.role || 'primary'
         skill = { ...canonical, role, progressionRole: common ? 'common' : offered.progressionRole }
@@ -927,7 +1019,7 @@ export class GameEngine {
       if (choiceState) choiceState.normalChoices++
     }
 
-    const weaponEvolved = this.weaponSystem.registerSkillEvolution(skill)
+    const weaponEvolved = !skill.isBossSkill && this.weaponSystem.registerSkillEvolution(skill)
     if (weaponEvolved && skill.isCapstone) {
       const info = getSpecInfo(skill.spec, this)
       this.evolutionEvent(
@@ -952,7 +1044,7 @@ export class GameEngine {
 
   _refreshRicochetCooldown() {
     if (!this.weaponSystem.ricochetCombat.enabled) return
-    this.player.strainSkillMax = this.strainSkill.cooldown * (this.player.activeSkillCdMultiplier || 1)
+    this.player.strainSkillMax = this.strainSkill.cooldown * (this.player.activeSkillCdMultiplier || 1) * (this.player.geneActiveSkillCdMultiplier || 1)
     this._pushCooldown()
   }
 
@@ -1065,29 +1157,42 @@ export class GameEngine {
     return true
   }
 
-  _rawEndlessDrops() {
-    return sumDrops(this.weaponSystem?.drops)
+  /** 实时预估分：战力点与无尽撤离预览共用（胜利/速通项在局内自然为 0）。 */
+  _liveScore() {
+    return computeScore({
+      mode: this.runSelection.mode,
+      difficulty: this.runSelection.difficulty,
+      result: 'defeat',
+      stage: this.expeditionStage,
+      wave: this.enemyManager?.wave,
+      kills: this.weaponSystem?.kills,
+      devours: this.weaponSystem?.devours,
+      eliteKills: this.weaponSystem?.eliteKills,
+      bossKills: this.weaponSystem?.bossKills,
+      eventsCompleted: this.worldEvents?.completed,
+      time: this.elapsed,
+    })
   }
 
   _offerEndlessCheckpoint(wave) {
     this._endlessDecisionKind = 'checkpoint'
     this._endlessChoices = []
-    const rawDrops = this._rawEndlessDrops()
+    const liveScore = this._liveScore()
     const nextBonus = getEndlessRewardBonus(this.endlessCalamities, this.endlessContinues + 1)
     this.onEndlessDecision?.({
       kind: 'checkpoint',
       wave,
-      rawDrops,
-      safeLoot: calculateMaterialReward(rawDrops, this.runSelection, {
+      liveScore,
+      extractPoints: scoreToPoints(liveScore, this.runSelection, {
         result: 'extracted',
         endlessRewardBonus: this.endlessRewardBonus,
       }),
-      defeatLoot: calculateMaterialReward(rawDrops, this.runSelection, {
+      defeatPoints: scoreToPoints(liveScore, this.runSelection, {
         result: 'defeat',
         endlessRewardBonus: this.endlessRewardBonus,
       }),
-      currentLootMultiplier: this.endlessLootMultiplier,
-      nextLootMultiplier: this.runProfile.rewardMul * (1 + nextBonus),
+      currentRewardMultiplier: this.endlessRewardMultiplier,
+      nextRewardMultiplier: this.runProfile.rewardMul * (1 + nextBonus),
       continues: this.endlessContinues,
       calamities: getEndlessCalamitySummary(this.endlessCalamities),
     })
@@ -1099,10 +1204,10 @@ export class GameEngine {
     this.onEndlessDecision?.({
       kind: 'calamity',
       wave,
-      currentLootMultiplier: this.endlessLootMultiplier,
+      currentRewardMultiplier: this.endlessRewardMultiplier,
       choices: this._endlessChoices.map((choice) => ({
         ...choice,
-        lootMultiplier:
+        rewardMultiplier:
           this.runProfile.rewardMul *
           (1 +
             getEndlessRewardBonus(
@@ -1211,8 +1316,8 @@ export class GameEngine {
       difficultyName: this.runProfile.difficultyInfo.name,
       rewardMultiplier: this.runProfile.rewardMul,
       endlessRewardBonus: this.endlessRewardBonus,
-      lootMultiplier: this.endlessLootMultiplier,
-      lootRetention:
+      effectiveMultiplier: this.endlessRewardMultiplier,
+      defeatRetention:
         this.runSelection.mode === 'endless' && result === 'defeat'
           ? ENDLESS_DEFEAT_RETENTION
           : 1,
@@ -1233,7 +1338,6 @@ export class GameEngine {
       bossKills: this.weaponSystem.bossKills,
       eventsCompleted: this.worldEvents.completed,
       eventsFailed: this.worldEvents.failed,
-      drops: { ...this.weaponSystem.drops }, // 本局勇者掉落物（黑市货币；副本快照，防死亡帧残差结算污染）
       behavior: this.weaponSystem.stats, // 代表行为（连锁/引爆，物种档案）
       species: buildSpecies(this.player, this.genes, this.enemyManager.wave, this.weaponSystem.kills, this.weaponSystem.stats), // 物种档案（评审：可截图的传播点）
       epilogue: this.dialogue.epilogue,
@@ -1243,6 +1347,10 @@ export class GameEngine {
   finishRun(result, defeatReason = null) {
     if (this.runFinished) return
     this.runFinished = true
+    this.bossTomes.clearStage()
+    this._bossRewardQueue.length = 0
+    this._chapterSettlement = null
+    this.onExpeditionReward?.(null)
     this.weaponSystem.shadowCombat.reset()
     this.weaponSystem.petCombat.reset()
     this.weaponSystem.spellCombat.shots.length = 0
@@ -1292,7 +1400,10 @@ export class GameEngine {
     ) {
       this._completeExpeditionStage()
     }
-    if (encounterComplete && !this.runFinished) this.queueSpellCore(boss)
+    if (encounterComplete && !this.runFinished) {
+      if (this.runSelection.mode === 'expedition') this._lastChapterBoss = boss.name
+      else this.queueBossReward(boss)
+    }
   }
 
   _enterFinale() {
@@ -1307,6 +1418,7 @@ export class GameEngine {
   }
 
   _updateRunState(dt) {
+    if (this._openPendingBossReward()) return
     if (this._openPendingSpellCore()) return
     if (this.runSelection.mode === 'expedition') {
       this._updateExpedition(dt)
@@ -1336,6 +1448,7 @@ export class GameEngine {
   }
 
   _enterExpeditionStage(stage, forceMap = false) {
+    this.bossTomes?.clearStage()
     this.weaponSystem.shadowCombat.reset({ preserveBuild: true })
     this.weaponSystem.petCombat.reset()
     this.player._dodgedAttacks = new WeakSet()
@@ -1436,22 +1549,14 @@ export class GameEngine {
       return
     }
     if (this.runState === 'stage-clearing') {
+      if (this._pauseLock > 0) return // 同帧经验升级先完成，避免覆盖已有选卡
       // 残敌溃散演出（0.6s）：演出结束后才暂停进补给——清除不再「瞬间发生」
       this._stageClearT += dt
       if (this._stageClearT < 0.6) return
       this.runState = 'stage-reward'
       this.enemyManager.prepareExpeditionStage()
       this.worldEvents.cancelForTransition()
-      this.pause()
-      this.onExpeditionReward?.({
-        stage: this.expeditionStage,
-        nextStage: this.expeditionStage + 1,
-        totalStages: getExpeditionStages(this.runSelection.difficulty).length,
-        stageTitle: getExpeditionStage(this.runSelection.difficulty, this.expeditionStage).title,
-        nextTitle: getExpeditionStage(this.runSelection.difficulty, this.expeditionStage + 1).title,
-        nextRegion: getExpeditionStage(this.runSelection.difficulty, this.expeditionStage + 1).region,
-        rewards: EXPEDITION_REWARDS,
-      })
+      this._beginBossSettlement(true)
       return
     }
     if (this.runState !== 'active') return
@@ -1490,29 +1595,42 @@ export class GameEngine {
     })
   }
 
-  resolveExpeditionReward(rewardId) {
-    if (this.runState !== 'stage-reward') return
-    const nextStage = this.expeditionStage + 1
-    if (rewardId === 'rest') {
-      this.player.heal(this.player.maxHp)
-    } else if (rewardId === 'blood') {
-      this.player.maxHp = Math.max(1, this.player.maxHp - 1)
+  resolveExpeditionReward(selection) {
+    const session = this._chapterSettlement
+    if (!session || this.runFinished || this.player.dead) return false
+    const id = typeof selection === 'string' ? selection : selection?.id
+    if (session.phase !== 'supply') {
+      const card = session.options.find(option => option.id === id)
+      if (!card) return false
+      this._settlementApplying = true
+      let applied
+      try { applied = this.applySkill(card) } finally { this._settlementApplying = false }
+      if (!applied) return false
+      if (session.phase === 'boss') session.summary = `${card.name} · Lv.${this.bossSkillLevels[card.id]}/3${card.recruitName ? ` · 招募${card.recruitName}` : ''}`
+      else if (!session.summary) session.summary = `秘典满级补偿 · ${card.name}`
+      if (session.phase === 'study') this._finishSettlement()
+      else this._advanceSettlement()
+      return true
+    }
+    if (!EXPEDITION_REWARDS.some(reward => reward.id === id)) return false
+    if (id === 'blood' && this.player.maxHp <= 1) return false
+    if (id === 'rest') this.player.heal(this.player.maxHp)
+    if (id === 'blood') {
+      this.player.maxHp -= 1
       this.player.hp = Math.min(this.player.hp, this.player.maxHp)
       this.weaponSystem.damage *= 1.2
-    } else if (rewardId === 'tome') {
-      // 远征关间秘籍同样先走角色觉醒，避免在这一入口漏掉 Lv.5 绑定
-      this._ensureRoleAwakening()
-      const options = rollSkills(this, 3)
-      if (options.length > 0) {
-        this._pendingExpeditionStage = nextStage
-        this.sound.levelUp()
-        this._pushStats()
-        this.onLevelUp?.(options)
-        return
-      }
     }
-    this._enterExpeditionStage(nextStage)
-    this.resume()
+    if (id === 'tome') {
+      this._ensureRoleAwakening()
+      const options = rollSkills(this, this._skillOptionCount())
+      if (options.length) {
+        session.phase = 'study'; session.options = options
+        this._publishSettlement(); return true
+      }
+      this.player.heal(1)
+    }
+    this._finishSettlement()
+    return true
   }
 
   /** 反应信息（替换面板展示用：图标组合/名称/物种/效果） */
@@ -1548,7 +1666,7 @@ export class GameEngine {
 
   /**
    * 元素核心吃前确认（阶段十六追加）：首颗元素 / 首次融合 → 暂停 + 回调 Vue 弹面板。
-   * 两者都是不可逆的「永久改变身体」时刻，值得一次确认；其余核心按 E 后直接吸收。
+   * 两者都是不可逆的「永久改变身体」时刻，值得一次确认；其余核心靠近后自动吸收。
    */
   askFusionConfirm(type) {
     this.pause()
@@ -1662,6 +1780,12 @@ export class GameEngine {
     resetGluttonResource(p)
     this.skillLevels = {}
     this.bossSkillIds = new Set()
+    this.bossSkillLevels = {}
+    this.bossTomes.reset()
+    this._bossRewardQueue = []
+    this._bossRewardSeen = new Set()
+    this._chapterSettlement = null
+    this._settlementApplying = false
     this.startingElement = null
     this._spellCoreQueue = []
     this._spellCoreChoice = null
@@ -1810,6 +1934,7 @@ export class GameEngine {
       // 伙伴面板跟随系统开关而非血统名：origin 拟态共生后同样显示名册与鼓舞状态
       pets: this.weaponSystem.petCombat.enabled ? this.weaponSystem.petCombat.hud() : null,
       petRally: this.weaponSystem.petCombat.enabled ? this.weaponSystem.petCombat.rallyHud() : null,
+      tomeShield: this.bossTomes.shield,
       spellShield: this.weaponSystem.spellCombat.available ? this.weaponSystem.spellCombat.shield.hud() : null,
       shadow: this.startingStrain === 'shadow' ? {
         evasion: this.player.evasionChance, crit: this.weaponSystem.critChance,
@@ -1857,16 +1982,34 @@ export class GameEngine {
       director: this.enemyManager.directorInfo,
       objective: this.worldEvents.objectiveInfo,
       eventsCompleted: this.worldEvents.completed,
-      loot: Object.values(this.weaponSystem.drops).reduce((sum, n) => sum + n, 0),
+      // 实时分数（HUD 直接展示原始信号；战力点折算留给撤离面板与结算页）
+      score: this._liveScore(),
       elements: Array.from(this.player.elements, ([id, lv]) => ({ id, lv })), // 元素等级（HUD 显示 💧2）
       // 激活反应（阶段十五：HUD 常驻徽章 + 效果说明，进化「有什么效果」一眼可读）
       reactions: this.player._reactions.map((r) => ({ id: r.id, name: r.name, desc: r.desc })),
       primaryReaction: this.player._primaryReaction, // 主形态（★ 徽章标识）
+      coreResonance: (() => {
+        const resonance = getOriginCoreResonance(this)
+        return resonance
+          ? {
+              id: resonance.id,
+              name: resonance.name,
+              effect: resonance.effect,
+              icons: resonance.icons,
+              levels: resonance.levels,
+              strength: resonance.strength,
+              color: resonance.color,
+              primary: resonance.primary,
+            }
+          : null
+      })(),
       secondaryCount: this.player._secondaryIds.size, // 副反应占用（阶段十六）
       secondarySlots: this.player.secondarySlots,
+      skillRerolls: this.player.geneRerolls || 0,
       primarySpec: this.primarySpec,
       secondarySpec: this.secondarySpec,
       // 角色身份（阶段十九）：HUD 据此显示角色名、决定是否渲染吞噬线（canDevour）
+      bossTomes: this.bossTomes.hud(),
       roleSpec: this.roleSpec,
       strainId: this.startingStrain,
       canDevour: this.canDevour,
@@ -1913,7 +2056,7 @@ export class GameEngine {
         finaleTime: this.finaleTime,
         rewardMultiplier: this.runProfile.rewardMul,
         endlessRewardBonus: this.endlessRewardBonus,
-        lootMultiplier: this.endlessLootMultiplier,
+        effectiveMultiplier: this.endlessRewardMultiplier,
         disasterTier: getEndlessDisasterTier(this.runSelection, this.enemyManager.wave),
         calamities: getEndlessCalamitySummary(this.endlessCalamities),
         endlessContinues: this.endlessContinues,
