@@ -243,6 +243,39 @@ export const SKILL_ICON_KEYS = Object.freeze({
   origin_concord: 'link2',
   origin_flux: 'repeat2',
   origin_overload: 'gem',
+  origin_adapt: 'shield_check',
+  origin_motility: 'movement',
+  origin_recovery: 'recovery',
+  ori_frag_glutton: 'shield_alert',
+  ori_frag_gatling: 'multishot',
+  ori_frag_elemental: 'atom',
+  ori_frag_assassin: 'target',
+  ori_frag_symbiosis: 'shield_plus',
+  ori_exp_ring: 'waves',
+  ori_exp_residue: 'droplets',
+  ori_exp_edge: 'orbit',
+  ori_exp_control: 'circle_gauge',
+  ori_asm_stack: 'dna',
+  ori_asm_recompose: 'sparkles',
+  ori_asm_adapt: 'shield_check',
+  ori_asm_duration: 'cooldown',
+  ori_res_circuit: 'repeat2',
+  ori_res_core: 'atom',
+  ori_res_switch: 'git_merge',
+  ori_res_burst: 'lightning',
+  ori_mark_glutton: 'shield_alert',
+  ori_mark_gatling: 'multishot',
+  ori_mark_elemental: 'atom',
+  ori_mark_assassin: 'target',
+  ori_mark_symbiosis: 'shield_plus',
+  spec_origin_route_expansion: 'waves',
+  spec_origin_route_assimilation: 'dna',
+  spec_origin_route_resonance: 'atom',
+  spec_origin_mark_glutton: 'shield_alert',
+  spec_origin_mark_gatling: 'multishot',
+  spec_origin_mark_elemental: 'atom',
+  spec_origin_mark_assassin: 'target',
+  spec_origin_mark_symbiosis: 'shield_plus',
   pet_bulwark: 'hexagon',
   pet_capstone: 'trophy',
   pet_command: 'crown',
@@ -539,6 +572,7 @@ export const SKILL_ICON_METRICS = Object.freeze({ frame: 58, glyph: 34, stroke: 
 const routePalettes = {
   gatling: RICOCHET_ROUTE_COLORS, gluttony: GLUTTON_ICON_COLORS,
   symbiosis: SYMBIOSIS_ICON_COLORS, assassin: SHADOW_ICON_COLORS, elemental: ELEMENTAL_ICON_COLORS,
+  origin: { expansion: '#5ad1c8', assimilation: '#b8e86a', resonance: '#ffd166', common: '#a8e06a' },
 }
 const routeMembership = { ...GLUTTON_ICON_ROUTES, ...SYMBIOSIS_ICON_ROUTES, ...SHADOW_ICON_ROUTES }
 const strainSpecs = { ricochet: 'gatling', glutton: 'gluttony', summoner: 'symbiosis', shadow: 'assassin' }
@@ -561,8 +595,12 @@ export function resolveSkillIcon(input) {
   const isPublic = /^(com_|origin_)/.test(skill.id || '') || publicIds.has(skill.id)
   const spec = skill.spec || (skill.id?.startsWith('rico_') || skill.id?.startsWith('boss_rico_') ? 'gatling'
     : skill.id?.startsWith('glut_') ? 'gluttony' : skill.id?.startsWith('pet_') || skill.id?.startsWith('sym_') ? 'symbiosis'
-    : skill.id?.startsWith('ass_') || skill.id?.startsWith('shadow_') ? 'assassin' : skill.element ? 'elemental' : '')
-  const route = skill.route || routeMembership[skill.id] || skill.element
+    : skill.id?.startsWith('ass_') || skill.id?.startsWith('shadow_') ? 'assassin'
+    : skill.id?.startsWith('ori_') || skill.id?.startsWith('spec_origin_') ? 'origin'
+    : skill.element ? 'elemental' : '')
+  const route = skill.route || routeMembership[skill.id]
+    || (skill.id?.startsWith('spec_origin_route_') ? skill.id.replace('spec_origin_route_', '') : null)
+    || skill.element
   const color = isPublic ? SKILL_ICON_NEUTRAL : (route && route !== 'common' ? routePalettes[spec]?.[route] || skill.color || SKILL_ICON_NEUTRAL : SKILL_ICON_NEUTRAL)
   return {
     key: glyph ? key : 'missing', glyph: glyph || SKILL_ICON_GLYPHS.missing, missing: !glyph, color,

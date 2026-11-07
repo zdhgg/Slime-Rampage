@@ -23,6 +23,7 @@ globalThis.cancelAnimationFrame = () => {}
 const { GameEngine } = await import('../src/game/GameEngine.js')
 export const { Boss } = await import('../src/game/entities/Boss.js')
 export const { SKILL_DATABASE, rollSkills } = await import('../src/game/SkillPool.js')
+export const { ORIGIN_SKILL_BY_ID } = await import('../src/game/OriginBuild.js')
 
 export function createArena(strain = 'glutton') {
   const game = GameEngine.create(canvas)
@@ -54,7 +55,8 @@ export function spawnBoss(game, hp = 300, type = 'boss-knight') {
 }
 
 export function learn(game, id, count = 1) {
-  const skill = Object.values(SKILL_DATABASE).flatMap(tree => Array.isArray(tree) ? tree : [...tree.primary, ...tree.secondary]).find(s => s.id === id)
+  const skill = ORIGIN_SKILL_BY_ID[id] ||
+    Object.values(SKILL_DATABASE).flatMap(tree => Array.isArray(tree) ? tree : [...tree.primary, ...tree.secondary]).find(s => s.id === id)
   if (!skill) throw new Error(`Unknown skill: ${id}`)
   for (let i = 0; i < count; i++) game.applySkill(skill)
 }

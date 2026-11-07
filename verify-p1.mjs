@@ -78,7 +78,7 @@ engine._updateStrainSkill(0)
 engine.player.strainSkillCd = 0.3
 engine._pushCooldown()
 assert.ok(lastCd && typeof lastCd.skillCd === 'number' && typeof lastCd.cast === 'number')
-assert.equal(lastCd.skillMax, 3.5, '原生技能 7 秒 × 冷却倍率')
+assert.equal(lastCd.skillMax, 3.25, '原生技能 6.5 秒 × 冷却倍率')
 assert.equal(lastCd.formationBreak, 0)
 assert.equal(lastCd.formationBreakMax, 8)
 // _tick 累积到 0.1s 触发推送
@@ -129,45 +129,28 @@ engine.reset()
 assert.equal(engine.player.adrenalineSpeed, 0, '重开清空肾上腺素等级')
 ok('肾上腺素：受击 → 3s 移速爆发 → 衰减，重开清零')
 
-// —— 5. Capstone 门槛：Lv.14 且达到战局进度后才进入候选 ——
+// —— 5. 原生重构：路线/印记取代职业 T4 ——
 engine.reset()
-engine.primarySpec = 'gatling'
-engine.secondarySpec = 'elemental' // 跳过 Lv.9 副专精里程碑，直接测常规抽取
-// 点满前置链（T1×2、T2、T3 各 1 级即满足 requires）
-for (const id of ['gat_multishot', 'gat_velocity', 'gat_split', 'gat_chain']) {
-  engine.skillLevels[id] = 1
-}
-engine.player.level = 12
-engine.enemyManager.wave = 6
+engine.player.level = 5
 let opts = rollSkills(engine, 3)
-assert.ok(opts.length > 0 && opts.every((o) => !o.isCapstone), 'Lv.12 / 波 6：大招未开放')
+assert.ok(opts.length === 3 && opts.every(o => o.isOriginRoute), 'Lv.5 只弹路线')
+assert.equal(engine.applySkill(opts[0]), true)
+engine.player.level = 9
+opts = rollSkills(engine, 5)
+assert.ok(opts.length === 5 && opts.every(o => o.isOriginMark), 'Lv.9 只弹印记')
+assert.equal(engine.applySkill(opts[0]), true)
 engine.player.level = 14
-opts = rollSkills(engine, 3)
-assert.ok(opts.every((o) => !o.isCapstone), '仅 Lv.14、波 6：大招仍未开放')
-engine.player.level = 12
 engine.enemyManager.wave = 10
 opts = rollSkills(engine, 3)
-assert.ok(opts.every((o) => !o.isCapstone), '仅第 10 波、Lv.12：大招仍未开放')
-engine.player.level = 14
-opts = rollSkills(engine, 3)
-assert.ok(opts[0].isCapstone, 'Lv.14 且第 10 波：大招进入候选并排首位')
-engine.runSelection = { mode: 'expedition', difficulty: 'normal' }
-engine.expeditionStage = 4
-opts = rollSkills(engine, 3)
-assert.ok(opts.every((o) => !o.isCapstone), '远征第 4 关：大招仍未开放')
-engine.expeditionStage = 5
-opts = rollSkills(engine, 3)
-assert.ok(opts[0].isCapstone, '远征 Lv.14 且第 5 关：大招开放')
-engine.runSelection = { mode: 'timed', difficulty: 'normal' }
-ok('Capstone 门槛：等级与战局进度必须同时达标')
+assert.ok(opts.every(o => !o.isCapstone), '原生不再出现职业 T4 终极')
+ok('原生重构：Lv.5 路线 / Lv.9 印记 / 无职业大招')
 
 // —— 6. 技能池耗尽：不再静默，转化为治愈 + 浮字 ——
 for (const [specKey, tree] of Object.entries(SKILL_DATABASE)) {
   const list = specKey === 'common' ? tree : [...tree.primary, ...tree.secondary]
   for (const s of list) engine.skillLevels[s.id] = s.maxLevel
 }
-engine.secondarySpec = 'elemental' // 副专精池也满
-// 路线入口等新构筑池不在 SKILL_DATABASE 内，反复抽取并升满，确保场景真的「池空」。
+// 原生卡不在 SKILL_DATABASE 内，反复抽取并升满，确保场景真的「池空」。
 for (let pass = 0; pass < 20; pass++) {
   const extra = rollSkills(engine, 50)
   if (!extra.length) break

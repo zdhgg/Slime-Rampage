@@ -12,6 +12,11 @@ const MATERIALS = {
   // 它打出的弹体、出膛火花与命中音色会和所有非元素角色一样是薄荷绿——
   // 玩家无法把这一发认成"我的"。这一条只改共生身份的观感，不动数值。
   symbiote: { shape: 'orb', color: '#f6a3c4', core: '#ffe6f0', impact: '#f08ab5', radius: 6, sound: 'base' },
+  // 原生黏液：基底是未分化液态；路线只换色，不换职业形态。
+  origin: { shape: 'glob', color: '#a8e06a', core: '#efffd9', impact: '#8cffc8', radius: 6.2, sound: 'fluid' },
+  origin_expansion: { shape: 'glob', color: '#5ad1c8', core: '#eafffd', impact: '#5ad1c8', radius: 6.6, sound: 'fluid' },
+  origin_assimilation: { shape: 'spore', color: '#b8e86a', core: '#f6ffd9', impact: '#b8e86a', radius: 6.4, sound: 'fluid' },
+  origin_resonance: { shape: 'core', color: '#ffd166', core: '#fff7d6', impact: '#ffd166', radius: 6.4, sound: 'spark' },
   fire: { shape: 'ember', color: '#ffad66', core: '#fff1c7', impact: '#ff9854', radius: 6.2, sound: 'ember' },
   water: { shape: 'drop', color: '#80d8ed', core: '#eefcff', impact: '#71cce2', radius: 6.2, sound: 'fluid' },
   poison: { shape: 'glob', color: '#91dc6a', core: '#eaffc9', impact: '#83cf62', radius: 6.4, sound: 'fluid' },
@@ -37,6 +42,8 @@ const FORMS = {
   // radius 刻意保持 1：这个字段经 Projectile.radius 进入命中判定
   // （WeaponSystem 的 `p.radius + e.radius`），"更饱满"只由 scaleX/scaleY 表达。
   symbiosis: { scaleX: 1.06, scaleY: 1.06, trail: 3.5, radius: 1 },
+  // 原生：柔软、略不规则的液态团；路线只通过材质色区分。
+  origin: { scaleX: 1.12, scaleY: 0.94, trail: 3.8, radius: 1 },
 }
 
 const rgba = (hex, alpha) => {
@@ -46,6 +53,12 @@ const rgba = (hex, alpha) => {
 
 function materialKey(state) {
   if (state.strain === 'ricochet') return MATERIALS[`rico_${state.ricochetRoute}`] ? `rico_${state.ricochetRoute}` : 'ricochet'
+  // 原生路线色优先：让玩家一眼看出自己走的是哪条液态路线；
+  // 元素反应仍通过本体形态/命中特效表达，不抢走路线身份。
+  if (state.strain === 'origin') {
+    const routeKey = state.originRoute ? `origin_${state.originRoute}` : 'origin'
+    if (MATERIALS[routeKey]) return routeKey
+  }
   if (state.chaos) return 'chaos'
   if (MATERIALS[state.primaryReaction]) return state.primaryReaction
   for (const id of state.elements || []) {

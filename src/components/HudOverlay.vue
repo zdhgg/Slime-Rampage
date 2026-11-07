@@ -11,6 +11,7 @@ import SkillIcon from './SkillIcon.vue'
 import { routeIconId } from './skillIconRegistry.js'
 import { Pause, Play, Volume2, VolumeX } from 'lucide-vue-next'
 import { SPEC_INFO, getSpecInfo } from '../game/SkillPool.js'
+import { ORIGIN_ROUTES, ORIGIN_MARKS } from '../game/OriginBuild.js'
 import { formatRunClock } from '../game/RunRules.js'
 import { DIGEST_EFFECTS } from '../game/ElementSystem.js'
 import { REACTION_SLOT_LEVELS } from '../game/entities/Player.js'
@@ -174,9 +175,9 @@ function elementTitle(id) {
   const lv = elementLevel(id)
   const digest = DIGEST_EFFECTS[id]
   if (!digest) return `${base.effect} | ${base.combo}`
-  // 消化档位挂吞噬触发：不能吞噬的角色（origin 未拟态暴食时）只标注解锁条件，
+  // 消化档位挂吞噬触发：只有暴食血统能吞噬，其它角色只标注解锁条件，
   // 不承诺当前可用——避免「文案承诺了却永远触发不了」。
-  if (!props.stats.canDevour) return `${base.effect} | ${base.combo} | 吞噬消化：需暴食血统或暴食拟态`
+  if (!props.stats.canDevour) return `${base.effect} | ${base.combo} | 吞噬消化：需暴食血统`
   const tier = lv >= 4 ? 'Lv.4 已解锁' : lv >= 2 ? 'Lv.4' : 'Lv.2'
   const detail = lv >= 4 ? digest.lv4 : digest.lv2
   return `${base.effect} | ${base.combo} | 吞噬消化（${tier}）：${detail.name}（当前 ${lv} 级）`
@@ -206,24 +207,28 @@ const digestTitle = computed(() => {
   return `吞噬积累消化能量（${Math.round(digestRatio.value * 100)}%）· 满槽转化元素等级｜已爆发 ${digest.bursts} 次`
 })
 
-/** 拟态能量（origin 独占，P0）：异源充能 → ≥40 空格技超载；满格脉冲提示 */
+/** 异源能量（origin 独占）：异源充能 → ≥40 空格技超载；满格脉冲提示 */
 const primalRatio = computed(() => {
-  const primal = props.stats.primal
-  if (!primal?.max) return 0
-  return Math.max(0, Math.min(1, primal.value / primal.max))
+  const origin = props.stats.origin || props.stats.primal
+  if (!origin?.max) return 0
+  return Math.max(0, Math.min(1, (origin.energy ?? origin.value ?? 0) / origin.max))
 })
 const primalReady = computed(() => {
-  const primal = props.stats.primal
-  return !!primal && primal.value >= primal.cost
+  const origin = props.stats.origin || props.stats.primal
+  return !!origin && (origin.energy ?? origin.value) >= origin.cost
 })
 const primalTitle = computed(() => {
-  const primal = props.stats.primal
-  if (!primal) return ''
-  const effect = primal.effect || '半径 ×1.5、伤害 ×2.5、击退翻倍'
-  if (primalRatio.value >= 1) return `拟态能量已满 · 下次有效空格技将超载：${effect}`
-  if (primalReady.value) return `拟态能量 ${primal.value}/${primal.max} · 下次有效空格技将超载：${effect}`
-  return `拟态能量 ${primal.value}/${primal.max} · 交替使用不同伤害来源（飞弹/震荡/元素反应/主机制/副共鸣）充能，≥${primal.cost} 后超载：${effect}`
+  const origin = props.stats.origin || props.stats.primal
+  if (!origin) return ''
+  const effect = origin.effect || '路线决定超载主体，印记提供有限回响'
+  const value = origin.energy ?? origin.value ?? 0
+  if (primalRatio.value >= 1) return `异源能量已满 · 下次有效空格技将超载：${effect}`
+  if (primalReady.value) return `异源能量 ${value}/${origin.max} · 下次有效空格技将超载：${effect}`
+  return `异源能量 ${value}/${origin.max} · 交替使用飞弹/震荡/元素/路线来源充能，≥${origin.cost} 后超载：${effect}`
 })
+const originRouteInfo = computed(() => ORIGIN_ROUTES[props.stats.originRoute] || null)
+const originMarkInfo = computed(() => ORIGIN_MARKS[props.stats.originMark] || null)
+const originMutation = computed(() => props.stats.origin?.mutation || null)
 </script>
 
 <template>
@@ -325,7 +330,7 @@ const primalTitle = computed(() => {
           </span>
         </div>
         <div
-          v-if="stats.coreResonance && stats.primarySpec === 'elemental' && !stats.spells"
+          v-if="stats.coreResonance && stats.originMark === 'elemental' && !stats.spells"
           class="hud-core-resonance"
           :style="{ '--resonance-color': stats.coreResonance.color }"
           :title="`${stats.coreResonance.name}：${stats.coreResonance.effect} · 两种元素等级 ${stats.coreResonance.levels.join(' / ')}`"
@@ -346,21 +351,36 @@ const primalTitle = computed(() => {
           <b v-if="digestRatio >= 1">{{ stats.elements.length ? '爆发就绪' : '待吸收元素' }}</b>
           <b v-else>{{ Math.round(digestRatio * 100) }}%</b>
         </div>
-        <!-- 拟态能量（原生黏液独占）：异源充能条，5 格 × 20，≥40 可超载、满格脉冲 -->
+        <!-- 异源能量（原生黏液独占）：异源充能条，5 格 × 20，≥40 可超载、满格脉冲 -->
         <div
           v-if="stats.strainId === 'origin'"
           class="hud-primal"
           :class="{ ready: primalReady, full: primalRatio >= 1 }"
           :title="primalTitle"
         >
-          <span>🫧 拟态</span>
+          <span>🫧 异源</span>
           <i><em :style="{ width: Math.round(primalRatio * 100) + '%' }"></em></i>
           <b v-if="primalRatio >= 1">已满</b>
           <b v-else-if="primalReady">超载就绪</b>
-          <b v-else>{{ stats.primal?.value ?? 0 }}</b>
+          <b v-else>{{ stats.origin?.energy ?? stats.primal?.value ?? 0 }}</b>
         </div>
-        <!-- 流派专精指示（阶段十八） -->
-        <div v-if="!stats.ricochet && (stats.primarySpec || stats.secondarySpec)" class="hud-specs">
+        <!-- 原生路线/印记：不显示职业主副专精，只显示液态变异方向 -->
+        <div v-if="stats.strainId === 'origin' && (originRouteInfo || originMarkInfo)" class="hud-specs">
+          <span v-if="originRouteInfo" class="spec-chip primary" :title="originRouteInfo.desc" :style="{ '--spec-color': originRouteInfo.color }">
+            <SkillIcon :skill="`spec_origin_route_${originRouteInfo.id}`" size="inline" /> {{ originRouteInfo.name }}
+          </span>
+          <span v-if="originMarkInfo" class="spec-chip secondary" :title="originMarkInfo.desc" :style="{ '--spec-color': originMarkInfo.color }">
+            <SkillIcon :skill="`spec_origin_mark_${originMarkInfo.id}`" size="inline" /> {{ originMarkInfo.name }}
+          </span>
+          <span v-if="originMutation && originMutation.max > 0 && originMutation.stacks > 0" class="spec-chip secondary" :title="`同化层数 ${originMutation.stacks}/${originMutation.max}`">
+            🧬 {{ originMutation.stacks }}/{{ originMutation.max }}
+          </span>
+          <span v-if="stats.origin?.circuits > 0" class="spec-chip secondary" :title="`共振回路 ${stats.origin.circuits}/3`">
+            ⚡ {{ stats.origin.circuits }}/3
+          </span>
+        </div>
+        <!-- 流派专精指示（专职角色） -->
+        <div v-if="!stats.ricochet && stats.strainId !== 'origin' && (stats.primarySpec || stats.secondarySpec)" class="hud-specs">
           <span v-if="stats.primarySpec" class="spec-chip primary" :title="'主专精：' + getSpecInfo(stats.primarySpec, stats)?.desc">
             <SkillIcon :skill="`spec_${stats.primarySpec}`" size="inline" /> 主: {{ getSpecInfo(stats.primarySpec, stats)?.name }}
           </span>

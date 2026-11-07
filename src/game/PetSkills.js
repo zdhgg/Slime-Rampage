@@ -42,8 +42,7 @@ export const PET_SKILLS = {
     }, PET_PARTNER_SKILLS),
     { ...skill('pet_capstone', '🌟 共生守望', 4, 1, '至少两只伙伴存活时，全体伙伴伤害额外提高 30%', '两只以上存活 · 全体伤害 ×1.3', ['pet_command']), isCapstone: true },
   ],
-  // 共鸣挂件刻意不带 requiresStrain：它们服务 origin 的 Lv.9 副专精拟态——
-  // 非共生血统也能拿到一只弱化伙伴投影，是「拟态只给机制层」的挂件化表达。
+  // 共鸣挂件不带 requiresStrain：历史上面向 origin 副专精；原生重构后不再产出，保留数据兼容。
   secondary: [
     {
       id: 'sym_sub_echo', spec: 'symbiosis', name: '残响伙伴', icon: '🐚',

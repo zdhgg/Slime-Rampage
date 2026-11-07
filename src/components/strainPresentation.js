@@ -10,8 +10,8 @@ export const STRAIN_PRESENTATION = {
   },
   origin: {
     ...SLIME_FAMILY_ART.origin,
-    label: '祖细胞拟态', epithet: '一切进化的起点',
-    intro: '未分化的原始形态。Lv.5 拟态任意一条血统的独占机制——吞噬、伙伴、弹幕、元素或暗影，由你写下进化方向。',
+    label: '液态变异', epithet: '没有固定形态，只有适应',
+    intro: '未分化的液态变异体。前期在原生核心、异源碎片与通用卡之间自由探索；Lv.5 选择原质扩张/基因同化/异源共振路线，Lv.9 烙下一枚异源印记。空格始终是黏液震荡，路线决定形态，印记只提供轻量附加特征。',
   },
   glutton: {
     ...SLIME_FAMILY_ART.glutton,
@@ -66,8 +66,8 @@ export function strainTraits(id) {
       { label: '生命上限', value: String(strain.maxHp).replace('-', '−'), cost: true },
     ]
     default: return [
-      { label: 'Lv.5 拟态', value: '五系任选' },
-      { label: 'Lv.9 独占', value: '副专精共鸣' },
+      { label: 'Lv.5 原生路线', value: '三选一' },
+      { label: 'Lv.9 异源印记', value: '五选一' },
       { label: '专属主动', value: '黏液震荡' },
     ]
   }

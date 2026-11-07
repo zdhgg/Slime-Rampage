@@ -88,8 +88,8 @@ function navigate(event, currentIndex) {
           <div class="character-skill">
             <span class="skill-key" aria-hidden="true"><template v-if="skill">SPACE</template><Sparkles v-else :size="19" /></span>
             <div class="skill-copy">
-              <div class="skill-title"><b>{{ skill?.name || '自由觉醒' }}</b><span>{{ skill ? (skill.chargeMax ? '猎食点驱动' : `冷却 ${skill.cooldown} 秒`) : 'Lv.5 选择主专精' }}</span></div>
-              <p>{{ skillSummary || 'Lv.1–4 三系技能均可选择，Lv.5 五系血统任选拟态，获得其独占机制与签名技能。' }}</p>
+              <div class="skill-title"><b>{{ skill?.name || '自由变异' }}</b><span>{{ skill ? (skill.chargeMax ? '猎食点驱动' : `冷却 ${skill.cooldown} 秒`) : 'Lv.5 选择原生路线' }}</span></div>
+              <p>{{ skillSummary || 'Lv.1–4 原生核心、异源碎片与通用卡自由探索；Lv.5 三选一原生路线，Lv.9 五选一异源印记。空格始终是黏液震荡。' }}</p>
             </div>
           </div>
 

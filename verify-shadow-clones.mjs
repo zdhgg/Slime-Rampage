@@ -221,9 +221,9 @@ check('升级与秘典顺序无关，原生黏液觉醒后首级暴伤有收益'
     return [g.weaponSystem.critChance, g.weaponSystem.critMul]
   }
   assert.deepEqual(snapshot(false), snapshot(true)); near(snapshot(true)[0], 0.41)
-  g.applyStartingStrain('origin'); g.reset(); g.primarySpec = 'assassin'; g._applyPrimarySpecBonus('assassin')
-  const before = g.weaponSystem.critMul; learn(g, 'ass_execute')
-  assert.ok(g.weaponSystem.critMul > before)
+  g.applyStartingStrain('origin'); g.reset()
+  assert.ok(!rollSkills(g, 99).some(s => s.id === 'ass_execute'), '原生不再抽取刺客职业树')
+  assert.equal(g.strainSkill.id, 'slime_shock')
 })
 check('角色技能显示真实效果，原生黏液不抽到分身技能', g => {
   let cards = rollSkills(g, 99)
@@ -231,8 +231,8 @@ check('角色技能显示真实效果，原生黏液不抽到分身技能', g =>
   assert.equal(cards.find(s => s.id === 'ass_stride').name, '虚化身躯')
   assert.equal(resolveShadowSkill({ ...book('boss_assassin_voidstep'), stats: book('boss_assassin_voidstep').ranks[0] }, g).stats.includes('影袭冷却'), true)
   g.applyStartingStrain('origin'); g.reset(); cards = rollSkills(g, 99)
-  assert.ok(!cards.some(s => ['ass_echo', 'ass_legion', 'ass_afterimage'].includes(s.id)))
-  assert.equal(cards.find(s => s.id === 'ass_stride').name, '暗影疾行')
+  assert.ok(!cards.some(s => /^(ass_|shadow_)/.test(s.id)), '原生不抽到任何暗影技能')
+  assert.equal(g.strainSkill.id, 'slime_shock')
 })
 check('达标终极随机出现且同一局只能取得一个', g => {
   learn(g, 'ass_echo'); g.player.level = 14; g.enemyManager.wave = 10; g._ensureRoleAwakening()

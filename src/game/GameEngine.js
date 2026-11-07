@@ -7,7 +7,7 @@ import { EnemyManager } from './EnemyManager.js'
 import { WeaponSystem } from './WeaponSystem.js'
 import { GemManager } from './GemManager.js'
 import { SoundManager } from './SoundManager.js'
-import { rollSkills, rollBossSkills, getSpecInfo, getSecondaryStarter, SPEC_INFO, SKILL_DATABASE } from './SkillPool.js'
+import { rollSkills, rollBossSkills, getSpecInfo, SKILL_DATABASE } from './SkillPool.js'
 import { RICOCHET_ROUTES, RICOCHET_SKILL_BY_ID, ricochetSkillAvailable, ricochetRouteReady } from './RicochetRules.js'
 import { GLUTTON_ROUTES, GLUTTON_SKILL_BY_ID, gluttonSkillAvailable, gluttonRouteReady } from './GluttonBuild.js'
 import { SYMBIOSIS_ROUTES, SYMBIOSIS_SKILL_BY_ID, symbiosisSkillAvailable, symbiosisRouteReady } from './SymbiosisBuild.js'
@@ -26,9 +26,10 @@ import { MapFeatureManager } from './MapFeatureManager.js'
 import { DialogueManager } from './DialogueManager.js'
 import { createGameplay, normalizeGameplayId } from './gameplay/GameplayFactory.js'
 import { AmbientLayer } from './effects/AmbientLayer.js'
-import { STRAINS, STRAIN_IDS, applyStrain, canDevour, canUseElements, getStrainSkill, mimicryStrain } from './Strains.js'
+import { STRAIN_IDS, applyStrain, canDevour, canUseElements, getStrainSkill } from './Strains.js'
 import { PRIMAL_ENERGY_MAX, PRIMAL_OVERLOAD_COST, resetPrimalEnergy, primalOverloadDescription } from './PrimalEnergy.js'
 import { getOriginCoreResonance } from './OriginCoreResonance.js'
+import { ORIGIN_ROUTES, ORIGIN_MARKS, ORIGIN_RULES, ORIGIN_SKILL_BY_ID, originSkillAvailable, initOriginRouteState, initOriginMarkState } from './OriginBuild.js'
 import { BossTomeCombat } from './BossTomeCombat.js'
 import { BossArena } from './BossArena.js'
 import {
@@ -85,34 +86,6 @@ export const DEVOUR_THRESHOLD_CAP = 0.4
  * UI 层用它初始化 stats（引擎就绪前 HUD 渲染不访问 undefined 字段），
  * 字段增删只改引擎这一处，消除「初始对象与回调拷贝手工双写」的漂移。
  */
-/**
- * origin 拟态授予（祖细胞拟态）：选择暴食/共生专精时，补发该血统的机制层——
- * 资源、涂装与首只伙伴。刻意只给机制不给属性（暴食 +1hp / 共生 −45% 伤害
- * 仍是血统独占），血统赢在「开局即是」，origin 赢在「自由+元素+双专精」。
- *  - gluttony：授予猎食点资源（空格换成重咬由 strainSkill 分派完成）；
- *    吞噬权限由 canDevour 读 mimicryStrain，此处无需写状态。
- *  - symbiosis：刷新伙伴名册（岩甲团团是常驻名册位，enabled 一开自动到场）。
- * 非 origin 或非拟态血统时为空操作，与里程碑/自动觉醒两条入口共用。
- * 模块级函数（不挂类）：测试桩直接 call _applyPrimarySpecBonus 时不依赖原型。
- */
-export function applyMimicryGrant(engine, spec) {
-  if (engine.startingStrain !== 'origin') return
-  const mimicry = mimicryStrain(engine.startingStrain, spec)
-  if (!mimicry) return
-  const strain = STRAINS[mimicry]
-  if (engine.player) {
-    engine.player.strainTint = strain?.tint || engine.player.strainTint
-    engine.player.strainDeco = strain?.deco || engine.player.strainDeco
-  }
-  if (mimicry === 'glutton') {
-    // 猎食点是局内资源：拟态授予时从 0 点/0 进度开始（disable 的 -1 哨兵在此转正）。
-    resetGluttonResource(engine.player)
-  } else if (mimicry === 'summoner') {
-    // 伙伴立即到场：enabled 闸门刚开，sync 才会把常驻名册位实例化。
-    engine.weaponSystem?.petCombat?.sync?.()
-  }
-}
-
 export function createDefaultStats() {
   return {
     elapsed: 0,
@@ -144,6 +117,8 @@ export function createDefaultStats() {
     primarySpec: null,
     secondarySpec: null,
     roleSpec: null,
+    originRoute: null,
+    originMark: null,
     ricochet: null,
     symbiosis: null,
     bossTomes: [],
@@ -152,7 +127,8 @@ export function createDefaultStats() {
     canUseElements: true,
     spells: null,
     digest: { charge: 0, max: 100, bursts: 0 },
-    // 拟态能量（origin 独占，P0）：异源充能 → ≥cost 时空格技升档为超载版
+    // 异源能量（origin 独占）：异源充能 → ≥cost 时空格技升档为超载版
+    origin: { energy: 0, max: 100, cost: 40, effect: primalOverloadDescription(), route: null, mark: null, overload: null, mutation: null, circuits: 0 },
     primal: { value: 0, max: 100, cost: 40, effect: primalOverloadDescription() },
     // 暴食猎食点（仅暴食角色在 _pushStats 里给出 true 与真实数值）
     glutton: { has: false, charge: 0, max: 2, progress: 0, progressPer: 5, ready: false },
@@ -313,7 +289,9 @@ export class GameEngine {
     this._chapterSettlement = null
     this._settlementApplying = false
     this.primarySpec = null // 主专精（'gluttony' | 'gatling' | 'elemental' | 'assassin'）
-    this.secondarySpec = null // 副专精
+    this.secondarySpec = null // 旧副专精字段：origin 重构后不再使用，保留以兼容旧测试桩
+    this.originRoute = null // 原生路线：'expansion' | 'assimilation' | 'resonance'
+    this.originMark = null // 异源印记：'glutton' | 'gatling' | 'elemental' | 'assassin' | 'symbiosis'
     this.startingStrain = 'origin' // 开局血统预选（先天属性，reset 末尾叠加应用）
     this.startingElement = null // Set when the first spell is learned at Lv.2.
     this.onSpellCore = null
@@ -548,27 +526,16 @@ export class GameEngine {
   // ------------------------------------------------------------
 
   /**
-   * origin 拟态血统（祖细胞拟态）：Lv.5 选择暴食/共生专精后，获得对应血统的
-   * 机制层身份（'glutton' / 'summoner'）。只读主专精推导，不单独持久化——
-   * 读档/测试桩缺字段时退化为 null，门禁全部自然关回。
-   */
-  get mimicryStrain() {
-    return mimicryStrain(this.startingStrain, this.primarySpec)
-  }
-
-  /**
-   * 该角色能否吞噬敌人。暴食天生可以；origin 拟态暴食专精后同样可以
-   * （吞噬→消化→元素吸收链路因此只对 origin 与暴食可达，且 origin 独有元素侧）。
-   * EnemyManager._checkDevour 与 Enemy.hit 共用此判定，避免两处口径漂移。
+   * 该角色能否吞噬敌人。只有暴食史莱姆天生可以；
+   * origin 的路线/印记不会授予吞噬，避免复制暴食主系统。
    */
   get canDevour() {
-    return canDevour(this.startingStrain) || this.mimicryStrain === 'glutton'
+    return canDevour(this.startingStrain)
   }
 
   /**
    * 该角色能否使用元素系统（第三批角色化）。
-   * 只有 elemental / origin 为真；暴食/弹射/暗影下：
-   * 核心不生成、自动吸收不生效、元素 HUD 不显示、absorbElement 直接短路。
+   * 只有 elemental / origin 为真；origin 保留元素吸收与反应，但不开放法术树。
    */
   get canUseElements() {
     return canUseElements(this.startingStrain)
@@ -576,13 +543,11 @@ export class GameEngine {
 
   /**
    * 当前角色的空格技能定义，包含原生黏液。
-   * origin 拟态后换成拟态血统的签名技（暴食→重咬、共生→鼓舞）：
-   * 这两条血统的资源体系（猎食点/伙伴）与空格扳机绑定，保留黏液震荡
-   * 等于给了弹药不给扳机。gatling/elemental/assassin 拟态为 null，保震荡。
+   * origin 任何路线/印记都固定返回「黏液震荡」，不再替换成重咬/鼓舞。
    */
   get strainSkill() {
     if (this.weaponSystem?.ricochetCombat?.enabled) return this.weaponSystem.ricochetCombat.activeSkill
-    const skill = getStrainSkill(this.mimicryStrain || this.startingStrain), spells = this.weaponSystem.spellCombat
+    const skill = getStrainSkill(this.startingStrain), spells = this.weaponSystem.spellCombat
     if (!spells.enabled) return skill
     this._spellActiveSkill ||= { ...skill, use: engine => engine.weaponSystem.spellCombat.useActive() }
     Object.assign(this._spellActiveSkill, { id: spells.routeUltimate ? `elemental_${spells.routeUltimate}` : spells.fusion ? `fusion_${spells.fusion.id}` : skill.id, name: spells.activeName,
@@ -597,7 +562,7 @@ export class GameEngine {
    *  - rollSkills 保持只负责生成候选，不产生副作用；
    *  - 所有会抽卡的入口（升级 / 王级秘籍 / 悬赏奖励 / 远征勇者秘籍）都先经过这里，
    *    因此任何一个入口在 Lv.5 都不会漏掉觉醒，也不会弹出错的四选一面板；
-   *  - origin 的 roleSpec 为 null，直接短路 → 保留 Lv.5 五系拟态里程碑。
+   *  - origin 的 roleSpec 为 null，直接短路 → 保留 Lv.5 三选一原生路线。
    *
    * 时序要求：必须在 weaponSystem.reset() / player.resetRunState() / applyGenes /
    * applyStrain 之后调用（觉醒会改写 damage/fireInterval/maxHp 等基础值）。
@@ -936,6 +901,29 @@ export class GameEngine {
       this._pushStats(); this._pushCooldown(); this.resume()
       return true
     }
+    if (skill.isOriginRoute) {
+      if (this.startingStrain !== 'origin' || this.originRoute || (this.player.level || 1) < ORIGIN_RULES.routeLevel) return false
+      if (!ORIGIN_ROUTES[skill.originRoute]) return false
+      this.originRoute = skill.originRoute
+      initOriginRouteState(this, this.originRoute)
+      this.player.strainTint = ORIGIN_ROUTES[this.originRoute].tint
+      this.weaponSystem.registerSkillEvolution({ spec: 'origin', tier: 1 })
+      this.enemyManager?.addText?.(this.player.x, this.player.y - 20, `🧬 原生进化：${ORIGIN_ROUTES[this.originRoute].name}`, null, ORIGIN_ROUTES[this.originRoute].color, 16)
+      this.sound.wave()
+      this.evolutionEvent('原生进化', ORIGIN_ROUTES[this.originRoute].name, 'origin', ORIGIN_ROUTES[this.originRoute].bonus)
+      this._pushStats(); this._pushCooldown(); this.resume()
+      return true
+    }
+    if (skill.isOriginMark) {
+      if (this.startingStrain !== 'origin' || !this.originRoute || this.originMark || (this.player.level || 1) < ORIGIN_RULES.markLevel) return false
+      if (!ORIGIN_MARKS[skill.originMark]) return false
+      this.originMark = skill.originMark
+      initOriginMarkState(this, this.originMark)
+      this.enemyManager?.addText?.(this.player.x, this.player.y - 20, `🧬 异源印记：${ORIGIN_MARKS[this.originMark].name}`, null, ORIGIN_MARKS[this.originMark].color, 16)
+      this.sound.wave()
+      this._pushStats(); this._pushCooldown(); this.resume()
+      return true
+    }
     skill = resolveShadowSkill(skill, this)
     skill = resolveElementalSkill(skill, this)
 
@@ -945,22 +933,13 @@ export class GameEngine {
       this.enemyManager?.addText?.(this.player.x, this.player.y - 20, `📜 ${skill.name} Lv.${this.bossSkillLevels[skill.id]}`, null, skill.color || '#ffd166', 16)
       this.sound.wave()
     } else if (skill.isMilestone) {
-      if (this.startingStrain === 'ricochet') return false
+      // 原生路线/印记已在上面处理；旧主/副专精里程碑不再对 origin 开放。
+      if (this.startingStrain === 'origin' || this.startingStrain === 'ricochet') return false
       const info = getSpecInfo(skill.spec, this)
       if (skill.milestoneType === 'primary') {
         this.primarySpec = skill.spec
         this._applyPrimarySpecBonus(skill.spec)
         this.enemyManager?.addText?.(this.player.x, this.player.y - 20, `👑 主专精确立：${info?.name || skill.spec}`, null, info?.color || '#ffd166', 16)
-        this.sound.wave()
-      } else if (skill.milestoneType === 'secondary') {
-        if (this.secondarySpec || this.roleSpec || this.startingStrain !== 'origin' || this.player.level < 9 || !this.primarySpec || skill.spec === this.primarySpec) return false
-        const starter = getSecondaryStarter(this, skill.spec)
-        if (!starter) return false
-        this.secondarySpec = skill.spec
-        const level = (this.skillLevels[starter.id] || 0) + 1
-        this.skillLevels[starter.id] = level
-        starter.apply?.(this, level)
-        this.enemyManager?.addText?.(this.player.x, this.player.y - 20, `🥈 副专精确立：${info?.name || skill.spec} · 获得${starter.name}`, null, info?.color || '#74b9ff', 16)
         this.sound.wave()
       }
     } else {
@@ -970,6 +949,15 @@ export class GameEngine {
         if (this.runSelection?.mode !== 'endless') return false
         skill = ENDLESS_SKILL_BY_ID[skill.id]
         if (!skill) return false
+      } else if (this.startingStrain === 'origin') {
+        const canonical = ORIGIN_SKILL_BY_ID[skill.id] || SKILL_DATABASE.common.find(entry => entry.id === skill.id)
+        if (!canonical || (canonical.originOnly && !originSkillAvailable(this, canonical))) return false
+        const role = canonical.originOnly
+          ? (canonical.originPool === 'fragment' ? 'origin_fragment'
+            : canonical.originPool?.startsWith('route_') ? 'origin_route'
+            : canonical.originPool === 'mark' ? 'origin_mark' : 'origin_common')
+          : 'common'
+        skill = { ...canonical, role, progressionRole: role, maxLevel: getEffectiveSkillMaxLevel(this, canonical, role) }
       } else if (this.startingStrain === 'ricochet') {
         const offered = skill
         const canonical = RICOCHET_SKILL_BY_ID[skill.id]
@@ -1067,6 +1055,8 @@ export class GameEngine {
    *  - 暴食的「消化效率 +50%」已随暴食退出元素链一并移除。
    */
   _applyPrimarySpecBonus(spec) {
+    // 职业觉醒赋能只属于专职角色；origin 的路线/印记不调用这里。
+    if (this.startingStrain === 'origin') return
     if (spec === 'gluttony') {
       this.devourThreshold = Math.min(DEVOUR_THRESHOLD_CAP, Math.max(this.devourThreshold, 0.28))
       this.player.maxHp += 1
@@ -1089,7 +1079,6 @@ export class GameEngine {
       // 显式比较 true，保证字段在任何上下文（含测试桩缺字段）下都是布尔值。
       this.weaponSystem.critGuaranteesElement = this.canUseElements === true
     }
-    applyMimicryGrant(this, spec)
   }
 
   /** 开局血统预选：先天属性每局 reset 末尾（基因/难度之后）叠加应用 */
@@ -1769,6 +1758,8 @@ export class GameEngine {
     p._aura.length = 0
     this.primarySpec = null
     this.secondarySpec = null
+    this.originRoute = null
+    this.originMark = null
     this.roleSpec = null // 角色身份归位（随后由 applyStrain 按血统重建）
     this.strainDevourBonus = 0
     this.devourThreshold = DEVOUR_THRESHOLD_BASE
@@ -1827,7 +1818,7 @@ export class GameEngine {
       p.hp = p.maxHp
     }
     applyStrain(this, this.startingStrain) // 血统先天属性：最后叠加（生命/移速/攻击/吞噬口径）
-    resetPrimalEnergy(p) // 拟态能量：纯局内资源，重开归零（不进存档）
+    resetPrimalEnergy(p) // 异源能量：纯局内资源，重开归零（不进存档）
     this.weaponSystem.spellCombat.start()
     if (this.runSelection.mode === 'expedition') {
       this._enterExpeditionStage(1, true)
@@ -1931,7 +1922,7 @@ export class GameEngine {
       // 空格角色技能：菜单/冷却条数据源。
       // 资源型技能（暴食）额外给出 charge 口径，HUD 改渲染猎食点而非冷却条——
       // 它的 skillMax 恒为 0，因此旧的冷却分支天然不会被点亮。
-      // 伙伴面板跟随系统开关而非血统名：origin 拟态共生后同样显示名册与鼓舞状态
+      // 伙伴面板跟随系统开关而非血统名：只有共生血统会开启完整名册。
       pets: this.weaponSystem.petCombat.enabled ? this.weaponSystem.petCombat.hud() : null,
       petRally: this.weaponSystem.petCombat.enabled ? this.weaponSystem.petCombat.rallyHud() : null,
       tomeShield: this.bossTomes.shield,
@@ -2008,6 +1999,8 @@ export class GameEngine {
       skillRerolls: this.player.geneRerolls || 0,
       primarySpec: this.primarySpec,
       secondarySpec: this.secondarySpec,
+      originRoute: this.originRoute,
+      originMark: this.originMark,
       // 角色身份（阶段十九）：HUD 据此显示角色名、决定是否渲染吞噬线（canDevour）
       bossTomes: this.bossTomes.hud(),
       roleSpec: this.roleSpec,
@@ -2023,9 +2016,31 @@ export class GameEngine {
         max: this.weaponSystem.digestChargeMax,
         bursts: this.weaponSystem.digestBursts,
       },
-      // 拟态能量（HUD 能量条；非 origin 恒为 0，HUD 按 strainId 决定是否渲染）
+      // 异源能量（HUD 能量条；非 origin 恒为 0，HUD 按 strainId 决定是否渲染）
+      origin: {
+        energy: Math.round(this.player.originEnergy || 0),
+        max: PRIMAL_ENERGY_MAX,
+        cost: PRIMAL_OVERLOAD_COST,
+        effect: primalOverloadDescription(this),
+        route: this.originRoute,
+        mark: this.originMark,
+        overload: this.player.overloadState ? {
+          active: !!this.player.overloadState.active,
+          timer: this.player.overloadState.timer || 0,
+          damageMul: this.player.overloadState.damageMul || 1,
+          radiusMul: this.player.overloadState.radiusMul || 1,
+        } : null,
+        mutation: this.player.mutationState ? {
+          stacks: this.player.mutationState.stacks || 0,
+          max: this.player.mutationState.max || 5,
+          timer: this.player.mutationState.timer || 0,
+          empowered: !!this.player.mutationState.empowered,
+        } : null,
+        circuits: this.player.routeState?.resonance?.circuits || 0,
+      },
+      // 兼容旧 HUD：primal 仍指向同一份异源能量
       primal: {
-        value: Math.round(this.player.primalEnergy || 0),
+        value: Math.round(this.player.originEnergy || 0),
         max: PRIMAL_ENERGY_MAX,
         cost: PRIMAL_OVERLOAD_COST,
         effect: primalOverloadDescription(this),

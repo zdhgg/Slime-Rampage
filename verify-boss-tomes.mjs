@@ -86,6 +86,8 @@ test('origin', '充能/超载费用固定，余震最多五目标且不返充；
   g.bossTomes.update(.02)
   assert.equal(enemies.filter(e => e.hp < 100).length, 5); assert.equal(g.player.primalEnergy, 40)
   g.bossTomes.update(.4); assert.equal(g.bossTomes.jobs.length, 0)
+  g.elapsed = 3 // 超载支付锁：真实战局里由 6.5 秒震荡冷却自然跨过
+  g.player.overloadState.active = false // 超载窗口由 OriginCombat.update 推进；测试直接跨过
   assert.equal(trySpendPrimalOverload(g), true); assert.equal(g.player.primalEnergy, 0); assert.equal(g.bossTomes.shield, 1)
   g.bossTomes.clearStage(); assert.equal(g.bossTomes.shield, 0); assert.equal(g.bossTomes.jobs.length, 0)
 })

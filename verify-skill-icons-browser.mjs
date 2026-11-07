@@ -24,11 +24,12 @@ import {symbiosisRouteOptions} from '/src/game/SymbiosisBuild.js'
 import {shadowRouteOptions} from '/src/game/ShadowBuild.js'
 import {elementalRouteOptions} from '/src/game/ElementalBuild.js'
 import {ELEMENTAL_SKILLS,spellMilestoneReward} from '/src/game/SpellRules.js'
+import {ORIGIN_COMMON_SKILLS,ORIGIN_FRAGMENT_SKILLS,originRouteOptions,originMarkOptions} from '/src/game/OriginBuild.js'
 import {GameEngine} from '/src/game/GameEngine.js'
 const common=SKILL_DATABASE.common
 const card=s=>({...s,level:0,stats:typeof s.stats==='string'?s.stats:'强化生效',role:'common'})
 const examples={
- origin:[common.find(s=>s.id==='com_vital'),common.find(s=>s.id==='com_swift'),common.find(s=>s.id==='com_regen')],
+ origin:[ORIGIN_COMMON_SKILLS[0],ORIGIN_FRAGMENT_SKILLS[0],common.find(s=>s.id==='com_vital')],
  ricochet:['rico_recharge','rico_vitality','rico_haste'].map(id=>RICOCHET_SKILLS.find(s=>s.id===id)),
  glutton:[SKILL_DATABASE.gluttony.primary[0],common[0],SKILL_DATABASE.gluttony.primary[4]],
  summoner:[SKILL_DATABASE.symbiosis.primary[3],common[0],SKILL_DATABASE.symbiosis.primary[4]],
@@ -42,12 +43,21 @@ const app=createApp({render(){const s=state.value
  if(s.type==='milestone')return h(LevelUpModal,{options:Object.entries(SPEC_INFO).map(([spec,v])=>({...v,id:'milestone_pri_'+spec,spec,isMilestone:true,milestoneType:'primary',tags:['主专精',v.name]})),level:5,canUseElements:false})
  if(s.type==='core')return h(SpellCoreModal,{info:spellMilestoneReward({available:true,elements:new Set(),player:{level:2}}),onSelect:id=>window.lastSelection=id})
  if(s.type==='route')return h(LevelUpModal,{key:s.strain,options:s.options,level:7,canUseElements:false})
+ if(s.type==='originRoute'||s.type==='originMark')return h(LevelUpModal,{key:s.type,options:s.options,level:s.type==='originRoute'?5:9,canUseElements:true,onSelect:c=>window.lastSelection=c.id})
  if(s.type==='hud')return h(HudOverlay,{stats:s.stats,cooldown:s.cooldown})
  return h('div',{class:'gallery'},Object.entries(examples).map(([strain,skills])=>h('section',[h('h2',strain),...skills.flatMap(skill=>[h(SkillIcon,{skill}),h('label',skill.name)])])))
 }}).mount('#app')
 window.review={async show(type,strain){
  window.lastSelection=null
  let data={type,strain}
+ if(type==='originRoute'||type==='originMark'){
+  const canvas=document.createElement('canvas');canvas.width=1440;canvas.height=960
+  const game=GameEngine.create(canvas);game.applyStartingStrain('origin');game.reset()
+  game.player.level=type==='originRoute'?5:9
+  if(type==='originRoute') data.options=originRouteOptions(game)
+  else { game.originRoute='expansion'; data.options=originMarkOptions(game) }
+  game.destroy()
+ }
  if(type==='route'||type==='hud'){
   const canvas=document.createElement('canvas');canvas.width=1440;canvas.height=960
   const game=GameEngine.create(canvas);game.applyStartingStrain(strain);game.reset()
@@ -116,6 +126,9 @@ try {
     await show('milestone')
     await page.screenshot({ animations: 'disabled', path: path.join(output, `milestone-${width}.png`) })
     for (const strain of ['ricochet', 'glutton', 'summoner', 'elemental', 'shadow']) await show('route', strain)
+    await show('originRoute')
+    await show('originMark')
+    await page.screenshot({ animations: 'disabled', path: path.join(output, `origin-milestones-${width}.png`) })
     await page.screenshot({ animations: 'disabled', path: path.join(output, `routes-shadow-${width}.png`) })
   }
   await page.setViewportSize({ width: 1440, height: 740 })

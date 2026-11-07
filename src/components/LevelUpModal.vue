@@ -47,7 +47,7 @@ const props = defineProps({
   options: { type: Array, required: true }, // 技能选项数组
   level: { type: Number, required: true }, // 当前等级
   // 角色身份（阶段十九）：非空 = 四角色血统，Lv.1~4 只开放本树；
-  // 空 = origin 祖细胞拟态，仍走三系自由探索 + Lv.5 五系拟态
+  // 空 = origin 原生体系，走原生核心/碎片 + Lv.5 三路线 + Lv.9 五印记。
   roleSpec: { type: String, default: null },
   // 元素权限（第四批）：无权限角色的槽位里程碑是空承诺，需隐藏
   canUseElements: { type: Boolean, default: true },
@@ -63,6 +63,8 @@ const isGluttonRoute = computed(() => !!props.options?.[0]?.isGluttonRoute)
 const isSymbiosisRoute = computed(() => !!props.options?.[0]?.isSymbiosisRoute)
 const isElementalRoute = computed(() => !!props.options?.[0]?.isElementalRoute)
 const isShadowRoute = computed(() => !!props.options?.[0]?.isShadowRoute)
+const isOriginRoute = computed(() => !!props.options?.[0]?.isOriginRoute)
+const isOriginMark = computed(() => !!props.options?.[0]?.isOriginMark)
 const isGluttonSkill = (s) => !!(s?.isGluttonSkill || s?.id?.startsWith('glut_'))
 const isSymbiosisSkill = (s) => !!(s?.isSymbiosisSkill || s?.id?.startsWith('sym_'))
 
@@ -114,7 +116,12 @@ const milestoneType = computed(() => props.options?.[0]?.milestoneType || 'prima
 
 const roleLabel = (s) => {
   if (s.element) return s.tags?.[0] || '元素强化'
-  if (s.originOnly) return '🧬 原生拟态成长'
+  if (s.isOriginRoute) return '🧬 原生进化路线'
+  if (s.isOriginMark) return '🧬 异源印记'
+  if (s.originPool === 'fragment') return '🧩 异源碎片'
+  if (s.role === 'origin_route') return `🌊 ${s.tags?.find(tag => ['扩张', '同化', '共振'].includes(tag)) || '路线强化'}`
+  if (s.role === 'origin_mark') return '🧬 印记强化'
+  if (s.originOnly) return '🫧 原生核心'
   if (s.isBossSkill) return s.isPartnerChoice ? '🐾 BOSS伙伴契约' : '📜 BOSS职业秘典'
   if (s.isCapstone) return '🌟 终极觉醒'
   if (s.isRicochetSkill) return s.tags?.[0] || '弹道进化'
@@ -131,6 +138,9 @@ const roleLabel = (s) => {
 }
 
 const cardClass = (s) => {
+  if (s.isOriginRoute) return 'card-primary'
+  if (s.isOriginMark) return 'card-secondary'
+  if (s.originPool === 'fragment') return 'card-free'
   if (s.element || s.role === 'role_t1' || s.originOnly) return 'card-primary'
   if (s.isBossSkill) return s.isPartnerChoice ? 'card-partner' : 'card-boss'
   if (s.isCapstone) return 'card-capstone'
@@ -177,10 +187,18 @@ const visibleTags = (s) => s.isRicochetSkill && s.tags?.[0] === roleLabel(s) ? s
     <div v-else-if="isMilestone" class="milestone-panel">
       <div class="milestone-header">
         <h2 class="milestone-title">
-          {{ milestoneType === 'primary' ? '👑 Lv.5 主专精觉醒 · 抉择你的进化宿命 👑' : '🥈 Lv.9 副专精共鸣 · 挑选你的辅助流派 🥈' }}
+          {{ isOriginRoute
+            ? '🧬 Lv.5 原生进化 · 选择你的液态路线 🧬'
+            : isOriginMark
+            ? '🧬 Lv.9 异源印记 · 选择一种外来特征 🧬'
+            : milestoneType === 'primary' ? '👑 Lv.5 主专精觉醒 · 抉择你的进化宿命 👑' : '🥈 Lv.9 副专精共鸣 · 挑选你的辅助流派 🥈' }}
         </h2>
         <div class="milestone-sub">
-          {{ milestoneType === 'primary'
+          {{ isOriginRoute
+            ? '路线决定黏液震荡的形态与超载主体效果；不会复制任何职业树，空格始终是黏液震荡。'
+            : isOriginMark
+            ? '印记只提供轻量附加特征与一次超载回响；不会开放对应职业的吞噬、伙伴、法术或分身系统。'
+            : milestoneType === 'primary'
             ? '主专精将确立你的核心战斗形态，并解锁后续 T2~T3 高阶技能与 T4 终极觉醒大招！'
             : '选择后立即获得一项基础共鸣，后续升级可继续强化并解锁同系辅助能力。' }}
         </div>
@@ -198,33 +216,37 @@ const visibleTags = (s) => s.isRicochetSkill && s.tags?.[0] === roleLabel(s) ? s
         >
           <kbd class="key-hint" aria-hidden="true">{{ idx + 1 }}</kbd>
           <div class="ms-top">
-            <SkillIcon :skill="{ ...s, id: `spec_${s.spec}` }" />
+            <SkillIcon :skill="{ ...s, id: s.iconId || `spec_${s.spec}` }" />
             <div class="ms-name">{{ s.name }}</div>
             <div class="ms-desc">{{ s.desc }}</div>
           </div>
 
           <!-- 觉醒即时赋能 -->
           <div class="ms-bonus-box">
-            <div class="ms-bonus-title">{{ milestoneType === 'primary' ? '⚡ 初始觉醒赋能' : '⚡ 选择后立即获得' }}</div>
+            <div class="ms-bonus-title">{{ isOriginRoute ? '🧬 路线确立' : isOriginMark ? '🧬 印记效果' : milestoneType === 'primary' ? '⚡ 初始觉醒赋能' : '⚡ 选择后立即获得' }}</div>
             <div class="ms-bonus-val">{{ s.bonus }}</div>
           </div>
 
           <!-- 玩法规则改写：主专精决定你怎么用（暴击／分裂／元素）。
                刺客那条依赖元素权限，对暗影隐藏——不承诺拿不到的效果。 -->
-          <div v-if="milestoneType === 'primary' && canShowSpecRule(s.spec)" class="ms-element-rule">
+          <div v-if="!isOriginRoute && !isOriginMark && milestoneType === 'primary' && canShowSpecRule(s.spec)" class="ms-element-rule">
             {{ SPEC_ELEMENT_RULE[s.spec] }}
           </div>
 
           <!-- 未来进阶路线预览 -->
-          <div v-if="milestoneType === 'primary'" class="ms-roadmap">
-            <div class="ms-roadmap-title">📜 未来进阶与终极觉醒预览</div>
-            <div v-for="(rm, idx) in s.roadmap" :key="idx" class="roadmap-item" :class="{ capstone: idx === 3 }">
+          <div v-if="milestoneType === 'primary' || isOriginRoute || isOriginMark" class="ms-roadmap">
+            <div class="ms-roadmap-title">{{ isOriginRoute ? '📜 路线进阶预览' : isOriginMark ? '📜 印记强化预览' : '📜 未来进阶与终极觉醒预览' }}</div>
+            <div v-for="(rm, idx) in s.roadmap" :key="idx" class="roadmap-item" :class="{ capstone: !isOriginRoute && !isOriginMark && idx === 3 }">
               {{ rm }}
             </div>
           </div>
 
           <button class="ms-select-btn">
-            {{ milestoneType === 'primary' ? `👑 确立【${s.tags[1]}】为主专精` : `🥈 确立【${s.tags[1]}】为副专精` }}
+            {{ isOriginRoute
+              ? `🧬 确立【${s.tags?.[1] || s.name}】路线`
+              : isOriginMark
+              ? `🧬 烙下【${s.tags?.[1] || s.name}】`
+              : milestoneType === 'primary' ? `👑 确立【${s.tags[1]}】为主专精` : `🥈 确立【${s.tags[1]}】为副专精` }}
           </button>
         </div>
       </div>
@@ -244,7 +266,7 @@ const visibleTags = (s) => s.isRicochetSkill && s.tags?.[0] === roleLabel(s) ? s
           : level < 5
           ? (roleSpec
             ? '🌱 阶段说明：Lv.1~4 只开放本角色专属技能树（Lv.5 自动觉醒为你的主专精，无需选择）'
-            : '🌱 阶段说明：Lv.1~4 为自由变异期（三系技能全开放，不锁死流派，Lv.5 将触发五系血统拟态觉醒）')
+            : '🌱 阶段说明：Lv.1~4 为自由变异期（原生核心/碎片/通用卡自由混搭，Lv.5 三选一原生路线）')
           : '📈 等级成长：攻击力自动提升 8%（已生效，可与技能叠加）') }}
       </div>
       <div v-if="slotMilestone" class="levelup-slot" :class="{ hit: slotMilestone.hit }">

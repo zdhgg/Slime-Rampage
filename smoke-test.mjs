@@ -623,16 +623,14 @@ assert.equal(weaponSystem._projectiles[0].active, false)
 weaponSystem.critChance = critChanceBeforePierce
 ok('动能穿透：一枚飞弹连续命中两个目标且不会重复命中')
 
-// 23) 刺客替身、击杀爆发与局内状态清理
+// 23) 原生震荡不再生成职业替身；击杀爆发与局内状态清理
 player.resetRunState()
-player.shadowDecoyDuration = 1.5
 player.killRushSpeed = 0.4
 player.devourDamageReduction = 0.25
+const energyBefore = player.originEnergy
 getStrainSkill('origin').use(game)
-assert.equal(player._decoys.length, 1)
-const taunted = new Enemy({ x: player.x + 100, y: player.y, speed: 80, hp: 5, type: 'knight' })
-taunted.attach(game)
-assert.equal(player.getEnemyTarget(taunted).isDecoy, true)
+assert.equal(player._decoys.length, 0)
+assert.ok(player.originEnergy >= energyBefore, '震荡仍会积累异源能量')
 player.triggerKillRush()
 player.triggerDevourGuard()
 assert.equal(player.killRushTimer, 2)

@@ -6,6 +6,7 @@ import { AssetManager } from '../AssetManager.js'
 import { renderSlimeFamilyBody, renderSlimeFamilyFace, paintSlimeFamilySilhouette, slimeFamilyBodyState, slimeFamilyFaceState } from '../SlimeFamilyArtRenderer.js'
 import { getSlimeFamilyArt } from '../SlimeFamilyArt.js'
 import { resetPrimalEnergy } from '../PrimalEnergy.js'
+import { ORIGIN_ROUTES } from '../OriginBuild.js'
 import { GLUTTON_FEAST_SPEED } from '../GluttonResource.js'
 
 const TAU = Math.PI * 2
@@ -161,8 +162,13 @@ export class Player extends Entity {
     this.baseSecondarySlots = BASE_SECONDARY_SLOTS
     this.secondarySlots = BASE_SECONDARY_SLOTS
     this._secondaryIds = new Set()
-    // 拟态能量（origin 独占资源，P0）：归零初始化，获取/消耗口径见 PrimalEnergy.js
+    // 异源能量（origin 独占资源）：归零初始化，获取/消耗口径见 PrimalEnergy.js
     resetPrimalEnergy(this)
+    this.originMoveBuff = 0
+    this.originMoveBuffTimer = 0
+    this.originDr = 0
+    this.originAdaptReduction = 0
+    this.originFormDr = 0
     this._refreshElements()
 
     // —— 基因属性（阶段八：黑市局外成长，由 applyGenes 维护） ——
@@ -333,6 +339,10 @@ export class Player extends Entity {
     decoy.flash = 0.12
   }
 
+  /** 旧字段兼容：primalEnergy 与 originEnergy 共用同一份状态。 */
+  get primalEnergy() { return this.originEnergy }
+  set primalEnergy(value) { this.originEnergy = Number(value) || 0 }
+
   /** 清理所有只应在单局内存在的技能与临时状态。 */
   resetRunState() {
     this.speedBuffTimer = 0
@@ -421,6 +431,12 @@ export class Player extends Entity {
     this.gluttonFeastTimer = 0
     this.gluttonCowLevel = 0
     this.elementProcCap = ELEMENT_PROC_CHANCE_CAP // 专精改写的附魔封顶归位
+    resetPrimalEnergy(this) // 异源能量/超载/同化/印记运行态归零
+    this.originMoveBuff = 0
+    this.originMoveBuffTimer = 0
+    this.originDr = 0
+    this.originAdaptReduction = 0
+    this.originFormDr = 0
   }
 
   /** 回复生命值 */
@@ -739,6 +755,14 @@ export class Player extends Entity {
     }
     const petRouteReduction = this.game?.weaponSystem?.petCombat?.playerDamageReduction || 0
     if (petRouteReduction > 0) damage = Math.max(1, Math.round(damage * (1 - petRouteReduction)))
+    // 基因同化：层数提供少量减伤（OriginCombat 每帧写入 originDr）。
+    if (this.originDr > 0 && damage > 0) damage = Math.max(1, Math.round(damage * (1 - this.originDr)))
+    // 适应性膜：只在超载窗口内生效。
+    if (this.overloadState?.active && this.originAdaptReduction > 0 && damage > 0) {
+      damage = Math.max(1, Math.round(damage * (1 - this.originAdaptReduction)))
+    }
+    // 局部形态重组：超载后的短时形变减伤。
+    if (this.originFormDr > 0 && damage > 0) damage = Math.max(1, Math.round(damage * (1 - this.originFormDr)))
     if (attack?.enemyAttack) this.game?.bossTomes?.onHurt()
     if (this.gluttonGuard > 0 && this.gluttonGuardTimer > 0 && damage > 0) {
       damage = Math.max(0, damage - this.gluttonGuard)
@@ -746,6 +770,28 @@ export class Player extends Entity {
       this.gluttonGuardTimer = 0
       this.game.weaponSystem._ring(this.x, this.y, '#d1efa0', this.radius + 14)
       this.game.weaponSystem.gluttonCombat?.onGuardBlocked?.()
+      if (damage <= 0) {
+        this.invincible = 0.18
+        return
+      }
+    }
+    // 暴食印记/碎片：原生护甲（只挡 1 点，不触发暴食路线反击）。
+    if (this.originGuard > 0 && this.originGuardTimer > 0 && damage > 0) {
+      damage = Math.max(0, damage - this.originGuard)
+      this.originGuard = 0
+      this.originGuardTimer = 0
+      this.game.weaponSystem._ring(this.x, this.y, '#ffb36b', this.radius + 12)
+      if (damage <= 0) {
+        this.invincible = 0.18
+        return
+      }
+    }
+    // 共生印记/碎片：支援泡泡吸收伤害（rank 2 可叠 2 点）。
+    if ((this.markState?.bubble || 0) > 0 && damage > 0) {
+      const absorbed = Math.min(this.markState.bubble, damage)
+      this.markState.bubble -= absorbed
+      damage -= absorbed
+      this.game.weaponSystem._ring(this.x, this.y, '#edc479', this.radius + 16)
       if (damage <= 0) {
         this.invincible = 0.18
         return
@@ -918,6 +964,7 @@ export class Player extends Entity {
     const previousX = this.x
     const previousY = this.y
     if (this.adrenalineTimer > 0) this.adrenalineTimer -= dt // 肾上腺素计时与移动状态无关，统一衰减
+    if (this.originMoveBuffTimer > 0) this.originMoveBuffTimer = Math.max(0, this.originMoveBuffTimer - dt)
 
     // 影袭独占位移，其余技能不打断普通移动。
     const shadowMoving = this.game.weaponSystem?.shadowCombat?.updateMovement(dt)
@@ -928,12 +975,13 @@ export class Player extends Entity {
       const rushBonus = this.killRushTimer > 0 ? this.killRushSpeed : 0
       const adrenaline = this.adrenalineTimer > 0 ? this.adrenalineSpeed : 0
       const feast = this.gluttonFeastTimer > 0 ? GLUTTON_FEAST_SPEED : 0
+      const originFlow = this.originMoveBuffTimer > 0 ? (this.originMoveBuff || 0) : 0
       const terrainMul = this.game.mapFeatures?.speedMultiplierAt(this.x, this.y, 'player') || 1
       const formationMul = this.game.endlessFormationBreakTimer > 0
         ? ENDLESS_FORMATION_BREAK_SPEED_MUL
         : 1
       const curSpeed = this.speed * (this.speedBuffTimer > 0 ? 1.25 : 1) *
-        (1 + rushBonus + adrenaline + feast) * terrainMul * formationMul * (this.volleyMoveTimer > 0 ? 1.2 : 1) * (this.game?.bossTomes?.moveMultiplier || 1)
+        (1 + rushBonus + adrenaline + feast + originFlow) * terrainMul * formationMul * (this.volleyMoveTimer > 0 ? 1.2 : 1) * (this.game?.bossTomes?.moveMultiplier || 1)
       this.x += dir.x * curSpeed * dt
       this.y += dir.y * curSpeed * dt
       // 面朝方向平滑转向（dt 归一化，帧率无关）
@@ -1156,6 +1204,15 @@ export class Player extends Entity {
       ctx.save()
       ctx.globalAlpha *= 0.28
       paintSilhouette({ fill: mut.grad[1] })
+      ctx.restore()
+    }
+
+    // 原生路线：用一层很淡的路线色剪影表达“液态变异方向”，不换身体。
+    const originRoute = this.strainId === 'origin' ? ORIGIN_ROUTES[this.game?.originRoute] : null
+    if (originRoute) {
+      ctx.save()
+      ctx.globalAlpha *= 0.2 + (this.overloadState?.active ? 0.12 : 0)
+      paintSilhouette({ fill: originRoute.color })
       ctx.restore()
     }
 

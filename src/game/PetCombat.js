@@ -3,8 +3,6 @@ import { renderPet, renderPetShot } from './PetVisuals.js'
 import { PET_PARTNER_TYPES, getPetRally } from './PetSkills.js'
 import { SYMBIOSIS_ROUTES, SYMBIOSIS_RULES, symbiosisRouteInvestment, symbiosisProgressReady, symbiosisRouteReady } from './SymbiosisBuild.js'
 import { petSupportStats, petSupportDescription } from './PetSupport.js'
-import { gainOriginMechanism, gainOriginSecondary, onPrimalKill, getOriginActiveGrowth, getPrimalOverloadProfile, trySpendPrimalOverload, PRIMAL_RALLY_OVERLOAD_DURATION, PRIMAL_RALLY_OVERLOAD_DAMAGE } from './PrimalEnergy.js'
-import { triggerOriginSecondaryEcho } from './OriginEchoes.js'
 
 const TYPES = {
   guardian: { name: '岩甲团团', role: '近战', color: '#edc479', hp: 9, speed: 290, interval: 0.85, power: 1.4, range: 85, follow: 65, windup: 0.19 },
@@ -29,16 +27,14 @@ export class PetCombat {
   get game() { return this.weapon.game }
   get player() { return this.weapon.player }
   /**
-   * 完整名册（共生血统级）：共生血统天生开启；origin 拟态共生专精（Lv.5）后同样开启。
-   * 岩甲团团只属于完整名册——残响伙伴挂件只给投影，不送护卫。
+   * 完整名册（共生血统级）：只有共生血统天生开启。
+   * origin 不再通过拟态获得伙伴系统。
    */
   get fullRoster() {
-    const g = this.game
-    return g?.startingStrain === 'summoner' || (g?.startingStrain === 'origin' && g?.primarySpec === 'symbiosis')
+    return this.game?.startingStrain === 'summoner'
   }
   /**
-   * 共生伙伴系统开关：完整名册恒开；origin 选了【残响伙伴】共鸣挂件后同样开启
-   * （挂件是共生树的副专精产物，只可能由 origin 取得）。
+   * 共生伙伴系统开关：完整名册；旧残响挂件入口保留但 origin 已不再产出该卡。
    */
   get enabled() { return this.fullRoster || this.level('sym_sub_echo') > 0 }
   get available() { return this.enabled && !this.player.dead && !this.game.runFinished }
@@ -61,12 +57,6 @@ export class PetCombat {
     const stats = getPetRally(this.level('pet_command'))
     if (this.route === 'guard') {
       stats.duration += Math.min(3, this.routeGuardAegisLevel * .5) + (this.routeUltimate === 'guard' ? 2 : 0)
-    }
-    if (this.game?.startingStrain === 'origin' && this.game.primarySpec === 'symbiosis') {
-      const growth = getOriginActiveGrowth(this.game)
-      const overload = getPrimalOverloadProfile(this.game, this.rallyOverloaded)
-      stats.duration += growth.rallyDuration + (this.rallyOverloaded ? PRIMAL_RALLY_OVERLOAD_DURATION + overload.rallyDuration : 0)
-      stats.damage += growth.rallyDamage + (this.rallyOverloaded ? PRIMAL_RALLY_OVERLOAD_DAMAGE + overload.rallyDamage : 0)
     }
     return stats
   }
@@ -253,7 +243,7 @@ export class PetCombat {
     this.sync()
     const pets = this.items.filter(p => p.hp > 0)
     if (!pets.length || this.rallyTime > 0) return false
-    this.rallyOverloaded = this.game.startingStrain === 'origin' && this.game.primarySpec === 'symbiosis' && trySpendPrimalOverload(this.game)
+    this.rallyOverloaded = false
     this.rallyTime = this.rallyDuration = this.rallyStats.duration
     this.rallyFlash = 0.55
     this.game?.bossTomes?.onRally(pets)
@@ -271,7 +261,6 @@ export class PetCombat {
     if (this.routeUltimate === 'hunt') this.routeHuntBurst()
     if (this.routeUltimate === 'spore') this.routeSporeBurst()
     if ((this.route === 'guard' && this.routeGuardPulseLevel > 0) || this.routeUltimate === 'guard') this.routePulse()
-    if (this.rallyOverloaded) triggerOriginSecondaryEcho(this.game, { overloaded: true })
     this.weapon._burstColor(this.player.x, this.player.y, '#edc479', 12, false)
     this.game.enemyManager.addText(this.player.x, this.player.y - 45, this.rallyOverloaded ? '⚡ 超载鼓舞!' : '共生鼓舞', null, '#ffe4a1', 15)
     this.game.sound?.bite?.(false, false)
@@ -345,10 +334,6 @@ export class PetCombat {
     const before = enemy.hp
     enemy.hit(damage)
     if (enemy.hp < before) {
-      if (this.game?.startingStrain === 'origin') {
-        if (this.game.primarySpec === 'symbiosis') gainOriginMechanism(this.game, 'symbiosis')
-        if (this.game.secondarySpec === 'symbiosis') gainOriginSecondary(this.game, 'symbiosis')
-      }
       if (this.route === 'hunt' && this.routeHuntLevel > 0) {
         enemy.petHuntMarkTime = Math.min(5, 2.5 + this.routeHuntLevel * .5)
         enemy.petHuntMarkDamage = Math.min(.36, .12 + this.routeHuntLevel * .06)
@@ -372,26 +357,6 @@ export class PetCombat {
     }
     if (!enemy.active) this.weapon._onKill(enemy)
     return enemy.hp < before
-  }
-
-  /** 原生副共生超载回响：一次性小范围脉冲，不触发伙伴攻击链、不递归充能。 */
-  primalEchoBurst() {
-    if (this.game?.startingStrain !== 'origin' || this.game.secondarySpec !== 'symbiosis') return 0
-    const targets = this.weapon.enemyManager.enemies.filter(e => alive(e) && !e.devouring &&
-      Math.hypot(e.x - this.player.x, e.y - this.player.y) <= 150)
-      .sort((a, b) => Math.hypot(a.x - this.player.x, a.y - this.player.y) - Math.hypot(b.x - this.player.x, b.y - this.player.y))
-      .slice(0, 5)
-    const damage = this.weapon.damage * this.weapon.levelMul * Math.min(0.65, 0.4 + this.level('sym_sub_echo') * 0.08)
-    for (const enemy of targets) {
-      const before = enemy.hp
-      enemy.hit(damage)
-      if (enemy.hp < before && !enemy.active) { this.weapon._onKill(enemy); onPrimalKill(this.game, enemy) }
-    }
-    if (targets.length) {
-      this.weapon._ring(this.player.x, this.player.y, '#edc479', 150)
-      this.weapon._burstColor(this.player.x, this.player.y, '#ffe4a1', Math.min(10, 3 + targets.length), false)
-    }
-    return targets.length
   }
 
   launchShot(pet, target, damage, offset = 0) {

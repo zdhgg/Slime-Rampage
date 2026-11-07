@@ -1,11 +1,11 @@
 import {
   PET_SKILL,
-  ORIGIN_SKILL,
   RICOCHET_SKILL,
   ELEMENTAL_SKILL,
   SHADOW_SKILL,
   GLUTTON_SKILL,
 } from './StrainSkills.js'
+import { ORIGIN_SKILL } from './OriginCombat.js'
 import { disableGluttonResource, resetGluttonResource } from './GluttonResource.js'
 
 /**
@@ -37,7 +37,7 @@ export const STRAINS = {
     id: 'origin',
     name: '原生黏液',
     icon: '🫧',
-    desc: '无修正的原始祖细胞。Lv.1~4 三系技能自由混搭，Lv.5 五系任选主拟态，保留远程普攻与元素吸收；暴食获得吞噬与重咬，共生获得伙伴与鼓舞。Lv.6 起随机出现原生专属充能、超载与主副协鸣成长卡，不保证抽齐。拟态能量达到 40 时有效主动会消耗 40 点超载；Lv.9 选择副专精并立即获得一项共鸣，超载时提供有限回响，不生成第二个终极。Lv.14 且战局第 10 波（远征第 5 关）后开放主树终极觉醒。',
+    desc: '未分化的液态变异体。Lv.1~4 在原生核心、异源碎片与通用卡之间自由探索；Lv.5 三选一原生路线（原质扩张/基因同化/异源共振），Lv.9 五选一异源印记。空格始终是黏液震荡，路线决定震荡形态与超载主体，印记只提供轻量附加特征；不会获得任何职业主系统。异源能量达到 40 时本次震荡超载。',
     roleSpec: null,
   },
   glutton: {
@@ -96,29 +96,12 @@ export const STRAINS = {
 
 export const STRAIN_IDS = ['origin', 'glutton', 'ricochet', 'elemental', 'shadow', 'summoner']
 
-/** 五名角色的 id（origin 是自由构筑，不算角色） */
+/** 五名角色的 id（origin 是独立原生体系，不算角色） */
 export const CHARACTER_IDS = ['glutton', 'ricochet', 'elemental', 'shadow', 'summoner']
 
 /**
- * 原生黏液「祖细胞拟态」：专精 → 拟态血统。
- * Lv.5 五选一觉醒时，origin 获得对应血统的**机制层**（吞噬/伙伴等独占机制与
- * 签名空格技），但不获得血统属性修正——血统独占的是「天生是」，
- * origin 拟态换的是「能不能」。gatling / elemental / assassin 三树
- * 对远程原生天然可用，无需拟态身份，故不在此映射。
- */
-export const MIMICRY_STRAINS = {
-  gluttony: 'glutton',
-  symbiosis: 'summoner',
-}
-
-/** origin 拟态后的血统 id（非 origin 或无拟态血统时为 null） */
-export function mimicryStrain(strainId, primarySpec) {
-  return strainId === 'origin' ? MIMICRY_STRAINS[primarySpec] || null : null
-}
-
-/**
  * 空格 专属主动技能表（角色 id → 技能定义）。
- * 原生黏液保留自由构筑，并拥有基础解围技能。
+ * 原生黏液保留唯一主动「黏液震荡」，任何路线/印记都不替换它。
  */
 export const STRAIN_SKILLS = {
   summoner: PET_SKILL,
@@ -136,9 +119,7 @@ export function getStrainSkill(strainId) {
 
 /**
  * 该角色能否吞噬敌人（按血统）。
- * 只有暴食史莱姆天生可以；origin 的吞噬权限是**拟态产物**——
- * Lv.5 选择暴食专精后经 GameEngine.canDevour（叠加 mimicryStrain）获得，
- * 本函数只回答「血统本身给不给」，不参与拟态判定。
+ * 只有暴食史莱姆天生可以；origin 不通过任何路线/印记获得吞噬。
  */
 export function canDevour(strainId) {
   return strainId === 'glutton'
@@ -156,11 +137,7 @@ export function hasGluttonCharge(strainId) {
 /**
  * 该角色能否使用元素系统（第三批角色化）。
  * 只有元素史莱姆与 origin 可以：吸收核心、累积元素等级、触发融合反应。
- * 暴食/弹射/暗影不使用元素——它们各自的专精树本来就不含元素技能，
- * 元素对它们只是「能捡但捡不起来」的空资源。
- *
- * `origin` 之所以保留权限：它的 roleSpec 为 null，Lv.5 拟态时仍可能主动
- * 选择元素树；保留权限才不会让那棵树的技能变成死机制。
+ * origin 保留元素权限，但不开放元素法术树；元素印记只把元素附着到震荡上。
  */
 export function canUseElements(strainId) {
   return strainId === 'elemental' || strainId === 'origin'

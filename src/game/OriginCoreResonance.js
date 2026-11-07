@@ -1,11 +1,11 @@
 import { getElement } from './ElementSystem.js'
 
 /**
- * 原生元素晶核共鸣：只服务 origin 的元素主专精。
+ * 原生元素印记的晶核回响：只服务 origin 的「元素印记」。
  *
  * 元素等级继续由 Player.elements 统一维护；这里仅从已经激活的主/副反应
- * 中选择一对等级最高的元素，并把它翻译成一次有限的黏液震荡附加效果。
- * 共鸣不改变主形态、不授予未入槽反应，也不再次产生拟态能量。
+ * 中选择一对等级最高的元素，并把它翻译成一次有限的超载附加效果。
+ * 回响不改变主形态、不授予未入槽反应，也不再次产生异源能量。
  */
 
 const ELEMENT_ORDER = ['fire', 'water', 'poison', 'lightning']
@@ -39,9 +39,9 @@ const elementOrder = (id) => {
   return index < 0 ? ELEMENT_ORDER.length : index
 }
 
-/** 返回 origin 元素主专精当前应显示的晶核共鸣；无可用反应时返回 null。 */
+/** 返回 origin 元素印记当前应显示的晶核回响；无可用反应时返回 null。 */
 export function getOriginCoreResonance(engine) {
-  if (engine?.startingStrain !== 'origin' || engine?.primarySpec !== 'elemental') return null
+  if (engine?.startingStrain !== 'origin' || engine?.originMark !== 'elemental') return null
   const player = engine.player
   const elements = player?.elements
   const reactions = player?._reactions

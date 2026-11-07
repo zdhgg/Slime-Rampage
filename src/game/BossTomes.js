@@ -1,7 +1,7 @@
 /** Six starting identities, four bounded tomes each. Rank values are totals. */
 export const BOSS_TOME_MAX_LEVEL = 3
 const meta = {
-  origin: ['原生', 'gatling', '#8cffc8'], glutton: ['暴食', 'gluttony', '#ffb36b'],
+  origin: ['原生', 'origin', '#8cffc8'], glutton: ['暴食', 'gluttony', '#ffb36b'],
   ricochet: ['弹射', 'gatling', '#83cbd9'], elemental: ['元素', 'elemental', '#b6a4ff'],
   shadow: ['暗影', 'assassin', '#c39be6'], summoner: ['共生', 'symbiosis', '#edc479'],
 }
@@ -12,8 +12,8 @@ const tome = (strain, id, name, icon, desc, ranks) => ({
 })
 export const BOSS_TOMES = {
   origin: [
-    tome('origin', 'boss_origin_conduit', '异源导流', '⚡', '交替输出积蓄额外拟态能量，满级后强化下一次普攻首击。', ['每3次有效异源充能，额外能量 +4', '额外能量 +4 → +6', '额外充能后3秒内，下一次普攻首击伤害 +30%']),
-    tome('origin', 'boss_origin_reservoir', '蓄能原核', '◈', '保留较高拟态能量获得持续增伤，满级后超载也能维持增益。', ['能量≥80：伤害 +10%', '能量门槛80 → 60；增伤10% → 15%', '超载后额外获得同等增伤3秒']),
+    tome('origin', 'boss_origin_conduit', '异源导流', '⚡', '交替输出积蓄额外异源能量，满级后强化下一次普攻首击。', ['每3次有效异源充能，额外能量 +4', '额外能量 +4 → +6', '额外充能后3秒内，下一次普攻首击伤害 +30%']),
+    tome('origin', 'boss_origin_reservoir', '蓄能原核', '◈', '保留较高异源能量获得持续增伤，满级后超载也能维持增益。', ['能量≥80：伤害 +10%', '能量门槛80 → 60；增伤10% → 15%', '超载后额外获得同等增伤3秒']),
     tome('origin', 'boss_origin_aftershock', '超载余震', '◎', '成功支付超载后释放有限近身余震，不再次充能。', ['超载余震：0.8倍基础攻击 · 半径130', '余震0.8 → 1.2倍 · 半径130 → 160', '0.4秒后追加50%威力余震']),
     tome('origin', 'boss_origin_membrane', '自适应膜', '🛡️', '成功超载后获得短时护盾，并为撤离创造机会。', ['超载后护盾1点 · 持续2秒', '护盾持续2 → 3秒', '超载后额外移速 +20% · 持续2秒']),
   ],

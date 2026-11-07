@@ -216,7 +216,7 @@ check('回响不再分裂或回响；护盾/击杀结算经过实体接口，空
   assert.ok(echoTarget.active && next.active)
 })
 
-check('重开清空路线；原生的加特林专精仍保留旧技能树', g => {
+check('重开清空路线；原生不再保留加特林职业树', g => {
   prepare(g, 'pierce')
   g.reset()
   assert.equal(g.weaponSystem.ricochetCombat.route, null)
@@ -225,8 +225,9 @@ check('重开清空路线；原生的加特林专精仍保留旧技能树', g =>
   g.applyStartingStrain('origin'); g.reset(); g.player.level = 6
   g.primarySpec = 'gatling'; g._applyPrimarySpecBonus('gatling')
   learnLegacy(g, 'gat_multishot', 2)
-  assert.ok(rollSkills(g, 99).some(s => s.id === 'gat_split'))
+  assert.ok(!rollSkills(g, 99).some(s => s.id === 'gat_split'))
   assert.ok(!rollSkills(g, 99).some(s => s.isRicochetSkill))
+  assert.equal(g.strainSkill.id, 'slime_shock')
   assert.equal(getSpecInfo('gatling', g).name, '机枪风暴')
 })
 

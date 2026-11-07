@@ -2,6 +2,7 @@ import { learnTome } from './test-support/arena-fixture.mjs'
 import assert from 'node:assert/strict'
 import { createArena, spawn, spawnBoss, learn, dispose, pressSpace } from './test-support/arena-fixture.mjs'
 import { BOSS_SKILL_DATABASE } from './src/game/SkillPool.js'
+import { originRouteOptions } from './src/game/OriginBuild.js'
 import { applyGenes } from './src/game/GenePool.js'
 import { RunnerDirector } from './src/game/gameplay/runner/RunnerDirector.js'
 
@@ -36,18 +37,23 @@ for (const strain of ['origin', 'glutton', 'ricochet', 'elemental', 'shadow', 's
     } finally { skill.use = original }
   })
 }
-check('origin', '震荡伤害、范围、首领不击退、自由构筑联动', g => {
+check('origin', '震荡伤害、范围、首领不击退、路线替代职业联动', g => {
   const e = spawn(g, { x: 70 }), outside = spawn(g, { x: 170 }), boss = spawnBoss(g, 1000)
   const bossX = boss.x, before = e.hp
   pressSpace(g)
-  near(e.hp, before - 1.9); near(e.x, g.player.x + 106)
+  near(e.hp, before - 1.7); near(e.x, g.player.x + 106)
   assert.equal(outside.hp, 100); assert.equal(boss.x, bossX)
-  learn(g, 'ass_stride'); learn(g, 'ass_decoy'); learn(g, 'ass_capstone')
+  assert.equal(g.strainSkill.id, 'slime_shock')
+  assert.equal(g.player.originEnergy, 8)
+  g.player.level = 5
+  assert.equal(g.applySkill(originRouteOptions(g)[0]), true)
+  assert.equal(g.originRoute, 'expansion')
+  assert.equal(g.primarySpec, null)
   g.player.strainSkillCd = 0; pressSpace(g)
-  near(g.player.strainSkillCd, 7 * 0.85)
-  assert.equal(g.player._decoys.length, 1); assert.equal(g.player.guaranteedCrit, true)
-  assert.equal(g.player.stealthTimer, 1.5)
+  near(g.player.strainSkillCd, 6.5)
+  assert.ok(g.weaponSystem.originCombat.fields.length >= 1, '扩张路线留下液痕')
   g.reset(); assert.equal(g.player.activeSkillCdMultiplier, 1); assert.equal(g.player._decoys.length, 0)
+  assert.equal(g.originRoute, null)
 })
 check('ricochet', '疾射无目标不扣冷却；分时四轮、移动增益按时间结束，死亡清理', g => {
   pressSpace(g); assert.equal(g.player.strainSkillCd, 0)

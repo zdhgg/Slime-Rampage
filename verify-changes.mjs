@@ -59,9 +59,7 @@ assert.equal(engine.input._feverQueued, false, '暂停应清空队列（无幽�
 engine.resume()
 ok('输入挂起：UI 期间不劫持 Space、恢复后无幽灵操作')
 
-// —— 2. 主专精只在局内觉醒（origin 路径）：开局无专精，Lv.5 五系拟态陈列且不附赠 T1 ——
-// 祖细胞拟态：origin 的 Lv.5 五系血统全可选（含暴食/共生，拟态补发机制层；
-// 早期 Lv.1~4 池仍排除这两树——见 2b 与第 3 组）
+// —— 2. 原生路线只在局内觉醒：开局无职业专精，Lv.5 三选一原生路线 ——
 assert.equal(engine.primarySpec, null)
 assert.equal(engine.weaponSystem.projectileCount, 1, '开局保持基础单弹')
 assert.equal(typeof engine.applyStartingSpec, 'undefined', '引擎不再暴露开局预选通道')
@@ -69,14 +67,13 @@ engine.player.level = 5
 engine.player.exp = 0
 engine.player.maxExp = 1
 let options = rollSkills(engine, 3)
-assert.equal(options.length, 5, 'Lv.5 展示五个可选主专精（五系拟态全陈列）')
-assert.ok(options.every((o) => o.isMilestone && o.milestoneType === 'primary'))
-assert.ok(options.some((o) => o.spec === 'gluttony') && options.some((o) => o.spec === 'symbiosis'), '拟态里程碑含暴食与共生')
-engine.applySkill(options.find((o) => o.spec === 'gatling'))
-assert.equal(engine.primarySpec, 'gatling')
-assert.equal(engine.weaponSystem.projectileCount, 2, '机枪觉醒只应用专精赋能，不附赠 T1')
-assert.ok(Math.abs(engine.weaponSystem.fireInterval - 0.85) < 1e-9)
-assert.equal(engine.skillLevels['gat_multishot'] || 0, 0, '局内觉醒不白送 T1')
+assert.equal(options.length, 3, 'Lv.5 展示三条原生进化路线')
+assert.ok(options.every((o) => o.isOriginRoute && o.milestoneType === 'origin_route'))
+engine.applySkill(options.find((o) => o.originRoute === 'expansion'))
+assert.equal(engine.originRoute, 'expansion')
+assert.equal(engine.primarySpec, null, '原生路线不写职业主专精')
+assert.equal(engine.weaponSystem.projectileCount, 1, '路线不附赠职业弹数')
+assert.ok(Math.abs(engine.weaponSystem.fireInterval - 1) < 1e-9, '路线不附赠职业射速')
 
 // 暴食的核心技能保留攻击成长，逐级强化吞噬与充能；重开后不残留。
 // 第四批：暴食主树归暴食角色，改用 glutton 角色走 Lv.5 自动觉醒路径。
@@ -96,7 +93,7 @@ assert.equal(engine.weaponSystem.damage, 1, '深渊胃囊 Lv.3 保留攻击成�
 assert.equal(engine.devourThreshold, 0.36)
 assert.equal(engine.player.devourRadiusBonus, 1.6)
 
-// 重开回到无专精基线，再由 Lv.5 选择另一条路线（第四批：origin 视角，暴食已排除）
+// 重开回到无专精基线，再由 Lv.5 选择另一条原生路线
 engine.applyStartingStrain('origin')
 engine.reset()
 assert.equal(engine.weaponSystem.damage, 1, '重开后暴食攻击回到基础值')
@@ -104,12 +101,13 @@ assert.equal(engine.primarySpec, null)
 assert.equal(engine.roleSpec, null)
 engine.player.level = 5
 options = rollSkills(engine, 3)
-engine.applySkill(options.find((o) => o.spec === 'elemental'))
-assert.equal(engine.primarySpec, 'elemental')
+engine.applySkill(options.find((o) => o.originRoute === 'resonance'))
+assert.equal(engine.originRoute, 'resonance')
+assert.equal(engine.primarySpec, null, '原生路线不写主专精')
 assert.equal(engine.weaponSystem.projectileCount, 1, '机枪赋能不残留')
-assert.ok(Math.abs(engine.weaponSystem.freezeChance - 0.2) < 1e-9, '元素觉醒只应用 +20% 基础赋能')
-assert.equal(engine.skillLevels['ele_affinity'] || 0, 0, '元素路线同样不附赠 T1')
-ok('主专精仅在 Lv.5 局内选择（origin 五系拟态），开局无预选与附赠技能')
+assert.equal(engine.weaponSystem.freezeChance, 0, '元素觉醒赋能不残留')
+assert.equal(engine.skillLevels['ele_affinity'] || 0, 0, '路线同样不附赠职业 T1')
+ok('原生路线仅在 Lv.5 局内选择，开局无预选与附赠技能')
 
 // —— 2b. 角色化（阶段十九）：角色绑定技能树、Lv.5 自动觉醒、吞噬独占、F 冷却 ——
 // 候选池只含本角色 T1 + 通用：其它树的 T1 不得出现（这是角色差异的骨架）
@@ -164,38 +162,21 @@ assert.equal(engine.primarySpec, 'gatling', 'openFreeSkillPanel 内部完成觉�
 assert.ok(rollSkills(engine, 30).some(o => o.id === 'rico_split'), '弹射继续随机探索入口')
 assert.ok(!rollSkills(engine, 30).some(o => o.id.startsWith('gat_')), '弹射不再使用旧加特林技能树')
 engine.resume()
-// 原生拟态加特林保留原 T2 门槛：累计投入 ≥2 级才能看到 gat_split。
-engine.applyStartingStrain('origin')
-engine.reset()
-engine.player.level = 5
-engine.primarySpec = 'gatling'
-engine.skillLevels['gat_multishot'] = 1
-assert.ok(!rollSkills(engine, 30).some((o) => o.id === 'gat_split'), '仅 1 级 T1 不进 T2 候选')
-engine.skillLevels['gat_velocity'] = 1
-assert.ok(rollSkills(engine, 30).some((o) => o.id === 'gat_split'), '主树投入 2 级后 T2 进入候选')
-engine.resume()
-
-// origin：祖细胞拟态 → Lv.1~4 三系 T1 自由探索，Lv.5 五系拟态
-// 早期池口径「现在就能用」：暴食/共生 T1 在拟态前是死卡，不进池；
-// 里程碑口径「选了觉醒就拿到机制」：五系全陈列。
+// origin：不再继承任何职业树；Lv.5 只弹三条原生路线。
 engine.applyStartingStrain('origin')
 engine.reset()
 assert.equal(engine.roleSpec, null)
 assert.equal(engine.primarySpec, null)
 engine.player.level = 4
 const originPool = rollSkills(engine, 30)
-const originSpecs = [...new Set(originPool.map((o) => o.spec).filter(Boolean))]
-assert.equal(originSpecs.length, 3, 'origin Lv.4 开放三系 T1（不含暴食/共生）')
-assert.ok(!originSpecs.includes('gluttony') && !originSpecs.includes('symbiosis'), 'origin Lv.4 不得出现暴食/共生主树')
+assert.ok(originPool.length > 0)
+assert.ok(originPool.every((o) => o.originOnly || o.id.startsWith('com_')))
+assert.ok(!originPool.some((o) => /^(gat_|ele_|ass_|glut_|pet_|sym_)/.test(o.id)), 'origin 不抽取任何职业树卡')
 engine.player.level = 5
 const originMilestone = rollSkills(engine, 3)
-assert.equal(originMilestone.length, 5, 'origin Lv.5 五系拟态全陈列')
-assert.ok(originMilestone.every((o) => o.isMilestone && o.milestoneType === 'primary'))
-assert.ok(
-  originMilestone.some((o) => o.spec === 'gluttony') && originMilestone.some((o) => o.spec === 'symbiosis'),
-  'origin Lv.5 拟态里程碑含暴食与共生'
-)
-ok('角色化：四角色绑定技能树并在 Lv.5 自动觉醒，origin 保留三系自由探索与五系拟态')
+assert.equal(originMilestone.length, 3, 'origin Lv.5 三选一原生路线')
+assert.ok(originMilestone.every((o) => o.isOriginRoute && o.milestoneType === 'origin_route'))
+ok('角色化：四角色绑定技能树并在 Lv.5 自动觉醒，origin 改为三路线原生成长')
 
 // —— 2c. 吞噬独占：只有暴食角色能吞噬，且白旗标记只对暴食出现 ——
 engine.applyStartingStrain('glutton')
@@ -262,7 +243,7 @@ engine.reset()
 assert.equal(engine.strainSkill.id, 'slime_shock', '原生拥有黏液震荡')
 engine.input.queueFever()
 engine._updateStrainSkill(0.016)
-assert.equal(engine.player.strainSkillCd, 7, '原生空格释放黏液震荡（早期补强：冷却 8→7）')
+assert.equal(engine.player.strainSkillCd, 6.5, '原生空格释放黏液震荡（冷却 6.5 秒）')
 
 // 冷却不得跨局残留
 engine.applyStartingStrain('elemental')
@@ -540,52 +521,14 @@ ok('重置归位：元素权限、元素等级、反应与附魔缓存在换角�
     assert.ok(pool.every((o) => o.id !== 'glut_maw' && o.id !== 'glut_bulk'))
   }
 
-  // ② origin Lv.5 里程碑是五系拟态全陈列（含暴食/共生——拟态在觉醒时补发机制层）
+  // ② origin Lv.5 只陈列三条原生路线，不再五系拟态
   engine.player.level = 5
   const pri = rollSkills(engine, 10)
-  assert.equal(pri.length, 5, 'origin Lv.5 恰好五选一（拟态全陈列）')
-  assert.ok(pri.some((o) => o.spec === 'gluttony') && pri.some((o) => o.spec === 'symbiosis'))
+  assert.equal(pri.length, 3, 'origin Lv.5 恰好三选一（原生路线）')
+  assert.ok(pri.every((o) => o.isOriginRoute && o.milestoneType === 'origin_route'))
+  engine.applySkill(pri[0])
 
-  // ③ 所有 canDevour=false 的角色：secondary 池不得出现 glut_sub_digest
-  // ④ 所有 canUseElements=false 的角色：secondary 池不得出现 ele_sub_boost
-  // 直接设置 secondarySpec 来检验「逐技能过滤」，不依赖里程碑候选（里程碑 id 只编码目标系）
-  // 弹射／暴食／元素／暗影／共生血统已各自切换到独立随机池，
-  // 旧三系 secondary 能力权限矩阵只剩 origin 仍在使用。
-  for (const strainId of STRAIN_IDS) {
-    if (strainId !== 'origin') continue
-    const devour = canDevour(strainId)
-    const elements = canUseElements(strainId)
-    engine.applyStartingStrain(strainId)
-    engine.reset()
-    engine.primarySpec = 'gatling' // 任意主系，避开 Lv.9 里程碑分支
-    engine.secondarySpec = 'gluttony'
-    const gluttonPool = rollSkills(engine, 30).map((o) => o.id)
-    assert.equal(
-      gluttonPool.includes('glut_sub_digest'),
-      devour,
-      `${strainId}(canDevour=${devour})：glut_sub_digest 仅在 canDevour 时进池`
-    )
-    assert.ok(gluttonPool.includes('glut_sub_armor'), `${strainId}：glut_sub_armor 不依赖权限，必须保留`)
-
-    engine.secondarySpec = 'elemental'
-    const elePool = rollSkills(engine, 30).map((o) => o.id)
-    assert.equal(
-      elePool.includes('ele_sub_boost'),
-      elements,
-      `${strainId}(canUseElements=${elements})：元素共鸣体仅在有元素权限时进池`
-    )
-    assert.equal(elePool.includes('ele_sub_aura'), elements,
-      `${strainId}：元素共鸣光环仅在有元素权限时进池`)
-
-    // 本角色自己的 secondary 系不受影响
-    if (engine.roleSpec) {
-      engine.secondarySpec = engine.roleSpec
-      const ownPool = rollSkills(engine, 30).map((o) => o.id)
-      assert.ok(ownPool.length > 0, `${strainId}：本系 secondary 池非空`)
-    }
-  }
-
-  // ⑤ 角色血统在 Lv.9 不再开启副专精；只有原生黏液保留组合构筑。
+  // ③ 角色血统在 Lv.9 不再开启副专精；原生也不再使用 secondary
   engine.applyStartingStrain('glutton')
   engine.reset()
   engine.primarySpec = 'gluttony'
@@ -599,14 +542,16 @@ ok('重置归位：元素权限、元素等级、反应与附魔缓存在换角�
 
   engine.applyStartingStrain('origin')
   engine.reset()
-  engine.primarySpec = 'gatling'
-  engine.secondarySpec = null
+  engine.player.level = 5
+  engine.applySkill(rollSkills(engine, 3)[0])
   engine.player.level = 9
   const originSec = rollSkills(engine, 10)
-  assert.ok(originSec.some((o) => o.isMilestone && o.milestoneType === 'secondary'),
-    '原生黏液 Lv.9 保留副专精组合构筑')
+  assert.equal(originSec.length, 5, '原生 Lv.9 只弹五枚异源印记')
+  assert.ok(originSec.every((o) => o.isOriginMark))
+  assert.ok(!originSec.some((o) => o.isMilestone && o.milestoneType === 'secondary'))
+  assert.ok(!originSec.some((o) => o.role === 'secondary'))
 }
-ok('技能池权限过滤：职业血统单一专精，原生黏液保留组合构筑')
+ok('技能池权限过滤：职业血统单一专精，原生黏液改为路线/印记组合')
 
 // —— 2h. Lv.4 / Lv.8 槽位里程碑提示只对有元素权限的角色显示 ——
 {
@@ -736,28 +681,16 @@ ok('黑市永久基因：购买与互斥规则不随角色变化，货架全盘�
   assert.equal(shadowCrit.burnHits, 0, 'Shadow Assassin 暴击不触发元素 proc')
   assert.equal(shadowCrit.poisonHits, 0, 'Shadow Assassin 暴击不触发元素 proc')
 
-  // ② origin + assassin + 已吸收元素：暴击保证触发元素 proc
+  // ② origin 保留元素权限，但不再通过刺客觉醒获得「暴击必触发元素」规则
   engine.applyStartingStrain('origin')
   engine.reset()
   engine.player.level = 5
-  engine.primarySpec = 'assassin'
-  engine._applyPrimarySpecBonus('assassin')
   assert.equal(engine.canUseElements, true)
-  assert.equal(engine.weaponSystem.critGuaranteesElement, true, 'origin 获得元素规则')
+  assert.equal(engine.weaponSystem.critGuaranteesElement, false, 'origin 不再获得刺客觉醒元素规则')
   const originCrit = fireCrit([['fire', 3], ['poison', 3]])
-  assert.ok(originCrit.burnHits > 0, 'Origin Assassin + 已吸收元素：暴击保证触发引燃 proc')
-  assert.ok(originCrit.poisonHits > 0, 'Origin Assassin + 已吸收元素：暴击保证触发中毒 proc')
-
-  // ③ origin + assassin 未吸收元素：无额外效果（_procs 为空，闸门无处可作用）
-  engine.applyStartingStrain('origin')
-  engine.reset()
-  engine.player.level = 5
-  engine.primarySpec = 'assassin'
-  engine._applyPrimarySpecBonus('assassin')
-  const originEmpty = fireCrit([])
-  assert.equal(originEmpty.flag, true, '标记仍然为真')
-  assert.equal(originEmpty.burnHits, 0, '未吸收元素时无额外效果')
-  assert.equal(originEmpty.poisonHits, 0, '未吸收元素时无额外效果')
+  assert.equal(originCrit.flag, false, '没有职业觉醒规则时，暴击不保证元素 proc')
+  assert.equal(originCrit.burnHits, 0, 'Origin 暴击不额外触发引燃')
+  assert.equal(originCrit.poisonHits, 0, 'Origin 暴击不额外触发中毒')
 
   // ④ 无元素权限的角色即使被误设 primarySpec='assassin' 也拿不到标记
   for (const strainId of ['glutton', 'ricochet']) {
@@ -774,15 +707,13 @@ ok('黑市永久基因：购买与互斥规则不随角色变化，货架全盘�
   // ⑤ 重开归位
   engine.applyStartingStrain('origin')
   engine.reset()
-  engine.primarySpec = 'assassin'
-  engine._applyPrimarySpecBonus('assassin')
-  assert.equal(engine.weaponSystem.critGuaranteesElement, true)
+  assert.equal(engine.weaponSystem.critGuaranteesElement, false)
   engine.reset()
   assert.equal(engine.weaponSystem.critGuaranteesElement, false, '重开后元素规则归位')
   engine.onStats = null
   Math.random = realRandom
 }
-ok('暴击 × 元素协同：仅 canUseElements 角色获得，暗影恒不触发，未吸收元素时无副作用')
+ok('暴击 × 元素协同：仅元素职业觉醒获得，暗影恒不触发，原生不再复制该规则')
 
 // —— 2k. Gatling Capstone 射速为「乘算语义」（不再绝对覆盖）——
 // 锁定的是语义本身：觉醒后的间隔 = 觉醒前 × GATLING_CAPSTONE_RATE，
@@ -839,26 +770,8 @@ ok('暴击 × 元素协同：仅 canUseElements 角色获得，暗影恒不触�
   assert.ok(Math.abs(fast.weaponSystem.fireInterval - slow.weaponSystem.fireInterval) > 1e-6,
     '两条路径不得被压到同一个绝对间隔（旧 0.12 实现的失效模式）')
 
-  // 契约保护：maxLevel 1 + 真实引擎里「已满级不再进候选池」
+  // 契约保护：maxLevel 1 + 直接设置字段的幂等性（origin 已不再进入职业 T4 池）
   assert.equal(cap.maxLevel, 1, 'Capstone 仍为一次性觉醒')
-  engine.player.level = 20
-  engine.enemyManager.wave = 20
-  engine.primarySpec = 'gatling'
-  // 先越过 Lv.9 副专精里程碑（否则 rollSkills 会一直只返回里程碑候选）
-  engine.secondarySpec = 'assassin'
-  assert.ok(
-    !rollSkills(engine, 30).some((o) => o.id === 'gat_capstone'),
-    '未点前置（gat_chain）时 Capstone 不进候选'
-  )
-  for (const id of ['gat_multishot', 'gat_split', 'gat_chain']) engine.skillLevels[id] = 1
-  const withPrereq = rollSkills(engine, 40)
-  assert.ok(withPrereq.some((o) => o.id === 'gat_capstone'), '前置齐备且 Lv.14+/波 10+ 时进候选')
-  engine.skillLevels['gat_capstone'] = cap.maxLevel
-  assert.ok(
-    !rollSkills(engine, 40).some((o) => o.id === 'gat_capstone'),
-    '已点满（maxLevel 已达）后不再进候选 → 不会重复乘算'
-  )
-  // 直接设字段的幂等性也一并确认（防止未来新增调用点绕过 maxLevel）
   const repeat = mkProbe(0.6)
   cap.apply(repeat)
   const once = repeat.weaponSystem.fireInterval

@@ -42,6 +42,17 @@ export function getEffectiveSkillMaxLevel(game, skill, role = skill?.role) {
     return base
   }
 
+  // 原生独立体系：路线/印记确认后才放开 core 跑道；碎片永远停在 1 级。
+  if (typeof progressionRole === 'string' && progressionRole.startsWith('origin_')) {
+    const commit = skill.originCommit
+    const committed = commit === 'mark' ? !!game?.originMark : commit === 'route' ? !!game?.originRoute : true
+    if (!committed) return base
+    const cap = authoredCap ?? limits.core
+    if (mode === 'endless') return Math.max(base, cap)
+    if (mode === 'expedition' && ['easy', 'normal'].includes(difficulty)) return Math.min(base, limits.core)
+    return Math.min(base, cap)
+  }
+
   if (skill.growthClass === 'core') {
     const committed = (skill.originOnly && game?.startingStrain === 'origin'
       ? !!game?.primarySpec

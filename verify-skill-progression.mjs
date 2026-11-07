@@ -34,17 +34,9 @@ const engine = createArena('origin')
 try {
   engine.configureRun({ mode: 'expedition', difficulty: 'hell' })
   engine.reset()
-  engine.primarySpec = 'gatling'
-  engine.secondarySpec = 'gluttony'
   engine.player.level = 10
-  for (let rank = 1; rank <= 12; rank++) {
-    const card = rollSkills(engine, 99).find(skill => skill.id === 'gat_velocity')
-    assert.ok(card, `hell route core remains available at rank ${rank}`)
-    assert.equal(card.maxLevel, 12)
-    engine.applySkill(card)
-  }
-  assert.equal(engine.skillLevels.gat_velocity, 12)
-  assert.ok(engine.weaponSystem.damage < 1.9, 'high ranks taper instead of compounding without bound')
+  assert.ok(!rollSkills(engine, 99).some(skill => /^(gat_|ele_|ass_|glut_|pet_|sym_)/.test(skill.id)),
+    '原生重构后不再抽取任何职业树技能')
 } finally {
   dispose(engine)
 }
@@ -53,8 +45,10 @@ const endlessEngine = createArena('origin')
 try {
   endlessEngine.configureRun({ mode: 'endless', difficulty: 'normal' })
   endlessEngine.reset()
-  endlessEngine.primarySpec = 'gatling'
-  endlessEngine.secondarySpec = 'gluttony'
+  endlessEngine.player.level = 5
+  assert.equal(endlessEngine.applySkill(rollSkills(endlessEngine, 3)[0]), true)
+  endlessEngine.player.level = 9
+  assert.equal(endlessEngine.applySkill(rollSkills(endlessEngine, 5)[0]), true)
   endlessEngine.player.level = 120
   endlessEngine.enemyManager.wave = 25
   const cards = rollSkills(endlessEngine, 99)

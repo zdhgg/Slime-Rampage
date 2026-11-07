@@ -14,7 +14,8 @@ import {
   onGluttonFDevoured,
   onNormalDevoured,
 } from './GluttonResource.js'
-import { gainOriginMechanism, gainOriginSecondary, gainPrimalEnergy, onPrimalKill, PRIMAL_SOURCES } from './PrimalEnergy.js'
+import { gainPrimalEnergy, onPrimalKill, PRIMAL_SOURCES } from './PrimalEnergy.js'
+import { OriginCombat } from './OriginCombat.js'
 import { GluttonCombat, GLUTTON_HEAL_COOLDOWN } from './GluttonCombat.js'
 import { ShadowCombat } from './ShadowCombat.js'
 import { RicochetCombat } from './RicochetCombat.js'
@@ -122,7 +123,7 @@ export class WeaponSystem extends Entity {
     this.digestCharge = 0 // 当前消化能量（0 ~ digestChargeMax）
     this.digestChargeMax = DIGEST_CHARGE_MAX
     this.digestBursts = 0 // 消化爆发次数（物种档案统计）
-    this.visualTiers = { gluttony: 0, gatling: 0, elemental: 0, assassin: 0, symbiosis: 0 }
+    this.visualTiers = { gluttony: 0, gatling: 0, elemental: 0, assassin: 0, symbiosis: 0, origin: 0 }
     this._muzzleT = 0
     this._muzzleAngle = 0
     this._muzzleVisual = null
@@ -133,6 +134,7 @@ export class WeaponSystem extends Entity {
     this.ricochetCombat = new RicochetCombat(this)
     this.petCombat = new PetCombat(this)
     this.spellCombat = new SpellCombat(this)
+    this.originCombat = new OriginCombat(this)
     this._projectiles = []
     this._particles = []
     this._pools = [] // 酸液池（火+毒：区域污染 + 引爆）
@@ -219,7 +221,7 @@ export class WeaponSystem extends Entity {
     this.digestCharge = 0
     this.digestChargeMax = DIGEST_CHARGE_MAX
     this.digestBursts = 0
-    this.visualTiers = { gluttony: 0, gatling: 0, elemental: 0, assassin: 0, symbiosis: 0 }
+    this.visualTiers = { gluttony: 0, gatling: 0, elemental: 0, assassin: 0, symbiosis: 0, origin: 0 }
     this._muzzleT = 0
     this._muzzleAngle = 0
     this._muzzleVisual = null
@@ -229,6 +231,7 @@ export class WeaponSystem extends Entity {
     this.ricochetCombat.reset()
     this.petCombat.reset()
     this.spellCombat.reset()
+    this.originCombat.reset()
     this._projectiles.length = 0
     this._particles.length = 0
     this._pools.length = 0
@@ -343,7 +346,7 @@ export class WeaponSystem extends Entity {
   /** 记录专精技能链的最高层级，让数值成长同步改变武器轮廓。 */
   registerSkillEvolution(skill) {
     if (!skill?.spec || !(skill.spec in this.visualTiers)) return false
-    if (this.game?.primarySpec && skill.spec !== this.game.primarySpec) return false
+    if (skill.spec !== 'origin' && this.game?.primarySpec && skill.spec !== this.game.primarySpec) return false
     const previous = this.visualTiers[skill.spec]
     const next = Math.max(previous, skill.isMilestone ? 1 : Number(skill.tier) || 0)
     if (next <= previous) return false
@@ -355,6 +358,16 @@ export class WeaponSystem extends Entity {
 
   _visualProfile() {
     if (this.ricochetCombat.enabled) return this.ricochetCombat.visual()
+    if (this.game?.startingStrain === 'origin') {
+      return resolveWeaponVisual({
+        primaryReaction: this.player._primaryReaction,
+        elements: this.player.elements.keys(),
+        primarySpec: 'origin',
+        originRoute: this.game?.originRoute || null,
+        tier: this.visualTiers.origin || 0,
+        strain: 'origin',
+      })
+    }
     const spec = this.game.primarySpec
     return resolveWeaponVisual({
       primaryReaction: this.player._primaryReaction,
@@ -425,7 +438,7 @@ export class WeaponSystem extends Entity {
     this.game?.bossTomes?.update(dt)
     // 玩家死亡（gameOver 已触发，仅本帧残差）：停止射击与结算，
     // 防止结算快照（击杀/掉落物）之后的数据继续变动
-    if (this.player.dead || this.game.runFinished) { this.gluttonCombat.reset(); this.shadowCombat.reset(); this.petCombat.reset(); this.spellCombat.reset(); this.rapidVolley = null; return }
+    if (this.player.dead || this.game.runFinished) { this.gluttonCombat.reset(); this.shadowCombat.reset(); this.petCombat.reset(); this.spellCombat.reset(); this.originCombat.reset(); this.rapidVolley = null; return }
 
     // 连杀窗口倒计时：超时清零（仅游戏时间，暂停不消耗）
     if (this._comboTimer < 1.8) {
@@ -458,6 +471,7 @@ export class WeaponSystem extends Entity {
     this.gluttonCombat.update(dt)
     this.shadowCombat.update(dt)
     this.petCombat.update(dt)
+    this.originCombat.update(dt)
     if (this.player.dead || this.game.runFinished) return
 
     // 1) 冷却计时 → 自动索敌 → 发射 / 咬击
@@ -941,6 +955,18 @@ export class WeaponSystem extends Entity {
             // ② 距离平方精判
             if (dx * dx + dy * dy >= rr * rr) continue
 
+            // 原生印记副弹：只结算一次直接伤害，不参与暴击/元素/分裂/充能/击杀加成，
+            // 避免“印记副弹 → 更多能量 → 更多超载”的递归。
+            if (p.isOriginEcho) {
+              e.hit(p.damage)
+              this._burstColor(e.x, e.y, p.visual.impact, 4, false)
+              this.game.sound.hit(p.visual.sound)
+              this.game.enemyManager.addText(e.x, e.y, String(Math.round(p.damage * 10) / 10), null, '#ffffff', 13)
+              if (!e.active) this._onKill(e)
+              p.destroy()
+              break hitScan
+            }
+
             // —— 命中：飞弹销毁，敌人扣血 ——
             const critChance = p.critChance + burstBonus
             // 原生黏液的刺客觉醒仍使用飞弹必暴；暗影在 ShadowCombat 内结算。
@@ -952,6 +978,11 @@ export class WeaponSystem extends Entity {
               critMultiplier *= 2.0
             }
             let damage = p.damage * critMultiplier
+            // 暗影印记：震荡后的下一次本体命中强化；只消费一次。
+            if (this.player.originNextHitMul > 1) {
+              damage *= this.player.originNextHitMul
+              this.player.originNextHitMul = 1
+            }
 
             // 刺客：暗影无相主宰 暴击瞬发影分身斩
             if (isCrit && this.isShadowLord) {
@@ -1015,11 +1046,6 @@ export class WeaponSystem extends Entity {
             // 函数内部对非 origin 直接短路，其他血统零开销零行为变化。
             gainPrimalEnergy(this.game, PRIMAL_SOURCES.PROJECTILE)
             if (elementProcApplied) gainPrimalEnergy(this.game, PRIMAL_SOURCES.ELEMENT)
-            // 主/副专精机制来源只在本系特有行为兑现时计一次；分裂与元素反应都受同一窗口节流。
-            if (p.isSplit && this.game?.primarySpec === 'gatling') gainOriginMechanism(this.game, 'gatling')
-            if (p.isSplit && this.game?.secondarySpec === 'gatling') gainOriginSecondary(this.game, 'gatling')
-            if (isCrit && this.game?.primarySpec === 'assassin') gainOriginMechanism(this.game, 'assassin')
-            if (isCrit && this.game?.secondarySpec === 'assassin') gainOriginSecondary(this.game, 'assassin')
             this._burstColor(e.x, e.y, p.visual.impact, isCrit ? 14 : p.visual.impactCount, isCrit)
             this.game.sound.hit(p.visual.sound)
 
@@ -1043,9 +1069,6 @@ export class WeaponSystem extends Entity {
               else this._dropPool(e.x, e.y)
             }
             if (steamR) this._dropCloud(e.x, e.y)
-
-            if ((gelR || acidR || steamR || elementProcApplied) && this.game?.primarySpec === 'elemental') gainOriginMechanism(this.game, 'elemental')
-            if ((gelR || acidR || steamR || elementProcApplied) && this.game?.secondarySpec === 'elemental') gainOriginSecondary(this.game, 'elemental')
 
             // 元素过载爆轰
             if (this.reactionShockwave > 0 && (gelR || acidR || steamR || this.isChaosOrigin)) {
@@ -1472,6 +1495,7 @@ export class WeaponSystem extends Entity {
     this.shadowCombat.render(ctx)
     this.petCombat.render(ctx)
     this.spellCombat.render(ctx)
+    this.originCombat.render(ctx)
     // 先粒子后飞弹：炸裂特效叠在飞弹之下，视觉更自然
     for (const pt of this._particles) pt.render(ctx)
     this.ricochetCombat.render(ctx)

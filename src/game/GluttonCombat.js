@@ -3,8 +3,6 @@ import {
   hasGluttonCharge, isGluttonLocked, onGluttonBossBasicHit, spendGluttonCharge,
 } from './GluttonResource.js'
 import { bitePose, renderBiteMotion, renderBiteFeedback } from './effects/GluttonBiteVisual.js'
-import { canPrimalOverload, gainPrimalEnergy, getPrimalOverloadProfile, trySpendPrimalOverload, getOriginActiveGrowth, PRIMAL_SOURCES, PRIMAL_BITE_OVERLOAD_DAMAGE, PRIMAL_BITE_OVERLOAD_RANGE } from './PrimalEnergy.js'
-import { triggerOriginSecondaryEcho } from './OriginEchoes.js'
 import { GLUTTON_ROUTES, GLUTTON_RULES, getGluttonEndlessDamageMultiplier, getGluttonHeavyDamageMultiplier, getGluttonHeavyReachMultiplier, gluttonCowDurationAt, gluttonCowPowerAt, gluttonProgressReady, gluttonRouteReady, gluttonRouteInvestment } from './GluttonBuild.js'
 import { traceShadowPath } from './ShadowGeometry.js'
 
@@ -98,17 +96,8 @@ export class GluttonCombat {
   get player() { return this.weapon.player }
   /** 全套近战咬击（自动咬人替代普攻）：仅暴食血统。 */
   get enabled() { return this.weapon.game?.startingStrain === 'glutton' }
-  /**
-   * origin 拟态暴食（半拟态）：保留远程普攻，只获得「空格重咬 + 吞噬结算表现」。
-   * 与 enabled 刻意分开——WeaponSystem 普攻换咬的分流仍只读 enabled，
-   * origin 的飞弹不受影响；重咬、护甲、酸爆、残像表现读 biteUnlocked。
-   */
-  get mimicry() {
-    const g = this.weapon.game
-    return !this.enabled && g?.startingStrain === 'origin' && g?.primarySpec === 'gluttony'
-  }
-  /** 重咬与吞噬结算表现的统一闸门（真暴食或拟态暴食）。 */
-  get biteUnlocked() { return this.enabled || this.mimicry }
+  /** 重咬与吞噬结算表现的统一闸门：只有真正的暴食血统。 */
+  get biteUnlocked() { return this.enabled }
   get routeInfo() { return GLUTTON_ROUTES[this.route] || null }
   get endlessDamageMultiplier() { return getGluttonEndlessDamageMultiplier(this.weapon.game?.skillLevels) }
   refreshStats() {}
@@ -129,15 +118,9 @@ export class GluttonCombat {
       note: route ? `${route.name}已锁定 · ${route.ultimateName}为互斥终极` : `前期随机探索 · 选卡满${GLUTTON_RULES.choicesBeforeRoute}次且第${GLUTTON_RULES.routeWave}波／远征第${GLUTTON_RULES.routeStage}章后确认路线`,
     }
   }
-  // 拟态也读 pose：空格重咬时 origin 身体同样需要咬合方向的挤压反馈；
-  // 吞噬吸入口（_startDevour 的 _devourAngle）仍只认 enabled，不受影响。
   get pose() { return this.biteUnlocked && !this.player.dead ? bitePose(this.swing, this.flash) : null }
   reach(heavy = false) {
-    const base = this.player.radius + (heavy ? GLUTTON_HEAVY_REACH * getGluttonHeavyReachMultiplier(this.player.gluttonHeavyLevel) : GLUTTON_BITE_REACH) * (this.player.isGluttonyLord ? 1.25 : 1) * (this.weapon.geneRangeMul || 1)
-    if (!heavy || !this.mimicry) return base
-    const overloaded = canPrimalOverload(this.player)
-    const profile = getPrimalOverloadProfile(this.weapon.game, overloaded)
-    return (base + getOriginActiveGrowth(this.weapon.game).rangeBonus) * (overloaded ? PRIMAL_BITE_OVERLOAD_RANGE * profile.biteRangeMul : 1)
+    return this.player.radius + (heavy ? GLUTTON_HEAVY_REACH * getGluttonHeavyReachMultiplier(this.player.gluttonHeavyLevel) : GLUTTON_BITE_REACH) * (this.player.isGluttonyLord ? 1.25 : 1) * (this.weapon.geneRangeMul || 1)
   }
 
   /** 朝向参考：玩家最近一次有效移动方向；静止时沿用最后朝向。 */
@@ -194,8 +177,8 @@ export class GluttonCombat {
   }
 
   bite(target = null, heavy = false) {
-    // 拟态只有重咬：origin 的普攻仍是飞弹，heavy=false 的入口对它是禁的。
-    if (!(this.enabled || (heavy && this.mimicry)) || this.player.dead || this.weapon.game.runFinished) return false
+    // 只有暴食血统会进入咬击；origin 不再拟态，普攻始终是飞弹。
+    if (!this.enabled || this.player.dead || this.weapon.game.runFinished) return false
     // 重咬可以替换尚未结算的普通前摇/转头；出手阶段不能被覆盖。
     if (this.swing && (!heavy || this.swing.heavy || this.swing.phase === 'strike')) return false
     const chosen = target || this.nearest(heavy)
@@ -216,11 +199,6 @@ export class GluttonCombat {
     // 猎食点在起手时扣除：转头/前摇都算已起手，目标随后离开仍按挥空处理。
     if (heavy && !spendGluttonCharge(this.player)) return false
     if (heavy && this.game?.bossTomes) this.game.bossTomes.fastBite = false
-    // 与猎食点一起在有效起手后扣费；索敌失败、释放锁和重复输入都不会丢失能量。
-    const overloaded = heavy && this.mimicry && trySpendPrimalOverload(this.weapon.game)
-    const overloadProfile = getPrimalOverloadProfile(this.weapon.game, overloaded)
-    const primalDamageMul = heavy && this.mimicry
-      ? getOriginActiveGrowth(this.weapon.game).damageMul * (overloaded ? PRIMAL_BITE_OVERLOAD_DAMAGE * overloadProfile.biteDamageMul : 1) : 1
 
     this.flash = null
     this.aimTarget = chosen
@@ -234,11 +212,6 @@ export class GluttonCombat {
       phase: needsTurn ? 'aim' : 'windup',
       aimDuration,
       recovery: heavy ? 0.22 : Math.min(0.16, this.weapon.attackInterval * 0.25),
-      overloaded, primalDamageMul,
-    }
-    if (overloaded) {
-      this.weapon._ring?.(this.player.x, this.player.y, '#ffd166', reach)
-      this.weapon.enemyManager.addText(this.player.x, this.player.y - 30, '⚡ 超载重咬!', null, '#ffd166', 18)
     }
     return true
   }
@@ -470,7 +443,7 @@ export class GluttonCombat {
             if (this.player.dead || this.weapon.game.runFinished) break
             const multiplier = swing.heavy ? (e.isBoss ? GLUTTON_BOSS_HEAVY_DAMAGE : GLUTTON_HEAVY_DAMAGE) : GLUTTON_BITE_DAMAGE
             const crit = !swing.heavy && Math.random() < this.weapon.critChance ? this.weapon.critMul : 1
-            const damage = this.weapon.damage * this.weapon.levelMul * this.weapon.devourDamageMul * this.endlessDamageMultiplier * multiplier * (swing.heavy ? getGluttonHeavyDamageMultiplier(this.player.gluttonHeavyLevel) : 1) * crit * (this.player.isGluttonyLord ? 1.25 : 1) * swing.primalDamageMul
+            const damage = this.weapon.damage * this.weapon.levelMul * this.weapon.devourDamageMul * this.endlessDamageMultiplier * multiplier * (swing.heavy ? getGluttonHeavyDamageMultiplier(this.player.gluttonHeavyLevel) : 1) * crit * (this.player.isGluttonyLord ? 1.25 : 1)
             const x = e.x, y = e.y
             const hit = this.hit(e, damage, { source, basic: !swing.heavy, execute: swing.heavy && this.player.isGluttonyLord })
             landed ||= hit
@@ -487,9 +460,6 @@ export class GluttonCombat {
           if (landed && swing.heavy && this.player.gluttonShellUltimate) this.grantGuard()
           this.weapon.game.sound.bite(swing.heavy, landed)
           if (landed && swing.heavy) {
-            if (this.mimicry && this.game.primarySpec === 'gluttony') gainPrimalEnergy(this.game, PRIMAL_SOURCES.MECHANISM)
-            if (this.mimicry && this.game.secondarySpec === 'gluttony') gainPrimalEnergy(this.game, PRIMAL_SOURCES.SECONDARY)
-            if (this.mimicry && swing.overloaded) triggerOriginSecondaryEcho(this.game, { center: { x: this.player.x, y: this.player.y }, overloaded: true })
             // 首领命中的咬合反馈略强，但保持适度，不打断玩家走位。
             if (bossHit) this.weapon.game.shakeScreen(4, 0.15)
             else this.weapon.game.shakeScreen(3, 0.12)

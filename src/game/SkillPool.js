@@ -5,7 +5,7 @@ import { ELEMENTAL_SKILLS, ELEMENTAL_SPEC_INFO, resolveElementalSkill } from './
 import { spellSkillAvailable, prioritizeSpellChoices } from './ElementalUpgrades.js'
 import { SHADOW_EXTRA_SKILLS, SHADOW_SKILL_VARIANTS, SHADOW_SPEC_INFO, resolveShadowSkill } from './ShadowSkills.js'
 import { SHADOW_ROUTES, getShadowSkill, rollShadowSkills } from './ShadowBuild.js'
-import { getOriginActiveGrowth, getPrimalOverloadProfile } from './PrimalEnergy.js'
+import { rollOriginSkills } from './OriginBuild.js'
 import { rollRicochetSkills, RICOCHET_SPEC_INFO, RICOCHET_ROUTES } from './RicochetRules.js'
 import { CORE_SKILL_RANK_CAPS, getEffectiveSkillMaxLevel, getSoftRankMultiplier, applyRankMultiplier } from './SkillProgression.js'
 import { ENDLESS_SKILLS } from './EndlessSkills.js'
@@ -747,79 +747,6 @@ export const SKILL_DATABASE = {
         },
     },
     {
-      id: 'com_shock',
-      name: '震荡扩能',
-      icon: '🫧',
-      // 原生主动成长：Lv.5 拟态后转为重咬伤害/范围，或鼓舞攻击加成/时长。
-      // 实际技能按等级实时读取，不在觉醒时反复叠加属性。
-      originOnly: true,
-      desc: '强化原生主动；拟态暴食后强化重咬，拟态共生后强化鼓舞，已有等级自动继承',
-      tags: ['通用', '主动技'],
-      maxLevel: 3,
-      stats(lv, game) {
-        const growth = getOriginActiveGrowth(game, lv + 1)
-        if (game?.primarySpec === 'symbiosis') return `鼓舞攻击加成额外 +${Math.round(growth.rallyDamage * 100)}% · 持续时间 +${growth.rallyDuration} 秒`
-        return `${game?.primarySpec === 'gluttony' ? '重咬' : '震荡'}伤害 +${(lv + 1) * 10}% · 范围 +${(lv + 1) * 8}px`
-      },
-      apply() {},
-    },
-    {
-      id: 'origin_flux',
-      name: '异源校准',
-      icon: '🔄',
-      originOnly: true,
-      desc: '让不同伤害来源之间的拟态能量轮换更高效；同源收益不变，异源收益递减封顶',
-      tags: ['原生·充能', '拟态能量'],
-      maxLevel: 6,
-      growthClass: 'core',
-      stats(lv, game) {
-        const previous = getOriginActiveGrowth({ ...game, skillLevels: { ...(game?.skillLevels || {}), origin_flux: lv } }).foreignBonus
-        const next = getOriginActiveGrowth({ ...game, skillLevels: { ...(game?.skillLevels || {}), origin_flux: lv + 1 } }).foreignBonus
-        return `异源充能额外 +${previous.toFixed(1)} → +${next.toFixed(1)}（上限 +3）`
-      },
-      apply() {},
-    },
-    {
-      id: 'origin_overload',
-      name: '超载棱镜',
-      icon: '🔆',
-      originOnly: true,
-      desc: '强化下一次有效主动的超载倍率；效果只在支付拟态能量后生效，并带硬上限',
-      tags: ['原生·超载', '有限增幅'],
-      maxLevel: 6,
-      growthClass: 'core',
-      stats(lv, game) {
-        const before = getOriginActiveGrowth({ ...game, skillLevels: { ...(game?.skillLevels || {}), origin_overload: lv } })
-        const g = getOriginActiveGrowth({ ...game, skillLevels: { ...(game?.skillLevels || {}), origin_overload: lv + 1 } })
-        return `超载伤害 ×${before.overloadDamageMul.toFixed(2)} → ×${g.overloadDamageMul.toFixed(2)} · 范围 ×${before.overloadRangeMul.toFixed(2)} → ×${g.overloadRangeMul.toFixed(2)}`
-      },
-      apply() {},
-    },
-    {
-      id: 'origin_concord',
-      name: '双相协鸣',
-      icon: '🔗',
-      originOnly: true,
-      desc: '让主专精决定超载形态，副专精追加一次有限回响；不生成第二套终极',
-      tags: ['原生·协同', '主副共鸣'],
-      maxLevel: 3,
-      growthClass: 'core',
-      stats(lv, game) {
-        const profileAt = rank => getPrimalOverloadProfile({
-          ...game,
-          skillLevels: { ...(game?.skillLevels || {}), origin_concord: rank },
-        }, true)
-        const before = profileAt(lv), after = profileAt(lv + 1)
-        if (game?.primarySpec === 'gatling') return `超载追加齐射 ${before.volleyBonus} → ${after.volleyBonus} 轮`
-        if (game?.primarySpec === 'elemental') return `震荡附魔扩散 +${Math.round(before.elementalSpreadBonus * 100)}% → +${Math.round(after.elementalSpreadBonus * 100)}%`
-        if (game?.primarySpec === 'assassin') return `超载隐匿 ${before.assassinStealth.toFixed(2)} → ${after.assassinStealth.toFixed(2)} 秒`
-        if (game?.primarySpec === 'gluttony') return `重咬增幅 ×${before.biteDamageMul.toFixed(2)}/×${before.biteRangeMul.toFixed(2)} → ×${after.biteDamageMul.toFixed(2)}/×${after.biteRangeMul.toFixed(2)}`
-        if (game?.primarySpec === 'symbiosis') return `鼓舞额外延长 ${before.rallyDuration.toFixed(2)} → ${after.rallyDuration.toFixed(2)} 秒 · 攻击加成 +${Math.round(before.rallyDamage * 100)}% → +${Math.round(after.rallyDamage * 100)}%`
-        return `主专精超载回响 ${Math.min(3, lv)} → ${Math.min(3, lv + 1)} 层`
-      },
-      apply() {},
-    },
-    {
       id: 'com_adrenaline',
       name: '肾上腺素',
       icon: '⚡',
@@ -937,16 +864,6 @@ function specPrimaryUsable(specKey, canDevour) {
   return true
 }
 
-/**
- * origin 拟态觉醒附注（祖细胞拟态）：暴食/共生两棵树的拟态会在觉醒时补发
- * 机制层（吞噬+猎食点+重咬 / 首只伙伴+鼓舞），这是里程碑选项的真实内容，
- * 必须写进卡里——否则玩家不知道这次觉醒还送独占机制。
- */
-const MIMICRY_AWAKENING_NOTES = {
-  gluttony: '🧬 拟态授予：解锁吞噬 · 猎食点 · 空格变暴食重咬（普攻仍为远程飞弹）；继承震荡扩能与拟态超载',
-  symbiosis: '🧬 拟态授予：岩甲团团即刻到场 · 空格变共生鼓舞（本体伤害不减）；继承震荡扩能与拟态超载',
-}
-
 const SECONDARY_STARTERS = {
   gluttony: 'glut_sub_armor', gatling: 'gat_sub_mag', elemental: 'ele_sub_aura',
   assassin: 'ass_sub_insight', symbiosis: 'sym_sub_echo',
@@ -991,12 +908,15 @@ export function rollSkills(game, count = 3) {
   if (game.startingStrain === 'elemental') {
     return elementalSkillOptions(game, ELEMENTAL_SKILLS, SKILL_DATABASE.common, count)
   }
+  if (game.startingStrain === 'origin') {
+    return rollOriginSkills(game, count, SKILL_DATABASE.common)
+  }
   const pLevel = game.player?.level || 1
   const levels = game.skillLevels || {}
   const primarySpec = game.primarySpec
   const secondarySpec = game.secondarySpec
   // 角色身份（阶段十九）：四名角色在 Lv.1~4 只开放本角色 T1；
-  // origin（roleSpec = null）保留三系 T1 自由探索 + Lv.5 五系拟态。
+  // origin 已在 rollSkills 顶部走独立 rollOriginSkills；此分支为历史 legacy。
   const roleSpec = game.roleSpec || null
   // 角色权限（第三/第四批）：技能池必须与独占能力对齐，否则会把死技能摆到玩家面前。
   // 引擎侧是 getter（布尔）；测试桩缺省按「有权限」处理，与本文件其它桩口径一致。
@@ -1007,7 +927,7 @@ export function rollSkills(game, count = 3) {
   // 拟态血统（祖细胞拟态）：origin 选了暴食/共生后，requiresStrain 按拟态血统判定——
   // 否则共生树全员 requiresStrain:'summoner' 会把自己锁死。引擎 getter 缺省（测试桩）
   // 时退化为 startingStrain，行为与旧版完全一致。
-  const effectiveStrain = game.mimicryStrain || game.startingStrain
+  const effectiveStrain = game.startingStrain
   // 里程碑口径「选了觉醒就拿到机制」：origin 的 Lv.5 五系全可选（拟态授予机制层）。
   const isMilestoneOffered = (k) =>
     (k !== 'symbiosis' || effectiveStrain === 'summoner' || isOrigin) &&
@@ -1017,18 +937,17 @@ export function rollSkills(game, count = 3) {
   const isSecondarySpecOffered = (k) => specSecondaryUsable(k, canDevour, canUseElements, isElementalStrain) && !!getSecondaryStarter(game, k)
 
   // ===================================================
-  // 1. Lv. 5 里程碑：主专精觉醒仪式（origin 五系拟态陈列；角色血统只列本树，按权限过滤）
+  // 1. Lv. 5 里程碑：专职角色主专精觉醒（legacy；origin 已改走三条原生路线）
   // ===================================================
   if (pLevel >= 5 && !primarySpec) {
     return Object.keys(SKILL_DATABASE)
       .filter((k) => k !== 'common' && isMilestoneOffered(k))
       .map((k) => {
         const info = SPEC_INFO[k]
-        const mimicryNote = isOrigin ? MIMICRY_AWAKENING_NOTES[k] : null
         // 「已投入 X 级」徽标：早期自由混搭的沉淀在里程碑上可见，
         // 觉醒哪条系一眼有数（配合卡池收敛，雏形与觉醒自然衔接）。
         const invested = (SKILL_DATABASE[k].primary || []).reduce((n, s) => n + (levels[s.id] || 0), 0)
-        const bonus = [mimicryNote, info.bonus, invested > 0 ? `已投入 ${invested} 级` : null]
+        const bonus = [info.bonus, invested > 0 ? `已投入 ${invested} 级` : null]
           .filter(Boolean).join(' ／ ')
         return {
           id: `milestone_pri_${k}`,
@@ -1187,7 +1106,7 @@ export function rollSkills(game, count = 3) {
   }
 
   // 觉醒时先选第一位搭档，后续升级仍可招募其余伙伴。
-  // effectiveStrain：origin 拟态共生后同样先招募（岩甲团团随 enabled 自动到场，
+  // effectiveStrain：共生血统先招募（岩甲团团随 enabled 自动到场，
   // 但三选一招募位是共生树的组队入口，不能只靠常驻位）。
   if (effectiveStrain === 'summoner' && primarySpec === 'symbiosis' &&
       !PET_PARTNER_SKILLS.some(id => (levels[id] || 0) > 0)) {

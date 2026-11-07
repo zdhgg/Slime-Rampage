@@ -1,66 +1,130 @@
-import { gainOriginSecondary, onPrimalKill } from './PrimalEnergy.js'
+import { Projectile } from './entities/Projectile.js'
+import { getElement } from './ElementSystem.js'
+import { ORIGIN_MARKS, ORIGIN_RULES } from './OriginBuild.js'
+import { applyOriginCoreResonance } from './OriginCoreResonance.js'
 
 /**
- * 原生副专精超载回响。一次支付只兑现一个副树小效果，不触发技能等级、
- * 伙伴攻击链或递归充能；每项回响都带目标数、倍率或时长上限。
+ * 异源印记的轻量战斗执行器。
+ *
+ * 这里只做“附加特征”：副弹、护甲/回复、元素附着、隐匿、支援泡泡。
+ * 不写任何职业状态（猎食点、伙伴名册、分身、法术路线），也不额外充能。
  */
-export function triggerOriginSecondaryEcho(engine, { center = engine?.player, overloaded = false } = {}) {
-  if (!overloaded || engine?.startingStrain !== 'origin' || !engine.secondarySpec || !center) return false
-  const ws = engine.weaponSystem, p = engine.player
-  const spec = engine.secondarySpec
-  const rankBySpec = {
-    gluttony: 'glut_sub_armor', gatling: 'gat_sub_mag', elemental: 'ele_sub_aura',
-    assassin: 'ass_sub_insight', symbiosis: 'sym_sub_echo',
+
+export function fireOriginEchoBolts(engine, count = 1, damageMul = 0.5) {
+  const ws = engine?.weaponSystem
+  const p = engine?.player
+  if (!ws || !p || p.dead || engine.runFinished) return 0
+  const target = ws._findNearest?.()
+  if (!target) return 0
+  const damage = ws.damage * ws.levelMul * damageMul
+  for (let i = 0; i < count; i++) {
+    const bolt = new Projectile({
+      x: p.x, y: p.y, target, speed: 520, damage, life: 1.2,
+      homing: 1, glow: ORIGIN_MARKS[engine.originMark]?.color || '#8cffc8',
+      radius: 5,
+    })
+    // 副弹只结算伤害：不充能、不分裂、不触发印记，避免递归。
+    bolt.isOriginEcho = true
+    ws._projectiles.push(bolt)
   }
-  const rank = Math.max(0, engine.skillLevels?.[rankBySpec[spec]] || 0)
-  if (!rank) return false
-  const enemies = ws?.enemyManager?.enemies || []
-  const hit = (enemy, damage, effects) => {
-    const before = enemy.hp
-    enemy.hit(damage, effects)
-    if (enemy.hp < before && !enemy.active) { ws._onKill(enemy); onPrimalKill(engine, enemy) }
+  return count
+}
+
+/** 元素印记/碎片：把已吸收元素里等级最高的一种轻量附到最近的敌人身上。 */
+export function applyElementalMarkProc(engine, chance = 0.25, durationBonus = 0) {
+  const p = engine?.player
+  const ws = engine?.weaponSystem
+  if (!p || !ws || !p.elements?.size) return false
+  if (Math.random() >= chance) return false
+  let best = null
+  for (const [id, level] of p.elements) {
+    if (!best || level > best.level) best = { id, level }
   }
-  const finish = applied => {
-    if (applied) gainOriginSecondary(engine, spec)
-    return !!applied
+  if (!best) return false
+  const proc = getElement(best.id)?.proc
+  if (!proc) return false
+  const enemies = [...(ws.enemyManager?.enemies || [])]
+    .filter(e => e.active && !e.devouring)
+    .sort((a, b) => (a.x - p.x) ** 2 + (a.y - p.y) ** 2 - ((b.x - p.x) ** 2 + (b.y - p.y) ** 2))
+  const target = enemies[0]
+  if (!target) return false
+  const duration = Math.min(3, (proc.duration || 1.5) + durationBonus)
+  const effects = {}
+  if (proc.status === 'burn') {
+    effects.burn = duration
+    effects.burnDmg = Math.max(1, Math.round(ws.damage * ws.levelMul * 0.35))
+  } else if (proc.status === 'freeze') {
+    effects.freeze = Math.min(2, duration)
+  } else if (proc.status === 'poison') {
+    effects.poison = duration
+    effects.poisonDmg = Math.max(1, Math.round(ws.damage * ws.levelMul * 0.35))
+  }
+  if (!Object.keys(effects).length) return false
+  target.hit(0, effects)
+  ws._burstColor?.(target.x, target.y, ORIGIN_MARKS[engine.originMark]?.color || '#a29bfe', 4, false)
+  return true
+}
+
+/** 超载时触发一次异源印记回响；本次超载只兑现一次。 */
+export function triggerOriginMarkEcho(engine, { overloaded = false, center = engine?.player, profile = null } = {}) {
+  const p = engine?.player
+  const ws = engine?.weaponSystem
+  const mark = engine?.originMark
+  if (!overloaded || !p || !ws || !mark || !ORIGIN_MARKS[mark] || !center) return false
+  const state = p.markState
+  if (!state || state.echoUsed) return false
+  state.echoUsed = true
+  const rank = Math.max(1, state.rank || 1)
+  const rankMul = rank >= 2 ? 1.5 : 1
+  const radius = Math.max(70, profile?.radius || 120)
+  const damage = (ws.damage * ws.levelMul) * (profile?.damageMul || 1) * ORIGIN_RULES.echoShareCap
+
+  if (mark === 'glutton') {
+    // 回复/护甲，不吞噬、不产生猎食点。
+    if (p.hp < p.maxHp) p.heal(1)
+    p.originGuard = Math.max(p.originGuard || 0, 1)
+    p.originGuardTimer = Math.max(p.originGuardTimer || 0, 2)
+    ws._ring?.(p.x, p.y, '#ff9f43', p.radius + 18)
+    return true
   }
 
-  if (spec === 'gluttony') {
-    const targets = enemies.filter(e => e.active && !e.devouring && Math.hypot(e.x - center.x, e.y - center.y) <= 105)
-      .sort((a, b) => Math.hypot(a.x - center.x, a.y - center.y) - Math.hypot(b.x - center.x, b.y - center.y)).slice(0, 3)
-    const damage = ws.damage * ws.levelMul * Math.min(0.65, 0.45 + rank * 0.04)
-    for (const enemy of targets) hit(enemy, damage)
-    if (targets.length) ws._ring?.(center.x, center.y, '#ff9f43', 105)
-    return finish(targets.length > 0)
+  if (mark === 'gatling') {
+    const bolts = rank >= 2 ? 3 : 2
+    const fired = fireOriginEchoBolts(engine, bolts, 0.5 * rankMul)
+    if (fired) ws._ring?.(p.x, p.y, '#00d2d3', p.radius + 14)
+    return fired > 0
   }
-  if (spec === 'gatling') {
-    const target = ws?._findNearest?.()
-    if (!target) return false
-    ws.fire(target)
-    ws.rapidVolley = { remaining: Math.min(3, 1 + Math.floor(rank / 2)), timer: 0.12 }
-    return finish(true)
-  }
-  if (spec === 'elemental') {
-    const procs = p?._procs
-    if (!procs) return false
-    let applied = 0
-    const radius = Math.min(210, 150 + rank * 10)
-    const bonus = Math.min(0.2, 0.05 + rank * 0.04)
-    for (const enemy of enemies) {
-      if (!enemy.active || enemy.devouring || Math.hypot(enemy.x - center.x, enemy.y - center.y) > radius) continue
-      const effects = {}
-      if (procs.burn?.chance && Math.random() < Math.min(1, procs.burn.chance + bonus)) { effects.burn = Math.min(3, procs.burn.duration); effects.burnDmg = Math.max(1, Math.round(ws.damage * ws.levelMul * 0.4)) }
-      if (procs.freeze?.chance && Math.random() < Math.min(1, procs.freeze.chance + bonus)) effects.freeze = Math.min(1.5, procs.freeze.duration)
-      if (procs.poison?.chance && Math.random() < Math.min(1, procs.poison.chance + bonus)) { effects.poison = Math.min(3, procs.poison.duration); effects.poisonDmg = Math.max(1, Math.round(ws.damage * ws.levelMul * 0.4)) }
-      if (Object.keys(effects).length) { hit(enemy, 0, effects); applied++ }
+
+  if (mark === 'elemental') {
+    const resonance = applyOriginCoreResonance(engine, radius, damage * rankMul)
+    if (resonance) {
+      engine.enemyManager?.addText?.(
+        p.x, p.y - 48,
+        `晶核回响：${resonance.icons.join('＋')} ${resonance.effect}`,
+        null, resonance.color, 14
+      )
     }
-    return finish(applied > 0)
+    return !!resonance
   }
-  if (spec === 'assassin') {
-    p.stealthTimer = Math.max(p.stealthTimer || 0, Math.min(1.2, 0.55 + rank * 0.12))
+
+  if (mark === 'assassin') {
+    p.stealthTimer = Math.max(p.stealthTimer || 0, rank >= 2 ? 1.6 : 1.2)
     p.guaranteedCrit = true
-    return finish(true)
+    p.originNextHitMul = Math.max(p.originNextHitMul || 1, 1 + 0.15 * rank)
+    ws._ring?.(p.x, p.y, '#ff6b6b', p.radius + 20)
+    return true
   }
-  if (spec === 'symbiosis') return finish(!!ws?.petCombat?.primalEchoBurst?.())
+
+  if (mark === 'symbiosis') {
+    // 旧泡泡先爆裂，再给一层新的支援泡泡；爆裂伤害有限且不充能。
+    if ((state.bubble || 0) > 0) {
+      ws._explode?.(p.x, p.y, damage * (rank >= 2 ? 1.5 : 1), null, 80)
+      ws._ring?.(p.x, p.y, '#edc479', 80)
+    }
+    state.bubble = rank >= 2 ? 2 : 1
+    state.bubbleTimer = 3
+    return true
+  }
+
   return false
 }
