@@ -54,8 +54,10 @@ export class OriginCombat {
       }
       if (p.mutationState.formTimer > 0) p.mutationState.formTimer = Math.max(0, p.mutationState.formTimer - dt)
       p.originFormDr = p.mutationState.formTimer > 0 ? 0.05 : 0
-      if (p.mutationState.formTimer > 0) {
-        // 局部形态重组：短时移速 +10%，与流体机动共享同一移速窗口。
+      const atMaxStacks = this.game?.originRoute === 'assimilation' &&
+        p.mutationState.max > 0 && p.mutationState.stacks >= p.mutationState.max
+      if (p.mutationState.formTimer > 0 || atMaxStacks) {
+        // 局部形态重组 / 满层适应：短时移速 +10%，与流体机动共享同一移速窗口。
         p.originMoveBuff = Math.max(p.originMoveBuff || 0, 0.1)
         p.originMoveBuffTimer = Math.max(p.originMoveBuffTimer || 0, 0.2)
       }
@@ -326,8 +328,9 @@ export class OriginCombat {
       if (this.ready('glutton')) {
         const lowHp = this.hasLowHpEnemy(profile.radius, 0.35)
         if (lowHp) {
-          if (hasMark('glutton') && p.hp < p.maxHp) p.heal(1)
-          p.originGuard = Math.max(p.originGuard || 0, 1)
+          const amount = hasMark('glutton') && rank >= 2 ? 2 : 1
+          if (hasMark('glutton') && p.hp < p.maxHp) p.heal(amount)
+          p.originGuard = Math.max(p.originGuard || 0, amount)
           p.originGuardTimer = Math.max(p.originGuardTimer || 0, 2)
           this.weapon._ring?.(p.x, p.y, ORIGIN_MARKS.glutton.color, p.radius + 14)
           this.setIcd('glutton', (hasMark('glutton') ? 8 : 12) * (rank >= 2 ? 0.8 : 1))

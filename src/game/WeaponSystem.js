@@ -824,6 +824,9 @@ export class WeaponSystem extends Entity {
     // 再被飞弹/雷击/酸液命中致死时，不再重复发放击杀数/宝石/核心
     if (e._settled) return
     e._settled = true
+    // 异源能量击杀奖励统一在唯一结算点发放：飞弹/震荡/液痕/DOT/路线伤害
+    // 都经过 _settleKill，因此不会漏掉，也不会因多次 _onKill 重复结算。
+    onPrimalKill(this.game, e)
     this.kills++
     this._tickLeech()
     if (e.isBoss) this.bossKills++
@@ -1057,7 +1060,7 @@ export class WeaponSystem extends Entity {
               isCrit ? '#ffd166' : '#ffffff',
               isCrit ? 26 : 14
             )
-            if (!e.active) { this._onKill(e); onPrimalKill(this.game, e) } // 击杀加成：精英 +15 / 首领 +30
+            if (!e.active) this._onKill(e)
 
             // 元素反应
             if (gelR) this._chainLightning(e, damage * rMul)

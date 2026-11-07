@@ -50,14 +50,13 @@ export const ORIGIN_ROUTES = Object.freeze({
     color: '#5ad1c8',
     tint: 'rgba(90,209,200,0.22)',
     desc: '把震荡扩散成层叠冲击环，用残留液痕与波纹外延持续压缩怪群空间。',
-    bonus: '震荡范围 +12%，每第 3 次震荡追加一道 35% 伤害的副环；超载必定留下液痕',
+    bonus: '震荡范围 +12%，每第 3 次震荡追加一道 35% 伤害的副环；震荡自带液痕，超载强化液痕并追加双重副环',
     shockDesc: '范围冲击 + 副环 + 残留液痕',
-    overloadDesc: '半径 ×1.7、伤害 ×2.0、双重冲击环、必定留下液痕',
+    overloadDesc: '半径 ×1.7、伤害 ×2.0、双重冲击环、强化液痕',
     roadmap: [
       'T1: 层叠冲击环（每 3 次震荡追加副环）',
-      'T2: 残留液痕（震荡后留下减速伤害区）',
+      'T2: 残留液痕强化（路线自带液痕；提升持续/伤害/减速）',
       'T3: 波纹外延（边缘伤害与击退强化）',
-      'T4: 原质扩张完全体（副环数量与液痕上限提升）',
     ],
   },
   assimilation: {
@@ -67,15 +66,14 @@ export const ORIGIN_ROUTES = Object.freeze({
     icon: '🧬',
     color: '#b8e86a',
     tint: 'rgba(184,232,106,0.22)',
-    desc: '用震荡命中积累不稳定基因层数，满层后触发局部形态重组，越打越适应。',
-    bonus: '震荡命中叠加同化层数（最多 5 层），满层后下一次震荡强化并消耗层数',
+    desc: '用震荡施放积累不稳定基因层数，满层后触发局部形态重组，越打越适应。',
+    bonus: '震荡施放叠加同化层数（最多 5 层，命中 3 个以上敌人额外 +1），满层后下一次震荡强化并消耗层数',
     shockDesc: '层数积累 + 满层形态重组',
     overloadDesc: '消耗全部层数：伤害 ×(2.0+0.1×层数)、半径扩大，并获得 3 秒形变',
     roadmap: [
       'T1: 不稳定基因纹路（层数上限与每层收益）',
       'T2: 局部形态重组（满层震荡强化）',
-      'T3: 战场适应（层数提供减伤与移速）',
-      'T4: 同化持续（层数持续时间与超载保留）',
+      'T3: 战场适应 / 同化持续（减伤、移速与层数窗口）',
     ],
   },
   resonance: {
@@ -92,8 +90,7 @@ export const ORIGIN_ROUTES = Object.freeze({
     roadmap: [
       'T1: 能量回路（回路充能与持续时间）',
       'T2: 共振核心（回路提高超载伤害）',
-      'T3: 多源切换（切换来源的额外收益）',
-      'T4: 超载爆发（消耗回路追加爆发）',
+      'T3: 多源切换 / 超载爆发（切换收益与回路爆发）',
     ],
   },
 })
@@ -215,14 +212,14 @@ export const ORIGIN_COMMON_SKILLS = [
     maxLevel: 3, growthClass: 'common', tier: 1, weight: 0.9,
     desc: '震荡后短暂提高移动速度，让原生在释放主动后更容易重新拉开距离。',
     tags: ['原生核心', '机动'],
-    stats(lv) { return `震荡后移速 +${(lv + 1) * 4}%（持续 1.5 秒）` },
+    stats(lv) { return `震荡后移速 +${4 + (lv + 1) * 4}%（持续 1.5 秒）` },
     apply() {},
   },
   {
     id: 'origin_recovery', name: '液态回流', icon: '🌱',
     spec: 'origin', originOnly: true, originPool: 'common', originCommit: 'route',
     maxLevel: 2, growthClass: 'common', tier: 2, weight: 0.8,
-    desc: '震荡击杀敌人时回复生命；共享 12 秒冷却，不能靠怪海无限续航。',
+    desc: '震荡击杀敌人时回复生命；共享独立冷却，不能靠怪海无限续航。',
     tags: ['原生核心', '恢复'],
     stats(lv) { return `震荡击杀回复 1 生命（${lv === 0 ? 12 : 10} 秒 ICD）` },
     apply() {},
@@ -254,7 +251,7 @@ export const ORIGIN_ROUTE_SKILLS = {
       lv => `副环伤害 ${Math.round((0.35 + 0.05 * (lv + 1)) * 100)}% · 半径为主环的 60%`,
       () => {}),
     routeSkill('expansion', 'ori_exp_residue', '残留液痕', '💧', 3,
-      '震荡后在地面留下液痕，周期伤害并减速敌人；场上最多同时存在 1 个液痕。',
+      '强化路线自带的残留液痕：延长持续、提高周期伤害与减速；场上最多同时存在 1 个液痕。',
       lv => `液痕持续 ${(3 + 0.5 * (lv + 1)).toFixed(1)} 秒 · 伤害 ${Math.round((0.4 + 0.08 * (lv + 1)) * 100)}% · 减速 ${Math.round((0.15 + 0.05 * (lv + 1)) * 100)}%`,
       () => {}),
     routeSkill('expansion', 'ori_exp_edge', '波纹外延', '🌀', 3,
@@ -268,7 +265,7 @@ export const ORIGIN_ROUTE_SKILLS = {
   ],
   assimilation: [
     routeSkill('assimilation', 'ori_asm_stack', '不稳定基因纹路', '🧬', 3,
-      '提高同化层数上限与每层伤害；层数在 4 秒内未刷新会衰减。',
+      '提高同化层数上限与每层伤害；层数在基础 8 秒内未刷新会衰减，可由同化持续延长。',
       lv => `层数上限 ${5 + lv + 1} · 每层伤害 +${(2.5 + 0.5 * (lv + 1)).toFixed(1)}%`,
       () => {}),
     routeSkill('assimilation', 'ori_asm_recompose', '局部形态重组', '🦠', 3,
@@ -280,7 +277,7 @@ export const ORIGIN_ROUTE_SKILLS = {
       lv => `每层减伤 +${(1 + (lv + 1))}% · 满层移速 +10%`,
       () => {}),
     routeSkill('assimilation', 'ori_asm_duration', '同化持续', '⏳', 2,
-      '延长同化层数的持续时间；超载后仍会消耗层数，但形变窗口更长。',
+      '延长同化层数的持续时间（基础 8 秒）；超载后仍会消耗层数，但形变窗口更长。',
       lv => `层数持续 +${lv + 1} 秒 · 超载形变 +${lv + 1} 秒`,
       () => {}),
   ],
@@ -294,7 +291,7 @@ export const ORIGIN_ROUTE_SKILLS = {
       lv => `每层回路超载伤害 +${Math.round((0.05 + 0.03 * (lv + 1)) * 100)}%`,
       () => {}),
     routeSkill('resonance', 'ori_res_switch', '多源切换', '🔄', 2,
-      '切换伤害来源时额外获得少量异源能量；共享 3 秒冷却，不能靠高频多段刷能。',
+      '切换伤害来源时额外获得少量异源能量；独立 3 秒冷却，不能靠高频多段刷能。',
       lv => `切换来源额外 +${(lv + 1) * 2} 能量 · 3 秒 ICD`,
       () => {}),
     routeSkill('resonance', 'ori_res_burst', '超载爆发', '💥', 2,
@@ -307,19 +304,19 @@ export const ORIGIN_ROUTE_SKILLS = {
 export const ORIGIN_MARK_SKILLS = [
   markUpgrade('glutton', 'ori_mark_glutton', '暴食印记·深化', '🍽️',
     '强化残血回复与护甲效果；仍然不会获得吞噬。',
-    () => '回复/护甲效果 +50% · ICD −20%'),
+    () => '回复/护甲提升至 2 点 · ICD −20%'),
   markUpgrade('gatling', 'ori_mark_gatling', '弹射印记·深化', '🔫',
-    '强化副弹数量与伤害；仍然不会获得分裂树。',
-    () => '副弹伤害 +50% · 额外 1 枚副弹'),
+    '强化副弹数量；总伤害仍受超载回响 35% 预算约束，不会随深化超预算。',
+    () => '副弹数量 +1 · 超载回响总伤害仍受 35% 预算'),
   markUpgrade('elemental', 'ori_mark_elemental', '元素印记·深化', '🔮',
-    '提高震荡元素附着的概率与持续时间；仍然不会开启法术树。',
+    '提高震荡元素附着的概率与持续时间；超载晶核回响仍受 35% 预算。',
     () => '附着概率 +15% · 持续时间 +0.75 秒'),
   markUpgrade('assassin', 'ori_mark_assassin', '暗影印记·深化', '🗡️',
     '延长隐匿并强化下一次攻击；仍然不会生成分身。',
     () => '隐匿 +0.4 秒 · 下一次攻击 +15%'),
   markUpgrade('symbiosis', 'ori_mark_symbiosis', '共生印记·深化', '🐾',
-    '强化支援泡泡与超载爆裂；仍然不会生成伙伴。',
-    () => '泡泡护盾 +1 · 爆裂伤害 +50%'),
+    '强化支援泡泡与超载爆裂范围；爆裂伤害仍受 35% 预算。',
+    () => '泡泡护盾 +1 · 爆裂范围 +20px'),
 ]
 
 export const ORIGIN_ALL_SKILLS = [
@@ -394,7 +391,7 @@ export function getOriginGrowth(game, overrideLevels = null) {
     stackDrBonus: route === 'assimilation' ? 0.01 + 0.01 * adaptLevel : 0,
     empoweredDamageBonus: route === 'assimilation' ? 0.15 + 0.1 * recomposeLevel : 0,
     empoweredRadiusBonus: route === 'assimilation' ? 0.25 + 0.05 * recomposeLevel : 0,
-    stackDuration: 4 + lv(levels, 'ori_asm_duration'),
+    stackDuration: 8 + lv(levels, 'ori_asm_duration'),
     formDuration: 3 + lv(levels, 'ori_asm_duration'),
     ringDamage: route === 'expansion' ? 0.35 + 0.05 * ringLevel : 0,
     residueDuration: route === 'expansion' ? 3 + 0.5 * residueLevel : 0,
@@ -561,6 +558,7 @@ export function resetOriginState(game) {
   p.originRiderIcd = {}
   p.originAdaptReduction = 0
   p.originFormDr = 0
+  p.originSwitchReadyAt = -Infinity
 }
 
 export function originMilestonePending(game) {

@@ -75,14 +75,15 @@ export function triggerOriginMarkEcho(engine, { overloaded = false, center = eng
   if (!state || state.echoUsed) return false
   state.echoUsed = true
   const rank = Math.max(1, state.rank || 1)
-  const rankMul = rank >= 2 ? 1.5 : 1
   const radius = Math.max(70, profile?.radius || 120)
+  // 统一回响预算：一次超载的印记伤害总量不超过本次震荡伤害的 35%。
   const damage = (ws.damage * ws.levelMul) * (profile?.damageMul || 1) * ORIGIN_RULES.echoShareCap
 
   if (mark === 'glutton') {
-    // 回复/护甲，不吞噬、不产生猎食点。
-    if (p.hp < p.maxHp) p.heal(1)
-    p.originGuard = Math.max(p.originGuard || 0, 1)
+    // 回复/护甲，不吞噬、不产生猎食点；深化后提升至 2 点，仍受 ICD 限制。
+    const amount = rank >= 2 ? 2 : 1
+    if (p.hp < p.maxHp) p.heal(amount)
+    p.originGuard = Math.max(p.originGuard || 0, amount)
     p.originGuardTimer = Math.max(p.originGuardTimer || 0, 2)
     ws._ring?.(p.x, p.y, '#ff9f43', p.radius + 18)
     return true
@@ -90,13 +91,14 @@ export function triggerOriginMarkEcho(engine, { overloaded = false, center = eng
 
   if (mark === 'gatling') {
     const bolts = rank >= 2 ? 3 : 2
-    const fired = fireOriginEchoBolts(engine, bolts, 0.5 * rankMul)
+    const perBolt = damage / Math.max(0.0001, ws.damage * ws.levelMul) / bolts
+    const fired = fireOriginEchoBolts(engine, bolts, perBolt)
     if (fired) ws._ring?.(p.x, p.y, '#00d2d3', p.radius + 14)
     return fired > 0
   }
 
   if (mark === 'elemental') {
-    const resonance = applyOriginCoreResonance(engine, radius, damage * rankMul)
+    const resonance = applyOriginCoreResonance(engine, radius, damage)
     if (resonance) {
       engine.enemyManager?.addText?.(
         p.x, p.y - 48,
@@ -116,10 +118,11 @@ export function triggerOriginMarkEcho(engine, { overloaded = false, center = eng
   }
 
   if (mark === 'symbiosis') {
-    // 旧泡泡先爆裂，再给一层新的支援泡泡；爆裂伤害有限且不充能。
+    // 旧泡泡先爆裂，再给一层新的支援泡泡；深化只扩大范围，不突破伤害预算。
     if ((state.bubble || 0) > 0) {
-      ws._explode?.(p.x, p.y, damage * (rank >= 2 ? 1.5 : 1), null, 80)
-      ws._ring?.(p.x, p.y, '#edc479', 80)
+      const burstRadius = rank >= 2 ? 100 : 80
+      ws._explode?.(p.x, p.y, damage, null, burstRadius)
+      ws._ring?.(p.x, p.y, '#edc479', burstRadius)
     }
     state.bubble = rank >= 2 ? 2 : 1
     state.bubbleTimer = 3

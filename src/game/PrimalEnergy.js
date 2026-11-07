@@ -107,7 +107,11 @@ export function gainOriginEnergy(engine, source, now = engine?.elapsed ?? 0) {
   const circuits = p.routeState?.resonance?.circuits || 0
   const circuitMul = engine.originRoute === 'resonance' ? 1 + growth.circuitEnergy * circuits : 1
   let amount = (foreign ? PRIMAL_GAIN_FOREIGN + growth.foreignBonus : PRIMAL_GAIN_SAME) * circuitMul
-  if (foreign && growth.switchLevel > 0) amount += growth.switchLevel * 2
+  // 「多源切换」独立 3 秒节流：不吃每秒充能窗口，也不会被同源命中刷新。
+  if (foreign && growth.switchLevel > 0 && now >= (p.originSwitchReadyAt ?? -Infinity)) {
+    amount += growth.switchLevel * 2
+    p.originSwitchReadyAt = now + 3
+  }
   p.originEnergy = Math.min(ORIGIN_ENERGY_MAX, p.originEnergy + amount)
   engine.bossTomes?.onOriginGain(foreign, amount)
   return amount
@@ -163,6 +167,8 @@ export function trySpendOriginOverload(engine) {
     lastPaidAt: now,
     echoTriggered: false,
   }
+  // 每次新超载都可以兑现一次印记回响；markState.echoUsed 只在本轮超载内有效。
+  if (p.markState) p.markState.echoUsed = false
   engine.bossTomes?.onOverload()
   return true
 }

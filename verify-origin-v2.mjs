@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict'
-import { createArena, spawn, pressSpace, rollSkills, learn, dispose } from './test-support/arena-fixture.mjs'
-import { ORIGIN_BASE, ORIGIN_RULES, getOriginShockProfile, getOriginGrowth, originRouteOptions, originMarkOptions } from './src/game/OriginBuild.js'
+import { createArena, spawn, spawnBoss, pressSpace, rollSkills, learn, dispose } from './test-support/arena-fixture.mjs'
+import { ORIGIN_BASE, ORIGIN_RULES, ORIGIN_ROUTES, ORIGIN_SKILL_BY_ID, getOriginShockProfile, getOriginGrowth, originRouteOptions, originMarkOptions } from './src/game/OriginBuild.js'
 import { gainOriginEnergy, trySpendOriginOverload, ORIGIN_SOURCES } from './src/game/PrimalEnergy.js'
 import { triggerOriginMarkEcho } from './src/game/OriginEchoes.js'
+import { Projectile } from './src/game/entities/Projectile.js'
+import { CELL_SIZE, GRID_KEY_SCALE } from './src/game/EnemyManager.js'
 
 let passed = 0
 const check = (name, run) => {
@@ -26,6 +28,16 @@ const chooseMark = (g, mark) => {
   const card = rollSkills(g, 5).find(s => s.isOriginMark && s.originMark === mark)
   assert.ok(card, `mark ${mark}`)
   assert.equal(g.applySkill(card), true)
+}
+
+/** 用真实引擎计时推进：冷却、超载窗口、同化层数都走 update，不直接改状态。 */
+function advance(g, seconds, step = 0.05) {
+  const steps = Math.ceil(seconds / step)
+  for (let i = 0; i < steps; i++) {
+    g.elapsed += step
+    g._updateStrainSkill(step)
+    g.weaponSystem.originCombat.update(step)
+  }
 }
 
 check('身份隔离：唯一主动始终是黏液震荡，不写 primarySpec/secondarySpec，不开放职业系统', g => {
@@ -204,6 +216,151 @@ check('重开清空路线/印记/能量/同化/回路，回到无职业身份的
   assert.equal(g.player.markState.mark, null)
   assert.equal(g.primarySpec, null)
   assert.equal(g.strainSkill.id, 'slime_shock')
+})
+
+check('连续两次超载都能触发印记回响', g => {
+  chooseRoute(g, 'resonance')
+  chooseMark(g, 'glutton')
+  spawn(g, { x: 30, hp: 10000 })
+  g.player.originEnergy = ORIGIN_BASE.overloadCost
+  pressSpace(g)
+  assert.equal(g.player.markState.echoUsed, true, '第一次超载兑现回响')
+  assert.equal(g.player.originGuard, 1)
+  g.player.originGuard = 0
+  g.player.originGuardTimer = 0
+
+  advance(g, 6.6) // 跨过 6.5 秒震荡冷却与超载窗口
+  g.player.originEnergy = ORIGIN_BASE.overloadCost
+  pressSpace(g)
+  assert.equal(g.player.markState.echoUsed, true, '第二次超载仍应兑现一次回响')
+  assert.equal(g.player.originGuard, 1, '第二次回响真实生效，而不是被旧的 echoUsed 锁死')
+})
+
+check('同化层数在真实 6.5 秒冷却下叠满并触发重组', g => {
+  chooseRoute(g, 'assimilation')
+  for (const x of [-30, 0, 30]) {
+    const enemy = spawn(g, { x, hp: 100000 })
+    enemy.isBoss = true // 首领不被击退，保证每次震荡都能命中 3 个目标
+  }
+
+  pressSpace(g)
+  assert.equal(g.player.mutationState.stacks, 2, '3 目标震荡 +2 层')
+  advance(g, 6.6)
+  pressSpace(g)
+  assert.equal(g.player.mutationState.stacks, 4, '第二次震荡后层数未过期')
+  advance(g, 6.6)
+  pressSpace(g)
+  assert.equal(g.player.mutationState.stacks, 5, '第三次震荡叠满')
+  assert.equal(g.player.mutationState.empowered, true, '满层标记已点亮')
+  g.weaponSystem.originCombat.update(0.01)
+  assert.ok(g.player.originMoveBuff >= 0.1, '战场适应：满层获得 10% 移速')
+
+  advance(g, 6.6)
+  pressSpace(g)
+  assert.equal(g.player.mutationState.stacks, 0, '强化震荡消耗全部层数')
+  assert.ok(g.player.mutationState.formTimer > 0, '进入局部形态重组窗口')
+})
+
+check('多源切换额外充能受独立 3 秒 ICD', g => {
+  chooseRoute(g, 'resonance')
+  learn(g, 'ori_res_switch')
+  // 暂时摘掉路线，隔离共振回路对充能数值的乘区，只验证切换 ICD。
+  g.originRoute = null
+  g.player.originEnergy = 0
+
+  gainOriginEnergy(g, ORIGIN_SOURCES.PROJECTILE, 0)
+  assert.equal(g.player.originEnergy, 10, '首次异源：8 + 切换 2')
+  gainOriginEnergy(g, ORIGIN_SOURCES.SHOCK, 0.1)
+  assert.equal(g.player.originEnergy, 18, '3 秒内再次切换不再获得额外 2')
+  gainOriginEnergy(g, ORIGIN_SOURCES.PROJECTILE, 3.1)
+  assert.equal(g.player.originEnergy, 28, '超过 3 秒后重新获得切换奖励')
+})
+
+check('震荡击杀首领的异源奖励只结算一次', g => {
+  const boss = spawnBoss(g, 1)
+  boss.shieldHits = 0
+  g.player.originEnergy = 0
+  pressSpace(g)
+  assert.equal(g.player.originEnergy, 38, '震荡 +8、首领击杀 +30')
+  g.weaponSystem._onKill(boss)
+  assert.equal(g.player.originEnergy, 38, '重复 _onKill 不得重复发放')
+})
+
+check('液痕击杀精英获得异源奖励', g => {
+  chooseRoute(g, 'expansion')
+  g.player.originEnergy = 0
+  pressSpace(g) // 无敌人，只留下液痕
+  assert.equal(g.weaponSystem.originCombat.fields.length, 1)
+  g.player.originEnergy = 0
+  const elite = spawn(g, { x: 0, hp: 0.05 })
+  elite.isElite = true
+  elite.maxHp = 1
+  g.weaponSystem.originCombat.update(0.6)
+  assert.equal(elite.active, false)
+  assert.equal(g.player.originEnergy, 15, '液痕击杀精英 +15，且不依赖震荡直接命中')
+})
+
+check('普通飞弹击杀精英获得异源奖励', g => {
+  g.enemyManager._enemies.length = 0
+  const elite = spawn(g, { x: 80, hp: 1 })
+  elite.isElite = true
+  elite.maxHp = 1
+  const bullet = new Projectile({ x: elite.x, y: elite.y, target: elite, damage: 1, vx: 0, vy: 0 })
+  g.weaponSystem._projectiles.length = 0
+  g.weaponSystem._projectiles.push(bullet)
+  const grid = g.enemyManager.grid
+  grid.clear()
+  const cx = (bullet.x / CELL_SIZE) | 0
+  const cy = (bullet.y / CELL_SIZE) | 0
+  grid.set(cx * GRID_KEY_SCALE + cy, [elite])
+  g.player.originEnergy = 0
+  g.weaponSystem._resolveCollisions()
+  assert.equal(elite.active, false)
+  assert.equal(g.player.originEnergy, 23, '飞弹命中 +8、精英击杀 +15')
+})
+
+check('弹射印记深化后的超载回响总伤害不超过 35% 预算', g => {
+  chooseRoute(g, 'expansion')
+  chooseMark(g, 'gatling')
+  const profile = getOriginShockProfile(g, true)
+  const shockDamage = g.weaponSystem.damage * g.weaponSystem.levelMul * profile.damageMul
+  for (const rank of [1, 2]) {
+    g.player.markState.rank = rank
+    g.player.markState.echoUsed = false
+    g.weaponSystem._projectiles.length = 0
+    g.enemyManager._enemies.length = 0
+    spawn(g, { x: 50, hp: 10000 })
+    assert.equal(triggerOriginMarkEcho(g, { overloaded: true, center: g.player, profile }), true)
+    const total = g.weaponSystem._projectiles.reduce((sum, bolt) => sum + bolt.damage, 0)
+    assert.ok(total > 0)
+    assert.ok(total <= shockDamage * ORIGIN_RULES.echoShareCap + 1e-6,
+      `rank ${rank}: ${total} > ${shockDamage * ORIGIN_RULES.echoShareCap}`)
+  }
+})
+
+check('原质扩张路线自带液痕，残留液痕卡只强化不解锁', g => {
+  chooseRoute(g, 'expansion')
+  assert.equal(g.skillLevels.ori_exp_residue || 0, 0)
+  pressSpace(g)
+  const first = g.weaponSystem.originCombat.fields.find(field => field.origin)
+  assert.ok(first, '未学习残留液痕卡时路线已能留下液痕')
+  const baseLife = first.life
+
+  learn(g, 'ori_exp_residue')
+  g.player.strainSkillCd = 0
+  pressSpace(g)
+  const second = g.weaponSystem.originCombat.fields.find(field => field.origin)
+  assert.ok(second.life > baseLife, '残留液痕卡提高液痕持续时间')
+})
+
+check('原生普通卡描述与派生一致，路线预览不含未实现 T4', g => {
+  const motility = ORIGIN_SKILL_BY_ID.origin_motility
+  assert.match(motility.stats(0, g), /8%/, '1 级流体机动描述为 8%')
+  assert.equal(getOriginGrowth({ ...g, skillLevels: { ...g.skillLevels, origin_motility: 1 } }).motilityBonus, 0.08)
+  for (const route of Object.keys(ORIGIN_ROUTES)) {
+    assert.ok(!ORIGIN_ROUTES[route].roadmap.some(line => line.startsWith('T4')),
+      `${route} 不应展示未实现的 T4`)
+  }
 })
 
 console.log(`\n原生黏液重构验证通过：${passed} 组 ✓`)
