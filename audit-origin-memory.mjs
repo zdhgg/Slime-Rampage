@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { createArena, dispose, spawn, rollSkills } from './test-support/arena-fixture.mjs'
 import { ORIGIN_RULES, getOriginShockProfile, getOriginGrowth } from './src/game/OriginBuild.js'
-import { ORIGIN_SOURCE_RULES, ORIGIN_SOURCE_BY_ID, originSourceLevel, originSourceRouteMods, learnOriginMemory } from './src/game/OriginSourceSkills.js'
+import { ORIGIN_INNATE_SKILL, ORIGIN_SOURCE_RULES, ORIGIN_SOURCE_BY_ID, originSourceLevel, originSourceRouteMods, learnOriginMemory } from './src/game/OriginSourceSkills.js'
 import { BOSS_TOME_BY_ID, tomeLevel } from './src/game/BossTomes.js'
 import { Enemy } from './src/game/entities/Enemy.js'
 
@@ -135,6 +135,8 @@ function patchCombat(g, stats) {
   const cs = g.weaponSystem.originSourceCombat
   const origHit = cs._hit.bind(cs)
   cs._hit = (enemy, damage) => {
+    const prev = stats._ctx
+    stats._ctx = 'source'
     stats.sourceDamage += damage
     stats.sourceHits += 1
     stats.hitsThisCast += 1
@@ -143,43 +145,65 @@ function patchCombat(g, stats) {
     else if (enemy.isElite) stats.eliteDamage += Math.min(damage, Math.max(0, enemy.hp))
     const killed = origHit(enemy, damage)
     if (killed) stats.sourceKills += 1
+    stats._ctx = prev
     return killed
   }
-  const origRelease = cs._release.bind(cs)
-  cs._release = (job) => {
-    const ok = origRelease(job)
+  // 伤害分桶：震荡施放与其残留（液痕/副环）在 update 中结算，统一归 'shock' 桶；
+  // 秘典派生带 bossTomeDerived 标记；其余（普攻、印记副弹等）归 'other'。
+  const oc = g.weaponSystem.originCombat
+  for (const key of ['update', 'castShock']) {
+    const orig = oc[key].bind(oc)
+    oc[key] = (...args) => {
+      const prev = stats._ctx
+      stats._ctx = 'shock'
+      try { return orig(...args) } finally { stats._ctx = prev }
+    }
+  }
+  // 被动超载的「无目标等待」计数：目标校验失败一次记一次（控制器每 0.5s 重试）。
+  const origHasTargets = cs.hasTargetsFor.bind(cs)
+  cs.hasTargetsFor = (entry) => {
+    const ok = origHasTargets(entry)
     if (!ok) stats.skips += 1
     return ok
   }
-  const origCast = cs._cast.bind(cs)
-  cs._cast = (def, level, snapshot) => {
-    const ok = origCast(def, level, snapshot)
-    if (!ok) return ok
+  const origCastNow = cs.castNow.bind(cs)
+  cs.castNow = (entry, snapshot) => {
+    const info = origCastNow(entry, snapshot)
+    if (!info) return info
     if (stats.pendingCast) stats.castLog.push(stats.pendingCast)
     stats.casts += 1
-    stats.castIds.push(def.id)
-    stats.castLevels.push(level)
+    stats.castIds.push(info.id)
+    stats.castLevels.push(entry?.level ?? 1)
     stats.lastCastAt = g.elapsed
     const p = g.player
     const nearest = g.weaponSystem._findNearest?.()
     const boss = (g.enemyManager.enemies || []).find(e => e.active && e.isBoss)
     const distTo = (e) => e ? Math.hypot(e.x - p.x, e.y - p.y) : -1
     stats.pendingCast = {
-      id: def.id,
+      id: info.id,
       nearest: distTo(nearest),
       bossNearest: distTo(boss),
       nearestIsBoss: !!nearest?.isBoss,
       hits: 0,
     }
     stats.hitsThisCast = 0
-    return ok
+    return info
   }
 }
 
 const ORIGINAL_HIT = Enemy.prototype.hit
 let ACTIVE_STATS = null
 Enemy.prototype.hit = function (damage, effects) {
-  if (ACTIVE_STATS && damage > 0) ACTIVE_STATS.totalDamage += Math.min(damage, Math.max(1, this.hp))
+  const s = ACTIVE_STATS
+  if (s && damage > 0) {
+    const dealt = Math.min(damage, Math.max(1, this.hp))
+    s.totalDamage += dealt
+    const bucket = effects?.bossTomeDerived ? 'tome'
+      : s._ctx === 'source' ? 'source'
+      : s._ctx === 'shock' ? 'shock' : 'other'
+    s.damageBySource[bucket] += dealt
+    if (this.isBoss) s.bossBySource[bucket] += dealt
+  }
   return ORIGINAL_HIT.call(this, damage, effects)
 }
 
@@ -194,11 +218,11 @@ function kiteInput(g, stats) {
     if (d < nd) { nd = d; nearest = e }
   }
   const readySoon = (p.strainSkillCd || 0) <= 0.8
-  const energyReady = (p.originEnergy || 0) >= 40
   let nx = 0
   let ny = 0
   if (nearest) {
-    if (readySoon && energyReady) { nx = nearest.x - p.x; ny = nearest.y - p.y } // 进圈打超载
+    // 空格现在是「控制/防御」：震荡就绪时贴近敌人，否则拉开距离。
+    if (readySoon) { nx = nearest.x - p.x; ny = nearest.y - p.y }
     else { nx = p.x - nearest.x; ny = p.y - nearest.y }
   }
   nx += (g.worldWidth / 2 - p.x) * 0.0015
@@ -217,7 +241,10 @@ function runSim({ route, mark, withMemory = true, minutes = 10, seed = 1, invinc
   const stats = {
     route, mark, withMemory, casts: 0, castIds: [], castLevels: [], hitsPerCast: [], hitsThisCast: 0,
     sourceDamage: 0, sourceHits: 0, sourceKills: 0, bossDamage: 0, eliteDamage: 0,
-    totalDamage: 0, skips: 0, overloads: 0, forcedResume: 0, forcedLog: [], failedPanels: [], deaths: 0, lastCastAt: -1,
+    totalDamage: 0, skips: 0, overloads: 0, overloadAt: [], forcedResume: 0, forcedLog: [], failedPanels: [], deaths: 0, lastCastAt: -1,
+    damageBySource: { source: 0, shock: 0, tome: 0, other: 0 },
+    bossBySource: { source: 0, shock: 0, tome: 0, other: 0 },
+    _ctx: null,
     memoryCards: 0, firstMemoryAt: null, zeroHitCasts: 0, bossMemoryTypes: [], castLog: [], pendingCast: null,
   }
   ACTIVE_STATS = stats
@@ -272,14 +299,18 @@ function runSim({ route, mark, withMemory = true, minutes = 10, seed = 1, invinc
       if (g.runFinished) break
       if (invincible) { g.player.hp = g.player.maxHp; g.player.invincible = 1e9 }
       kiteInput(g, stats)
-      if (g.player.strainSkillCd <= 0 && g.player.originEnergy >= 40 && !g.player.dead) {
-        g.input.queueFever()
+      if (g.player.strainSkillCd <= 0 && !g.player.dead) {
+        g.input.queueFever() // 黏液震荡回归主动控制：冷却好就放
       }
       g.elapsed += DT
       g.update(DT)
-      if (g.player.overloadState?.lastPaidAt !== lastPaid) {
-        lastPaid = g.player.overloadState.lastPaidAt
+      const paidAt = g.player.overloadState?.lastPaidAt
+      if (!Number.isFinite(paidAt)) {
+        lastPaid = paidAt // 重开/重置后回到 -Infinity，避免把重置误记为一次支付
+      } else if (paidAt !== lastPaid) {
+        lastPaid = paidAt
         stats.overloads++
+        stats.overloadAt.push(Math.round(paidAt * 10) / 10)
       }
       if (g._pauseLock > 0 && !g._chapterSettlement) {
         // 兜底：任何遗漏的暂停回调都不应该卡死采样
@@ -303,6 +334,12 @@ function runSim({ route, mark, withMemory = true, minutes = 10, seed = 1, invinc
     stats.invincible = g.player.invincible
     stats.memories = (g.originSourceMemories || []).map(m => `${m.id}:${m.level}`)
     stats.cursor = g.originSourceCursor
+    // 超载节奏：相邻两次支付的间隔（秒）。
+    const gaps = []
+    for (let i = 1; i < stats.overloadAt.length; i++) gaps.push(stats.overloadAt[i] - stats.overloadAt[i - 1])
+    stats.overloadGapAvg = gaps.length ? gaps.reduce((a, b) => a + b, 0) / gaps.length : 0
+    stats.overloadGapMax = gaps.length ? Math.max(...gaps) : 0
+    stats.firstOverloadAt = stats.overloadAt[0] ?? null
     const bySkill = {}
     for (const id of stats.castIds) bySkill[id] = (bySkill[id] || 0) + 1
     stats.bySkill = bySkill
@@ -324,9 +361,19 @@ function printSim(s) {
   if (s.ended !== 'running') console.log(`结束原因 ${s.defeatReason} · 生命 ${s.hp} · 无敌 ${s.invincible}`)
   if (s.forcedLog?.length) console.log(`强制恢复日志 ${JSON.stringify(s.forcedLog)}`)
   if (s.failedPanels?.length) console.log(`无法应用的选卡面板 ${JSON.stringify(s.failedPanels)}`)
-  console.log(`超载 ${s.overloads} 次 · 源质释放 ${s.casts} 次 · 无目标跳过 ${s.skips} 次 · 强退暂停 ${s.forcedResume} 次`)
+  console.log(`超载 ${s.overloads} 次 · 源质释放 ${s.casts} 次 · 无目标等待 ${s.skips} 次 · 强退暂停 ${s.forcedResume} 次`)
   console.log(`源质伤害 ${fmt(s.sourceDamage)} / 全来源 ${fmt(s.totalDamage)} = ${share.toFixed(1)}% · 命中 ${s.sourceHits} 次 · 击杀 ${s.sourceKills}`)
   console.log(`源质对首领 ${fmt(s.bossDamage)} · 对精英 ${fmt(s.eliteDamage)}`)
+  // 伤害分桶：source=源质技能 shock=震荡+液痕+副环 tome=秘典派生 other=普攻/印记副弹
+  const b = s.damageBySource
+  const pct = (v, base) => base > 0 ? ` ${(v / base * 100).toFixed(1)}%` : ' -'
+  console.log(`分桶：源质 ${fmt(b.source)}${pct(b.source, s.totalDamage)} · 震荡系 ${fmt(b.shock)}${pct(b.shock, s.totalDamage)} · 秘典 ${fmt(b.tome)}${pct(b.tome, s.totalDamage)} · 其他 ${fmt(b.other)}${pct(b.other, s.totalDamage)}`)
+  const bt = s.bossBySource
+  const bossTotal = bt.source + bt.shock + bt.tome + bt.other
+  if (bossTotal > 0) {
+    console.log(`对首领：源质 ${fmt(bt.source)}${pct(bt.source, bossTotal)} · 震荡系 ${fmt(bt.shock)}${pct(bt.shock, bossTotal)} · 秘典 ${fmt(bt.tome)}${pct(bt.tome, bossTotal)} · 其他 ${fmt(bt.other)}${pct(bt.other, bossTotal)}`)
+  }
+  console.log(`超载节奏：首次 ${s.firstOverloadAt ?? '-'}s · 平均间隔 ${s.overloadGapAvg.toFixed(1)}s · 最长 ${s.overloadGapMax.toFixed(1)}s`)
   const log = s.castLog || []
   const zero = log.filter(c => c.hits === 0)
   const hit = log.filter(c => c.hits > 0)
@@ -339,7 +386,7 @@ function printSim(s) {
   }
   console.log(`每次释放命中目标：平均 ${(log.reduce((a, c) => a + c.hits, 0) / Math.max(1, log.length)).toFixed(1)} · 最高 ${log.length ? Math.max(...log.map(c => c.hits)) : 0} · 空放 ${zero.length}/${log.length}`)
   for (const [id, v] of Object.entries(per)) {
-    console.log(`  ${ORIGIN_SOURCE_BY_ID[id]?.name || id}: ${v.n} 次 · 平均命中 ${(v.hits / v.n).toFixed(2)} · 空放 ${v.zero}（${(v.zero / v.n * 100).toFixed(0)}%）`)
+    console.log(`  ${ORIGIN_SOURCE_BY_ID[id]?.name || (id === ORIGIN_INNATE_SKILL.id ? ORIGIN_INNATE_SKILL.name : id)}: ${v.n} 次 · 平均命中 ${(v.hits / v.n).toFixed(2)} · 空放 ${v.zero}（${(v.zero / v.n * 100).toFixed(0)}%）`)
   }
   if (log.length) {
     console.log(`  空放时最近目标距离 ${avg(zero, 'nearest').toFixed(0)}px · 命中时 ${avg(hit, 'nearest').toFixed(0)}px`)
@@ -368,38 +415,42 @@ function safetyProbes() {
     g.player.strainSkillCd = 0
     g.player.overloadState.lastPaidAt = -Infinity
   }
+  /** 驱动被动控制器完成一次超载：启动 → 扣费 → 立即释放。 */
   const overloadNow = (g) => {
-    g.player.strainSkillCd = 0
+    const ctrl = g.weaponSystem.originOverload
+    ctrl.reset()
     g.player.overloadState.lastPaidAt = -Infinity
     g.player.overloadState.active = false
     g.player.overloadState.timer = 0
     g.player.originEnergy = 40
-    g.input.queueFever()
-    g._updateStrainSkill(0)
+    for (let i = 0; i < 40 && !g.player.overloadState.active; i++) {
+      g.elapsed += 0.02
+      ctrl.update(0.02)
+    }
   }
   const tick = (g, seconds, step = 0.05) => {
     for (let i = 0; i < Math.ceil(seconds / step); i++) {
       g.elapsed += step
       g.weaponSystem.originSourceCombat.update(step)
+      g.weaponSystem.originOverload.update(step)
     }
   }
 
-  ok('暂停期间延迟任务不推进，恢复后只释放一次', g => {
+  ok('暂停期间超载启动不推进，恢复后只释放一次', g => {
     learnOriginMemory(g, 'knight_breach')
     spawn(g, { x: 150, hp: 100000 })
-    overloadNow(g)
-    assert.equal(g.player.overloadState.active, true)
-    const jobs = g.weaponSystem.originSourceCombat.jobs.length
-    assert.equal(jobs, 1)
-    // 暂停：主循环不再调用 weaponSystem.update，任务保持
+    g.player.originEnergy = 40
+    g.weaponSystem.originOverload.update(0.02)
+    assert.equal(g.weaponSystem.originOverload.state, 'windup')
+    // 暂停：主循环不再调用 weaponSystem.update，启动保持
     g.pause()
-    assert.equal(g.weaponSystem.originSourceCombat.jobs.length, 1, '暂停不丢弃任务')
+    assert.equal(g.weaponSystem.originOverload.state, 'windup', '暂停不丢弃启动')
     g.resume()
     tick(g, 0.5)
     assert.equal(g.originSourceLastCast?.id, 'knight_breach')
-    assert.equal(g.weaponSystem.originSourceCombat.jobs.length, 0, '任务已消费')
-    const casts = g.weaponSystem.originSourceCombat.spikes.length
-    assert.equal(casts, 0)
+    const paid = g.player.overloadState.lastPaidAt
+    tick(g, 0.3)
+    assert.equal(g.player.overloadState.lastPaidAt, paid, '只支付一次')
   })
 
   ok('死亡结算后延迟任务被清理，重开清空记忆', g => {
@@ -410,23 +461,30 @@ function safetyProbes() {
     g.weaponSystem.update(0.016)
     const cs = g.weaponSystem.originSourceCombat
     assert.equal(cs.jobs.length, 0, '死亡后无残留任务')
-    assert.equal(cs.waves.length + cs.cores.length + cs.spikes.length, 0)
+    assert.equal(cs.waves.length + cs.cores.length + cs.spikes.length + cs.orbs.length, 0)
+    assert.equal(g.weaponSystem.originOverload.state, 'charging')
     g.reset()
     assert.deepEqual(g.originSourceMemories, [])
     assert.equal(g.originSourceCursor, 0)
     assert.equal(g.weaponSystem.originSourceCombat.jobs.length, 0)
   })
 
-  ok('换章时延迟任务不崩溃；无目标时跳过且不推进游标', g => {
+  ok('换章清空在途技能；无目标时不支付且不推进游标', g => {
     learnOriginMemory(g, 'knight_breach')
     learnOriginMemory(g, 'mage_collapse')
     spawn(g, { x: 150, hp: 100000 })
     overloadNow(g)
-    assert.equal(g.weaponSystem.originSourceCombat.jobs.length, 1)
+    assert.equal(g.originSourceLastCast?.id, 'knight_breach')
+    assert.equal(g.originSourceCursor, 1)
     g.enemyManager._enemies.length = 0
     g._enterExpeditionStage(2)
+    assert.equal(g.weaponSystem.originSourceCombat.waves.length, 0, '换章清掉在途波体')
+    const paidAt = g.player.overloadState.lastPaidAt
+    g.weaponSystem.originOverload.reset()
+    g.player.originEnergy = 40
     tick(g, 0.5)
-    assert.equal(g.originSourceCursor, 0, '无目标不消耗轮换位')
+    assert.equal(g.player.overloadState.lastPaidAt, paidAt, '无目标不支付')
+    assert.equal(g.originSourceCursor, 1, '记忆保留则轮换游标也跨章保留')
     assert.equal(g.weaponSystem.originSourceCombat.jobs.length, 0)
   })
 
@@ -441,17 +499,19 @@ function safetyProbes() {
     const bolts = g.weaponSystem._projectiles.filter(p => p.isOriginEcho).length
     assert.ok(bolts >= 1, '回响副弹已生成')
     assert.equal(g.player.markState.echoUsed, true)
-    tick(g, 0.6)
     assert.equal(g.originSourceLastCast?.id, 'knight_breach')
+    tick(g, 0.6)
     const after = g.weaponSystem._projectiles.filter(p => p.isOriginEcho).length
     assert.ok(after <= bolts, '源质技能不追加新的回响副弹')
   })
 
-  ok('源质击杀与震荡击杀同一敌人只结算一次', g => {
+  ok('源质击杀与普通击杀同一敌人只结算一次', g => {
     learnOriginMemory(g, 'knight_breach')
     const victim = spawn(g, { x: 120, hp: 1 })
     const gemsBefore = g.gemManager.count
-    overloadNow(g) // 震荡先击杀（冲击波稍后才到）
+    victim.hit(100) // 先由普通伤害击杀
+    g.weaponSystem._onKill(victim)
+    g.weaponSystem.originSourceCombat._hit(victim, 50) // 源质技能再打到尸体：不重复结算
     tick(g, 0.6)
     assert.equal(victim.active, false)
     assert.equal(g.weaponSystem.kills, 1, '击杀统计只加一次')
