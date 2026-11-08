@@ -75,7 +75,7 @@ test('ricochet', '等级总量替换，不逐级重复乘算；回响按轮次�
   const before = e.hp; ws.ricochetCombat.hit(echo, e)
   near(before - e.hp, echo.damage)
 })
-test('origin', '充能/超载费用固定，余震最多五目标且不返充；护盾不叠容量', g => {
+test('origin', '充能/超载费用固定；源质调谐不放余震只给移速；护盾不叠容量', g => {
   learn(g, 'origin_conduit', 3); learn(g, 'origin_aftershock', 3); learn(g, 'origin_membrane', 3)
   for (const [i, source] of ['projectile', 'shock', 'projectile'].entries()) gainPrimalEnergy(g, source, i * .35)
   assert.equal(g.player.primalEnergy, 30)
@@ -83,9 +83,10 @@ test('origin', '充能/超载费用固定，余震最多五目标且不返充；
   const enemies = Array.from({ length: 8 }, (_, i) => spawn(g, { x: 45 + i, hp: 100 }))
   assert.equal(trySpendPrimalOverload(g), true); assert.equal(g.player.primalEnergy, 40)
   assert.equal(g.bossTomes.shield, 1)
+  assert.ok(g.bossTomes.until.move > g.bossTomes.time, '调谐/膜满级给 2 秒移速窗口')
   g.bossTomes.update(.02)
-  assert.equal(enemies.filter(e => e.hp < 100).length, 5); assert.equal(g.player.primalEnergy, 40)
-  g.bossTomes.update(.4); assert.equal(g.bossTomes.jobs.length, 0)
+  assert.equal(enemies.filter(e => e.hp < 100).length, 0, '调谐不再释放余震脉冲')
+  assert.equal(g.bossTomes.jobs.length, 0)
   g.elapsed = 3 // 超载支付锁：真实战局里由 6.5 秒震荡冷却自然跨过
   g.player.overloadState.active = false // 超载窗口由 OriginCombat.update 推进；测试直接跨过
   assert.equal(trySpendPrimalOverload(g), true); assert.equal(g.player.primalEnergy, 0); assert.equal(g.bossTomes.shield, 1)

@@ -250,4 +250,74 @@ check('启动表现 0.25 秒：期间不扣能量，结束后才支付', g => {
   assert.equal(g.originSourceLastCast?.id, 'primal_orbit', '启动结束后释放')
 })
 
+// ============================================================
+// 验收用例 10~12：三路线、资源归属与乘区收口（第 2 阶段）
+// ============================================================
+
+check('10. 同化新层数来源：普攻命中 2.5s 节流 / 精英击杀 4s 节流；满层兑现后可重新叠层', g => {
+  g.originRoute = 'assimilation'
+  const oc = g.weaponSystem.originCombat
+  oc.onBasicHit(); oc.onBasicHit()
+  assert.equal(g.player.mutationState.stacks, 1, '普攻命中 2.5 秒内只 +1')
+  g.elapsed += 2.6
+  oc.onBasicHit()
+  assert.equal(g.player.mutationState.stacks, 2)
+
+  const elite = spawn(g, { x: 300, hp: 10000 })
+  elite.isElite = true
+  const trash = spawn(g, { x: 320, hp: 10 })
+  oc.onKill(elite); oc.onKill(elite)
+  assert.equal(g.player.mutationState.stacks, 3, '精英击杀 4 秒内只 +1')
+  g.elapsed += 4.1
+  oc.onKill(trash)
+  assert.equal(g.player.mutationState.stacks, 3, '非精英击杀不叠层')
+  oc.onKill(elite)
+  assert.equal(g.player.mutationState.stacks, 4)
+
+  // 满层（基础上限 5）由超载兑现清空，之后可重新积累，不会长期卡满。
+  g.player.mutationState.stacks = 5
+  spawn(g, { x: 120, hp: 100000 }) // 原质环流射程内的释放目标
+  fireOverload(g)
+  assert.equal(g.player.mutationState.stacks, 0, '满层被被动超载兑现清空')
+  oc.onBasicHit()
+  assert.equal(g.player.mutationState.stacks, 1, '兑现后重新积累')
+})
+
+check('11. 三路线差异：扩张液域独立上限 1 / 共振冷却更短 / 同化满层消耗', g => {
+  g.originRoute = 'expansion'
+  spawn(g, { x: 200, hp: 100000 })
+  fireOverload(g)
+  fireOverload(g)
+  const fields = g.weaponSystem.originCombat.fields.filter(f => f.overloadField)
+  assert.equal(fields.length, 1, '超载液域顶替不叠加')
+  assert.ok(fields[0].dmg > 0 && fields[0].life > 0)
+
+  g.originRoute = 'resonance'
+  assert.ok(g.weaponSystem.originOverload.cooldownFor() < 6, '共振路线超载冷却更短')
+
+  g.originRoute = 'assimilation'
+  g.player.mutationState.stacks = 5
+  g.elapsed += 10
+  fireOverload(g)
+  assert.equal(g.player.mutationState.stacks, 0, '满层快照兑现消耗')
+})
+
+check('12. 一次超载的共振余波/印记回响各只兑现一次（棘刺多段不叠加）', g => {
+  g.originRoute = 'resonance'
+  learnOriginMemory(g, 'archer_hunt')
+  g.originMark = 'gatling'
+  g.player.markState = { mark: 'gatling', rank: 1, icd: 0, echoUsed: false, bubble: 0, bubbleTimer: 0, icdByFamily: {} }
+  g.player.routeState = {
+    route: 'resonance',
+    resonance: { sources: ['projectile', 'shock', 'element'], circuits: 3, circuitTimer: 8 },
+  }
+  for (let i = 0; i < 4; i++) spawn(g, { x: 150 + i * 60, hp: 100000 })
+  fireOverload(g)
+  advance(g, 1.0, 0.03) // 让棘刺完成多段命中
+  const echoes = g.weaponSystem.originSourceCombat.jobs.filter(j => j.kind === 'echo')
+  assert.ok(echoes.length <= 1, '多段命中也只排一次共振余波')
+  assert.equal(g.player.markState.echoUsed, true, '印记回响已兑现')
+  // 回响预算改为读本次技能倍率：棘刺 Lv.1 2.0×乘区 → 副弹伤害按该基准 ×35%
+})
+
 console.log(`\n原生被动超载验收通过：${passed} 组 ✓`)

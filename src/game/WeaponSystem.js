@@ -848,7 +848,10 @@ export class WeaponSystem extends Entity {
     //  - 敌人身上的 _originDerivedKill 标记（源质技能/回响/路线衍生击杀）；
     //  - _suppressKillCharge 窗口（副环、爆裂回响等经由 _explode 的同步击杀）。
     // 经验/掉落/击杀统计仍照常结算。
-    if (!e._originDerivedKill && !this._suppressKillCharge) onPrimalKill(this.game, e)
+    if (!e._originDerivedKill && !this._suppressKillCharge) {
+      onPrimalKill(this.game, e)
+      this.originCombat.onKill?.(e) // 同化路线：精英击杀叠层（非原生直接短路）
+    }
     this.kills++
     this._tickLeech()
     if (e.isBoss) this.bossKills++
@@ -1071,6 +1074,8 @@ export class WeaponSystem extends Entity {
             // 函数内部对非 origin 直接短路，其他血统零开销零行为变化。
             gainPrimalEnergy(this.game, PRIMAL_SOURCES.PROJECTILE)
             if (elementProcApplied) gainPrimalEnergy(this.game, PRIMAL_SOURCES.ELEMENT)
+            // 同化路线：普攻有效命中叠层（内部节流 2.5s/次，非原生/非同化直接短路）。
+            if (p.isBasicAttack && !p.isSplit) this.originCombat.onBasicHit?.()
             this._burstColor(e.x, e.y, p.visual.impact, isCrit ? 14 : p.visual.impactCount, isCrit)
             this.game.sound.hit(p.visual.sound)
 

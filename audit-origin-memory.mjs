@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import { createArena, dispose, spawn, rollSkills } from './test-support/arena-fixture.mjs'
 import { ORIGIN_RULES, getOriginShockProfile, getOriginGrowth } from './src/game/OriginBuild.js'
-import { ORIGIN_INNATE_SKILL, ORIGIN_SOURCE_RULES, ORIGIN_SOURCE_BY_ID, originSourceLevel, originSourceRouteMods, learnOriginMemory } from './src/game/OriginSourceSkills.js'
-import { BOSS_TOME_BY_ID, tomeLevel } from './src/game/BossTomes.js'
+import { ORIGIN_INNATE_SKILL, ORIGIN_ORBIT_STATS, ORIGIN_OVERLOAD_BUDGET, ORIGIN_SOURCE_RULES, ORIGIN_SOURCE_BY_ID, originSourceCastMods, originSourceLevel, learnOriginMemory } from './src/game/OriginSourceSkills.js'
+import { BOSS_TOME_BY_ID } from './src/game/BossTomes.js'
 import { Enemy } from './src/game/entities/Enemy.js'
 
 /**
@@ -17,7 +17,11 @@ function makeLevel(skillLevels = {}, extra = {}) {
   return { skillLevels, ...extra }
 }
 
-/** 复刻 castShock 的伤害口径：ws.damage * ws.levelMul * profile.damageMul */
+/**
+ * 被动超载口径的预算表：
+ *   超载单体命中 = base × 技能倍率 × passiveDamageScale × mods.damage（mods 合计 ≤1.8）
+ *   震荡不再参与超载乘区，只作为主动辅助列出。
+ */
 function budget(route, level, opts = {}) {
   const g = createArena('origin')
   try {
@@ -32,54 +36,43 @@ function budget(route, level, opts = {}) {
     if (g.player.routeState?.resonance) g.player.routeState.resonance.circuits = opts.circuits || 0
 
     const base = g.weaponSystem.damage * g.weaponSystem.levelMul
-    const normal = getOriginShockProfile(g, false)
-    const over = getOriginShockProfile(g, true)
-    const shockNormal = base * normal.damageMul
-    const shockOver = base * over.damageMul
-    const echo = shockOver * ORIGIN_RULES.echoShareCap // triggerOriginMarkEcho 固定 35% 预算
-    const aftershockRank = tomeLevel(g, 'boss_origin_aftershock')
-    const aftershock = aftershockRank
-      ? base * (aftershockRank === 1 ? 0.8 : 1.2) * (aftershockRank === 3 ? 1.5 : 1)
-      : 0
+    const shock = getOriginShockProfile(g)
+    const shockDamage = base * shock.damageMul
+    const scale = ORIGIN_SOURCE_RULES.passiveDamageScale
+    const snapshot = { stacks: opts.stacks || 0, circuits: opts.circuits || 0 }
+    const mods = originSourceCastMods(g, snapshot)
     const growth = getOriginGrowth(g)
-    const rings = route === 'expansion'
-      ? shockOver * growth.ringDamage * (over.overloaded ? 2 : 1)
-      : 0
-    const pulse = route === 'resonance' && (opts.circuits || 0) >= ORIGIN_RULES.resonanceMaxCircuits
-      ? shockOver * growth.pulseDamage
-      : 0
-    const residueTick = route === 'expansion'
-      ? Math.round(base * growth.residueDamage)
-      : 0
-    const residueDuration = route === 'expansion' ? growth.residueDuration : 0
-    const residueTicks = route === 'expansion' ? Math.floor(residueDuration / 0.5) : 0
 
+    const orbit = {
+      perHit: base * ORIGIN_ORBIT_STATS.damageMul * mods.damage * scale,
+      total: base * ORIGIN_ORBIT_STATS.damageMul * ORIGIN_ORBIT_STATS.orbs * mods.damage * scale,
+    }
     const memory = {}
     for (const def of Object.values(ORIGIN_SOURCE_BY_ID)) {
       memory[def.id] = [1, 2, 3].map((lv) => {
         const stat = originSourceLevel(def, lv)
-        const mods = originSourceRouteMods(g, { stacks: opts.stacks || 0, circuits: opts.circuits || 0 })
-        const perHit = base * stat.damageMul * mods.damage
-        return { perHit, radius: stat.radius, width: stat.width, distance: stat.distance, count: stat.count }
+        return {
+          perHit: base * stat.damageMul * mods.damage * scale,
+          radius: stat.radius, width: stat.width, distance: stat.distance, count: stat.count,
+        }
       })
     }
+    // 印记回响预算 = 本次超载主伤害倍率 × 35%（按破阵波 Lv.1 口径展示）。
+    const echo = (memory.knight_breach?.[0]?.perHit ?? orbit.total) * ORIGIN_RULES.echoShareCap
+    // 共振余波 = 主技能单次伤害 × 25%（满 3 回路才追加）。
+    const echoWave = mods.echo ? (memory.knight_breach?.[0]?.perHit ?? orbit.total) * ORIGIN_SOURCE_RULES.echoShare : 0
+    const residueTick = route === 'expansion' ? Math.round(base * growth.residueDamage) : 0
+    const fieldTick = route === 'expansion' ? Math.round(base * (growth.residueDamage + 0.15)) : 0
+    const residueTicks = route === 'expansion' ? Math.floor(growth.residueDuration / 0.5) : 0
+    const fieldTicks = route === 'expansion' ? Math.floor((growth.residueDuration + 1.5) / 0.5) : 0
 
     return {
-      level,
-      levelMul: g.weaponSystem.levelMul,
-      base,
-      shockNormal,
-      shockOver,
-      echo,
-      aftershock,
-      rings,
-      pulse,
-      residueTick,
-      residueTicks,
-      residueDuration,
-      memory,
-      radius: { normal: normal.radius, over: over.radius },
-      cap: ORIGIN_RULES.overloadDamageCap,
+      level, levelMul: g.weaponSystem.levelMul, base,
+      shockDamage, shockRadius: shock.radius,
+      mods, orbit, memory, echo, echoWave,
+      residueTick, fieldTick, residueTicks, fieldTicks,
+      residueDuration: route === 'expansion' ? growth.residueDuration : 0,
+      caps: ORIGIN_OVERLOAD_BUDGET,
     }
   } finally {
     dispose(g)
@@ -99,27 +92,26 @@ function printBudget() {
   ]
   for (const scene of scenarios) {
     const b = budget(scene.route, scene.level, scene.opts)
-    const shockDamage = b.shockOver
-    const total = shockDamage + b.echo + b.aftershock + b.rings + b.pulse
     console.log(`\n=== ${scene.label} ===`)
-    console.log(`武器基准伤害 base = ${fmt(b.base)}（damage 1 × levelMul ${fmt(b.levelMul)}）`)
-    console.log(`普通震荡 ${fmt(b.shockNormal)} · 超载震荡 ${fmt(shockDamage)}（硬上限 ×${b.cap}，半径 ${b.radius.normal}→${b.radius.over}）`)
-    console.log(`印记回响 ${fmt(b.echo)}（35%） · 秘典余震 ${fmt(b.aftershock)} · 路线副环 ${fmt(b.rings)} · 共振脉冲 ${fmt(b.pulse)}`)
-    console.log(`液痕每跳 ${b.residueTick} · 持续 ${fmt(b.residueDuration)} 秒 · 满跳总计 ≈ ${fmt(b.residueTick * b.residueTicks)}（单体、随时间结算）`)
-    console.log(`—— 不含源质技能的单次超载对单体总伤 ≈ ${fmt(total)}`)
+    console.log(`武器基准伤害 base = ${fmt(b.base)}（levelMul ${fmt(b.levelMul)}）`)
+    console.log(`被动乘区 ×${fmt(b.mods.damage)}（硬上限 ×${b.caps.damageCap}） · 范围乘区 ×${fmt(b.mods.area)}（上限 ×${b.caps.areaCap}）`)
+    console.log(`普通震荡 ${fmt(b.shockDamage)} · 半径 ${b.shockRadius}（主动技，不参与超载乘区）`)
+    console.log(`原质环流 每球 ${fmt(b.orbit.perHit)} · 3 球全中 ${fmt(b.orbit.total)}`)
     for (const [id, levels] of Object.entries(b.memory)) {
       const name = ORIGIN_SOURCE_BY_ID[id].name
       const rows = levels.map((lv, i) => `Lv.${i + 1} ${fmt(lv.perHit)}${lv.radius ? ` (r${lv.radius})` : ''}${lv.width ? ` (w${Math.round(lv.width)}/${lv.distance})` : ''}${lv.count ? ` ×${lv.count}` : ''}`)
       console.log(`  ${name}: ${rows.join(' | ')}`)
     }
     console.log(`  棘刺总伤（3/4/5 枚全中同一目标，仅理论值）= ${levelsOf(b, 'archer_hunt').map(fmt).join(' / ')}`)
-    const full = total + levelsOf(b, 'knight_breach')[0]
-    console.log(`—— 单体全叠加上限（震荡+回响+余震+副环+源质Lv1）≈ ${fmt(full)}`)
-    // 同场景的敌人血量参照：wave ≈ level，用于判断"总伤是否只是溢出"
+    console.log(`印记回响预算 ≈ ${fmt(b.echo)}（35%）${b.mods.echo ? ` · 共振余波 ≈ ${fmt(b.echoWave)}（25%）` : ''}`)
+    if (scene.route === 'expansion') {
+      console.log(`震荡液痕每跳 ${b.residueTick} · 超载液域每跳 ${b.fieldTick} · 液域满跳 ≈ ${fmt(b.fieldTick * b.fieldTicks)}`)
+    }
     const waveApprox = scene.level
     const knightHp = (1 + 1 + Math.floor((waveApprox - 1) / 2)) * 1.6
     const bossHp = 100 + waveApprox * 10
-    console.log(`   参照：第 ${waveApprox} 波骑士 ≈ ${fmt(knightHp)} 生命 · 同波首领 ≈ ${bossHp} 生命（震荡占首领 ${(shockDamage / bossHp * 100).toFixed(1)}%）`)
+    const castHit = b.memory.knight_breach?.[0]?.perHit ?? b.orbit.total
+    console.log(`   参照：第 ${waveApprox} 波骑士 ≈ ${fmt(knightHp)} 生命 · 同波首领 ≈ ${bossHp} 生命（单次超载主命中占首领 ${(castHit / bossHp * 100).toFixed(1)}%）`)
   }
 }
 

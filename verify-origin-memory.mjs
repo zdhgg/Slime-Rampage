@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { createArena, spawn, spawnBoss, pressSpace, rollSkills, dispose, learn } from './test-support/arena-fixture.mjs'
-import { ORIGIN_BASE, ORIGIN_RULES } from './src/game/OriginBuild.js'
+import { ORIGIN_BASE, ORIGIN_RULES, getOriginGrowth } from './src/game/OriginBuild.js'
 import {
   ORIGIN_OVERLOAD_RULES,
   ORIGIN_SOURCE_BY_ID,
@@ -13,7 +13,7 @@ import {
   originMemoryLevel,
   originMemories,
   originSourceForBossType,
-  originSourceRouteMods,
+  originSourceCastMods,
   resetOriginSourceMemories,
   rollOriginMemoryCard,
 } from './src/game/OriginSourceSkills.js'
@@ -381,28 +381,49 @@ check('C3 异源共振 3 回路追加有限余波，且不超过 25%', g => {
 
 check('C4 三条路线只叠加自己的专属效果，加成都有上限', g => {
   g.originRoute = 'expansion'
-  const expansion = originSourceRouteMods(g, { stacks: 5, circuits: 3 })
+  const expansion = originSourceCastMods(g, { stacks: 5, circuits: 3 })
   assert.equal(expansion.route, 'expansion')
   assert.equal(expansion.damage, 1, '扩张不额外加伤害')
   assert.equal(expansion.echo, false, '扩张不触发共振余波')
   assert.ok(expansion.area <= 1.15)
 
   g.originRoute = 'assimilation'
-  const assimilation = originSourceRouteMods(g, { stacks: 9, circuits: 3 })
-  assert.equal(assimilation.area, 1, '同化不加范围')
+  const assimilation = originSourceCastMods(g, { stacks: 9, circuits: 3 })
   assert.equal(assimilation.echo, false)
-  assert.ok(Math.abs(assimilation.damage - 1.15) < 1e-9, '同化增伤封顶 15%')
+  assert.equal(assimilation.consumeStacks, true, '满层快照标记消耗')
+  assert.ok(Math.abs(assimilation.damage - 1.15) < 1e-9, '满层按重组加成 15%')
+  assert.ok(Math.abs(assimilation.area - 1.15) < 1e-9, '满层范围 +15%')
+  const underMax = originSourceCastMods(g, { stacks: 3, circuits: 0 })
+  assert.ok(Math.abs(underMax.damage - 1.075) < 1e-9, '未满层每层 2.5%')
+  assert.equal(underMax.consumeStacks, false, '未满层不消耗')
 
   g.originRoute = 'resonance'
-  const resonance = originSourceRouteMods(g, { stacks: 5, circuits: 3 })
-  assert.equal(resonance.damage, 1, '共振不额外加伤害')
+  const resonance = originSourceCastMods(g, { stacks: 5, circuits: 3 })
+  assert.ok(Math.abs(resonance.damage - 0.9 * 1.15) < 1e-9, '共振 = 0.9 × (1 + 回路加成)')
   assert.equal(resonance.area, 1)
   assert.equal(resonance.echo, true)
-  assert.equal(originSourceRouteMods({ ...g, originRoute: 'resonance' }, { circuits: 2 }).echo, false, '2 回路不触发')
+  assert.equal(resonance.consumeCircuits, true, '满回路标记消耗')
+  assert.equal(originSourceCastMods({ ...g, originRoute: 'resonance' }, { circuits: 2 }).echo, false, '2 回路不触发')
 
   g.originRoute = null
-  const none = originSourceRouteMods(g, { stacks: 5, circuits: 3 })
+  const none = originSourceCastMods(g, { stacks: 5, circuits: 3 })
   assert.deepEqual([none.area, none.damage, none.echo], [1, 1, false])
+})
+
+check('C4b 棱镜/调谐进入统一乘区，合计不超过硬上限', g => {
+  g.skillLevels = { origin_overload: 6 }
+  g.bossSkillLevels = { boss_origin_aftershock: 3 }
+  g.originRoute = 'assimilation'
+  const mods = originSourceCastMods(g, { stacks: 9, circuits: 0 })
+  assert.ok(mods.damage <= 1.8, '伤害乘区封顶 1.8')
+  assert.ok(mods.area <= 1.35, '范围乘区封顶 1.35')
+  // 棱镜 6 级 1.45 × 调谐 1.15 × 满层重组 1.15 = 1.919 → 被 1.8 截断
+  assert.ok(mods.damage > 1.4, '棱镜与调谐确实进入了乘区')
+
+  g.originRoute = null
+  const plain = originSourceCastMods(g, { stacks: 0, circuits: 0 })
+  const expected = getOriginGrowth(g).overloadDamageMul * 1.15
+  assert.ok(Math.abs(plain.damage - expected) < 1e-9, '无路线时 = 棱镜 × 调谐')
 })
 
 // ============================================================

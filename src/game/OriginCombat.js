@@ -247,15 +247,60 @@ export class OriginCombat {
     return count
   }
 
-  addStacks(hitCount) {
+  _gainStacks(n) {
     const p = this.player
     if (!p?.mutationState) return
     const g = getOriginGrowth(this.game)
-    const gain = Math.min(ORIGIN_RULES.mutationMaxGainPerCast, 1 + (hitCount >= 3 ? 1 : 0))
-    p.mutationState.stacks = Math.min(g.maxStacks, p.mutationState.stacks + gain)
+    p.mutationState.stacks = Math.min(g.maxStacks, p.mutationState.stacks + n)
     p.mutationState.max = g.maxStacks
     p.mutationState.timer = g.stackDuration
     p.mutationState.empowered = p.mutationState.stacks >= g.maxStacks
+  }
+
+  addStacks(hitCount) {
+    this._gainStacks(Math.min(ORIGIN_RULES.mutationMaxGainPerCast, 1 + (hitCount >= 3 ? 1 : 0)))
+  }
+
+  /** 同化新增来源：普攻有效命中，每 2.5 秒最多 +1 层。 */
+  onBasicHit() {
+    const g = this.game
+    if (g?.originRoute !== 'assimilation' || !this.player?.mutationState) return
+    const now = g.elapsed || 0
+    if (now - (this._stackBasicAt ?? -Infinity) < 2.5) return
+    this._stackBasicAt = now
+    this._gainStacks(1)
+  }
+
+  /** 同化新增来源：精英击杀，每 4 秒最多 +1 层；派生击杀由调用方过滤。 */
+  onKill(enemy) {
+    const g = this.game
+    if (g?.originRoute !== 'assimilation' || !this.player?.mutationState || !enemy?.isElite) return
+    const now = g.elapsed || 0
+    if (now - (this._stackKillAt ?? -Infinity) < 4) return
+    this._stackKillAt = now
+    this._gainStacks(1)
+  }
+
+  /**
+   * 扩张：被动超载在技能落点沉淀的超载液域。
+   * 与震荡液痕（origin:true）独立计数、各自最多 1 个；走同一 field 结算，
+   * 击杀天然带 `_originDerivedKill` 标记，不返还充能。
+   */
+  spawnOverloadField(x, y) {
+    const g = this.game
+    if (g?.originRoute !== 'expansion' || !this.player || this.player.dead) return
+    const growth = getOriginGrowth(g)
+    const index = this.fields.findIndex(f => f.overloadField === true)
+    if (index >= 0) this.fields.splice(index, 1)
+    const life = (growth.residueDuration || 3) + 1.5
+    this.fields.push({
+      x, y, overloadField: true,
+      life, maxLife: life,
+      r: 100,
+      dmg: Math.max(1, Math.round(this.weapon.damage * this.weapon.levelMul * ((growth.residueDamage || 0.4) + 0.15))),
+      tick: 0.5, slow: growth.residueSlow || 0.3,
+      color: '#ffd166',
+    })
   }
 
   applyExpansion(profile, damage, hitCount) {

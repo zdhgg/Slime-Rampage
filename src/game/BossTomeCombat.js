@@ -109,13 +109,9 @@ export class BossTomeCombat {
     const membrane = this.rank('origin_membrane')
     if (membrane) this.grantShield(membrane === 1 ? 2 : 3)
     if (membrane === 3) this.until.move = this.time + 2
-    const rank = this.rank('origin_aftershock')
-    if (rank) {
-      const center = { x: this.p.x, y: this.p.y }, radius = rank === 1 ? 130 : 160
-      const damage = this.base() * (rank === 1 ? .8 : 1.2)
-      this.schedule(.01, () => this.pulse(center, radius, damage, '#8cffc8'))
-      if (rank === 3) this.schedule(.41, () => this.pulse(center, radius, damage * .5, '#8cffc8'))
-    }
+    // 源质调谐（原「超载余震」）：Lv.3 超载后 2 秒移速 +20%；伤害/范围加成
+    // 在 originSourceCastMods 里统一进源质技能的乘区，不再放独立余震。
+    if (this.rank('origin_aftershock') === 3) this.until.move = this.time + 2
   }
   grantShield(duration) {
     this.shield = 1; this.until.shield = this.time + duration
@@ -151,7 +147,7 @@ export class BossTomeCombat {
   hitMultiplier(e, effects) {
     let multiplier = 1
     const reservoir = this.rank('origin_reservoir')
-    if (reservoir && (this.p.primalEnergy >= (reservoir === 1 ? 80 : 60) || this.until.reservoir > this.time)) multiplier *= 1 + bonus(reservoir, .1, .15)
+    if (reservoir && (this.p.primalEnergy >= (reservoir === 1 ? 50 : 40) || this.until.reservoir > this.time)) multiplier *= 1 + bonus(reservoir, .1, .15)
     if (effects?.bossTomeDerived) return multiplier
     const ctx = effects?.bossTomeContext
     if (!ctx) return multiplier

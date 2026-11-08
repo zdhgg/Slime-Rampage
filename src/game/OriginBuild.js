@@ -5,7 +5,7 @@ import { ENDLESS_SKILLS } from './EndlessSkills.js'
  * 原生黏液（origin）的独立成长体系。
  *
  * 设计约束：
- *  - 只有一条路线、一个异源印记；路线管“黏液震荡的主形态与超载主体”，
+ *  - 只有一条路线、一个异源印记；路线管“黏液震荡的主形态与被动超载的形态”，
  *    印记管“震荡附加特征与超载回响”，两者都不开放任何职业主系统。
  *  - 碎片只在 Lv.1~4 出现，最多 2 个系、每系 1 级；同系印记会吸收碎片，
  *    不会产生两次触发。
@@ -22,8 +22,6 @@ export const ORIGIN_RULES = Object.freeze({
   routeWeight: 1.15,
   maxWeightBoost: 1.35,
   overloadWindow: 2.5,
-  overloadDamageCap: 2.8,
-  overloadRadiusCap: 1.8,
   echoShareCap: 0.35,
   mutationMaxStacks: 5,
   mutationMaxGainPerCast: 2,
@@ -66,12 +64,12 @@ export const ORIGIN_ROUTES = Object.freeze({
     color: '#b8e86a',
     tint: 'rgba(184,232,106,0.22)',
     desc: '用震荡施放积累不稳定基因层数，满层后触发局部形态重组，越打越适应。',
-    bonus: '震荡与持续战斗积累同化层数（命中 3 个以上敌人额外 +1），被动超载读取层数增伤，满层时消耗层数触发形态重组',
+    bonus: '震荡、普攻命中与精英击杀积累同化层数（震荡命中 3 个以上敌人额外 +1），被动超载读取层数增伤，满层时消耗层数触发形态重组',
     shockDesc: '层数积累 + 每层减伤',
     overloadDesc: '每层同化提高本次超载伤害；满层时消耗层数，强化本次超载并进入形变',
     roadmap: [
       'T1: 不稳定基因纹路（层数上限与每层收益）',
-      'T2: 局部形态重组（满层震荡强化）',
+      'T2: 局部形态重组（满层超载强化）',
       'T3: 战场适应 / 同化持续（减伤、移速与层数窗口）',
     ],
   },
@@ -187,7 +185,7 @@ export const ORIGIN_COMMON_SKILLS = [
     id: 'origin_overload', name: '超载棱镜', icon: '🔆',
     spec: 'origin', originOnly: true, originPool: 'common', originRequires: { route: true },
     originCommit: 'route', maxLevel: 6, growthClass: 'core', tier: 2, weight: 1,
-    desc: '强化超载的伤害与范围；只在你支付异源能量后生效，并受全局硬上限约束。',
+    desc: '强化被动超载的源质技能与原质环流：提高伤害与范围，并受全局硬上限约束。',
     tags: ['原生核心', '超载'],
     stats(lv, game) {
       const before = getOriginGrowth({ ...game, skillLevels: { ...(game?.skillLevels || {}), origin_overload: lv } })
@@ -200,9 +198,9 @@ export const ORIGIN_COMMON_SKILLS = [
     id: 'origin_adapt', name: '适应性膜', icon: '🛡️',
     spec: 'origin', originOnly: true, originPool: 'common', originRequires: { route: true },
     originCommit: 'route', maxLevel: 2, growthClass: 'core', tier: 2, weight: 0.9,
-    desc: '超载窗口内降低受到的伤害；原生高光时刻也是短暂的生存窗口。',
+    desc: '被动超载后短暂降低受到的伤害；原生高光时刻也是 2.5 秒生存窗口。',
     tags: ['原生核心', '生存'],
-    stats(lv) { return `超载期间受到伤害 −${(lv + 1) * 10}%` },
+    stats(lv) { return `被动超载后 2.5 秒受到伤害 −${(lv + 1) * 10}%` },
     apply() {},
   },
   {
@@ -252,7 +250,7 @@ export const ORIGIN_ROUTE_SKILLS = {
       lv => `副环伤害 ${Math.round((0.35 + 0.05 * (lv + 1)) * 100)}% · 半径为主环的 60%`,
       () => {}),
     routeSkill('expansion', 'ori_exp_residue', '残留液痕', '💧', 3,
-      '强化路线自带的残留液痕：延长持续、提高周期伤害与减速；场上最多同时存在 1 个液痕。',
+      '强化路线自带的震荡液痕与超载液域：延长持续、提高周期伤害与减速；两种液域各自最多 1 个。',
       lv => `液痕持续 ${(3 + 0.5 * (lv + 1)).toFixed(1)} 秒 · 伤害 ${Math.round((0.4 + 0.08 * (lv + 1)) * 100)}% · 减速 ${Math.round((0.15 + 0.05 * (lv + 1)) * 100)}%`,
       () => {}),
     routeSkill('expansion', 'ori_exp_edge', '波纹外延', '🌀', 3,
@@ -270,8 +268,8 @@ export const ORIGIN_ROUTE_SKILLS = {
       lv => `层数上限 ${5 + lv + 1} · 每层伤害 +${(2.5 + 0.5 * (lv + 1)).toFixed(1)}%`,
       () => {}),
     routeSkill('assimilation', 'ori_asm_recompose', '局部形态重组', '🦠', 3,
-      '满层后的下一次震荡获得额外伤害与范围，并消耗全部层数。',
-      lv => `满层震荡伤害 +${Math.round((0.15 + 0.1 * (lv + 1)) * 100)}% · 范围 +${Math.round((0.25 + 0.05 * (lv + 1)) * 100)}%`,
+      '满层后的下一次被动超载获得额外伤害与范围，并消耗全部层数。',
+      lv => `满层超载伤害 +${Math.round((0.15 + 0.1 * (lv + 1)) * 100)}% · 范围 +15%`,
       () => {}),
     routeSkill('assimilation', 'ori_asm_adapt', '战场适应', '🛡️', 3,
       '每层同化提供少量减伤；满层时额外提高移速。',
@@ -288,16 +286,16 @@ export const ORIGIN_ROUTE_SKILLS = {
       lv => `回路充能 +${Math.round((0.04 + 0.02 * (lv + 1)) * 100)}% · 持续时间 ${8 + lv + 1} 秒`,
       () => {}),
     routeSkill('resonance', 'ori_res_core', '共振核心', '◈', 3,
-      '每层共振回路提高超载伤害；这是共振路线的主要爆发成长。',
-      lv => `每层回路超载伤害 +${Math.round((0.05 + 0.03 * (lv + 1)) * 100)}%`,
+      '每层共振回路提高被动超载伤害；这是共振路线的主要爆发成长。',
+      lv => `每层回路超载伤害 +${Math.round((0.05 + 0.03 * (lv + 1)) * 100)}%（与超载爆发合计封顶 30%）`,
       () => {}),
     routeSkill('resonance', 'ori_res_switch', '多源切换', '🔄', 2,
       '切换伤害来源时额外获得少量异源能量；独立 3 秒冷却，不能靠高频多段刷能。',
       lv => `切换来源额外 +${(lv + 1) * 2} 能量 · 3 秒 ICD`,
       () => {}),
     routeSkill('resonance', 'ori_res_burst', '超载爆发', '💥', 2,
-      '超载消耗回路追加爆发伤害；只结算一次，不返还能量。',
-      lv => `每层回路超载伤害额外 +${(lv + 1) * 15}%`,
+      '每层共振回路使被动超载伤害额外提高；与共振核心合计封顶 30%，满 3 回路时再追加一次共振余波。',
+      lv => `每层回路超载伤害额外 +${(lv + 1) * 15}%（合计封顶 30%）`,
       () => {}),
   ],
 }
@@ -403,7 +401,6 @@ export function getOriginGrowth(game, overrideLevels = null) {
     circuitEnergy: route === 'resonance' ? 0.04 + 0.02 * circuitLevel : 0,
     circuitDamage: route === 'resonance' ? 0.05 + 0.03 * coreLevel : 0,
     circuitWindow: ORIGIN_RULES.resonanceWindow + circuitLevel,
-    pulseDamage: route === 'resonance' ? 0.4 : 0,
     overloadBurstBonus: route === 'resonance' ? 0.15 * burstLevel : 0,
     adaptReduction: 0.1 * lv(levels, 'origin_adapt'),
     motilityBonus: lv(levels, 'origin_motility') > 0 ? 0.04 + 0.04 * lv(levels, 'origin_motility') : 0,

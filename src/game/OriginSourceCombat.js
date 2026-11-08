@@ -5,8 +5,8 @@ import {
   ORIGIN_SOURCE_RULES,
   advanceOriginMemoryCursor,
   originMemoryLevel,
+  originSourceCastMods,
   originSourceLevel,
-  originSourceRouteMods,
 } from './OriginSourceSkills.js'
 import { ORIGIN_ROUTES, getOriginGrowth } from './OriginBuild.js'
 
@@ -79,22 +79,20 @@ export class OriginSourceCombat {
     const def = entry.def || ORIGIN_SOURCE_BY_ID[entry.id]
     if (!def) return null
     const snap = snapshot || this.snapshot()
-    const mods = originSourceRouteMods(this.game, snap)
+    const mods = originSourceCastMods(this.game, snap)
     const base = (this.weapon.damage || 1) * (this.weapon.levelMul || 1)
     const token = { echoUsed: false }
     // 路线资源归属（D3）：同化满层 / 共振满回路只由被动超载兑现与消耗，
     // 黏液震荡只负责积累，不再消费这些资源。
-    if (mods.route === 'assimilation' && p.mutationState) {
+    if (mods.consumeStacks && p.mutationState) {
       const growth = getOriginGrowth(this.game)
-      if ((snap.stacks || 0) >= (growth.maxStacks || 0) && snap.stacks > 0) {
-        p.mutationState.stacks = 0
-        p.mutationState.empowered = false
-        p.mutationState.timer = 0
-        p.mutationState.formTimer = growth.formDuration
-        this.weapon._ring?.(p.x, p.y, ORIGIN_ROUTES.assimilation.color, (p.radius || 14) + 26)
-      }
+      p.mutationState.stacks = 0
+      p.mutationState.empowered = false
+      p.mutationState.timer = 0
+      p.mutationState.formTimer = growth.formDuration
+      this.weapon._ring?.(p.x, p.y, ORIGIN_ROUTES.assimilation.color, (p.radius || 14) + 26)
     }
-    if (mods.echo) {
+    if (mods.consumeCircuits) {
       const resonance = p.routeState?.resonance
       if (resonance) {
         resonance.circuits = 0
@@ -102,26 +100,30 @@ export class OriginSourceCombat {
       }
     }
 
+    let anchor = { x: p.x, y: p.y }
+    let profile = null
     if (def.innate || def.exec === 'orbit') {
       const stat = ORIGIN_ORBIT_STATS
       this.game.originSourceLastCast = { id: def.id, name: def.name, level: 1, at: this.game.elapsed || 0 }
-      this._castOrbit(def, stat, base, mods, token)
-      return { id: def.id, profile: { radius: def.castRange, damageMul: stat.damageMul * stat.orbs * mods.damage * ORIGIN_SOURCE_RULES.passiveDamageScale } }
-    }
-
-    const level = originMemoryLevel(this.game, entry.id)
-    const stat = originSourceLevel(def, level)
-    if (!stat || level <= 0) return null
-    advanceOriginMemoryCursor(this.game)
-    this.game.originSourceLastCast = { id: def.id, name: def.name, level, at: this.game.elapsed || 0 }
-    this._cast(def, stat, base, mods, level, token)
-    return {
-      id: def.id,
-      profile: {
+      anchor = this._castOrbit(def, stat, base, mods, token)
+      profile = { radius: def.castRange, damageMul: stat.damageMul * stat.orbs * mods.damage * ORIGIN_SOURCE_RULES.passiveDamageScale }
+    } else {
+      const level = originMemoryLevel(this.game, entry.id)
+      const stat = originSourceLevel(def, level)
+      if (!stat || level <= 0) return null
+      advanceOriginMemoryCursor(this.game)
+      this.game.originSourceLastCast = { id: def.id, name: def.name, level, at: this.game.elapsed || 0 }
+      anchor = this._cast(def, stat, base, mods, level, token)
+      profile = {
         radius: def.exec === 'breach' ? stat.width : def.exec === 'collapse' ? stat.radius : 120,
         damageMul: stat.damageMul * mods.damage * ORIGIN_SOURCE_RULES.passiveDamageScale,
-      },
+      }
     }
+    // 扩张：超载在技能落点沉淀一块超载液域（独立计数上限 1，击杀不返还充能）。
+    if (mods.route === 'expansion' && anchor) {
+      this.weapon.originCombat?.spawnOverloadField(anchor.x, anchor.y)
+    }
+    return { id: def.id, profile }
   }
 
   update(dt) {
@@ -188,10 +190,11 @@ export class OriginSourceCombat {
     }
     const scale = ORIGIN_SOURCE_RULES.passiveDamageScale
     // 一次超载最多兑现一次共振余波（棘刺多段命中也不会叠加多次）。
-    if (def.exec === 'breach') this._castBreach(def, stat, base * scale, mods, level, token)
-    else if (def.exec === 'collapse') this._castCollapse(def, stat, base * scale, mods, token)
-    else if (def.exec === 'hunt') this._castHunt(def, stat, base * scale, mods, token)
-    return true
+    // 返回的 anchor 是技能主要落点，扩张路线用它沉淀超载液域。
+    if (def.exec === 'breach') return this._castBreach(def, stat, base * scale, mods, level, token)
+    if (def.exec === 'collapse') return this._castCollapse(def, stat, base * scale, mods, token)
+    if (def.exec === 'hunt') return this._castHunt(def, stat, base * scale, mods, token)
+    return { x: this.player.x, y: this.player.y }
   }
 
   // ---------------------------------------------------------------- 原质环流
@@ -225,6 +228,7 @@ export class OriginSourceCombat {
         token,
       })
     }
+    return { x: p.x, y: p.y }
   }
 
   _updateOrbs(dt) {
@@ -330,6 +334,7 @@ export class OriginSourceCombat {
       echo: mods.echo ? { share: ORIGIN_SOURCE_RULES.echoShare, radius: ORIGIN_SOURCE_RULES.echoRadius * mods.area } : null,
       token,
     })
+    return { x: p.x + Math.cos(angle) * distance * 0.6, y: p.y + Math.sin(angle) * distance * 0.6 }
   }
 
   _updateWaves(dt) {
@@ -409,6 +414,7 @@ export class OriginSourceCombat {
       echo: mods.echo ? { share: ORIGIN_SOURCE_RULES.echoShare, radius: ORIGIN_SOURCE_RULES.echoRadius * mods.area } : null,
       token,
     })
+    return { x: center.x, y: center.y }
   }
 
   _updateCores(dt) {
@@ -499,6 +505,7 @@ export class OriginSourceCombat {
         token,
       })
     }
+    return { x: p.x, y: p.y }
   }
 
   /** 优先锁定不同敌人：按距离排序后依次挑未用过的目标。 */

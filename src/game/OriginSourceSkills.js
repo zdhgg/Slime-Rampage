@@ -1,4 +1,4 @@
-import { originInvestment } from './OriginBuild.js'
+import { ORIGIN_RULES, getOriginGrowth, originInvestment } from './OriginBuild.js'
 
 /**
  * 源质记忆（Origin Essence Memory）——原生黏液吸收 BOSS 源质后「重新长出来」的技能。
@@ -270,34 +270,68 @@ export function learnOriginMemory(game, memoryId) {
   return { ok: true, id: memoryId, level: 1, upgraded: false }
 }
 
+/** 一次超载的乘区预算硬上限（不含 passiveDamageScale 基准系数）。 */
+export const ORIGIN_OVERLOAD_BUDGET = Object.freeze({
+  /** 一次超载：路线 × 棱镜 × 调谐 × 同化/共振 合计伤害乘区 ≤ 1.8。 */
+  damageCap: 1.8,
+  /** 一次超载：范围乘区合计 ≤ 1.35。 */
+  areaCap: 1.35,
+})
+
 /**
- * 原生路线联动（一次性读取，加成都有明确上限）：
- *  - 原质扩张：范围 +10%~15%（路线投入提高，封顶 15%），只影响覆盖，不额外制造独立伤害。
- *  - 基因同化：按「超载触发前」的同化层数给有限增伤，每层 3%，封顶 15%。
- *  - 异源共振：超载前达到 3 回路时追加一次 25% 的共振余波，不充能、不递归。
+ * 被动超载的统一乘区计算：技能倍率之外的全部加成在这里收口。
+ *   最终伤害 = 技能倍率 × passiveDamageScale × mods.damage（合计 ≤1.8）
+ *   最终范围 = 技能半径/宽度 × mods.area（合计 ≤1.35）
+ * 组成：路线专属 × 超载棱镜 × 源质调谐(秘典) × 同化层数/共振回路加成。
+ * 返回的 consumeStacks / consumeCircuits 供执行器在释放后统一消费路线资源，
+ * 保证「读快照 → 结算 → 再消耗」的顺序。
  */
-export function originSourceRouteMods(game, snapshot = null) {
+export function originSourceCastMods(game, snapshot = null) {
+  const growth = getOriginGrowth(game)
+  const tuneRank = Math.max(0, Math.min(3, Math.floor(Number(game?.bossSkillLevels?.boss_origin_aftershock) || 0)))
   const route = game?.originRoute || null
+  const stacks = Math.max(0, Math.floor(Number(snapshot?.stacks) || 0))
+  const circuits = Math.max(0, Math.floor(Number(snapshot?.circuits) || 0))
+
+  let damage = growth.overloadDamageMul * (1 + [0, 0.08, 0.12, 0.15][tuneRank])
+  let area = growth.overloadRangeMul * (1 + (tuneRank >= 2 ? 0.05 : 0))
+  let echo = false
+  let consumeStacks = false
+  let consumeCircuits = false
+
   if (route === 'expansion') {
     const investment = originInvestment(game, 'expansion')
-    return {
-      route,
-      area: Math.min(1.15, 1.1 + 0.01 * investment),
-      damage: 1,
-      echo: false,
-      stacks: 0,
-      circuits: 0,
+    area *= Math.min(1.15, 1.1 + 0.01 * investment)
+  } else if (route === 'assimilation') {
+    if (stacks > 0 && stacks >= (growth.maxStacks || Infinity)) {
+      // 满层兑现：消耗全部层数换「局部形态重组」的爆发加成，范围 +15%。
+      damage *= 1 + growth.empoweredDamageBonus
+      area *= 1.15
+      consumeStacks = true
+    } else {
+      // 未满层：每层读 stackDamageBonus（2.5%~4%），合计封顶 20%。
+      damage *= 1 + Math.min(0.2, growth.stackDamageBonus * stacks)
+    }
+  } else if (route === 'resonance') {
+    // 共振核心+超载爆发的回路增伤作用于源质技能（合计封顶 30%）；
+    // 单次伤害整体 ×0.9 换更高超载频率。
+    damage *= 0.9 * (1 + Math.min(0.3, (growth.circuitDamage + growth.overloadBurstBonus) * circuits))
+    if (circuits >= ORIGIN_RULES.resonanceMaxCircuits) {
+      echo = true
+      consumeCircuits = true
     }
   }
-  if (route === 'assimilation') {
-    const stacks = Math.max(0, Math.min(5, Math.floor(Number(snapshot?.stacks) || 0)))
-    return { route, area: 1, damage: 1 + Math.min(0.15, 0.03 * stacks), echo: false, stacks, circuits: 0 }
+
+  return {
+    route,
+    damage: Math.min(ORIGIN_OVERLOAD_BUDGET.damageCap, damage),
+    area: Math.min(ORIGIN_OVERLOAD_BUDGET.areaCap, area),
+    echo,
+    stacks,
+    circuits,
+    consumeStacks,
+    consumeCircuits,
   }
-  if (route === 'resonance') {
-    const circuits = Math.max(0, Math.min(3, Math.floor(Number(snapshot?.circuits) || 0)))
-    return { route, area: 1, damage: 1, echo: circuits >= 3, stacks: 0, circuits }
-  }
-  return { route: null, area: 1, damage: 1, echo: false, stacks: 0, circuits: 0 }
 }
 
 /** 卡面数值串：当前等级 → 下一级（满级只展示当前）。 */
