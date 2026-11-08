@@ -1,9 +1,9 @@
-import { getOriginGrowth, getOriginShockProfile, originOverloadDescription, resetOriginState, ORIGIN_BASE, ORIGIN_RULES } from './OriginBuild.js'
+import { getOriginGrowth, originOverloadDescription, resetOriginState, ORIGIN_BASE, ORIGIN_RULES } from './OriginBuild.js'
 
 /**
  * 异源能量（原生黏液 origin 独占资源）：
- * 「异源充能 → 超载释放」。飞弹、震荡、元素附着是不同的伤害来源；
- * 交替使用会获得更高充能，攒到阈值后把本次黏液震荡升档为超载版。
+ * 「异源充能 → 被动超载自动释放」。飞弹、震荡、元素附着是不同的伤害来源；
+ * 交替使用会获得更高充能，攒到阈值后由被动超载控制器自动释放源质技能。
  *
  * 路线效果与印记回响刻意不充能（共振路线只提高充能效率），
  * 避免“路线附加伤害 → 更多能量 → 更多超载”的递归。
@@ -27,12 +27,16 @@ export const PRIMAL_SOURCES = ORIGIN_SOURCES
 
 export const PRIMAL_GAIN_FOREIGN = 8
 export const PRIMAL_GAIN_SPECIAL = 5
-export const PRIMAL_GAIN_SAME = 1
+export const PRIMAL_GAIN_SAME = 2
 export const PRIMAL_FOREIGN_BONUS_CAP = 3
 export const PRIMAL_GAIN_ELITE = 15
 export const PRIMAL_GAIN_BOSS = 30
 export const PRIMAL_GAIN_WINDOW = 1
 export const PRIMAL_GAIN_WINDOW_MAX = 3
+
+/** 战斗涌流：附近有敌人时持续充能，保证不按空格也有完整的被动超载循环。 */
+export const ORIGIN_FLOW_RATE = 1.5
+export const ORIGIN_FLOW_RANGE = 480
 
 export function isOrigin(player) {
   return !!player && player.strainId === 'origin'
@@ -127,6 +131,24 @@ export function noteOriginSource(engine, source, now = engine?.elapsed ?? 0) {
   return 0
 }
 
+/**
+ * 战斗涌流：指定范围内存在有效敌人时按 dt 持续充能。
+ * 不属于任何「伤害来源」：不切换来源、不受每秒 3 次充能窗口节流、不记录共振回路。
+ */
+export function tickOriginCombatFlow(engine, dt) {
+  const p = engine?.player
+  if (!isOrigin(p) || p.dead || !(dt > 0) || p.originEnergy >= ORIGIN_ENERGY_MAX) return 0
+  const r2 = ORIGIN_FLOW_RANGE * ORIGIN_FLOW_RANGE
+  for (const e of engine?.enemyManager?.enemies || []) {
+    if (!e.active || e.devouring) continue
+    if ((e.x - p.x) ** 2 + (e.y - p.y) ** 2 > r2) continue
+    const before = p.originEnergy
+    p.originEnergy = Math.min(ORIGIN_ENERGY_MAX, p.originEnergy + ORIGIN_FLOW_RATE * dt)
+    return p.originEnergy - before
+  }
+  return 0
+}
+
 export function onOriginKill(engine, enemy) {
   const p = engine?.player
   if (!isOrigin(p) || p.dead || !enemy) return 0
@@ -145,24 +167,25 @@ export function canOriginOverload(player) {
 export const canPrimalOverload = canOriginOverload
 
 /**
- * 支付一次超载。写入 overloadState，供 HUD、同化形变和印记回响共享；
- * 2.5 秒支付锁防止任何未来多段施法重复触发。
+ * 支付一次被动超载。写入 overloadState，供 HUD、同化形变和印记回响共享。
+ * 只由被动超载控制器（OriginOverload）在确认释放时调用：
+ * 黏液震荡与其他路径都不再支付能量。active 状态是唯一的重入保护，
+ * 频率由控制器的内部冷却与充能速度决定。
  */
-export function trySpendOriginOverload(engine) {
+export function trySpendOriginOverload(engine, info = {}) {
   const p = engine?.player
   if (!canOriginOverload(p)) return false
   const now = engine?.elapsed ?? 0
   const state = p.overloadState || {}
-  if (state.active || now - (state.lastPaidAt ?? -Infinity) < ORIGIN_RULES.overloadLock) return false
-  const profile = getOriginShockProfile(engine, true)
-  const normal = getOriginShockProfile(engine, false)
+  if (state.active) return false
   p.originEnergy -= ORIGIN_OVERLOAD_COST
   p.overloadState = {
     active: true,
     timer: ORIGIN_RULES.overloadWindow,
     route: engine?.originRoute || null,
-    damageMul: profile.damageMul / Math.max(0.001, normal.damageMul),
-    radiusMul: profile.radius / Math.max(1, normal.radius),
+    skillId: info.id || null,
+    damageMul: info.damageMul || 1,
+    radiusMul: info.radiusMul || 1,
     spent: ORIGIN_OVERLOAD_COST,
     lastPaidAt: now,
     echoTriggered: false,
@@ -175,31 +198,6 @@ export function trySpendOriginOverload(engine) {
 
 export const trySpendPrimalOverload = trySpendOriginOverload
 
-/** 超载乘区旧接口：返回路线/印记派生后的有限 profile。 */
-export function getOriginOverloadProfile(engine, overloaded = true) {
-  const profile = getOriginShockProfile(engine, overloaded)
-  const normal = getOriginShockProfile(engine, false)
-  const damageRatio = profile.damageMul / Math.max(0.001, normal.damageMul)
-  const rangeRatio = profile.radius / Math.max(1, normal.radius)
-  return {
-    shockDamageMul: overloaded ? damageRatio : 1,
-    shockRangeMul: overloaded ? rangeRatio : 1,
-    biteDamageMul: 1,
-    biteRangeMul: 1,
-    rallyDuration: 0,
-    rallyDamage: 0,
-    volleyBonus: 0,
-    elementalSpreadBonus: 0,
-    assassinStealth: 0,
-    secondaryEcho: null,
-    route: engine?.originRoute || null,
-    mark: engine?.originMark || null,
-    damageRatio,
-    rangeRatio,
-  }
-}
-
-export const getPrimalOverloadProfile = getOriginOverloadProfile
 export const originOverloadText = originOverloadDescription
 export const primalOverloadDescription = (engine) => originOverloadDescription(engine)
 

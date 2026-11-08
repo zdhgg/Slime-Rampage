@@ -1,12 +1,14 @@
 import {
+  ORIGIN_INNATE_SKILL,
+  ORIGIN_ORBIT_STATS,
   ORIGIN_SOURCE_BY_ID,
   ORIGIN_SOURCE_RULES,
   advanceOriginMemoryCursor,
-  nextOriginMemory,
   originMemoryLevel,
   originSourceLevel,
   originSourceRouteMods,
 } from './OriginSourceSkills.js'
+import { ORIGIN_ROUTES, getOriginGrowth } from './OriginBuild.js'
 
 const TAU = Math.PI * 2
 const clamp = (value, lo, hi) => Math.max(lo, Math.min(hi, value))
@@ -14,9 +16,9 @@ const clamp = (value, lo, hi) => Math.max(lo, Math.min(hi, value))
 /**
  * 源质记忆的战斗执行器（原生黏液独占）。
  *
- * 安全边界（与印记回响/超载余震刻意区分）：
+ * 安全边界（与印记回响/秘典派生刻意区分）：
  *  - 所有伤害都带 `originSource` 语义，经 `_hit` 统一收口：击杀仍走 `_onKill`
- *    （经验/掉落/击杀统计照常），但会给敌人打 `_originSourceKill` 标记，
+ *    （经验/掉落/击杀统计照常），但会给敌人打 `_originDerivedKill` 标记，
  *    统一击杀结算据此跳过异源能量，杜绝「源质技能击杀 → 充能 → 再超载」的循环。
  *  - 本模块不调用 gainOriginEnergy，也不会触发印记回响或源质技能自身。
  *  - 弹体/波/原核都有明确的寿命与数量上限，单次释放的实体数固定。
@@ -37,9 +39,10 @@ export class OriginSourceCombat {
     this.waves = []
     this.cores = []
     this.spikes = []
+    this.orbs = []
   }
 
-  /** 超载瞬间的路线快照：必须在震荡消耗层数/回路之前取样。 */
+  /** 超载确认瞬间的路线快照：必须在消耗层数/回路之前取样。 */
   snapshot() {
     const p = this.player
     return {
@@ -50,21 +53,75 @@ export class OriginSourceCombat {
   }
 
   /**
-   * 排入一次「超载 → 源质技能」延迟释放。返回是否真的排入了。
-   * 没学任何源质记忆时完全不影响原有超载行为。
+   * 目标有效性：该技能在自身射程内是否存在有效敌人。
+   * 被动超载用它决定「能不能放」；具体打谁交给各技能自己的索敌。
    */
-  queueOverload(snapshot = null) {
-    if (!this.enabled || !this.player || this.player.dead || this.game.runFinished) return false
-    const next = nextOriginMemory(this.game)
-    if (!next) return false
-    this.jobs.push({
-      kind: 'overload',
-      due: this.time + ORIGIN_SOURCE_RULES.castDelay,
-      memoryId: next.id,
-      level: next.level,
-      snapshot: snapshot || this.snapshot(),
-    })
-    return true
+  hasTargetsFor(entry) {
+    const def = entry?.def || ORIGIN_SOURCE_BY_ID[entry?.id]
+    const p = this.player
+    if (!p || !def) return false
+    const range = def.castRange ?? 520
+    for (const enemy of this._targets()) {
+      const reach = range + (enemy.radius || 0)
+      if ((enemy.x - p.x) ** 2 + (enemy.y - p.y) ** 2 <= reach * reach) return true
+    }
+    return false
+  }
+
+  /**
+   * 立即释放一次被动超载（由控制器在确认支付后调用）。
+   * 返回 { profile } 供印记回响做预算基准；失败返回 null。
+   * 只有这里有「轮换游标 + 1」——默认技能不进轮换。
+   */
+  castNow(entry, snapshot = null) {
+    const p = this.player
+    if (!entry || !p || p.dead || this.game?.runFinished) return null
+    const def = entry.def || ORIGIN_SOURCE_BY_ID[entry.id]
+    if (!def) return null
+    const snap = snapshot || this.snapshot()
+    const mods = originSourceRouteMods(this.game, snap)
+    const base = (this.weapon.damage || 1) * (this.weapon.levelMul || 1)
+    const token = { echoUsed: false }
+    // 路线资源归属（D3）：同化满层 / 共振满回路只由被动超载兑现与消耗，
+    // 黏液震荡只负责积累，不再消费这些资源。
+    if (mods.route === 'assimilation' && p.mutationState) {
+      const growth = getOriginGrowth(this.game)
+      if ((snap.stacks || 0) >= (growth.maxStacks || 0) && snap.stacks > 0) {
+        p.mutationState.stacks = 0
+        p.mutationState.empowered = false
+        p.mutationState.timer = 0
+        p.mutationState.formTimer = growth.formDuration
+        this.weapon._ring?.(p.x, p.y, ORIGIN_ROUTES.assimilation.color, (p.radius || 14) + 26)
+      }
+    }
+    if (mods.echo) {
+      const resonance = p.routeState?.resonance
+      if (resonance) {
+        resonance.circuits = 0
+        resonance.sources.length = 0
+      }
+    }
+
+    if (def.innate || def.exec === 'orbit') {
+      const stat = ORIGIN_ORBIT_STATS
+      this.game.originSourceLastCast = { id: def.id, name: def.name, level: 1, at: this.game.elapsed || 0 }
+      this._castOrbit(def, stat, base, mods, token)
+      return { id: def.id, profile: { radius: def.castRange, damageMul: stat.damageMul * stat.orbs * mods.damage * ORIGIN_SOURCE_RULES.passiveDamageScale } }
+    }
+
+    const level = originMemoryLevel(this.game, entry.id)
+    const stat = originSourceLevel(def, level)
+    if (!stat || level <= 0) return null
+    advanceOriginMemoryCursor(this.game)
+    this.game.originSourceLastCast = { id: def.id, name: def.name, level, at: this.game.elapsed || 0 }
+    this._cast(def, stat, base, mods, level, token)
+    return {
+      id: def.id,
+      profile: {
+        radius: def.exec === 'breach' ? stat.width : def.exec === 'collapse' ? stat.radius : 120,
+        damageMul: stat.damageMul * mods.damage * ORIGIN_SOURCE_RULES.passiveDamageScale,
+      },
+    }
   }
 
   update(dt) {
@@ -89,12 +146,13 @@ export class OriginSourceCombat {
     this._updateCores(dt)
     if (p.dead || this.game?.runFinished) return
     this._updateSpikes(dt)
+    if (p.dead || this.game?.runFinished) return
+    this._updateOrbs(dt)
   }
 
   // ---------------------------------------------------------------- jobs
 
   _runJob(job) {
-    if (job.kind === 'overload') return this._release(job)
     if (job.kind === 'echo') {
       this._area(this.player, job.radius, job.damage)
       this.weapon._ring?.(this.player.x, this.player.y, job.color || '#ffd166', job.radius)
@@ -109,43 +167,137 @@ export class OriginSourceCombat {
     return undefined
   }
 
-  /** 真正释放：只有这里有「轮换游标 + 1」。无有效目标时跳过且不消耗轮换位。 */
-  _release(job) {
-    const def = ORIGIN_SOURCE_BY_ID[job.memoryId]
-    const level = originMemoryLevel(this.game, job.memoryId)
-    if (!def || level <= 0) return false
-    if (!this._targets().length) return false // 无有效目标：不浪费轮换位，也不报错
-    this._cast(def, level, job.snapshot)
+  /** 释放表现：本体光环 + 名称飘字（记忆与默认技能共用）。 */
+  _announce(def, level) {
+    const p = this.player
+    const ws = this.weapon
+    ws._ring?.(p.x, p.y, def.color, (p.radius || 14) + 22)
+    ws._burstColor?.(p.x, p.y, def.color, 7, false)
+    const label = def.innate
+      ? `${def.icon} 被动超载：${def.name}`
+      : `${def.icon} 源质记忆：${def.name} Lv.${level}`
+    this.game.enemyManager?.addText?.(p.x, p.y - 48, label, null, def.color, 16)
+    this.game.sound?.originWard?.()
+  }
+
+  _cast(def, stat, base, mods, level, token) {
+    this._announce(def, level)
+    if (mods.route === 'expansion') {
+      // 扩张：只加覆盖与扩散波纹，不追加独立伤害。
+      this.weapon._ring?.(this.player.x, this.player.y, def.color, (this.player.radius || 14) + 38)
+    }
+    const scale = ORIGIN_SOURCE_RULES.passiveDamageScale
+    // 一次超载最多兑现一次共振余波（棘刺多段命中也不会叠加多次）。
+    if (def.exec === 'breach') this._castBreach(def, stat, base * scale, mods, level, token)
+    else if (def.exec === 'collapse') this._castCollapse(def, stat, base * scale, mods, token)
+    else if (def.exec === 'hunt') this._castHunt(def, stat, base * scale, mods, token)
     return true
   }
 
-  _cast(def, level, snapshot) {
-    const ws = this.weapon
+  // ---------------------------------------------------------------- 原质环流
+
+  /** 默认超载技能：三枚原质球环绕后追踪近距离敌人，命中产生小爆裂与短暂减速。 */
+  _castOrbit(def, stat, base, mods, token) {
     const p = this.player
-    const stat = originSourceLevel(def, level)
-    if (!stat) return false
-    const mods = originSourceRouteMods(this.game, snapshot)
-    const base = (ws.damage || 1) * (ws.levelMul || 1)
-
-    advanceOriginMemoryCursor(this.game)
-    this.game.originSourceLastCast = { id: def.id, name: def.name, level, at: this.game.elapsed || 0 }
-    ws._ring?.(p.x, p.y, def.color, (p.radius || 14) + 22)
-    ws._burstColor?.(p.x, p.y, def.color, 7, false)
-    this.game.enemyManager?.addText?.(
-      p.x, p.y - 48, `${def.icon} 源质记忆：${def.name} Lv.${level}`, null, def.color, 16
-    )
-    this.game.sound?.originWard?.()
-    if (mods.route === 'expansion') {
-      // 扩张：只加覆盖与扩散波纹，不追加独立伤害。
-      ws._ring?.(p.x, p.y, def.color, (p.radius || 14) + 38)
+    this._announce(def, 1)
+    const damage = base * stat.damageMul * mods.damage * ORIGIN_SOURCE_RULES.passiveDamageScale
+    const targets = this._targets().filter((enemy) => {
+      const reach = def.castRange + (enemy.radius || 0)
+      return (enemy.x - p.x) ** 2 + (enemy.y - p.y) ** 2 <= reach * reach
+    })
+    const picked = this._distinctTargets(targets.length ? targets : this._targets(), stat.orbs)
+    const echo = mods.echo
+      ? { share: ORIGIN_SOURCE_RULES.echoShare, radius: ORIGIN_SOURCE_RULES.echoRadius * mods.area }
+      : null
+    for (let i = 0; i < stat.orbs; i++) {
+      this.orbs.push({
+        x: p.x, y: p.y,
+        angle: (i / stat.orbs) * TAU - Math.PI / 2,
+        swirlT: 0.3,
+        life: stat.duration,
+        target: picked[i % Math.max(1, picked.length)] || null,
+        damage,
+        splash: stat.splash,
+        splashRadius: stat.splashRadius * mods.area,
+        slow: stat.slow,
+        color: def.color,
+        echo,
+        token,
+      })
     }
+  }
 
-    // 一次超载最多兑现一次共振余波（棘刺多段命中也不会叠加多次）。
-    const token = { echoUsed: false }
-    if (def.exec === 'breach') this._castBreach(def, stat, base, mods, level, token)
-    else if (def.exec === 'collapse') this._castCollapse(def, stat, base, mods, token)
-    else if (def.exec === 'hunt') this._castHunt(def, stat, base, mods, token)
-    return true
+  _updateOrbs(dt) {
+    const p = this.player
+    for (let i = this.orbs.length - 1; i >= 0; i--) {
+      const orb = this.orbs[i]
+      orb.life -= dt
+      if (orb.life <= 0) {
+        // 耗尽：收尾小波纹，纯视觉。
+        this.weapon._ring?.(orb.x, orb.y, orb.color, 14)
+        this.orbs.splice(i, 1)
+        continue
+      }
+      if (orb.swirlT > 0) {
+        // 环绕阶段：围绕本体旋转，结束后脱离。
+        orb.swirlT -= dt
+        orb.angle += dt * 9
+        const r = 26
+        orb.x = p.x + Math.cos(orb.angle) * r
+        orb.y = p.y + Math.sin(orb.angle) * r
+        if (orb.swirlT <= 0) {
+          orb.vx = Math.cos(orb.angle) * 320
+          orb.vy = Math.sin(orb.angle) * 320
+        }
+        continue
+      }
+      // 追踪阶段：目标失效则重选范围内最近目标，否则直线飞出。
+      const castRange = ORIGIN_INNATE_SKILL.castRange
+      if (!(orb.target?.active && !orb.target.devouring)) {
+        const rest = this._targets().filter((enemy) => {
+          const reach = castRange + (enemy.radius || 0)
+          return (enemy.x - p.x) ** 2 + (enemy.y - p.y) ** 2 <= reach * reach
+        })
+        orb.target = this._distinctTargets(rest, 1)[0] || null
+      }
+      const speed = 380
+      if (orb.target) {
+        const dx = orb.target.x - orb.x
+        const dy = orb.target.y - orb.y
+        const d = Math.hypot(dx, dy) || 1
+        orb.vx += ((dx / d) * speed - orb.vx) * 0.3
+        orb.vy += ((dy / d) * speed - orb.vy) * 0.3
+      }
+      orb.x += orb.vx * dt
+      orb.y += orb.vy * dt
+
+      for (const enemy of this._targets()) {
+        const reach = 10 + (enemy.radius || 0)
+        if ((enemy.x - orb.x) ** 2 + (enemy.y - orb.y) ** 2 > reach * reach) continue
+        this._hit(enemy, orb.damage)
+        if (enemy.active && !enemy.isBoss) enemy.primeSlow = Math.max(enemy.primeSlow || 0, orb.slow)
+        this._orbitSplash(enemy, orb)
+        if (orb.echo) this._scheduleEcho(orb.token, orb.damage, orb.echo, orb.color)
+        this.weapon._ring?.(orb.x, orb.y, orb.color, 16)
+        this.weapon._burstColor?.(orb.x, orb.y, orb.color, 5, false)
+        this.orbs.splice(i, 1)
+        break
+      }
+    }
+  }
+
+  /** 原质球命中后的小爆裂：只打周围其他敌人，不重复结算主目标。 */
+  _orbitSplash(impact, orb) {
+    if (!(orb.splash > 0)) return
+    for (const other of this._targets()) {
+      if (other === impact) continue
+      const dx = other.x - impact.x
+      const dy = other.y - impact.y
+      const reach = orb.splashRadius + (other.radius || 0)
+      if (dx * dx + dy * dy > reach * reach) continue
+      this._hit(other, orb.damage * orb.splash)
+      if (this.player?.dead || this.game?.runFinished) return
+    }
   }
 
   // ---------------------------------------------------------------- 破阵凝胶波
@@ -468,7 +620,7 @@ export class OriginSourceCombat {
     if (!enemy?.active || enemy.devouring || damage <= 0) return false
     enemy.hit(damage)
     if (!enemy.active) {
-      enemy._originSourceKill = true
+      enemy._originDerivedKill = true
       this.weapon._onKill(enemy)
       return true
     }
@@ -498,14 +650,6 @@ export class OriginSourceCombat {
     enemy.y = Number.isFinite(g?.worldHeight) ? clamp(ny, enemy.radius, g.worldHeight - enemy.radius) : ny
   }
 
-  _updateRings(dt) {
-    for (let i = this.rings.length - 1; i >= 0; i--) {
-      const ring = this.rings[i]
-      ring.t += dt
-      if (ring.t >= ring.life) this.rings.splice(i, 1)
-    }
-  }
-
   // ---------------------------------------------------------------- render
 
   render(ctx) {
@@ -513,6 +657,7 @@ export class OriginSourceCombat {
     this._renderWaves(ctx)
     this._renderCores(ctx)
     this._renderSpikes(ctx)
+    this._renderOrbs(ctx)
   }
 
   _renderWaves(ctx) {
@@ -586,6 +731,26 @@ export class OriginSourceCombat {
         ctx.arc(0, 0, r * 0.9, 0, TAU)
         ctx.fill()
       }
+      ctx.restore()
+    }
+  }
+
+  _renderOrbs(ctx) {
+    for (const orb of this.orbs) {
+      const r = orb.swirlT > 0 ? 7 : 6
+      ctx.save()
+      ctx.translate(orb.x, orb.y)
+      ctx.globalAlpha = 0.9
+      ctx.fillStyle = orb.color
+      ctx.beginPath()
+      ctx.arc(0, 0, r, 0, TAU)
+      ctx.fill()
+      ctx.globalAlpha = 0.35
+      ctx.strokeStyle = orb.color
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      ctx.arc(0, 0, r + 3.5, 0, TAU)
+      ctx.stroke()
       ctx.restore()
     }
   }

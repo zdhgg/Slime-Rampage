@@ -126,7 +126,9 @@ export function triggerOriginMarkEcho(engine, { overloaded = false, center = eng
     // 旧泡泡先爆裂，再给一层新的支援泡泡；深化只扩大范围，不突破伤害预算。
     if ((state.bubble || 0) > 0) {
       const burstRadius = rank >= 2 ? 100 : 80
-      ws._explode?.(p.x, p.y, damage, null, burstRadius)
+      ws._suppressKillCharge = true // 回响爆裂是印记衍生伤害，击杀不返还超载充能
+      try { ws._explode?.(p.x, p.y, damage, null, burstRadius) }
+      finally { ws._suppressKillCharge = false }
       ws._ring?.(p.x, p.y, '#edc479', burstRadius)
     }
     state.bubble = rank >= 2 ? 2 : 1

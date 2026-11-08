@@ -112,7 +112,7 @@ try {
   await shot('04-hud-memory-mobile')
   await page.setViewportSize({ width: 1440, height: 960 })
 
-  // 真实超载 → 延迟自动释放
+  // 被动超载：能量满格 + 有目标 → 控制器自动支付并释放（无需按空格）
   await game(() => {
     const g = window.playtestGame
     g._pauseLock = 0
@@ -120,18 +120,16 @@ try {
     g.enemyManager._enemies = []
     g.enemyManager._spawnTimer = Infinity
     for (let i = 0; i < 3; i++) g.enemyManager.spawnAt(g.player.x + 130 + i * 34, g.player.y, 'knight')
-    g.player.strainSkillCd = 0
+    g.weaponSystem.originOverload.reset()
     g.player.overloadState.lastPaidAt = -Infinity
     g.player.overloadState.active = false
     g.player.originEnergy = 40
     g.start()
-    g.input.queueFever()
-    g._updateStrainSkill(0)
   })
-  assert.equal(await game(() => playtestGame.player.overloadState.active), true, '空格成功支付超载')
-  await page.waitForTimeout(600)
+  await page.waitForTimeout(900) // 重试/启动 0.25s + 校验
+  assert.equal(await game(() => playtestGame.player.overloadState.active), true, '被动超载自动支付')
   const cast = await game(() => playtestGame.originSourceLastCast)
-  assert.ok(cast, '超载后自动释放了源质技能')
+  assert.ok(cast, '被动超载自动释放了源质技能')
   assert.equal(cast.id, 'knight_breach')
   assert.equal(await game(() => playtestGame.weaponSystem.originSourceCombat.waves.length >= 0), true)
 

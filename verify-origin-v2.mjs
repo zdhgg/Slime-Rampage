@@ -30,14 +30,27 @@ const chooseMark = (g, mark) => {
   assert.equal(g.applySkill(card), true)
 }
 
-/** 用真实引擎计时推进：冷却、超载窗口、同化层数都走 update，不直接改状态。 */
+/** 用真实引擎计时推进：冷却、超载窗口、同化层数、被动超载都走 update，不直接改状态。 */
 function advance(g, seconds, step = 0.05) {
   const steps = Math.ceil(seconds / step)
   for (let i = 0; i < steps; i++) {
     g.elapsed += step
     g._updateStrainSkill(step)
     g.weaponSystem.originCombat.update(step)
+    g.weaponSystem.originSourceCombat.update(step)
+    g.weaponSystem.originOverload.update(step)
   }
+}
+
+/** 驱动被动控制器完成一次超载（启动 → 扣费 → 释放）。 */
+function fireOverload(g) {
+  g.weaponSystem.originOverload.reset()
+  g.player.overloadState.active = false
+  g.player.overloadState.timer = 0
+  g.player.originEnergy = ORIGIN_BASE.overloadCost
+  advance(g, 0.4, 0.02)
+  assert.equal(g.player.overloadState.active, true, '被动超载应成功支付')
+  assert.ok(g.player.originEnergy < ORIGIN_BASE.overloadCost)
 }
 
 check('身份隔离：唯一主动始终是黏液震荡，不写 primarySpec/secondarySpec，不开放职业系统', g => {
@@ -135,32 +148,32 @@ check('碎片最多 2 系、每系 1 级；同系印记吸收碎片且不双触�
   assert.equal(g.player.originGuard + before >= 1, true)
 })
 
-check('震荡超载：39 能量仍为基础版，40 能量支付并进入 overloadState', g => {
+check('空格不再支付超载：能量满格 + 有目标 → 被动控制器自动支付', g => {
   chooseRoute(g, 'resonance')
   spawn(g, { x: 40, hp: 1000 })
+  g.weaponSystem.originOverload.cooldown = 9999 // 先隔离控制器
   g.player.originEnergy = ORIGIN_BASE.overloadCost - 1
   pressSpace(g)
-  assert.equal(g.player.overloadState.active, false)
-  assert.ok(g.player.originEnergy >= ORIGIN_BASE.overloadCost, 'shock should charge energy')
+  assert.equal(g.player.overloadState.active, false, '空格不支付超载')
+  assert.ok(g.player.originEnergy >= ORIGIN_BASE.overloadCost, '震荡仍充能')
 
-  g.player.strainSkillCd = 0
-  g.player.originEnergy = ORIGIN_BASE.overloadCost
-  g.player.overloadState.lastPaidAt = -Infinity
-  pressSpace(g)
+  g.weaponSystem.originOverload.cooldown = 0
+  advance(g, 0.4, 0.02)
   assert.equal(g.player.overloadState.active, true)
   assert.equal(g.player.overloadState.route, 'resonance')
   assert.ok(g.player.originEnergy >= 0 && g.player.originEnergy < ORIGIN_BASE.overloadCost)
 })
 
-check('超载乘区有硬上限：伤害 ≤ 普通震荡 ×2.8、半径 ≤ ×1.8', g => {
+check('震荡不再有超载乘区：层数与能量都不改变震荡数值', g => {
   chooseRoute(g, 'assimilation')
+  const normal = getOriginShockProfile(g)
   g.player.mutationState.stacks = 8
   g.player.mutationState.max = 8
   g.player.mutationState.timer = 4
-  const normal = getOriginShockProfile(g, false)
-  const overloaded = getOriginShockProfile(g, true)
-  assert.ok(overloaded.damageMul <= normal.damageMul * ORIGIN_RULES.overloadDamageCap + 1e-9)
-  assert.ok(overloaded.radius <= normal.radius * ORIGIN_RULES.overloadRadiusCap + 1e-9)
+  g.player.originEnergy = 100
+  const boosted = getOriginShockProfile(g)
+  assert.equal(boosted.damageMul, normal.damageMul)
+  assert.equal(boosted.radius, normal.radius)
 })
 
 check('路线/印记效果不直接充能；路线来源只记录回路', g => {
@@ -218,30 +231,28 @@ check('重开清空路线/印记/能量/同化/回路，回到无职业身份的
   assert.equal(g.strainSkill.id, 'slime_shock')
 })
 
-check('连续两次超载都能触发印记回响', g => {
+check('连续两次被动超载都能触发印记回响', g => {
   chooseRoute(g, 'resonance')
   chooseMark(g, 'glutton')
   spawn(g, { x: 30, hp: 10000 })
-  g.player.originEnergy = ORIGIN_BASE.overloadCost
-  pressSpace(g)
+  fireOverload(g)
   assert.equal(g.player.markState.echoUsed, true, '第一次超载兑现回响')
   assert.equal(g.player.originGuard, 1)
   g.player.originGuard = 0
   g.player.originGuardTimer = 0
 
-  advance(g, 6.6) // 跨过 6.5 秒震荡冷却与超载窗口
-  g.player.originEnergy = ORIGIN_BASE.overloadCost
-  pressSpace(g)
+  fireOverload(g)
   assert.equal(g.player.markState.echoUsed, true, '第二次超载仍应兑现一次回响')
   assert.equal(g.player.originGuard, 1, '第二次回响真实生效，而不是被旧的 echoUsed 锁死')
 })
 
-check('同化层数在真实 6.5 秒冷却下叠满并触发重组', g => {
+check('同化层数叠满后由被动超载兑现（震荡只积累不再消耗）', g => {
   chooseRoute(g, 'assimilation')
   for (const x of [-30, 0, 30]) {
     const enemy = spawn(g, { x, hp: 100000 })
     enemy.isBoss = true // 首领不被击退，保证每次震荡都能命中 3 个目标
   }
+  g.weaponSystem.originOverload.cooldown = 9999 // 隔离自动超载，专注叠层过程
 
   pressSpace(g)
   assert.equal(g.player.mutationState.stacks, 2, '3 目标震荡 +2 层')
@@ -257,7 +268,11 @@ check('同化层数在真实 6.5 秒冷却下叠满并触发重组', g => {
 
   advance(g, 6.6)
   pressSpace(g)
-  assert.equal(g.player.mutationState.stacks, 0, '强化震荡消耗全部层数')
+  assert.equal(g.player.mutationState.stacks, 5, '满层时震荡不再消耗层数')
+
+  g.weaponSystem.originOverload.cooldown = 0
+  fireOverload(g)
+  assert.equal(g.player.mutationState.stacks, 0, '被动超载兑现并消耗全部层数')
   assert.ok(g.player.mutationState.formTimer > 0, '进入局部形态重组窗口')
 })
 
@@ -286,7 +301,7 @@ check('震荡击杀首领的异源奖励只结算一次', g => {
   assert.equal(g.player.originEnergy, 38, '重复 _onKill 不得重复发放')
 })
 
-check('液痕击杀精英获得异源奖励', g => {
+check('路线液痕击杀精英：正常结算但不返还超载充能（防循环）', g => {
   chooseRoute(g, 'expansion')
   g.player.originEnergy = 0
   pressSpace(g) // 无敌人，只留下液痕
@@ -297,7 +312,8 @@ check('液痕击杀精英获得异源奖励', g => {
   elite.maxHp = 1
   g.weaponSystem.originCombat.update(0.6)
   assert.equal(elite.active, false)
-  assert.equal(g.player.originEnergy, 15, '液痕击杀精英 +15，且不依赖震荡直接命中')
+  assert.equal(g.weaponSystem.eliteKills, 1, '精英击杀照常统计')
+  assert.equal(g.player.originEnergy, 0, '路线派生伤害击杀不返还 +15，避免循环充能')
 })
 
 check('普通飞弹击杀精英获得异源奖励', g => {
@@ -322,8 +338,9 @@ check('普通飞弹击杀精英获得异源奖励', g => {
 check('弹射印记深化后的超载回响总伤害不超过 35% 预算', g => {
   chooseRoute(g, 'expansion')
   chooseMark(g, 'gatling')
-  const profile = getOriginShockProfile(g, true)
-  const shockDamage = g.weaponSystem.damage * g.weaponSystem.levelMul * profile.damageMul
+  // 回响预算基准 = 本次超载技能的主伤害倍率（此处用 3.0 代表一次中档源质技能）。
+  const profile = { damageMul: 3.0 }
+  const castDamage = g.weaponSystem.damage * g.weaponSystem.levelMul * profile.damageMul
   for (const rank of [1, 2]) {
     g.player.markState.rank = rank
     g.player.markState.echoUsed = false
@@ -333,8 +350,8 @@ check('弹射印记深化后的超载回响总伤害不超过 35% 预算', g => 
     assert.equal(triggerOriginMarkEcho(g, { overloaded: true, center: g.player, profile }), true)
     const total = g.weaponSystem._projectiles.reduce((sum, bolt) => sum + bolt.damage, 0)
     assert.ok(total > 0)
-    assert.ok(total <= shockDamage * ORIGIN_RULES.echoShareCap + 1e-6,
-      `rank ${rank}: ${total} > ${shockDamage * ORIGIN_RULES.echoShareCap}`)
+    assert.ok(total <= castDamage * ORIGIN_RULES.echoShareCap + 1e-6,
+      `rank ${rank}: ${total} > ${castDamage * ORIGIN_RULES.echoShareCap}`)
   }
 })
 

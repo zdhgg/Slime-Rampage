@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import { createArena, spawn, spawnBoss, pressSpace, rollSkills, dispose, learn } from './test-support/arena-fixture.mjs'
 import { ORIGIN_BASE, ORIGIN_RULES } from './src/game/OriginBuild.js'
 import {
+  ORIGIN_OVERLOAD_RULES,
   ORIGIN_SOURCE_BY_ID,
   ORIGIN_SOURCE_RULES,
   ORIGIN_SOURCE_SKILLS,
@@ -42,7 +43,7 @@ const chooseMark = (g, mark) => {
   assert.equal(g.applySkill(card), true)
 }
 
-/** 真实引擎计时推进：超载延迟、波/原核/棘刺都走 update，不直接写结果。 */
+/** 真实引擎计时推进：超载延迟、波/原核/棘刺/被动控制器都走 update，不直接写结果。 */
 function advance(g, seconds, step = 0.05) {
   const steps = Math.max(1, Math.ceil(seconds / step))
   for (let i = 0; i < steps; i++) {
@@ -50,22 +51,22 @@ function advance(g, seconds, step = 0.05) {
     g._updateStrainSkill(step)
     g.weaponSystem.originCombat.update(step)
     g.weaponSystem.originSourceCombat.update(step)
+    g.weaponSystem.originOverload.update(step)
   }
 }
 
 /**
- * 支付一次超载。
- * 超载窗口 1 秒 + 支付锁 2.5 秒：连续测试时直接关闭窗口/清锁，
- * 只跳过等待，不改变「支付成功才释放」这条被验证的规则。
+ * 驱动被动控制器完成一次超载（启动 0.25s → 扣费 → 立即释放）。
+ * 只跳过能量积累与冷却等待，不改变「支付成功才释放」这条被验证的规则。
  */
 function overload(g) {
-  g.player.strainSkillCd = 0
+  g.weaponSystem.originOverload.reset()
   g.player.overloadState.lastPaidAt = -Infinity
   g.player.overloadState.active = false
   g.player.overloadState.timer = 0
   g.player.originEnergy = ORIGIN_BASE.overloadCost
-  pressSpace(g)
-  assert.equal(g.player.overloadState.active, true, '本次震荡应当成功支付超载')
+  advance(g, ORIGIN_OVERLOAD_RULES.windup + 0.15, 0.02)
+  assert.equal(g.player.overloadState.active, true, '被动超载应成功支付')
   assert.ok(g.player.originEnergy < ORIGIN_BASE.overloadCost, '确实扣除了超载能量')
 }
 
@@ -180,29 +181,30 @@ check('A 来源映射按稳定 boss 类型，不依赖显示名', g => {
 // B. 超载机制
 // ============================================================
 
-check('B1/B2 普通震荡与能量不足都不释放源质技能', g => {
+check('B1/B2 能量不足或无目标时不释放源质技能；空格本身不触发超载', g => {
   learnOriginMemory(g, 'knight_breach')
   g.player.strainSkillCd = 0
   g.player.originEnergy = ORIGIN_BASE.overloadCost - 1
   pressSpace(g)
-  assert.equal(g.player.overloadState.active, false, '能量不足 → 不是超载')
+  assert.equal(g.player.overloadState.active, false, '空格不触发超载')
   advance(g, 0.6)
-  assert.equal(g.originSourceLastCast, null, '普通震荡不释放源质技能')
+  assert.equal(g.originSourceLastCast, null, '无目标/能量不足不释放源质技能')
   assert.equal(g.weaponSystem.originSourceCombat.waves.length, 0)
   assert.equal(g.originSourceCursor, 0)
 })
 
-check('B3 成功超载后自动释放一项已学技能（延迟 0.15~0.25 秒）', g => {
+check('B3 超载在 0.25 秒启动表现后自动释放一项已学技能', g => {
   learnOriginMemory(g, 'knight_breach')
   spawn(g, { x: 120, hp: 10000 })
-  overload(g)
-  g.weaponSystem.originSourceCombat.update(0.1)
-  assert.equal(g.originSourceLastCast, null, '0.1 秒时还没释放')
+  g.player.originEnergy = ORIGIN_BASE.overloadCost
+  g.weaponSystem.originOverload.update(0.02)
+  assert.equal(g.weaponSystem.originOverload.state, 'windup')
+  advance(g, 0.1, 0.02)
+  assert.equal(g.originSourceLastCast, null, '启动期间还没释放')
   advance(g, 0.2, 0.02)
-  assert.ok(g.originSourceLastCast, '延迟后自动释放')
+  assert.ok(g.originSourceLastCast, '启动结束后释放')
   assert.equal(g.originSourceLastCast.id, 'knight_breach')
   assert.equal(g.originSourceLastCast.level, 1)
-  assert.ok(ORIGIN_SOURCE_RULES.castDelay >= 0.15 && ORIGIN_SOURCE_RULES.castDelay <= 0.25)
 })
 
 check('B4 只有一个技能时每次超载都释放', g => {
@@ -252,25 +254,27 @@ check('B7 连续超载不丢失轮换状态（游标始终合法）', g => {
   assert.equal(seen.size, 3, '三个技能都轮到过')
 })
 
-check('B8 无有效目标时不报错、不卡死轮换、不浪费轮换位', g => {
+check('B8 无有效目标时不扣能量、不卡死轮换、不浪费轮换位', g => {
   g.enemyManager._enemies.length = 0
   learnOriginMemory(g, 'knight_breach')
   learnOriginMemory(g, 'mage_collapse')
   spawn(g, { x: 150, hp: 100000 })
   overload(g)
-  advance(g, 0.4)
+  assert.equal(g.originSourceLastCast.id, 'knight_breach')
   assert.equal(g.originSourceCursor, 1, '有目标时正常推进')
-  const before = g.originSourceLastCast.id
+  const paidAt = g.player.overloadState.lastPaidAt
   g.enemyManager._enemies.length = 0
-  overload(g)
-  advance(g, 0.4)
-  assert.equal(g.originSourceCursor, 1, '无目标时保持游标，下次再释放')
-  assert.equal(g.originSourceLastCast.id, before, '没有释放任何技能')
+  g.weaponSystem.originOverload.reset()
+  g.player.originEnergy = ORIGIN_BASE.overloadCost
+  advance(g, 0.4, 0.02)
+  assert.equal(g.player.overloadState.lastPaidAt, paidAt, '无目标不支付超载')
+  assert.ok(g.player.originEnergy >= ORIGIN_BASE.overloadCost, '能量保留不空耗')
+  assert.equal(g.originSourceCursor, 1, '无目标时保持游标')
+  assert.equal(g.originSourceLastCast.id, 'knight_breach', '没有释放任何技能')
   assert.equal(g.weaponSystem.originSourceCombat.jobs.length, 0, '不残留悬挂任务')
   // 目标回来后，轮换从上次的位置继续
   spawn(g, { x: 150, hp: 100000 })
   overload(g)
-  advance(g, 0.4)
   assert.equal(g.originSourceLastCast.id, 'mage_collapse')
 })
 
@@ -409,11 +413,13 @@ check('D1/D2 源质技能不产生异源能量，也不会触发自身', g => {
   learnOriginMemory(g, 'knight_breach')
   const victim = spawn(g, { x: 120, hp: 1 }) // 会被冲击波击杀
   overload(g)
-  const energyAfterShock = g.player.originEnergy
+  const energyAfterPay = g.player.originEnergy
+  const paidAt = g.player.overloadState.lastPaidAt
   advance(g, 0.6)
   assert.equal(victim.active, false, '源质技能完成击杀')
-  assert.equal(g.player.originEnergy, energyAfterShock, '击杀不返还/产生异源能量')
-  assert.equal(g.weaponSystem.originSourceCombat.jobs.filter(job => job.kind === 'overload').length, 0, '不会自我递归')
+  assert.ok(victim._originDerivedKill, '击杀带衍生标记')
+  assert.ok(g.player.originEnergy <= energyAfterPay + 1.5, '击杀不返还/产生异源能量（涌流微量除外）')
+  assert.equal(g.player.overloadState.lastPaidAt, paidAt, '不会自我递归支付')
 })
 
 check('D3 棘刺数量有硬上限，不产生无限弹体', g => {
@@ -466,7 +472,7 @@ check('D6 源质技能击杀精英/首领不会形成无限充能', g => {
   advance(g, 1.2, 0.03)
   assert.equal(elite.active, false, '冲击波击杀精英')
   assert.equal(boss.active, false, '冲击波击杀首领')
-  assert.equal(g.player.originEnergy, energy, '精英/首领击杀不额外充能')
+  assert.ok(g.player.originEnergy <= energy + 2, '精英/首领击杀不额外充能（涌流微量除外）')
   assert.equal(g.weaponSystem.eliteKills, 1)
   assert.equal(g.weaponSystem.bossKills, 1)
 })
@@ -476,7 +482,7 @@ check('D7 其他五种职业的战斗逻辑不受影响', g => {
     const other = createArena(strain)
     try {
       assert.equal(other.weaponSystem.originSourceCombat.enabled, false, `${strain} 不启用源质记忆`)
-      assert.equal(other.weaponSystem.originSourceCombat.queueOverload(), false)
+      assert.equal(other.weaponSystem.originOverload.enabled, false, `${strain} 不启用被动超载`)
       other.weaponSystem.update(0.016)
       assert.equal(other.originSourceLastCast, null)
       assert.deepEqual(other.originSourceMemories, [])
@@ -556,6 +562,7 @@ check('E5 暂停/恢复/结算不产生异常', g => {
   assert.deepEqual(g.originSourceMemories, [{ id: 'knight_breach', level: 1 }], '结算不清空本局记忆')
   g.weaponSystem.update(0.016)
   assert.equal(g.weaponSystem.originSourceCombat.spikes.length, 0, '结束后清空残留实体')
+  assert.equal(g.weaponSystem.originSourceCombat.orbs.length, 0, '原质环流球体同样清空')
 })
 
 check('E6 窄屏 UI：HUD 有紧凑样式与窄屏断点', () => {

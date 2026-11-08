@@ -17,6 +17,7 @@ import {
 import { gainPrimalEnergy, onPrimalKill, PRIMAL_SOURCES } from './PrimalEnergy.js'
 import { OriginCombat } from './OriginCombat.js'
 import { OriginSourceCombat } from './OriginSourceCombat.js'
+import { OriginOverload } from './OriginOverload.js'
 import { GluttonCombat, GLUTTON_HEAL_COOLDOWN } from './GluttonCombat.js'
 import { ShadowCombat } from './ShadowCombat.js'
 import { RicochetCombat } from './RicochetCombat.js'
@@ -136,8 +137,10 @@ export class WeaponSystem extends Entity {
     this.petCombat = new PetCombat(this)
     this.spellCombat = new SpellCombat(this)
     this.originCombat = new OriginCombat(this)
-    // 源质记忆战斗层：只在超载成功后延迟释放，独立于武器/印记结算链。
+    // 源质记忆战斗层：被动超载的释放执行器（默认技能 + 源质记忆轮换）。
     this.originSourceCombat = new OriginSourceCombat(this)
+    // 被动超载控制器：异源能量驱动的自动释放，与空格震荡完全解耦。
+    this.originOverload = new OriginOverload(this)
     this._projectiles = []
     this._particles = []
     this._pools = [] // 酸液池（火+毒：区域污染 + 引爆）
@@ -146,6 +149,7 @@ export class WeaponSystem extends Entity {
     this._rings = [] // 死亡扩散环（阶段十五美化）
     this.rapidVolley = null
     this.barrierAttackCooldown = 0
+    this._suppressKillCharge = false // 原生衍生伤害的同步击杀窗口（见 _settleKill）
     this.stats = { maxChain: 0, explosions: 0, slowClouds: 0, venomStorms: 0 } // 代表行为统计（物种档案）
     // 全屏麻痹（雷+水）计时器：周期触发
     this._stormTimer = 5
@@ -236,6 +240,7 @@ export class WeaponSystem extends Entity {
     this.spellCombat.reset()
     this.originCombat.reset()
     this.originSourceCombat.reset()
+    this.originOverload.reset()
     this._projectiles.length = 0
     this._particles.length = 0
     this._pools.length = 0
@@ -442,7 +447,7 @@ export class WeaponSystem extends Entity {
     this.game?.bossTomes?.update(dt)
     // 玩家死亡（gameOver 已触发，仅本帧残差）：停止射击与结算，
     // 防止结算快照（击杀/掉落物）之后的数据继续变动
-    if (this.player.dead || this.game.runFinished) { this.gluttonCombat.reset(); this.shadowCombat.reset(); this.petCombat.reset(); this.spellCombat.reset(); this.originCombat.reset(); this.originSourceCombat.reset(); this.rapidVolley = null; return }
+    if (this.player.dead || this.game.runFinished) { this.gluttonCombat.reset(); this.shadowCombat.reset(); this.petCombat.reset(); this.spellCombat.reset(); this.originCombat.reset(); this.originSourceCombat.reset(); this.originOverload.reset(); this.rapidVolley = null; return }
 
     // 连杀窗口倒计时：超时清零（仅游戏时间，暂停不消耗）
     if (this._comboTimer < 1.8) {
@@ -559,6 +564,10 @@ export class WeaponSystem extends Entity {
       this._rings[i].life -= dt
       if (this._rings[i].life <= 0) this._rings.splice(i, 1)
     }
+
+    // 9) 被动超载（原生黏液独占）：在所有命中/击杀结算完成后检查触发，
+    //    防止充能同步引发释放，也避免击杀过程中递归触发新的攻击。
+    this.originOverload.update(dt)
   }
 
   /**
@@ -724,7 +733,10 @@ export class WeaponSystem extends Entity {
           const d2 = (e.x - p.x) ** 2 + (e.y - p.y) ** 2
           if (d2 < p.r * p.r) {
             e.hit(p.dmg) // 跳伤随酸液池强度（元素等级）成长
-            if (!e.active) this._onKill(e)
+            if (!e.active) {
+              if (p.originDerived) e._originDerivedKill = true // 晶核回响池的击杀不返还超载充能
+              this._onKill(e)
+            }
           }
         }
       }
@@ -831,9 +843,12 @@ export class WeaponSystem extends Entity {
     e._settled = true
     // 异源能量击杀奖励统一在唯一结算点发放：飞弹/震荡/液痕/DOT/路线伤害
     // 都经过 _settleKill，因此不会漏掉，也不会因多次 _onKill 重复结算。
-    // 例外：源质记忆技能自己造成的击杀不充能（否则击杀 → 充能 → 更快超载 →
-    // 更多源质技能，形成自循环）。经验/掉落/击杀统计仍照常结算。
-    if (!e._originSourceKill) onPrimalKill(this.game, e)
+    // 例外：源质技能与各种「衍生伤害」造成的击杀不充能（否则击杀 → 充能 →
+    // 更快超载 → 更多衍生伤害，形成自循环）：
+    //  - 敌人身上的 _originDerivedKill 标记（源质技能/回响/路线衍生击杀）；
+    //  - _suppressKillCharge 窗口（副环、爆裂回响等经由 _explode 的同步击杀）。
+    // 经验/掉落/击杀统计仍照常结算。
+    if (!e._originDerivedKill && !this._suppressKillCharge) onPrimalKill(this.game, e)
     this.kills++
     this._tickLeech()
     if (e.isBoss) this.bossKills++
@@ -972,7 +987,7 @@ export class WeaponSystem extends Entity {
               this._burstColor(e.x, e.y, p.visual.impact, 4, false)
               this.game.sound.hit(p.visual.sound)
               this.game.enemyManager.addText(e.x, e.y, String(Math.round(p.damage * 10) / 10), null, '#ffffff', 13)
-              if (!e.active) this._onKill(e)
+              if (!e.active) { e._originDerivedKill = true; this._onKill(e) }
               p.destroy()
               break hitScan
             }

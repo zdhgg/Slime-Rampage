@@ -89,7 +89,7 @@ export class BossTomeCombat {
   deal(e, damage) {
     if (!alive(e) || this.p.dead || this.game.runFinished) return
     e.hit(damage, { bossTomeDerived: true, preventDevour: true })
-    if (!e.active) this.w._onKill(e)
+    if (!e.active) { e._originDerivedKill = true; this.w._onKill(e) }
   }
   pulse(center, radius, damage, color, after = null) {
     for (const e of this.targets(center, radius)) {

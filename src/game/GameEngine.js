@@ -1516,6 +1516,9 @@ export class GameEngine {
     this.bossTomes?.clearStage()
     this.weaponSystem.shadowCombat.reset({ preserveBuild: true })
     this.weaponSystem.petCombat.reset()
+    // 换章不遗留上一章的源质延迟技能与超载启动（已学记忆保留）。
+    this.weaponSystem.originSourceCombat?.reset()
+    this.weaponSystem.originOverload?.reset()
     this.player._dodgedAttacks = new WeakSet()
     const total = getExpeditionStages(this.runSelection.difficulty).length
     this.expeditionStage = Math.max(1, Math.min(total, stage))
@@ -2138,6 +2141,8 @@ export class GameEngine {
           empowered: !!this.player.mutationState.empowered,
         } : null,
         circuits: this.player.routeState?.resonance?.circuits || 0,
+        // 被动超载：充能/就绪/启动/冷却状态（HUD 不再提示「按空格超载」）。
+        passive: this.weaponSystem.originOverload?.hud() || null,
         // 源质记忆：三槽位、当前轮换位、下一次超载预告、最近一次释放（HUD 高亮）。
         memory: originMemoryHud(this),
       },

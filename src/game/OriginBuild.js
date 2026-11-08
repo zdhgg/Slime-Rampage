@@ -21,8 +21,7 @@ export const ORIGIN_RULES = Object.freeze({
   ownedWeight: 1.2,
   routeWeight: 1.15,
   maxWeightBoost: 1.35,
-  overloadWindow: 1.0,
-  overloadLock: 2.5,
+  overloadWindow: 2.5,
   overloadDamageCap: 2.8,
   overloadRadiusCap: 1.8,
   echoShareCap: 0.35,
@@ -50,9 +49,9 @@ export const ORIGIN_ROUTES = Object.freeze({
     color: '#5ad1c8',
     tint: 'rgba(90,209,200,0.22)',
     desc: '把震荡扩散成层叠冲击环，用残留液痕与波纹外延持续压缩怪群空间。',
-    bonus: '震荡范围 +12%，每第 3 次震荡追加一道 35% 伤害的副环；震荡自带液痕，超载强化液痕并追加双重副环',
+    bonus: '震荡范围 +12%，每第 3 次震荡追加一道 35% 伤害的副环；震荡自带液痕；超载覆盖更大并在落点留下液域',
     shockDesc: '范围冲击 + 副环 + 残留液痕',
-    overloadDesc: '半径 ×1.7、伤害 ×2.0、双重冲击环、强化液痕',
+    overloadDesc: '超载范围 +10%~15%，落点生成液域',
     roadmap: [
       'T1: 层叠冲击环（每 3 次震荡追加副环）',
       'T2: 残留液痕强化（路线自带液痕；提升持续/伤害/减速）',
@@ -67,9 +66,9 @@ export const ORIGIN_ROUTES = Object.freeze({
     color: '#b8e86a',
     tint: 'rgba(184,232,106,0.22)',
     desc: '用震荡施放积累不稳定基因层数，满层后触发局部形态重组，越打越适应。',
-    bonus: '震荡施放叠加同化层数（最多 5 层，命中 3 个以上敌人额外 +1），满层后下一次震荡强化并消耗层数',
-    shockDesc: '层数积累 + 满层形态重组',
-    overloadDesc: '消耗全部层数：伤害 ×(2.0+0.1×层数)、半径扩大，并获得 3 秒形变',
+    bonus: '震荡与持续战斗积累同化层数（命中 3 个以上敌人额外 +1），被动超载读取层数增伤，满层时消耗层数触发形态重组',
+    shockDesc: '层数积累 + 每层减伤',
+    overloadDesc: '每层同化提高本次超载伤害；满层时消耗层数，强化本次超载并进入形变',
     roadmap: [
       'T1: 不稳定基因纹路（层数上限与每层收益）',
       'T2: 局部形态重组（满层震荡强化）',
@@ -84,9 +83,9 @@ export const ORIGIN_ROUTES = Object.freeze({
     color: '#ffd166',
     tint: 'rgba(255,209,102,0.22)',
     desc: '交替使用飞弹、震荡、元素与路线效果，积累共振回路，把异源能量转成超载爆发。',
-    bonus: '8 秒内每出现一种不同伤害来源获得 1 层回路（最多 3 层），提高充能与超载伤害',
-    shockDesc: '多源回路 + 共振脉冲',
-    overloadDesc: '伤害 ×2.4、半径 ×1.4，回路额外增幅，3 回路追加共振脉冲',
+    bonus: '8 秒内每出现一种不同伤害来源获得 1 层回路（最多 3 层），提高充能；超载冷却更短，满 3 回路时超载追加共振余波',
+    shockDesc: '多源回路积累',
+    overloadDesc: '超载冷却缩短，回路提高本次超载伤害，满 3 回路追加共振余波',
     roadmap: [
       'T1: 能量回路（回路充能与持续时间）',
       'T2: 共振核心（回路提高超载伤害）',
@@ -413,15 +412,12 @@ export function getOriginGrowth(game, overrideLevels = null) {
   }
 }
 
-/** 震荡基础/超载的最终数值；超载乘区只在这里 clamp，战斗代码不再二次放大。 */
-export function getOriginShockProfile(game, overloaded = false) {
+/** 黏液震荡的最终数值。超载已与震荡解耦，这里不再有超载乘区。 */
+export function getOriginShockProfile(game) {
   const g = getOriginGrowth(game)
-  const p = game?.player
-  const mutation = p?.mutationState
   const baseRadius = ORIGIN_BASE.shockRadius + g.shockRangeBonus
-  const baseDamage = ORIGIN_BASE.shockDamageMul * g.shockDamageMul
   let radius = baseRadius
-  let damage = baseDamage
+  let damage = ORIGIN_BASE.shockDamageMul * g.shockDamageMul
   let knockback = 36
 
   if (g.route === 'expansion') {
@@ -430,43 +426,14 @@ export function getOriginShockProfile(game, overloaded = false) {
     knockback *= 1 + g.knockbackBonus
   } else if (g.route === 'assimilation') {
     damage *= 1 + 0.01 * g.routeInvestment
-    if (!overloaded) damage *= 1 + Math.min(0.4, g.stackDamageBonus * (mutation?.stacks || 0))
   } else if (g.route === 'resonance') {
     damage *= 1 + 0.015 * g.routeInvestment
-  }
-
-  const empowered = !overloaded && g.route === 'assimilation' && (mutation?.stacks || 0) >= g.maxStacks
-  if (empowered) {
-    damage *= 1 + g.empoweredDamageBonus
-    radius *= 1 + g.empoweredRadiusBonus
-  }
-
-  if (overloaded) {
-    const routeDamage = g.route === 'expansion' ? 2.0 : g.route === 'resonance' ? 2.4 : 2.0
-    const routeRadius = g.route === 'expansion' ? 1.7 : g.route === 'resonance' ? 1.4 : 1.3
-    damage *= routeDamage * g.overloadDamageMul
-    radius *= routeRadius * g.overloadRangeMul
-    if (g.route === 'assimilation') {
-      const stacks = mutation?.stacks || 0
-      damage *= 1 + Math.min(0.8, 0.1 * stacks)
-      radius *= 1 + Math.min(0.3, 0.03 * stacks)
-    }
-    if (g.route === 'resonance') {
-      const circuits = p?.routeState?.resonance?.circuits || 0
-      damage *= 1 + Math.min(0.45, (g.circuitDamage + g.overloadBurstBonus) * circuits)
-      radius *= 1 + Math.min(0.12, 0.04 * circuits)
-    }
-    damage = Math.min(baseDamage * ORIGIN_RULES.overloadDamageCap, damage)
-    radius = Math.min(baseRadius * ORIGIN_RULES.overloadRadiusCap, radius)
-    knockback *= 2
   }
 
   return {
     radius: Math.max(40, Math.round(radius)),
     damageMul: damage,
     knockback,
-    empowered,
-    overloaded,
     growth: g,
   }
 }
@@ -477,9 +444,9 @@ export function originOverloadDescription(game) {
   const markInfo = ORIGIN_MARKS[game?.originMark]
   const parts = []
   if (routeInfo) parts.push(routeInfo.overloadDesc)
-  else parts.push('半径 ×1.45、伤害 ×2.2、击退翻倍')
-  if (markInfo) parts.push(`${markInfo.name}：${markInfo.overloadDesc}`)
-  return `异源能量 ≥${ORIGIN_BASE.overloadCost} 时：${parts.join('；')}（乘区受硬上限约束）`
+  else parts.push('自动释放默认技能「原质环流」或已吸收的源质记忆')
+  if (markInfo) parts.push(`${markInfo.name}回响：${markInfo.overloadDesc}`)
+  return `异源能量 ≥${ORIGIN_BASE.overloadCost} 时被动超载自动释放：${parts.join('；')}`
 }
 
 export function originShockDescription(game) {

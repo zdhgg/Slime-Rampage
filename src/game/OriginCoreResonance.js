@@ -136,7 +136,7 @@ function chainLightning(engine, origin, damage, strength) {
     const hopDamage = Math.max(1, Math.round(damage * 0.3))
     next.hit(hopDamage, Math.random() < paralyzeChance ? { freeze: 0.6 } : null)
     ws._burst?.(next.x, next.y, 'lightning', 4, true)
-    if (!next.active) ws._onKill?.(next)
+    if (!next.active) { next._originDerivedKill = true; ws._onKill?.(next) }
     current = next
     hops++
   }
@@ -166,6 +166,7 @@ export function applyOriginCoreResonance(engine, radius, baseDamage) {
       pool.life = Math.min(pool.life, 1.8)
       pool.r = Math.min(pool.r, 70 + strength * 3)
       pool.dmg = Math.min(pool.dmg, 2)
+      pool.originDerived = true // 晶核回响产生的酸液池：击杀不返还超载充能
     }
   } else if (resonance.id === 'gel') {
     const origin = targets[0]
@@ -175,7 +176,7 @@ export function applyOriginCoreResonance(engine, radius, baseDamage) {
     for (const enemy of targets.slice(0, 3)) {
       enemy.hit(damage)
       ws._burstColor?.(enemy.x, enemy.y, REACTION_COLORS.burst, 5, true)
-      if (!enemy.active) ws._onKill?.(enemy)
+      if (!enemy.active) { enemy._originDerivedKill = true; ws._onKill?.(enemy) }
     }
   } else if (resonance.id === 'corrode') {
     const duration = Math.min(3, 1.2 + strength * 0.3)

@@ -1,10 +1,10 @@
-import { gainOriginEnergy, trySpendOriginOverload, ORIGIN_SOURCES } from './PrimalEnergy.js'
+import { gainOriginEnergy, ORIGIN_SOURCES } from './PrimalEnergy.js'
 import {
   ORIGIN_BASE, ORIGIN_MARKS, ORIGIN_ROUTES, ORIGIN_RULES,
-  getOriginGrowth, getOriginShockProfile, originOverloadDescription, originShockDescription,
+  getOriginGrowth, getOriginShockProfile, originShockDescription,
   hasOriginFragment,
 } from './OriginBuild.js'
-import { triggerOriginMarkEcho, applyElementalMarkProc, fireOriginEchoBolts } from './OriginEchoes.js'
+import { applyElementalMarkProc, fireOriginEchoBolts } from './OriginEchoes.js'
 
 const TAU = Math.PI * 2
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v))
@@ -12,8 +12,11 @@ const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v))
 /**
  * 原生黏液的战斗层：唯一主动「黏液震荡」+ 三路线形态 + 五印记附加。
  *
+ * 黏液震荡是战术辅助：击退解围、补充充能、催化路线状态。
+ * 超载已与震荡解耦——由被动超载控制器（OriginOverload）自动驱动，
+ * 这里不再支付能量、不再调用源质技能。
  * 它不读取 primarySpec / secondarySpec，也不写任何职业状态；
- * 路线和印记只改变震荡/超载的表现，不改变主动 id。
+ * 路线和印记只改变震荡的表现，不改变主动 id。
  */
 export class OriginCombat {
   constructor(weapon) {
@@ -111,7 +114,10 @@ export class OriginCombat {
           if ((enemy.x - field.x) ** 2 + (enemy.y - field.y) ** 2 > field.r * field.r) continue
           enemy.hit(field.dmg)
           if (enemy.active && !enemy.isBoss) enemy.primeSlow = Math.max(enemy.primeSlow || 0, field.slow)
-          if (!enemy.active) this.weapon._onKill(enemy)
+          if (!enemy.active) {
+            enemy._originDerivedKill = true // 路线衍生伤害击杀不返还超载充能
+            this.weapon._onKill(enemy)
+          }
         }
       }
       if (field.life <= 0) this.fields.splice(i, 1)
@@ -122,7 +128,9 @@ export class OriginCombat {
       const ring = this.pendingRings[i]
       ring.delay -= dt
       if (ring.delay > 0) continue
-      this.weapon._explode(ring.x, ring.y, ring.damage, null, ring.radius)
+      this.weapon._suppressKillCharge = true // 副环是路线衍生伤害，击杀不返还超载充能
+      try { this.weapon._explode(ring.x, ring.y, ring.damage, null, ring.radius) }
+      finally { this.weapon._suppressKillCharge = false }
       this.weapon._ring?.(ring.x, ring.y, ring.color, ring.radius)
       this.pendingRings.splice(i, 1)
     }
@@ -187,11 +195,8 @@ export class OriginCombat {
     const ws = this.weapon
     const p = this.player
     if (!ws || !p) return false
-    const overloaded = trySpendOriginOverload(this.game)
-    // 超载瞬间取样路线状态：同化层数/共振回路都会在下面本次震荡里被消耗，
-    // 源质记忆必须读「触发前」的快照，而不是结算后的残留值。
-    const memorySnapshot = overloaded ? this.weapon.originSourceCombat?.snapshot() : null
-    const profile = getOriginShockProfile(this.game, overloaded)
+    // 震荡永远是普通形态：超载由被动控制器独立支付与释放。
+    const profile = getOriginShockProfile(this.game)
     const growth = profile.growth
     const radius = profile.radius
     const damage = ws.damage * ws.levelMul * profile.damageMul
@@ -209,17 +214,13 @@ export class OriginCombat {
     this.game.mapFeatures?.attackBarricades(p.x, p.y, radius)
 
     const route = this.game.originRoute
-    const color = overloaded ? '#ffd166' : (ORIGIN_ROUTES[route]?.color || '#8cffc8')
+    const color = ORIGIN_ROUTES[route]?.color || '#8cffc8'
     ws._ring?.(p.x, p.y, color, radius)
-    ws._burstColor?.(p.x, p.y, color, overloaded ? 18 : 10, false)
-    if (overloaded) {
-      this.game.enemyManager?.addText?.(p.x, p.y - 30, '⚡ 超载震荡!', null, '#ffd166', 18)
-      this.game.shakeScreen?.(4, 0.22)
-    }
+    ws._burstColor?.(p.x, p.y, color, 10, false)
 
     if (route === 'expansion') this.applyExpansion(profile, damage, hitCount)
     else if (route === 'assimilation') this.applyAssimilation(profile, hitCount)
-    else if (route === 'resonance') this.applyResonance(profile, damage, hitCount)
+    else if (route === 'resonance') this.applyResonance(profile)
 
     this.applyRiders(profile, damage, hitCount, lowHpBefore)
 
@@ -233,10 +234,6 @@ export class OriginCombat {
       p.originMoveBuff = Math.max(p.originMoveBuff || 0, growth.motilityBonus)
       p.originMoveBuffTimer = Math.max(p.originMoveBuffTimer || 0, 1.5)
     }
-
-    if (overloaded) triggerOriginMarkEcho(this.game, { overloaded: true, center: p, profile })
-    // 源质记忆：只有真正支付了超载能量才排入，延迟 0.2 秒后自动释放当前轮换位。
-    if (overloaded) this.weapon.originSourceCombat?.queueOverload(memorySnapshot)
     return true
   }
 
@@ -267,7 +264,7 @@ export class OriginCombat {
     const state = p.routeState?.expansion
     if (!state) return
     state.shockCount++
-    const rings = profile.overloaded ? 2 : (state.shockCount % 3 === 0 ? 1 : 0)
+    const rings = state.shockCount % 3 === 0 ? 1 : 0
     for (let i = 0; i < rings; i++) {
       this.pendingRings.push({
         x: p.x, y: p.y,
@@ -286,7 +283,10 @@ export class OriginCombat {
         const d2 = (e.x - p.x) ** 2 + (e.y - p.y) ** 2
         if (d2 >= inner * inner && d2 <= profile.radius * profile.radius) {
           e.hit(damage * g.edgeDamageBonus)
-          if (!e.active) this.weapon._onKill(e)
+          if (!e.active) {
+            e._originDerivedKill = true
+            this.weapon._onKill(e)
+          }
         }
       }
     }
@@ -303,48 +303,17 @@ export class OriginCombat {
     })
   }
 
+  /** 同化路线：震荡只负责积累层数；满层兑现只由被动超载触发，震荡不再消耗。 */
   applyAssimilation(profile, hitCount) {
-    const p = this.player
-    const g = profile.growth
-    if (!p.mutationState) return
-    if (profile.overloaded) {
-      p.mutationState.stacks = 0
-      p.mutationState.empowered = false
-      p.mutationState.timer = 0
-      p.mutationState.formTimer = g.formDuration
-      this.weapon._ring?.(p.x, p.y, ORIGIN_ROUTES.assimilation.color, p.radius + 24)
-      return
-    }
-    if (profile.empowered) {
-      // 已消耗层数：本次震荡就是强化版，清零重新积累。
-      p.mutationState.stacks = 0
-      p.mutationState.empowered = false
-      p.mutationState.timer = 0
-      p.mutationState.formTimer = Math.max(p.mutationState.formTimer, 1.5)
-      this.weapon._ring?.(p.x, p.y, ORIGIN_ROUTES.assimilation.color, profile.radius * 0.7)
-      return
-    }
+    if (!this.player?.mutationState) return
     this.addStacks(hitCount)
   }
 
-  applyResonance(profile, damage, hitCount) {
-    const p = this.player
-    const g = profile.growth
-    const resonance = p.routeState?.resonance
+  /** 共振路线：震荡本身计入一次不同来源，让回路有机会达到 3；不再放脉冲、不清空回路。 */
+  applyResonance(profile) {
+    const resonance = this.player?.routeState?.resonance
     if (!resonance) return
-    // 路线本身也是一次“不同来源”，让回路有机会达到 3。
-    this.noteRouteSource(resonance, g)
-    if (profile.overloaded) {
-      resonance.circuits = 0
-      resonance.sources.length = 0
-      return
-    }
-    if (resonance.circuits >= ORIGIN_RULES.resonanceMaxCircuits) {
-      this.weapon._explode(p.x, p.y, damage * g.pulseDamage, null, 80)
-      this.weapon._ring?.(p.x, p.y, ORIGIN_ROUTES.resonance.color, 80)
-      resonance.circuits = 0
-      resonance.sources.length = 0
-    }
+    this.noteRouteSource(resonance, profile.growth)
   }
 
   noteRouteSource(resonance, growth) {
@@ -468,7 +437,7 @@ export const ORIGIN_SKILL = {
   name: '黏液震荡',
   icon: '🫧',
   cooldown: ORIGIN_BASE.shockCooldown,
-  desc: '原生黏液唯一的主动技：以自身为中心释放黏液冲击，路线决定形态，印记附加特征。',
+  desc: '原生黏液唯一的主动技：以自身为中心释放黏液冲击，击退解围并补充异源充能；超载由异源能量自动驱动。',
   getDesc(engine) { return originShockDescription(engine) },
   use(engine) { return engine.weaponSystem?.originCombat?.castShock() || false },
 }

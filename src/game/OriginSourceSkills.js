@@ -12,8 +12,6 @@ import { originInvestment } from './OriginBuild.js'
  */
 
 export const ORIGIN_SOURCE_RULES = Object.freeze({
-  /** 超载后延迟释放，让玩家看清「震荡 → 源质技能」的连续关系。 */
-  castDelay: 0.2,
   maxSlots: 3,
   maxLevel: 3,
   /** 破阵凝胶波推进速度（px/s）。 */
@@ -27,6 +25,48 @@ export const ORIGIN_SOURCE_RULES = Object.freeze({
   echoRadius: 100,
   /** 源质技能只对普通敌人击退；首领免疫位移。 */
   bossKnockback: 0,
+  /** 被动超载统一乘区：源质技能倍率换算到「超载口径」的基准系数。 */
+  passiveDamageScale: 1.3,
+})
+
+/** 被动超载（OriginOverload 控制器）的触发参数。 */
+export const ORIGIN_OVERLOAD_RULES = Object.freeze({
+  /** 基础自动超载冷却（秒）。 */
+  cooldown: 6,
+  /** 异源共振路线的超载冷却（秒）。 */
+  resonanceCooldown: 5.5,
+  /** 启动表现时长：预约→确认释放之间的窗口，不扣能量。 */
+  windup: 0.25,
+  /** 无有效目标时重新判断的间隔（秒）。 */
+  retryDelay: 0.5,
+})
+
+/**
+ * 原生史莱姆先天具备的源质能力——「原质环流」。
+ * 不是 BOSS 源质、不占记忆槽、不出现在奖励卡池；
+ * 存在有效源质记忆时退出自动释放序列，但不被删除。
+ */
+export const ORIGIN_INNATE_SKILL = Object.freeze({
+  id: 'primal_orbit',
+  name: '原质环流',
+  icon: '🫧',
+  iconKey: 'orbit',
+  color: '#8cffc8',
+  exec: 'orbit',
+  innate: true,
+  castRange: 240,
+  tags: ['原生', '被动超载'],
+  desc: '身体中的原质核心分离出三枚液态原质球，环绕后追踪近距离敌人，命中产生小型液态爆裂。',
+  trigger: '被动超载自动释放：原质球追踪并爆裂',
+})
+/** 原质环流数值（单档，不受记忆等级影响；成长来自路线/棱镜/秘典乘区）。 */
+export const ORIGIN_ORBIT_STATS = Object.freeze({
+  orbs: 3,
+  duration: 1.2,
+  damageMul: 1.0,
+  splash: 0.35,
+  splashRadius: 36,
+  slow: 0.8,
 })
 
 /**
@@ -46,6 +86,7 @@ export const ORIGIN_SOURCE_SKILLS = Object.freeze([
     iconKey: 'waves',
     color: '#5ad1c8',
     exec: 'breach',
+    castRange: 500,
     tags: ['源质记忆', '骑士王', '直线突破'],
     desc: '身体先压成一枚凝胶弹芯，再向最近敌人推出一道高速液态冲击波：沿途击退并撕开一道缺口。',
     trigger: '超载时自动释放：向最近敌人推出直线凝胶冲击波',
@@ -70,6 +111,7 @@ export const ORIGIN_SOURCE_SKILLS = Object.freeze([
     iconKey: 'aperture',
     color: '#a29bfe',
     exec: 'collapse',
+    castRange: 520,
     tags: ['源质记忆', '大法师', '延迟爆发'],
     desc: '在敌人最密集处凝出一枚凝胶化的奥术原核，先向内坍缩，再向外炸开成一圈液态冲击。',
     trigger: '超载时自动释放：在敌人密集处生成坍缩原核',
@@ -94,6 +136,7 @@ export const ORIGIN_SOURCE_SKILLS = Object.freeze([
     iconKey: 'multishot',
     color: '#ffd166',
     exec: 'hunt',
+    castRange: 760,
     tags: ['源质记忆', '弓王', '多目标追踪'],
     desc: '体表凝出数枚凝胶棘刺弹射而出，各自追猎不同目标，命中后炸开一小片黏液。',
     trigger: '超载时自动释放：向不同目标射出追踪棘刺',
@@ -179,6 +222,16 @@ export function nextOriginMemory(game) {
   const entry = list[index]
   const def = ORIGIN_SOURCE_BY_ID[entry.id]
   return def ? { ...entry, def, index } : null
+}
+
+/**
+ * 被动超载的「下一次释放」统一判定：
+ * 有源质记忆 → 当前轮换位；没有 → 默认技能「原质环流」。
+ */
+export function nextOriginCast(game) {
+  const memory = nextOriginMemory(game)
+  if (memory) return memory
+  return { id: ORIGIN_INNATE_SKILL.id, level: 1, def: ORIGIN_INNATE_SKILL, index: -1, innate: true }
 }
 
 export function advanceOriginMemoryCursor(game) {
@@ -337,9 +390,10 @@ export function originMemoryHud(game) {
         total: def?.source || '',
       }
     }),
-    nextId: next?.id || null,
-    nextName: next?.def?.name || null,
-    nextLevel: next?.level || 0,
+    nextId: next?.id || ORIGIN_INNATE_SKILL.id,
+    nextName: next?.def?.name || ORIGIN_INNATE_SKILL.name,
+    nextLevel: next?.level || 1,
+    nextInnate: !next,
     lastId: last?.id || null,
     lastName: last?.name || null,
     lastLevel: last?.level || 0,

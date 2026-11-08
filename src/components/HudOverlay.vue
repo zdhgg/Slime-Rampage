@@ -222,9 +222,9 @@ const primalTitle = computed(() => {
   if (!origin) return ''
   const effect = origin.effect || '路线决定超载主体，印记提供有限回响'
   const value = origin.energy ?? origin.value ?? 0
-  if (primalRatio.value >= 1) return `异源能量已满 · 下次有效空格技将超载：${effect}`
-  if (primalReady.value) return `异源能量 ${value}/${origin.max} · 下次有效空格技将超载：${effect}`
-  return `异源能量 ${value}/${origin.max} · 交替使用飞弹/震荡/元素/路线来源充能，≥${origin.cost} 后超载：${effect}`
+  if (primalRatio.value >= 1) return `异源能量已满 · 被动超载就绪后自动释放：${effect}`
+  if (primalReady.value) return `异源能量 ${value}/${origin.max} · 被动超载就绪后自动释放：${effect}`
+  return `异源能量 ${value}/${origin.max} · 交替使用飞弹/震荡/元素/路线来源充能，≥${origin.cost} 后被动超载自动释放：${effect}`
 })
 const originRouteInfo = computed(() => ORIGIN_ROUTES[props.stats.originRoute] || null)
 const originMarkInfo = computed(() => ORIGIN_MARKS[props.stats.originMark] || null)
