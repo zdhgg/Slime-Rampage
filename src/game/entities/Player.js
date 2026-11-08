@@ -83,21 +83,23 @@ const MUTATIONS = {
 const MUTATION_VARIANTS = new Map(Object.entries(MUTATIONS).map(([k, cfg]) => [k, { ...cfg, key: k }]))
 
 /**
- * 元素氛围粒子配置（阶段十五美化）：形态色微粒环绕/上浮，
+ * 元素氛围粒子配置（阶段十五美化）：形态色微粒从身体下缘滴落/升腾，
  * 元素身份一眼可辨（火苗上浮/水泡/毒滴下沉/电弧快闪/蒸汽白雾…）
+ * spawn='drip' 从身体下缘滴落、'rise' 从底部升腾——都不再整圈生成，
+ * 避免读成绕身公转（未声明 spawn 的形态才保持整圈，作为扩展兜底）。
  */
 const AURAS = {
-  base: { colors: ['#b8e85a', '#8ae84a'], vy: 30, life: 0.8, r: 2.4 },
-  fire: { colors: ['#ff9d4a', '#ff6b4a'], vy: -45, life: 0.7, r: 2.4 },
-  water: { colors: ['#7fd4f7', '#b8ecff'], vy: -35, life: 0.9, r: 2.2 },
-  poison: { colors: ['#7ce86a', '#4fae4a'], vy: 40, life: 0.8, r: 2.2 },
-  lightning: { colors: ['#ffe98a', '#ffd166'], vy: -60, life: 0.35, r: 1.8 },
-  acid: { colors: ['#c8e84a', '#eaff9a'], vy: -30, life: 0.8, r: 2.4 },
-  gel: { colors: ['#8ae8f7', '#d8fbff'], vy: -40, life: 0.9, r: 2.4 },
-  storm: { colors: ['#ffc166', '#ffd166'], vy: -55, life: 0.4, r: 2 },
-  corrode: { colors: ['#6ad86a', '#a8f06a'], vy: 35, life: 0.8, r: 2.2 },
-  steam: { colors: ['#eef7fb', '#ffffff'], vy: -25, life: 1, r: 2.6 },
-  venom: { colors: ['#b8e85a', '#c9a6f0'], vy: -40, life: 0.8, r: 2.2 },
+  base: { colors: ['#b8e85a', '#8ae84a'], vy: 45, life: 0.65, r: 2.2, spawn: 'drip' },
+  fire: { colors: ['#ff9d4a', '#ff6b4a'], vy: -45, life: 0.7, r: 2.4, spawn: 'rise' },
+  water: { colors: ['#7fd4f7', '#b8ecff'], vy: -35, life: 0.9, r: 2.2, spawn: 'rise' },
+  poison: { colors: ['#7ce86a', '#4fae4a'], vy: 40, life: 0.8, r: 2.2, spawn: 'drip' },
+  lightning: { colors: ['#ffe98a', '#ffd166'], vy: -60, life: 0.35, r: 1.8, spawn: 'rise' },
+  acid: { colors: ['#c8e84a', '#eaff9a'], vy: -30, life: 0.8, r: 2.4, spawn: 'rise' },
+  gel: { colors: ['#8ae8f7', '#d8fbff'], vy: -40, life: 0.9, r: 2.4, spawn: 'rise' },
+  storm: { colors: ['#ffc166', '#ffd166'], vy: -55, life: 0.4, r: 2, spawn: 'rise' },
+  corrode: { colors: ['#6ad86a', '#a8f06a'], vy: 35, life: 0.8, r: 2.2, spawn: 'drip' },
+  steam: { colors: ['#eef7fb', '#ffffff'], vy: -25, life: 1, r: 2.6, spawn: 'rise' },
+  venom: { colors: ['#b8e85a', '#c9a6f0'], vy: -40, life: 0.8, r: 2.2, spawn: 'rise' },
 }
 
 /**
@@ -932,17 +934,26 @@ export class Player extends Entity {
     }
     this._blink = Math.max(0, this._blink - dt)
 
-    // 元素氛围粒子（阶段十五美化）：形态色微粒环绕/上浮，元素身份一眼可辨
+    // 元素氛围粒子（阶段十五美化）：形态色微粒从体底滴落/升腾，元素身份一眼可辨。
+    // drip/rise 都只在身体下缘生成：整圈随机生成会读成「绕身公转」，
+    // 黏滴应往下坠、火苗/水泡应从体底升腾。
     const auraCfg = AURAS[this._mutation().key] || AURAS.base
     this._auraTimer -= dt
     if (this._auraTimer <= 0) {
       this._auraTimer = 0.14
-      const a = Math.random() * TAU
-      const d = this.radius * (0.5 + Math.random() * 0.6)
+      const mode = auraCfg.spawn === 'drip' ? 'drip' : auraCfg.spawn === 'rise' ? 'rise' : 'ring'
+      // 升腾类从左右下缘起跳，并带明显外扩初速：贴着体外两侧上升，不穿过脸、也不整圈包围。
+      const a = mode === 'ring' ? Math.random() * TAU
+        : mode === 'drip' ? Math.PI / 2 + (Math.random() - 0.5) * 0.9
+          : Math.PI / 2 + (Math.random() < 0.5 ? -1 : 1) * (0.7 + Math.random() * 0.3)
+      const d = mode === 'ring'
+        ? this.radius * (0.5 + Math.random() * 0.6)
+        : this.radius * (mode === 'drip' ? 0.85 + Math.random() * 0.2 : 1 + Math.random() * 0.12)
+      const outward = mode === 'drip' ? 14 : mode === 'rise' ? 30 : 0
       this._aura.push({
         x: this.x + Math.cos(a) * d,
         y: this.y + Math.sin(a) * d,
-        vx: (Math.random() - 0.5) * 16,
+        vx: Math.cos(a) * outward + (Math.random() - 0.5) * 10,
         vy: auraCfg.vy + (Math.random() - 0.5) * 20,
         life: auraCfg.life,
         maxLife: auraCfg.life,
@@ -1088,7 +1099,7 @@ export class Player extends Entity {
     }
     ctx.globalAlpha = blink ? baseAlpha * 0.45 : baseAlpha
 
-    // ---- 元素氛围粒子（身体后方环绕，阶段十五美化） ----
+    // ---- 元素氛围粒子（滴落/升腾都在身体后方，阶段十五美化） ----
     for (const pa of this._aura) {
       ctx.globalAlpha = Math.max(0, pa.life / pa.maxLife) * 0.7
       ctx.fillStyle = pa.color

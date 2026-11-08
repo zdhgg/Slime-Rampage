@@ -363,4 +363,60 @@ check('原生普通卡描述与派生一致，路线预览不含未实现 T4', g
   }
 })
 
+check('暴食碎片按“震荡前残血”判定，残血目标被震死也兑现护甲', g => {
+  learn(g, 'ori_frag_glutton')
+  const target = spawn(g, { x: 40, hp: 1000 })
+  target.hp = 1 // 震荡前已残血，且会被本次震荡打死
+  pressSpace(g)
+  assert.equal(target.active, false, '残血目标被震荡打死')
+  assert.equal(g.player.originGuard, 1, '命中前残血仍应触发护甲')
+  assert.ok(g.player.originGuardTimer > 0)
+})
+
+check('异源碎片进入 HUD 快照，元素碎片无元素时明确提示未激活', g => {
+  let snapshot = null
+  g.onStats = (stats) => { snapshot = stats }
+  const card = ORIGIN_SKILL_BY_ID.ori_frag_elemental
+  assert.equal(g.applySkill(card), true)
+  assert.ok(snapshot, '选卡后立即推送一次 HUD 快照')
+  const chip = snapshot.originFragments.find(f => f.id === 'elemental')
+  assert.ok(chip, '碎片出现在 HUD 快照')
+  assert.match(chip.title, /尚未吸收元素核心/)
+  assert.match(card.stats(0, g), /未吸收任何元素核心/)
+  g.player.elements.set('fire', 1)
+  g._pushStats()
+  const active = snapshot.originFragments.find(f => f.id === 'elemental')
+  assert.doesNotMatch(active.title, /尚未吸收元素核心/)
+  assert.match(active.title, /35%|附加/)
+})
+
+check('碎片手感数值与卡面一致（ICD/时长）', g => {
+  learn(g, 'ori_frag_glutton')
+  const target = spawn(g, { x: 40, hp: 1000 })
+  target.hp = 500 // 50%：不触发
+  pressSpace(g)
+  assert.equal(g.player.originGuard, 0)
+  target.hp = 200 // 20%：触发
+  g.player.strainSkillCd = 0
+  pressSpace(g)
+  assert.equal(g.player.originGuard, 1)
+  assert.equal(g.player.markState.icdByFamily.glutton, 6, '暴食碎片 ICD 6 秒')
+  assert.match(ORIGIN_SKILL_BY_ID.ori_frag_glutton.stats(0, g), /6 秒 ICD/)
+})
+
+check('暗影/共生碎片手感数值与卡面一致', g => {
+  learn(g, 'ori_frag_assassin')
+  learn(g, 'ori_frag_symbiosis')
+  spawn(g, { x: 40, hp: 100000 })
+  pressSpace(g)
+  assert.ok(Math.abs(g.player.stealthTimer - 0.5) < 1e-9, '暗影碎片 0.5 秒隐匿')
+  assert.ok(Math.abs(g.player.originNextHitMul - 1.12) < 1e-9, '下一次攻击 +12%')
+  assert.equal(g.player.markState.icdByFamily.assassin, 6)
+  assert.equal(g.player.markState.bubble, 1)
+  assert.equal(g.player.markState.bubbleTimer, 12)
+  assert.equal(g.player.markState.icdByFamily.symbiosis, 10)
+  assert.match(ORIGIN_SKILL_BY_ID.ori_frag_assassin.stats(0, g), /0\.5 秒隐匿/)
+  assert.match(ORIGIN_SKILL_BY_ID.ori_frag_symbiosis.stats(0, g), /10 秒 ICD/)
+})
+
 console.log(`\n原生黏液重构验证通过：${passed} 组 ✓`)

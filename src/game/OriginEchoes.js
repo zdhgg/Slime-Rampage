@@ -61,7 +61,10 @@ export function applyElementalMarkProc(engine, chance = 0.25, durationBonus = 0)
   }
   if (!Object.keys(effects).length) return false
   target.hit(0, effects)
-  ws._burstColor?.(target.x, target.y, ORIGIN_MARKS[engine.originMark]?.color || '#a29bfe', 4, false)
+  const color = ORIGIN_MARKS[engine.originMark]?.color || '#a29bfe'
+  ws._ring?.(target.x, target.y, color, 18)
+  ws._burstColor?.(target.x, target.y, color, 4, false)
+  engine.sound?.spellCast?.(best.id)
   return true
 }
 
@@ -86,6 +89,8 @@ export function triggerOriginMarkEcho(engine, { overloaded = false, center = eng
     p.originGuard = Math.max(p.originGuard || 0, amount)
     p.originGuardTimer = Math.max(p.originGuardTimer || 0, 2)
     ws._ring?.(p.x, p.y, '#ff9f43', p.radius + 18)
+    engine.enemyManager?.addText?.(p.x, p.y - 44, `🛡 回响护甲 +${amount}`, null, '#ff9f43', 14)
+    engine.sound?.originWard?.()
     return true
   }
 

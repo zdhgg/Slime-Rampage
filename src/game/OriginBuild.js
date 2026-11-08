@@ -111,7 +111,7 @@ export const ORIGIN_MARKS = Object.freeze({
   elemental: {
     id: 'elemental', name: '元素印记', icon: '🔮', color: '#a29bfe',
     desc: '震荡附带轻量元素附着；超载时触发一次有上限的晶核共鸣。',
-    shockDesc: '25% 概率附加已吸收元素 1.5 秒',
+    shockDesc: '25% 概率附加已吸收元素（时长按元素 0.6~3 秒）',
     overloadDesc: '触发晶核共鸣（最多 5 个目标）',
   },
   assassin: {
@@ -229,19 +229,21 @@ export const ORIGIN_COMMON_SKILLS = [
 export const ORIGIN_FRAGMENT_SKILLS = [
   fragment('glutton', 'ori_frag_glutton', '暴食碎片', '🍽️',
     '震荡命中残血目标时获得 1 层护甲；不回复生命，也不能吞噬。',
-    () => '残血命中获得 1 层护甲 · 12 秒 ICD'),
+    () => '残血命中获得 1 层护甲 · 6 秒 ICD'),
   fragment('gatling', 'ori_frag_gatling', '弹射碎片', '🔫',
     '震荡有概率追加 1 枚弱化副弹；不获得分裂、连锁或穿透。',
-    () => '30% 概率追加 1 枚 35% 副弹 · 6 秒 ICD'),
+    () => '50% 概率追加 1 枚 35% 副弹 · 3 秒 ICD'),
   fragment('elemental', 'ori_frag_elemental', '元素碎片', '🔮',
-    '震荡有概率附加 1 秒元素附着；不会开启元素法术树。',
-    () => '20% 概率附加 1 种已吸收元素 1 秒'),
+    '震荡有概率附加已吸收元素的短暂附着；需先吸收元素核心，且不会开启元素法术树。',
+    (lv, game) => (game?.player?.elements?.size || 0) > 0
+      ? '35% 概率附加 1 种已吸收元素（时长按元素 0.6~3 秒）'
+      : '未吸收任何元素核心 · 当前不会触发（先吃一颗元素核心）'),
   fragment('assassin', 'ori_frag_assassin', '暗影碎片', '🗡️',
     '震荡后短暂隐匿并小幅强化下一次攻击；不获得分身与闪避。',
-    () => '0.4 秒隐匿 · 下一次攻击 +10% · 10 秒 ICD'),
+    () => '0.5 秒隐匿 · 下一次攻击 +12% · 6 秒 ICD'),
   fragment('symbiosis', 'ori_frag_symbiosis', '共生碎片', '🐾',
     '震荡生成 1 点支援泡泡；不会生成伙伴，也不提供鼓舞。',
-    () => '获得 1 点支援泡泡 · 18 秒 ICD'),
+    () => '获得 1 点支援泡泡 · 10 秒 ICD'),
 ]
 
 export const ORIGIN_ROUTE_SKILLS = {

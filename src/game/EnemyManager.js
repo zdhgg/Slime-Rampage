@@ -732,6 +732,11 @@ export class EnemyManager extends Entity {
     boss.isBossSquadMember = boss.bossGroupSize > 1
     boss.bossEncounterFinal = !!options.bossEncounterFinal
     boss.encounterLabel = options.encounterLabel || boss.name
+    // 编队成员类型登记：成员阵亡后会被移出 _bosses，因此必须在生成时留档。
+    if (this._bossEncounter && this._bossEncounter.id === boss.bossGroupId) {
+      if (!this._bossEncounter.memberTypes) this._bossEncounter.memberTypes = new Set()
+      this._bossEncounter.memberTypes.add(boss.type)
+    }
     if (options.expMul) boss.expValue = Math.max(20, Math.round(boss.expValue * options.expMul))
     boss.attach(this.game)
     this._enemies.push(boss)
@@ -774,6 +779,9 @@ export class EnemyManager extends Entity {
     this._bossEncounter.label = plan.label
     this._bossEncounter.total = target
     this._bossEncounter.maxActive = maxActive
+    // 记录本场遭遇出现过的全部类型（含后续补位），奖励结算据此按"未学优先"挑选源质。
+    if (!this._bossEncounter.memberTypes) this._bossEncounter.memberTypes = new Set()
+    for (const type of plan.types) this._bossEncounter.memberTypes.add(type)
     if (formationChanged) {
       this._bossEncounter.formation = plan.formation || null
       this._bossEncounter.formationWave = this.wave
@@ -860,6 +868,24 @@ export class EnemyManager extends Entity {
       if (boss) spawned.push(boss)
     }
     return spawned
+  }
+
+  /**
+   * 本场遭遇出现过的全部首领类型（含已阵亡与待补位成员）。
+   * 必须在 advanceBossEncounter 之前调用：编队清空时 _bossEncounter 会被置空。
+   */
+  bossEncounterTypes(boss) {
+    const types = new Set()
+    if (boss?.type) types.add(boss.type)
+    const encounter = this._bossEncounter
+    if (encounter && encounter.id === boss?.bossGroupId) {
+      for (const type of encounter.memberTypes || []) types.add(type)
+      for (const member of encounter.pending || []) if (member.type) types.add(member.type)
+      for (const member of this._bosses) {
+        if (member.bossGroupId === boss.bossGroupId && member.type) types.add(member.type)
+      }
+    }
+    return [...types]
   }
 
   /** Boss 击败结算后推进增援；返回整个编队是否已经清空。 */

@@ -143,6 +143,8 @@ export const SKILL_ICON_KEYS = Object.freeze({
 
   boss_origin_conduit: 'battery_charging', boss_origin_reservoir: 'gem',
   boss_origin_aftershock: 'shockwave', boss_origin_membrane: 'shield_check',
+  // 源质记忆（原生黏液吸收 BOSS 源质后的技能）：三种独立语义图标。
+  osrc_knight_breach: 'waves', osrc_mage_collapse: 'aperture', osrc_archer_hunt: 'multishot',
   boss_glutton_rhythm: 'activity', boss_glutton_jaw: 'swords', boss_rico_echo: 'repeat2',
   boss_elemental_circuit: 'refresh_cw', boss_elemental_sigil: 'sparkles', boss_elemental_veil: 'shield_plus',
   boss_shadow_pact: 'users_round', boss_shadow_cloak: 'cloud_fog',

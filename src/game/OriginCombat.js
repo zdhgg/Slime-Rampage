@@ -148,6 +148,39 @@ export class OriginCombat {
       ctx.stroke()
       ctx.restore()
     }
+
+    // 碎片/印记的防御型效果必须有画面：1 点护甲和支援泡泡都只存在于状态里，
+    // 不画出来玩家就永远不知道它们触发过。
+    const p = this.player
+    if (p && !p.dead) {
+      if (p.originGuard > 0 && p.originGuardTimer > 0) {
+        const guardRadius = (p.radius || 14) + 7
+        ctx.save()
+        ctx.globalAlpha = 0.55 + 0.2 * Math.sin(t * 8)
+        ctx.strokeStyle = ORIGIN_MARKS.glutton.color
+        ctx.lineWidth = 2
+        ctx.beginPath()
+        ctx.arc(p.x, p.y, guardRadius, 0, TAU)
+        ctx.stroke()
+        ctx.restore()
+      }
+      if ((p.markState?.bubble || 0) > 0) {
+        const bubbleRadius = (p.radius || 14) + 11
+        ctx.save()
+        ctx.globalAlpha = 0.24 + 0.06 * Math.sin(t * 3)
+        ctx.fillStyle = ORIGIN_MARKS.symbiosis.color
+        ctx.beginPath()
+        ctx.arc(p.x, p.y, bubbleRadius, 0, TAU)
+        ctx.fill()
+        ctx.globalAlpha = 0.6
+        ctx.strokeStyle = ORIGIN_MARKS.symbiosis.color
+        ctx.lineWidth = 1.5
+        ctx.beginPath()
+        ctx.arc(p.x, p.y, bubbleRadius, 0, TAU)
+        ctx.stroke()
+        ctx.restore()
+      }
+    }
   }
 
   castShock() {
@@ -155,11 +188,17 @@ export class OriginCombat {
     const p = this.player
     if (!ws || !p) return false
     const overloaded = trySpendOriginOverload(this.game)
+    // 超载瞬间取样路线状态：同化层数/共振回路都会在下面本次震荡里被消耗，
+    // 源质记忆必须读「触发前」的快照，而不是结算后的残留值。
+    const memorySnapshot = overloaded ? this.weapon.originSourceCombat?.snapshot() : null
     const profile = getOriginShockProfile(this.game, overloaded)
     const growth = profile.growth
     const radius = profile.radius
     const damage = ws.damage * ws.levelMul * profile.damageMul
     const hitCount = this.countEnemies(radius)
+    // 「命中残血目标」必须在震荡结算前取样：结算后再看，会漏掉被震荡打死的
+    // 残血目标，也会把“被打成残血”的满血目标误算进来。
+    const lowHpBefore = this.hasLowHpEnemy(radius, 0.35)
 
     ws._explode(p.x, p.y, damage, null, radius)
     const kills = Math.max(0, hitCount - this.countEnemies(radius))
@@ -182,7 +221,7 @@ export class OriginCombat {
     else if (route === 'assimilation') this.applyAssimilation(profile, hitCount)
     else if (route === 'resonance') this.applyResonance(profile, damage, hitCount)
 
-    this.applyRiders(profile, damage, hitCount)
+    this.applyRiders(profile, damage, hitCount, lowHpBefore)
 
     // 液态回流：震荡击杀回复 1 点生命，独立 ICD。
     if (growth.recoveryLevel > 0 && kills > 0 && this.ready('recovery') && p.hp < p.maxHp) {
@@ -196,6 +235,8 @@ export class OriginCombat {
     }
 
     if (overloaded) triggerOriginMarkEcho(this.game, { overloaded: true, center: p, profile })
+    // 源质记忆：只有真正支付了超载能量才排入，延迟 0.2 秒后自动释放当前轮换位。
+    if (overloaded) this.weapon.originSourceCombat?.queueOverload(memorySnapshot)
     return true
   }
 
@@ -315,7 +356,7 @@ export class OriginCombat {
     }
   }
 
-  applyRiders(profile, damage, hitCount) {
+  applyRiders(profile, damage, hitCount, lowHpBefore = false) {
     const mark = this.game.originMark
     const p = this.player
     if (!p?.markState) return
@@ -326,14 +367,15 @@ export class OriginCombat {
     // 暴食：残血回复/护甲（不吞噬）
     if (hasMark('glutton') || fragmentActive('glutton')) {
       if (this.ready('glutton')) {
-        const lowHp = this.hasLowHpEnemy(profile.radius, 0.35)
-        if (lowHp) {
+        if (lowHpBefore) {
           const amount = hasMark('glutton') && rank >= 2 ? 2 : 1
           if (hasMark('glutton') && p.hp < p.maxHp) p.heal(amount)
           p.originGuard = Math.max(p.originGuard || 0, amount)
           p.originGuardTimer = Math.max(p.originGuardTimer || 0, 2)
           this.weapon._ring?.(p.x, p.y, ORIGIN_MARKS.glutton.color, p.radius + 14)
-          this.setIcd('glutton', (hasMark('glutton') ? 8 : 12) * (rank >= 2 ? 0.8 : 1))
+          this.weapon.enemyManager?.addText?.(p.x, p.y - 30, `🛡 护甲 +${amount}`, null, ORIGIN_MARKS.glutton.color, 13)
+          this.game.sound?.originWard?.()
+          this.setIcd('glutton', (hasMark('glutton') ? 8 : 6) * (rank >= 2 ? 0.8 : 1))
         }
       }
     }
@@ -345,9 +387,9 @@ export class OriginCombat {
           const count = Math.min(3, 1 + (hitCount >= 3 ? 1 : 0) + (rank >= 2 ? 1 : 0))
           fireOriginEchoBolts(this.game, count, 0.5 * (rank >= 2 ? 1.5 : 1))
           this.setIcd('gatling', 4)
-        } else if (Math.random() < 0.3) {
+        } else if (Math.random() < 0.5) {
           fireOriginEchoBolts(this.game, 1, 0.35)
-          this.setIcd('gatling', 6)
+          this.setIcd('gatling', 3)
         }
       }
     }
@@ -355,7 +397,7 @@ export class OriginCombat {
     // 元素：轻量附着
     if (hasMark('elemental') || fragmentActive('elemental')) {
       if (this.ready('elemental')) {
-        const chance = hasMark('elemental') ? 0.25 + (rank >= 2 ? 0.15 : 0) : 0.2
+        const chance = hasMark('elemental') ? 0.25 + (rank >= 2 ? 0.15 : 0) : 0.35
         const bonus = hasMark('elemental') && rank >= 2 ? 0.75 : 0
         applyElementalMarkProc(this.game, chance, bonus)
         this.setIcd('elemental', 2)
@@ -366,11 +408,13 @@ export class OriginCombat {
     if (hasMark('assassin') || fragmentActive('assassin')) {
       if (this.ready('assassin')) {
         const strong = hasMark('assassin')
-        const duration = (strong ? 0.6 : 0.4) + (strong && rank >= 2 ? 0.4 : 0)
-        const mul = (strong ? 0.2 : 0.1) + (strong && rank >= 2 ? 0.15 : 0)
+        const duration = (strong ? 0.6 : 0.5) + (strong && rank >= 2 ? 0.4 : 0)
+        const mul = (strong ? 0.2 : 0.12) + (strong && rank >= 2 ? 0.15 : 0)
         p.stealthTimer = Math.max(p.stealthTimer || 0, duration)
         p.originNextHitMul = Math.max(p.originNextHitMul || 1, 1 + mul)
-        this.setIcd('assassin', strong ? 6 : 10)
+        this.weapon.enemyManager?.addText?.(p.x, p.y - 30, '🗡 隐匿', null, ORIGIN_MARKS.assassin.color, 13)
+        this.game.sound?.shadowBlade?.(false, false)
+        this.setIcd('assassin', 6)
       }
     }
 
@@ -378,9 +422,11 @@ export class OriginCombat {
     if (hasMark('symbiosis') || fragmentActive('symbiosis')) {
       if (this.ready('symbiosis') && (p.markState?.bubble || 0) <= 0) {
         p.markState.bubble = hasMark('symbiosis') && rank >= 2 ? 2 : 1
-        p.markState.bubbleTimer = hasMark('symbiosis') ? 12 : 18
+        p.markState.bubbleTimer = 12
         this.weapon._ring?.(p.x, p.y, ORIGIN_MARKS.symbiosis.color, p.radius + 16)
-        this.setIcd('symbiosis', hasMark('symbiosis') ? 12 : 18)
+        this.weapon.enemyManager?.addText?.(p.x, p.y - 30, '🫧 支援泡泡', null, ORIGIN_MARKS.symbiosis.color, 13)
+        this.game.sound?.originWard?.()
+        this.setIcd('symbiosis', hasMark('symbiosis') ? 12 : 10)
       }
     }
   }

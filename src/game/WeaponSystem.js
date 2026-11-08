@@ -16,6 +16,7 @@ import {
 } from './GluttonResource.js'
 import { gainPrimalEnergy, onPrimalKill, PRIMAL_SOURCES } from './PrimalEnergy.js'
 import { OriginCombat } from './OriginCombat.js'
+import { OriginSourceCombat } from './OriginSourceCombat.js'
 import { GluttonCombat, GLUTTON_HEAL_COOLDOWN } from './GluttonCombat.js'
 import { ShadowCombat } from './ShadowCombat.js'
 import { RicochetCombat } from './RicochetCombat.js'
@@ -135,6 +136,8 @@ export class WeaponSystem extends Entity {
     this.petCombat = new PetCombat(this)
     this.spellCombat = new SpellCombat(this)
     this.originCombat = new OriginCombat(this)
+    // 源质记忆战斗层：只在超载成功后延迟释放，独立于武器/印记结算链。
+    this.originSourceCombat = new OriginSourceCombat(this)
     this._projectiles = []
     this._particles = []
     this._pools = [] // 酸液池（火+毒：区域污染 + 引爆）
@@ -232,6 +235,7 @@ export class WeaponSystem extends Entity {
     this.petCombat.reset()
     this.spellCombat.reset()
     this.originCombat.reset()
+    this.originSourceCombat.reset()
     this._projectiles.length = 0
     this._particles.length = 0
     this._pools.length = 0
@@ -438,7 +442,7 @@ export class WeaponSystem extends Entity {
     this.game?.bossTomes?.update(dt)
     // 玩家死亡（gameOver 已触发，仅本帧残差）：停止射击与结算，
     // 防止结算快照（击杀/掉落物）之后的数据继续变动
-    if (this.player.dead || this.game.runFinished) { this.gluttonCombat.reset(); this.shadowCombat.reset(); this.petCombat.reset(); this.spellCombat.reset(); this.originCombat.reset(); this.rapidVolley = null; return }
+    if (this.player.dead || this.game.runFinished) { this.gluttonCombat.reset(); this.shadowCombat.reset(); this.petCombat.reset(); this.spellCombat.reset(); this.originCombat.reset(); this.originSourceCombat.reset(); this.rapidVolley = null; return }
 
     // 连杀窗口倒计时：超时清零（仅游戏时间，暂停不消耗）
     if (this._comboTimer < 1.8) {
@@ -472,6 +476,7 @@ export class WeaponSystem extends Entity {
     this.shadowCombat.update(dt)
     this.petCombat.update(dt)
     this.originCombat.update(dt)
+    this.originSourceCombat.update(dt)
     if (this.player.dead || this.game.runFinished) return
 
     // 1) 冷却计时 → 自动索敌 → 发射 / 咬击
@@ -826,7 +831,9 @@ export class WeaponSystem extends Entity {
     e._settled = true
     // 异源能量击杀奖励统一在唯一结算点发放：飞弹/震荡/液痕/DOT/路线伤害
     // 都经过 _settleKill，因此不会漏掉，也不会因多次 _onKill 重复结算。
-    onPrimalKill(this.game, e)
+    // 例外：源质记忆技能自己造成的击杀不充能（否则击杀 → 充能 → 更快超载 →
+    // 更多源质技能，形成自循环）。经验/掉落/击杀统计仍照常结算。
+    if (!e._originSourceKill) onPrimalKill(this.game, e)
     this.kills++
     this._tickLeech()
     if (e.isBoss) this.bossKills++
@@ -1499,6 +1506,7 @@ export class WeaponSystem extends Entity {
     this.petCombat.render(ctx)
     this.spellCombat.render(ctx)
     this.originCombat.render(ctx)
+    this.originSourceCombat.render(ctx)
     // 先粒子后飞弹：炸裂特效叠在飞弹之下，视觉更自然
     for (const pt of this._particles) pt.render(ctx)
     this.ricochetCombat.render(ctx)

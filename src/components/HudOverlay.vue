@@ -228,7 +228,17 @@ const primalTitle = computed(() => {
 })
 const originRouteInfo = computed(() => ORIGIN_ROUTES[props.stats.originRoute] || null)
 const originMarkInfo = computed(() => ORIGIN_MARKS[props.stats.originMark] || null)
+const originFragments = computed(() => props.stats.originFragments || [])
 const originMutation = computed(() => props.stats.origin?.mutation || null)
+/** 源质记忆：三槽位 + 当前轮换位 + 下一次超载预告（原生黏液独占）。 */
+const originMemory = computed(() => props.stats.origin?.memory || null)
+const originMemoryChip = (slot) => ({
+  id: slot.cardId,
+  iconKey: slot.iconKey,
+  color: slot.color,
+  route: 'memory',
+  spec: 'origin',
+})
 </script>
 
 <template>
@@ -364,10 +374,13 @@ const originMutation = computed(() => props.stats.origin?.mutation || null)
           <b v-else-if="primalReady">超载就绪</b>
           <b v-else>{{ stats.origin?.energy ?? stats.primal?.value ?? 0 }}</b>
         </div>
-        <!-- 原生路线/印记：不显示职业主副专精，只显示液态变异方向 -->
-        <div v-if="stats.strainId === 'origin' && (originRouteInfo || originMarkInfo)" class="hud-specs">
+        <!-- 原生路线/印记/碎片：不显示职业主副专精，只显示液态变异方向 -->
+        <div v-if="stats.strainId === 'origin' && (originRouteInfo || originMarkInfo || originFragments.length)" class="hud-specs">
           <span v-if="originRouteInfo" class="spec-chip primary" :title="originRouteInfo.desc" :style="{ '--spec-color': originRouteInfo.color }">
             <SkillIcon :skill="`spec_origin_route_${originRouteInfo.id}`" size="inline" /> {{ originRouteInfo.name }}
+          </span>
+          <span v-for="frag in originFragments" :key="frag.id" class="spec-chip secondary" :title="frag.title" :style="{ '--spec-color': frag.color }">
+            <SkillIcon :skill="frag.skillId" size="inline" /> {{ frag.name }}
           </span>
           <span v-if="originMarkInfo" class="spec-chip secondary" :title="originMarkInfo.desc" :style="{ '--spec-color': originMarkInfo.color }">
             <SkillIcon :skill="`spec_origin_mark_${originMarkInfo.id}`" size="inline" /> {{ originMarkInfo.name }}
@@ -378,6 +391,36 @@ const originMutation = computed(() => props.stats.origin?.mutation || null)
           <span v-if="stats.origin?.circuits > 0" class="spec-chip secondary" :title="`共振回路 ${stats.origin.circuits}/3`">
             ⚡ {{ stats.origin.circuits }}/3
           </span>
+        </div>
+        <!-- 源质记忆（原生黏液独占）：吸收的 BOSS 源质技能 + 下一次超载释放预告 -->
+        <div
+          v-if="stats.strainId === 'origin' && originMemory"
+          class="hud-memory"
+          :class="{ empty: !originMemory.known }"
+          aria-label="源质记忆"
+        >
+          <template v-if="originMemory.known">
+            <span class="memory-label">源质记忆</span>
+            <span
+              v-for="slot in originMemory.slots"
+              :key="slot.id"
+              class="memory-slot"
+              :class="{
+                next: slot.next,
+                casting: originMemory.lastId === slot.id && originMemory.lastAge < 1.4,
+              }"
+              :style="{ '--memory-color': slot.color }"
+              :title="`${slot.name} Lv.${slot.level}/${originMemory.maxLevel} · ${slot.next ? '下一次超载释放' : '等待轮换'}`"
+            >
+              <SkillIcon :skill="originMemoryChip(slot)" size="inline" />
+              <b>{{ slot.name }}</b>
+              <em>Lv.{{ slot.level }}</em>
+            </span>
+            <span class="memory-next" :title="`超载后自动释放：${originMemory.nextName}`">
+              下次超载释放：<b>{{ originMemory.nextName }}</b>
+            </span>
+          </template>
+          <span v-else class="memory-empty" title="击败骑士王 / 大法师 / 弓王后可在首领奖励中吸收源质">🫧 尚未吸收源质</span>
         </div>
         <!-- 流派专精指示（专职角色） -->
         <div v-if="!stats.ricochet && stats.strainId !== 'origin' && (stats.primarySpec || stats.secondarySpec)" class="hud-specs">
@@ -1246,6 +1289,63 @@ const originMutation = computed(() => props.stats.origin?.mutation || null)
   background: linear-gradient(90deg, rgba(9, 132, 227, 0.85), rgba(0, 206, 201, 0.85));
   border: 1px solid #74b9ff;
   box-shadow: 0 0 10px rgba(116, 185, 255, 0.35);
+}
+
+/* 源质记忆（原生黏液）：紧凑三槽位 + 下一次超载预告 */
+.hud-memory {
+  display: flex;
+  flex-wrap: wrap;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+}
+
+.hud-memory .memory-label {
+  color: #8ea6a0;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1.2px;
+}
+
+.hud-memory .memory-slot {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 8px 1px 4px;
+  border: 1px solid color-mix(in srgb, var(--memory-color) 45%, transparent);
+  border-radius: 999px;
+  color: #dfeae2;
+  background: color-mix(in srgb, var(--memory-color) 12%, rgba(0, 0, 0, 0.35));
+  white-space: nowrap;
+}
+
+.hud-memory .memory-slot b { font-weight: 700; }
+
+.hud-memory .memory-slot em {
+  color: var(--memory-color);
+  font-style: normal;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.hud-memory .memory-slot.next {
+  border-color: var(--memory-color);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--memory-color) 55%, transparent);
+}
+
+.hud-memory .memory-slot.casting {
+  animation: memory-cast 0.5s ease-out 2;
+}
+
+.hud-memory .memory-next { color: #a7b8ad; font-size: 10.5px; }
+.hud-memory .memory-next b { color: #ffe08a; font-weight: 800; }
+.hud-memory.empty { color: #7f8f88; font-size: 10.5px; }
+.hud-memory .memory-empty { letter-spacing: 0.4px; }
+
+@keyframes memory-cast {
+  0% { background: color-mix(in srgb, var(--memory-color) 55%, rgba(0, 0, 0, 0.35)); }
+  100% { background: color-mix(in srgb, var(--memory-color) 12%, rgba(0, 0, 0, 0.35)); }
 }
 
 /* 元素组合激活提示（屏幕中央上方短暂浮现） */
@@ -2377,4 +2477,11 @@ const originMutation = computed(() => props.stats.origin?.mutation || null)
 .hud-tomes { display:flex; flex-wrap:wrap; gap:6px 12px; max-width:560px; margin:6px 0; color:#c2d2b4; font-size:10px; }
 .hud-tomes > span { display:inline-flex; align-items:center; gap:4px; }.hud-tomes b { color:#e0cf92; font-weight:500; }
 @media(max-width:650px) { .hud-tomes { max-width:230px; font-size:9px; gap:3px 8px; } }
+@media (max-width: 650px) {
+  /* 窄屏：源质记忆收成两行内，避免挤掉血条/技能条 */
+  .hud-memory { max-width: 250px; font-size: 10px; gap: 4px; }
+  .hud-memory .memory-slot { padding: 1px 6px 1px 3px; }
+  .hud-memory .memory-slot b { max-width: 74px; overflow: hidden; text-overflow: ellipsis; }
+  .hud-memory .memory-label { display: none; }
+}
 </style>

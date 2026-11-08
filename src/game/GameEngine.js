@@ -29,7 +29,14 @@ import { AmbientLayer } from './effects/AmbientLayer.js'
 import { STRAIN_IDS, applyStrain, canDevour, canUseElements, getStrainSkill } from './Strains.js'
 import { PRIMAL_ENERGY_MAX, PRIMAL_OVERLOAD_COST, resetPrimalEnergy, primalOverloadDescription } from './PrimalEnergy.js'
 import { getOriginCoreResonance } from './OriginCoreResonance.js'
-import { ORIGIN_ROUTES, ORIGIN_MARKS, ORIGIN_RULES, ORIGIN_SKILL_BY_ID, originSkillAvailable, initOriginRouteState, initOriginMarkState } from './OriginBuild.js'
+import { ORIGIN_ROUTES, ORIGIN_MARKS, ORIGIN_RULES, ORIGIN_SKILL_BY_ID, originSkillAvailable, originFragmentFamilies, initOriginRouteState, initOriginMarkState } from './OriginBuild.js'
+import {
+  learnOriginMemory,
+  originMemoryHud,
+  originMemories,
+  resetOriginSourceMemories,
+  rollOriginMemoryCard,
+} from './OriginSourceSkills.js'
 import { BossTomeCombat } from './BossTomeCombat.js'
 import { BossArena } from './BossArena.js'
 import {
@@ -119,6 +126,7 @@ export function createDefaultStats() {
     roleSpec: null,
     originRoute: null,
     originMark: null,
+    originFragments: [],
     ricochet: null,
     symbiosis: null,
     bossTomes: [],
@@ -128,7 +136,7 @@ export function createDefaultStats() {
     spells: null,
     digest: { charge: 0, max: 100, bursts: 0 },
     // 异源能量（origin 独占）：异源充能 → ≥cost 时空格技升档为超载版
-    origin: { energy: 0, max: 100, cost: 40, effect: primalOverloadDescription(), route: null, mark: null, overload: null, mutation: null, circuits: 0 },
+    origin: { energy: 0, max: 100, cost: 40, effect: primalOverloadDescription(), route: null, mark: null, overload: null, mutation: null, circuits: 0, memory: null },
     primal: { value: 0, max: 100, cost: 40, effect: primalOverloadDescription() },
     // 暴食猎食点（仅暴食角色在 _pushStats 里给出 true 与真实数值）
     glutton: { has: false, charge: 0, max: 2, progress: 0, progressPer: 5, ready: false },
@@ -288,10 +296,17 @@ export class GameEngine {
     this._bossRewardSeen = new Set()
     this._chapterSettlement = null
     this._settlementApplying = false
+    this._lastChapterBoss = null
+    this._lastChapterBossTypes = []
     this.primarySpec = null // 主专精（'gluttony' | 'gatling' | 'elemental' | 'assassin'）
     this.secondarySpec = null // 旧副专精字段：origin 重构后不再使用，保留以兼容旧测试桩
     this.originRoute = null // 原生路线：'expansion' | 'assimilation' | 'resonance'
     this.originMark = null // 异源印记：'glutton' | 'gatling' | 'elemental' | 'assassin' | 'symbiosis'
+    // 源质记忆（原生黏液独占）：击败 BOSS 吸收的源质技能，超载时轮换释放。
+    this.originSourceMemories = [] // [{ id, level }]，最多 3 槽、每槽 Lv.3
+    this.originSourceCursor = 0 // 下一次超载释放的槽位
+    this.originSourceLastCast = null // { id, name, level, at }：HUD 释放高亮用
+    this._originSourceSeen = new Set() // 本局已「保底发放」过的源质 id（每种只保底一次）
     this.startingStrain = 'origin' // 开局血统预选（先天属性，reset 末尾叠加应用）
     this.startingElement = null // Set when the first spell is learned at Lv.2.
     this.onSpellCore = null
@@ -757,12 +772,34 @@ export class GameEngine {
     if (!this._chapterSettlement && !this.runFinished) this._beginBossSettlement(false, '首领战利品')
   }
 
-  queueBossReward(boss) {
+  /**
+   * 首领奖励入队：按遭遇去重（同一场编队只发一次），概率与旧规则一致。
+   * 例外：原生黏液「首次遇到某种源质」时保底入队，避免打死首领却什么都没吸收。
+   * 额外记录本场遭遇出现过的首领类型，供源质卡按「未学优先」挑选。
+   */
+  queueBossReward(boss, encounterTypes = null) {
     const key = boss.bossGroupId || boss
     if (this._bossRewardSeen.has(key)) return false
     this._bossRewardSeen.add(key)
-    if (Math.random() >= (boss.isBossSquadMember ? .85 : .65)) return false
-    this._bossRewardQueue.push(boss.encounterLabel || boss.name || '首领')
+    const bossTypes = encounterTypes?.length ? encounterTypes : (boss.type ? [boss.type] : [])
+    const guaranteed = this._claimFirstOriginSource(bossTypes)
+    if (!guaranteed && Math.random() >= (boss.isBossSquadMember ? .85 : .65)) return false
+    this._bossRewardQueue.push({
+      label: boss.encounterLabel || boss.name || '首领',
+      bossTypes,
+    })
+    return true
+  }
+
+  /**
+   * 首次源质保底：每种源质在一局里只保底一次。
+   * 只有确实能给出卡（未满级、槽位够）时才占用保底机会，不会白占。
+   */
+  _claimFirstOriginSource(bossTypes) {
+    if (this.startingStrain !== 'origin') return false
+    const card = rollOriginMemoryCard(this, bossTypes)
+    if (!card || this._originSourceSeen.has(card.memoryId)) return false
+    this._originSourceSeen.add(card.memoryId)
     return true
   }
 
@@ -774,8 +811,20 @@ export class GameEngine {
 
   _beginBossSettlement(chapter, source = this._lastChapterBoss || '章节首领') {
     if (this._chapterSettlement || this.runFinished || this.player.dead) return false
+    // source 兼容旧调用（字符串）与新的入队结构（{ label, bossTypes }）。
+    const info = typeof source === 'string' ? { label: source } : (source || {})
+    const label = info.label || this._lastChapterBoss || '章节首领'
+    const bossTypes = info.bossTypes?.length
+      ? info.bossTypes
+      : (chapter ? (this._lastChapterBossTypes || []) : [])
     this.pause()
-    this._chapterSettlement = { chapter, source, summary: null, phase: 'boss', options: rollBossSkills(this, 3) }
+    this._chapterSettlement = { chapter, source: label, bossTypes, summary: null, phase: 'boss', options: [] }
+    // 原生专属：本次首领有源质映射且未满级时，强制占一个候选位；
+    // 其余候选继续走原有 BOSS 秘典抽取，其他五种职业不受影响（rollOriginMemoryCard 返回 null）。
+    const memory = rollOriginMemoryCard(this, bossTypes)
+    this._chapterSettlement.options = memory
+      ? [memory, ...rollBossSkills(this, 2)]
+      : rollBossSkills(this, 3)
     if (!this._chapterSettlement.options.length) {
       this._chapterSettlement.phase = 'compensation'
       this._chapterSettlement.options = rollSkills(this, this._skillOptionCount())
@@ -927,8 +976,21 @@ export class GameEngine {
     skill = resolveShadowSkill(skill, this)
     skill = resolveElementalSkill(skill, this)
 
+    // 0. 源质记忆（原生专属）：独立等级，不写 skillLevels，不占用 BOSS 秘典槽。
+    if (skill.isOriginMemory) {
+      const learned = learnOriginMemory(this, skill.memoryId)
+      if (!learned) return false
+      const color = skill.color || '#8cffc8'
+      this.enemyManager?.addText?.(
+        this.player.x, this.player.y - 22,
+        `${skill.icon || '🫧'} 源质记忆：${skill.name} Lv.${learned.level}`,
+        null, color, 16
+      )
+      this.weaponSystem?._ring?.(this.player.x, this.player.y, color, 48)
+      this.sound.wave()
+    }
     // 1. BOSS 职业秘典：独立等级，校验本次候选的旧等级，拒绝重复提交
-    if (skill.isBossSkill) {
+    else if (skill.isBossSkill) {
       if (!this.bossTomes.learn(skill)) return false
       this.enemyManager?.addText?.(this.player.x, this.player.y - 20, `📜 ${skill.name} Lv.${this.bossSkillLevels[skill.id]}`, null, skill.color || '#ffd166', 16)
       this.sound.wave()
@@ -1004,10 +1066,18 @@ export class GameEngine {
       this.skillLevels[skill.id] = (this.skillLevels[skill.id] || 0) + 1
       if (this.startingStrain === 'elemental' && skill.isElementalDiscovery) this.weaponSystem.spellCombat.applyElementalSkill(skill, this.skillLevels[skill.id])
       else skill.apply?.(this, this.skillLevels[skill.id])
+      // 异源碎片没有进化演出，但至少要让玩家在场上确认“我真的拿到了”。
+      if (this.startingStrain === 'origin' && skill.originPool === 'fragment') {
+        const info = ORIGIN_MARKS[skill.fragment]
+        const color = info?.color || '#5ad1c8'
+        this.enemyManager?.addText?.(this.player.x, this.player.y - 22, `🧬 异源碎片：${skill.name}`, null, color, 16)
+        this.weaponSystem?._ring?.(this.player.x, this.player.y, color, 44)
+        this._pushStats()
+      }
       if (choiceState) choiceState.normalChoices++
     }
 
-    const weaponEvolved = !skill.isBossSkill && this.weaponSystem.registerSkillEvolution(skill)
+    const weaponEvolved = !skill.isBossSkill && !skill.isOriginMemory && this.weaponSystem.registerSkillEvolution(skill)
     if (weaponEvolved && skill.isCapstone) {
       const info = getSpecInfo(skill.spec, this)
       this.evolutionEvent(
@@ -1371,6 +1441,9 @@ export class GameEngine {
 
   handleBossDefeated(boss) {
     this.bossArena.onBossDeath(boss) // 决斗圈随 BOSS 死亡消散
+    // 编队类型必须在 advanceBossEncounter 之前取样：清空后 _bossEncounter 会被置 null，
+    // 已阵亡成员也已从 _bosses 移除。
+    const encounterTypes = this.enemyManager.bossEncounterTypes?.(boss) || (boss?.type ? [boss.type] : [])
     const encounterComplete = this.enemyManager.advanceBossEncounter(boss)
     if (
       this.runState === 'finale' &&
@@ -1390,8 +1463,11 @@ export class GameEngine {
       this._completeExpeditionStage()
     }
     if (encounterComplete && !this.runFinished) {
-      if (this.runSelection.mode === 'expedition') this._lastChapterBoss = boss.name
-      else this.queueBossReward(boss)
+      if (this.runSelection.mode === 'expedition') {
+        this._lastChapterBoss = boss.name
+        // 章节首领复用骑士/法师/弓手 archetype，源质映射按稳定类型判定（不按显示名）。
+        this._lastChapterBossTypes = encounterTypes
+      } else this.queueBossReward(boss, encounterTypes)
     }
   }
 
@@ -1595,8 +1671,11 @@ export class GameEngine {
       let applied
       try { applied = this.applySkill(card) } finally { this._settlementApplying = false }
       if (!applied) return false
-      if (session.phase === 'boss') session.summary = `${card.name} · Lv.${this.bossSkillLevels[card.id]}/3${card.recruitName ? ` · 招募${card.recruitName}` : ''}`
-      else if (!session.summary) session.summary = `秘典满级补偿 · ${card.name}`
+      if (session.phase === 'boss') {
+        session.summary = card.isOriginMemory
+          ? `${card.name} · Lv.${originMemories(this).find(m => m.id === card.memoryId)?.level || 1}/3`
+          : `${card.name} · Lv.${this.bossSkillLevels[card.id]}/3${card.recruitName ? ` · 招募${card.recruitName}` : ''}`
+      } else if (!session.summary) session.summary = `秘典满级补偿 · ${card.name}`
       if (session.phase === 'study') this._finishSettlement()
       else this._advanceSettlement()
       return true
@@ -1760,6 +1839,9 @@ export class GameEngine {
     this.secondarySpec = null
     this.originRoute = null
     this.originMark = null
+    // 源质记忆是「本局吸收」的成长：新开局清空，远征换章保留（不参与任何重置）。
+    resetOriginSourceMemories(this)
+    this._originSourceSeen = new Set()
     this.roleSpec = null // 角色身份归位（随后由 applyStrain 按血统重建）
     this.strainDevourBonus = 0
     this.devourThreshold = DEVOUR_THRESHOLD_BASE
@@ -1777,6 +1859,8 @@ export class GameEngine {
     this._bossRewardSeen = new Set()
     this._chapterSettlement = null
     this._settlementApplying = false
+    this._lastChapterBoss = null
+    this._lastChapterBossTypes = []
     this.startingElement = null
     this._spellCoreQueue = []
     this._spellCoreChoice = null
@@ -2001,6 +2085,23 @@ export class GameEngine {
       secondarySpec: this.secondarySpec,
       originRoute: this.originRoute,
       originMark: this.originMark,
+      // 异源碎片（Lv.1~4 获取）：HUD 需要显示已拥有碎片，否则选完就“消失”。
+      originFragments: this.startingStrain === 'origin'
+        ? originFragmentFamilies(this).filter((family) => family !== this.originMark).map((family) => {
+          const info = ORIGIN_MARKS[family]
+          const skill = ORIGIN_SKILL_BY_ID[`ori_frag_${family}`]
+          const effect = typeof skill?.stats === 'function' ? skill.stats(0, this) : skill?.stats || ''
+          const inactive = family === 'elemental' && !this.player.elements.size
+          return {
+            id: family,
+            skillId: `ori_frag_${family}`,
+            icon: info.icon,
+            name: info.name.replace('印记', '碎片'),
+            color: info.color,
+            title: inactive ? '尚未吸收元素核心：震荡的元素附着不会触发' : effect,
+          }
+        })
+        : [],
       // 角色身份（阶段十九）：HUD 据此显示角色名、决定是否渲染吞噬线（canDevour）
       bossTomes: this.bossTomes.hud(),
       roleSpec: this.roleSpec,
@@ -2037,6 +2138,8 @@ export class GameEngine {
           empowered: !!this.player.mutationState.empowered,
         } : null,
         circuits: this.player.routeState?.resonance?.circuits || 0,
+        // 源质记忆：三槽位、当前轮换位、下一次超载预告、最近一次释放（HUD 高亮）。
+        memory: originMemoryHud(this),
       },
       // 兼容旧 HUD：primal 仍指向同一份异源能量
       primal: {

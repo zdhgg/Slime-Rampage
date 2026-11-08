@@ -168,6 +168,12 @@ export class SoundManager {
     this._tone({ freq: 780, endFreq: 1040, dur: 0.12, type: 'sine', vol: 0.04, delay: 0.08 })
   }
 
+  /** 原生护甲/支援泡泡：短促上行泛音，提示“挡下一次伤害” */
+  originWard() {
+    this._tone({ freq: 620, endFreq: 860, dur: 0.09, type: 'sine', vol: 0.028 })
+    this._tone({ freq: 980, endFreq: 1160, dur: 0.07, type: 'sine', vol: 0.018, delay: 0.05 })
+  }
+
   spellCast(element) {
     const tone = { fire: [220, 90, 'triangle'], water: [1100, 660, 'sine'], lightning: [1500, 280, 'sawtooth'], poison: [180, 260, 'sine'] }[element]
     if (tone) this._tone({ freq: tone[0], endFreq: tone[1], type: tone[2], dur: .11, vol: .035 })
