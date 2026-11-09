@@ -21,13 +21,13 @@ import TowerDefenseHudOverlay from './components/TowerDefenseHudOverlay.vue'
 import TowerDefenseResultModal from './components/TowerDefenseResultModal.vue'
 import TowerDefenseWorldMapModal from './components/TowerDefenseWorldMapModal.vue'
 import LevelUpModal from './components/LevelUpModal.vue'
+import OriginLoadout from './components/OriginLoadout.vue'
 import SpellCoreModal from './components/SpellCoreModal.vue'
 import GameOverModal from './components/GameOverModal.vue'
 import PauseModal from './components/PauseModal.vue'
 import StartScreen from './components/StartScreen.vue'
 import SaveSlotModal from './components/SaveSlotModal.vue'
 import BlackMarket from './components/BlackMarket.vue'
-import ReactionSwapModal from './components/ReactionSwapModal.vue'
 import FusionConfirmModal from './components/FusionConfirmModal.vue'
 import ExpeditionRewardModal from './components/ExpeditionRewardModal.vue'
 import EndlessDecisionModal from './components/EndlessDecisionModal.vue'
@@ -248,7 +248,6 @@ const runnerActive = computed(() => activeGameplay.value === 'runner')
 const towerDefenseActive = computed(() => activeGameplay.value === 'tower-defense')
 const showTowerDefenseMap = ref(false)
 const towerDefenseMapContext = ref('menu')
-const reactionChoice = ref(null) // 副反应替换面板数据（null = 不显示；阶段十六槽位经济）
 const fusionConfirm = ref(null) // 首融确认面板数据（null = 不显示；阶段十六追加设计）
 const expeditionReward = ref(null)
 const endlessDecision = ref(null)
@@ -353,10 +352,6 @@ function onEngineReady(eng) {
     evolutionTimer = setTimeout(() => {
       evolution.value = null
     }, 950)
-  }
-  // 副反应位已满（阶段十六槽位经济）：暂停 + 弹替换面板
-  eng.onReactionFull = (payload) => {
-    reactionChoice.value = payload
   }
   // 首融确认（阶段十六追加）：吃下将触发首次融合的核心 → 弹确认面板
   eng.onFusionConfirm = (payload) => {
@@ -681,7 +676,6 @@ async function onStartRunner(submode = 'marathon') {
   gameplayHud.value = null
   paused.value = false
   levelUpOptions.value = null
-  reactionChoice.value = null
   fusionConfirm.value = null
   expeditionReward.value = null
   endlessDecision.value = null
@@ -712,7 +706,6 @@ async function onStartTowerDefenseStage(stageId = 1) {
   gameplayHud.value = null
   paused.value = false
   levelUpOptions.value = null
-  reactionChoice.value = null
   fusionConfirm.value = null
   expeditionReward.value = null
   endlessDecision.value = null
@@ -770,7 +763,6 @@ async function onStartTowerDefenseEndless() {
   gameplayHud.value = null
   paused.value = false
   levelUpOptions.value = null
-  reactionChoice.value = null
   fusionConfirm.value = null
   expeditionReward.value = null
   endlessDecision.value = null
@@ -867,16 +859,13 @@ function onSelectSpellCore(id) {
   snd()?.select()
 }
 
-/** 副反应替换面板选择（阶段十六）：replacedId 为 null = 放弃新反应 */
-function onResolveSwap(newId, replacedId) {
-  snd()?.select()
-  reactionChoice.value = null
-  engine.value?.resolveReactionSwap(newId, replacedId) // 引擎内部替换 + resume
-}
-
 /** 首融确认结果（阶段十六追加）：accepted = 吃下并融合 */
 function onResolveFusion(accepted) {
   snd()?.select()
+  if (fusionConfirm.value?.coreChoice) {
+    if (engine.value?.resolveOriginCoreChoice(accepted)) fusionConfirm.value = null
+    return
+  }
   const type = fusionConfirm.value?.type
   fusionConfirm.value = null
   engine.value?.resolveFusionConfirm(type, accepted) // 引擎：吸收/吐回 + 恢复
@@ -945,7 +934,6 @@ function onChangeRules() {
   levelUpOptions.value = null
   gameOverInfo.value = null
   paused.value = false
-  reactionChoice.value = null
   fusionConfirm.value = null
   expeditionReward.value = null
   endlessDecision.value = null
@@ -968,7 +956,6 @@ const isModalOpen = computed(
       spellCoreReward.value ||
       gameOverInfo.value ||
       gameplayResult.value ||
-      reactionChoice.value ||
       fusionConfirm.value ||
       expeditionReward.value ||
       endlessDecision.value ||
@@ -1099,12 +1086,14 @@ onUnmounted(() => {
 
     <!-- 升级面板：覆盖层之上，点击卡片应用技能并恢复游戏 -->
     <Transition name="modal-fade">
-      <LevelUpModal v-if="levelUpOptions" :options="levelUpOptions" :level="stats.level" :role-spec="stats.roleSpec" :can-use-elements="stats.canUseElements" :secondary-slots="stats.secondarySlots" :rerolls="stats.skillRerolls || 0" @select="onSelectSkill" @reroll="onRerollSkill" />
+      <LevelUpModal v-if="levelUpOptions" :options="levelUpOptions" :level="stats.level" :role-spec="stats.roleSpec" :can-use-elements="stats.canUseElements" :rerolls="stats.skillRerolls || 0" @select="onSelectSkill" @reroll="onRerollSkill" />
     </Transition>
     <Transition name="modal-fade" mode="out-in">
       <SpellCoreModal v-if="spellCoreReward" :key="stats.spells?.cores" :info="spellCoreReward" @select="onSelectSpellCore" />
     </Transition>
 
+    <OriginLoadout v-if="(levelUpOptions || expeditionReward) && stats.origin?.combo" :combo="stats.origin.combo"
+      @configure="(equipped, main) => engine?.configureOriginCombo(equipped, main)" />
     <Transition name="modal-fade">
       <ExpeditionRewardModal
         v-if="expeditionReward"
@@ -1123,12 +1112,7 @@ onUnmounted(() => {
       />
     </Transition>
 
-    <!-- 副反应替换面板（阶段十六槽位经济）：槽满时选择替换或放弃 -->
-    <Transition name="modal-fade">
-      <ReactionSwapModal v-if="reactionChoice" :info="reactionChoice" @resolve="onResolveSwap" />
-    </Transition>
-
-    <!-- 首融确认面板（阶段十六追加）：主形态锁定前唯一一次「吃或不吃」 -->
+    <!-- 首融确认面板（阶段十六追加）：首次融合前唯一一次「吃或不吃」 -->
     <Transition name="modal-fade">
       <FusionConfirmModal v-if="fusionConfirm" :info="fusionConfirm" @resolve="onResolveFusion" />
     </Transition>

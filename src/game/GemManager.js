@@ -70,7 +70,7 @@ export class GemManager extends Entity {
 
   /**
    * 首融确认（阶段十六追加）：持住宝石（冻结状态）并交给引擎弹确认面板。
-   * 主形态整局锁定不可逆，吃之前给玩家一次选择。
+   * 首颗元素永久入体、首次融合确立物种身份，吃之前给玩家一次选择。
    */
   askFusion(g) {
     this._heldGem = g
@@ -390,6 +390,12 @@ export class GemManager extends Entity {
           // 元素核心：自动吸收；首颗元素 / 首次融合不可逆——先确认再吃；
           // 刚被吐掉的核心进入冷却：本帧不拾取（防原地重复弹窗）
           if (g.rejectedUntil > 0 && this.game.elapsed < g.rejectedUntil) continue
+          if (g.coreChoices?.length === 2 && this.game.startingStrain === 'origin') {
+            this._heldGem = g
+            g.state = 'held'
+            this.game.askOriginCoreChoice(g.coreChoices)
+            break
+          }
           if (this.player.shouldConfirmElement(g.type)) {
             this.askFusion(g)
             break // 确认面板打开（引擎暂停），本帧停止继续拾取

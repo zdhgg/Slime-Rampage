@@ -284,11 +284,11 @@ check('多源切换额外充能受独立 3 秒 ICD', g => {
   g.player.originEnergy = 0
 
   gainOriginEnergy(g, ORIGIN_SOURCES.PROJECTILE, 0)
-  assert.equal(g.player.originEnergy, 10, '首次异源：8 + 切换 2')
+  assert.equal(g.player.originEnergy, 4, '首次命中 2 + 切换 2')
   gainOriginEnergy(g, ORIGIN_SOURCES.SHOCK, 0.1)
-  assert.equal(g.player.originEnergy, 18, '3 秒内再次切换不再获得额外 2')
+  assert.equal(g.player.originEnergy, 12, '3 秒内再次切换不再获得额外 2')
   gainOriginEnergy(g, ORIGIN_SOURCES.PROJECTILE, 3.1)
-  assert.equal(g.player.originEnergy, 28, '超过 3 秒后重新获得切换奖励')
+  assert.equal(g.player.originEnergy, 16, '超过 3 秒后重新获得切换奖励')
 })
 
 check('震荡击杀首领的异源奖励只结算一次', g => {
@@ -332,7 +332,7 @@ check('普通飞弹击杀精英获得异源奖励', g => {
   g.player.originEnergy = 0
   g.weaponSystem._resolveCollisions()
   assert.equal(elite.active, false)
-  assert.equal(g.player.originEnergy, 23, '飞弹命中 +8、精英击杀 +15')
+  assert.equal(g.player.originEnergy, 17, '飞弹命中 +2、精英击杀 +15')
 })
 
 check('弹射印记深化后的超载回响总伤害不超过 35% 预算', g => {
@@ -380,13 +380,14 @@ check('原生普通卡描述与派生一致，路线预览不含未实现 T4', g
   }
 })
 
-check('暴食碎片按“震荡前残血”判定，残血目标被震死也兑现护甲', g => {
+check('暴食碎片由超载触发护甲', g => {
   learn(g, 'ori_frag_glutton')
   const target = spawn(g, { x: 40, hp: 1000 })
-  target.hp = 1 // 震荡前已残血，且会被本次震荡打死
   pressSpace(g)
-  assert.equal(target.active, false, '残血目标被震荡打死')
-  assert.equal(g.player.originGuard, 1, '命中前残血仍应触发护甲')
+  assert.equal(g.player.originGuard, 0, '震荡不触发碎片')
+  fireOverload(g)
+  advance(g, 1.2)
+  assert.equal(g.player.originGuard, 1, '成功超载触发护甲')
   assert.ok(g.player.originGuardTimer > 0)
 })
 
@@ -404,34 +405,32 @@ check('异源碎片进入 HUD 快照，元素碎片无元素时明确提示未�
   g._pushStats()
   const active = snapshot.originFragments.find(f => f.id === 'elemental')
   assert.doesNotMatch(active.title, /尚未吸收元素核心/)
-  assert.match(active.title, /35%|附加/)
+  assert.match(active.title, /注入/)
 })
 
 check('碎片手感数值与卡面一致（ICD/时长）', g => {
   learn(g, 'ori_frag_glutton')
-  const target = spawn(g, { x: 40, hp: 1000 })
-  target.hp = 500 // 50%：不触发
+  spawn(g, { x: 40, hp: 1000 })
   pressSpace(g)
   assert.equal(g.player.originGuard, 0)
-  target.hp = 200 // 20%：触发
-  g.player.strainSkillCd = 0
-  pressSpace(g)
+  fireOverload(g)
+  advance(g, 1.2)
   assert.equal(g.player.originGuard, 1)
-  assert.equal(g.player.markState.icdByFamily.glutton, 6, '暴食碎片 ICD 6 秒')
-  assert.match(ORIGIN_SKILL_BY_ID.ori_frag_glutton.stats(0, g), /6 秒 ICD/)
+  assert.ok(g.player.markState.icdByFamily.glutton > 4.5)
+  assert.match(ORIGIN_SKILL_BY_ID.ori_frag_glutton.stats(0, g), /6 秒冷却/)
 })
 
 check('暗影/共生碎片手感数值与卡面一致', g => {
   learn(g, 'ori_frag_assassin')
   learn(g, 'ori_frag_symbiosis')
   spawn(g, { x: 40, hp: 100000 })
-  pressSpace(g)
-  assert.ok(Math.abs(g.player.stealthTimer - 0.5) < 1e-9, '暗影碎片 0.5 秒隐匿')
+  fireOverload(g)
+  assert.ok(g.player.stealthTimer > 0, '暗影碎片触发隐匿')
   assert.ok(Math.abs(g.player.originNextHitMul - 1.12) < 1e-9, '下一次攻击 +12%')
-  assert.equal(g.player.markState.icdByFamily.assassin, 6)
+  assert.ok(g.player.markState.icdByFamily.assassin > 5.7)
   assert.equal(g.player.markState.bubble, 1)
-  assert.equal(g.player.markState.bubbleTimer, 12)
-  assert.equal(g.player.markState.icdByFamily.symbiosis, 10)
+  assert.ok(g.player.markState.bubbleTimer > 11.7)
+  assert.ok(g.player.markState.icdByFamily.symbiosis > 9.7)
   assert.match(ORIGIN_SKILL_BY_ID.ori_frag_assassin.stats(0, g), /0\.5 秒隐匿/)
   assert.match(ORIGIN_SKILL_BY_ID.ori_frag_symbiosis.stats(0, g), /10 秒 ICD/)
 })

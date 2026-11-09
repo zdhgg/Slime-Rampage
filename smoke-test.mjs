@@ -3,10 +3,7 @@
 import assert from 'node:assert/strict'
 import {
   ELEMENTAL_SPEC_PROC_CAP,
-  MAX_REACTION_SLOTS,
   Player,
-  REACTION_SLOT_LEVELS,
-  getReactionSlotLevelBonus,
 } from './src/game/entities/Player.js'
 import { Enemy } from './src/game/entities/Enemy.js'
 import { Boss } from './src/game/entities/Boss.js'
@@ -55,7 +52,7 @@ import {
 } from './src/game/RunRules.js'
 import { CHARACTER_IDS, STRAINS, STRAIN_IDS, canDevour, getStrainSkill } from './src/game/Strains.js'
 import { getRunIntro } from './src/game/RunIntro.js'
-import { DIGEST_EFFECTS, getDigestTier } from './src/game/ElementSystem.js'
+import { DIGEST_EFFECTS, getDigestTier, rankElements, reactionForPair } from './src/game/ElementSystem.js'
 import {
   applyGenes,
   getChosenOrigin,
@@ -112,7 +109,6 @@ const game = {
   onBossSpawn() {},
   evolutionEvent() {},
   shakeScreen() {}, // 屏幕震动（阶段十五美化，桩）
-  reactionSlotsFull() {}, // 副反应位满面板（阶段十六，桩）
 }
 player.attach(game)
 enemyManager.attach(game)
@@ -211,17 +207,18 @@ player.absorbElement('water') // 应静默返回
 player.dead = false
 ok('死亡帧防护：武器/宝石/经验/吸收全部静默')
 
-// 6) 四元素齐备：主形态 1 + 副反应 2（槽位经济，超出组合不激活）
+// 6) 四元素齐备：主反应 = 等级前两名，副反应 = 第 3 名的两个组合（第 4 名不参与反应）
 player.absorbElement('water')
 player.absorbElement('lightning')
-assert.ok(player._reactionIds.has('acid')) // 主形态
-assert.equal(player._secondaryIds.size, 2) // 槽位 2：入槽 steam + corrode
+assert.deepEqual(player._elementRanks, ['fire', 'poison', 'water', 'lightning']) // 火12 毒/水/雷各 1，并列按吸收先后
+assert.ok(player._reactionIds.has('acid')) // 主反应：火 + 毒
+assert.equal(player._secondaryIds.size, 2) // 第 3 名（水）与前两名配对：steam + corrode
 assert.ok(player._reactionIds.has('steam'))
 assert.ok(player._reactionIds.has('corrode'))
-assert.ok(!player._reactionIds.has('gel')) // 槽满，未入槽组合不生效
-ok('副反应槽位：主形态 1 + 副反应 2（默认），超出组合不激活')
-assert.equal(player._mutation().shape, 'acid') // 设计层：主形态锁定剪影（酸液）
-ok('元素形态剪影：主形态锁定驱动形态轮廓（acid）')
+assert.ok(!player._reactionIds.has('gel')) // 雷为第 4 名，其组合不生效
+ok('主/副反应：主反应 1 + 副反应 2（排名驱动），第 4 名元素组合不激活')
+assert.equal(player._mutation().shape, 'acid') // 设计层：主反应驱动形态轮廓（酸液）
+ok('元素形态剪影：主反应驱动形态轮廓（acid）')
 assert.ok(player._procs.freeze.chance > 0 && player._procs.poison.chance > 0)
 ok('水流+雷电附魔同状态（冻结/麻痹）概率叠加')
 
@@ -501,7 +498,7 @@ assert.ok(eAni._moving)
 assert.ok(eAni._walkT > 0)
 ok('敌人动画状态：出生弹入递减 + 移动相位推进')
 
-// 18) 融合进化：主形态锁定 + 副反应槽位入槽（阶段十五/十六设计改造）
+// 18) 融合进化：首个组合 = 主反应，第 3 元素加入两个副反应（排名驱动设计）
 let evoCount = 0
 let lastEvo = null
 const p2 = new Player({ input })
@@ -511,40 +508,47 @@ p2.game = {
     evoCount++
     lastEvo = args
   },
-  reactionSlotsFull() {},
 }
 p2.absorbElement('fire')
-p2.absorbElement('water') // 激活蒸汽 → 首次融合 = 主形态锁定
+p2.absorbElement('water') // 激活蒸汽 → 首次融合 = 主反应
 assert.equal(evoCount, 1)
 assert.equal(p2._primaryReaction, 'steam')
 assert.equal(p2._mutation().key, 'steam')
-p2.absorbElement('poison') // 酸液 + 腐蚀 → 2 个空槽全入（2/2）
+p2.absorbElement('poison') // 毒为第 3 名 → 副反应酸液（火毒）+ 腐蚀（水毒）
 assert.equal(evoCount, 2)
 assert.equal(lastEvo[0], '副反应激活：爆炸酸液！')
 assert.ok(lastEvo[1].includes('腐蚀')) // 副标题合并两行
-assert.ok(lastEvo[3].includes('不改变主形态')) // 效果说明标注叠加
+assert.ok(lastEvo[3].includes('不改变主反应')) // 效果说明标注叠加
 assert.equal(p2._secondaryIds.size, 2)
-assert.equal(p2._mutation().key, 'steam') // 外形锁定：副反应不再换肤
-assert.equal(p2._primaryReaction, 'steam') // 主形态不变
-ok('融合进化主形态锁定：首个融合即物种身份，副反应入槽叠加生效')
+assert.equal(p2._mutation().key, 'steam') // 副反应不换肤：主反应仍是蒸汽
+assert.equal(p2._primaryReaction, 'steam') // 并列 1 级保持既有排名（先吸收者在前）
+ok('融合进化：首个融合即主反应，第 3 元素接入两个副反应')
 
-// 19) 副反应槽满 → 替换面板 + 替换/放弃（阶段十六槽位经济）
-let fullCandidateId = null
-p2.game.reactionSlotsFull = (candidateId) => {
-  fullCandidateId = candidateId // Player 传候选 id；引擎层才组装面板 payload
-}
-p2.absorbElement('lightning') // 新组合 gel/burst/venom → 槽满 → 面板（候选 gel）
-assert.equal(fullCandidateId, 'gel') // 反应表顺序第一个候选
-assert.equal(p2.secondarySlots, 2)
+// 19) 排名改写：元素等级反超 → 主反应转变 + 副反应跟随（元素等级构筑）
+p2.absorbElement('lightning') // 四系并列 1：排名 F/W/P/L，雷为第 4 名不参与反应
+assert.equal(p2._primaryReaction, 'steam')
 assert.equal(p2._secondaryIds.size, 2)
-p2.resolveSecondarySwap(fullCandidateId, 'acid') // 替换 acid → gel
-assert.ok(p2._secondaryIds.has('gel'))
-assert.ok(!p2._secondaryIds.has('acid'))
-assert.ok(p2._reactionIds.has('gel'))
-assert.ok(!p2._reactionIds.has('acid')) // 被替换的反应效果立即失效
-p2.resolveSecondarySwap('venom', null) // 放弃路径：不改变任何状态
-assert.equal(p2._secondaryIds.size, 2)
-ok('副反应槽满：替换面板回调 + 替换生效（旧反应失效）/ 放弃无副作用')
+assert.ok(!p2._reactionIds.has('gel') && !p2._reactionIds.has('burst') && !p2._reactionIds.has('venom'))
+p2.absorbElement('lightning') // 雷 2 > 水 1 → 排名 雷/火/水/毒 → 主反应转为爆裂
+assert.equal(p2._primaryReaction, 'burst')
+assert.equal(lastEvo[0], '主反应转变：爆裂！')
+assert.equal(p2._mutation().key, 'storm') // 外形随主反应转变
+assert.ok(p2._secondaryIds.has('gel') && p2._secondaryIds.has('steam')) // 副反应 = 第 3 名（水）配前两名
+assert.ok(!p2._reactionIds.has('acid') && !p2._reactionIds.has('corrode'))
+p2.absorbElement('poison') // 毒 2 与雷并列第 1~2 名 → 主反应转毒雷（副反应 = 第 3 名火配前两名）
+assert.equal(p2._primaryReaction, 'venom')
+assert.equal(lastEvo[0], '主反应转变：毒雷风暴！')
+assert.ok(p2._secondaryIds.has('burst') && p2._secondaryIds.has('acid'))
+p2.absorbElement('fire') // 火 2 → 三者并列 2 级：只是打平未反超 → 毒雷保持主反应
+assert.equal(p2._primaryReaction, 'venom')
+assert.deepEqual(p2._elementRanks.slice(0, 3), ['lightning', 'poison', 'fire'])
+assert.ok(p2._secondaryIds.has('burst') && p2._secondaryIds.has('acid'))
+assert.equal(evoCount, 4, '打平不触发演出：一次融合 + 一次副反应激活 + 两次主反应转变')
+// 同级非主反应元素按「先升到该等级」决胜：水后升到 2 级，排在同为 2 级的火之后
+p2.absorbElement('water')
+assert.deepEqual(p2._elementRanks, ['lightning', 'poison', 'fire', 'water'])
+assert.equal(p2._primaryReaction, 'venom')
+ok('排名改写：严格反超才切换主反应、打平保持、同级按先达到者、第 4 元素只给附魔')
 
 // 20) 首融确认：shouldConfirmElement 判定 + 持住/吐回宝石（阶段十六追加设计）
 const p5 = new Player({ input })
@@ -657,10 +661,19 @@ assert.ok(huntTargets.every((e) => e.isElite))
 for (const target of huntTargets) weaponSystem._settleKill(target)
 assert.equal(hunt.state, 'complete')
 assert.equal(worldEvents.completed, 1)
+assert.equal(worldEvents.completedByType.hunt, 1, '按类型记录 hunt 完成数')
+assert.equal(worldEvents.completedByType.beacon, 0)
 assert.ok(gemManager.count >= 2)
 worldEvents.reset()
 assert.equal(worldEvents.current, null)
 assert.equal(worldEvents.completed, 0)
+assert.deepEqual(worldEvents.completedByType, { hunt: 0, beacon: 0, surge: 0 }, '重开清空按类型完成计数')
+// 章节锁定：远征信标章节失败重试时，未指定类型也必须仍生成 beacon
+worldEvents.lockEventType('beacon')
+const lockedEvent = worldEvents.spawnEvent()
+assert.equal(lockedEvent.type, 'beacon')
+worldEvents.reset()
+assert.equal(worldEvents._lockedType, null, '重开解除事件类型锁定')
 ok('地图事件：抵达激活、事件精英归属、完成奖励与重开清理形成闭环')
 
 enemyManager.reset()
@@ -675,6 +688,7 @@ assert.ok(player.hp > 1)
 for (let i = 0; i < 121; i++) worldEvents.update(0.1)
 assert.equal(surge.state, 'complete')
 assert.equal(player.hp, player.maxHp)
+assert.equal(worldEvents.completedByType.surge, 1, '毒潮完成数按类型独立累计')
 ok('污染浪潮：触发时应急治疗，目标时长先于失败期限并在完成时回满')
 
 // 26) 遭遇导演：同一波内部按集结 → 围攻 → 冲刺切换节拍（波末最快，无死时间）
@@ -983,9 +997,14 @@ weaponSystem.fire(geneTarget)
 assert.equal(weaponSystem._projectiles[0].pierces, 1)
 
 weaponSystem.reset()
+game.startingStrain = 'origin' // 原生黏液：共鸣基因/原核改为反应伤害加成（同一基因倍率乘区）
 applyGenes(game, { lore: 2, resonance: 1, element_origin: 1 })
-assert.equal(player.secondarySlots, 4)
-assert.equal(weaponSystem.geneReactionDmgMul, 1.25)
+assert.ok(Math.abs(weaponSystem.geneReactionDmgMul - 1.1 * 1.25 * 1.2) < 1e-9)
+applyGenes(game, { lore: 2, resonance: 1, element_origin: 1 }) // 幂等：重复应用不累加
+assert.ok(Math.abs(weaponSystem.geneReactionDmgMul - 1.1 * 1.25 * 1.2) < 1e-9)
+applyGenes(game, {})
+assert.equal(weaponSystem.geneReactionDmgMul, 1)
+delete game.startingStrain
 assert.equal(getGene('gorged_origin').isCapstone, true)
 applyGenes(game, {
   giant: 2,
@@ -1192,47 +1211,28 @@ const midRunScore = computeScore({ mode: 'expedition', difficulty: 'normal', res
 assert.ok(scoreToPoints(midRunScore, { mode: 'expedition', difficulty: 'normal' }) <= 500)
 ok('黑市战力点：分数统一折算，困难通关 ≈1100 点、暴毙局自动低保')
 
-// 35) 等级 → 元素联动：副反应槽随等级里程碑扩张，并自动接入被满槽挤掉的反应
-assert.deepEqual(REACTION_SLOT_LEVELS, [4, 8])
-assert.equal(getReactionSlotLevelBonus(3), 0)
-assert.equal(getReactionSlotLevelBonus(4), 1)
-assert.equal(getReactionSlotLevelBonus(8), 2)
+// 35) 元素等级排名：rankElements/reactionForPair 纯函数 + 升级不再改变反应结构
+assert.equal(reactionForPair('fire', 'poison').id, 'acid')
+assert.equal(reactionForPair('water', 'fire').id, 'steam') // 参数顺序无关
+assert.equal(reactionForPair('fire', 'fire'), null)
+assert.deepEqual(rankElements(new Map([['fire', 1], ['water', 1]])), ['fire', 'water']) // 缺省：并列按插入序
+assert.deepEqual(rankElements(new Map([['fire', 2], ['water', 2], ['poison', 2]]), { keep: ['water', 'poison'] }),
+  ['water', 'poison', 'fire']) // 同级时当前主反应元素在前
+assert.deepEqual(rankElements(new Map([['fire', 2], ['water', 2]]), { reached: new Map([['fire', 9], ['water', 3]]) }),
+  ['water', 'fire']) // 再并列：先升到该等级者在前
+assert.deepEqual(rankElements(new Map([['fire', 1], ['water', 3], ['poison', 2]])), ['water', 'poison', 'fire'])
 const slotPlayer = new Player({ input })
-slotPlayer.game = {
-  sound,
-  evolutionEvent() {},
-  reactionSlotsFull() {},
-  enemyManager: { addText() {} },
-}
-assert.equal(slotPlayer.secondarySlots, 2)
+slotPlayer.game = { sound, evolutionEvent() {}, enemyManager: { addText() {} } }
 slotPlayer.absorbElement('fire')
-slotPlayer.absorbElement('water') // steam → 主形态锁定
-slotPlayer.absorbElement('poison') // acid + corrode → 2/2 满槽
+slotPlayer.absorbElement('water') // steam → 主反应
+slotPlayer.absorbElement('poison') // acid + corrode → 副反应
 assert.equal(slotPlayer._primaryReaction, 'steam')
 assert.equal(slotPlayer._secondaryIds.size, 2)
-slotPlayer.absorbElement('lightning') // gel/burst/venom 已满足但无槽可入
-assert.equal(slotPlayer._secondaryIds.size, 2, '满槽时新反应不得潜伏入槽')
-
 slotPlayer.level = 4
-const unlockedAt4 = slotPlayer.refreshReactionSlots()
-assert.equal(slotPlayer.secondarySlots, 3, 'Lv.4 里程碑 +1 槽')
-assert.equal(unlockedAt4.length, 1)
-assert.equal(unlockedAt4[0].id, 'gel', '接入此前因满槽未能入位的反应')
-assert.equal(slotPlayer._reactionIds.has('gel'), true, '自动接入立即产生效果')
-
-slotPlayer.level = 8
-const unlockedAt8 = slotPlayer.refreshReactionSlots()
-assert.equal(slotPlayer.secondarySlots, 4, 'Lv.8 里程碑再 +1 槽')
-assert.equal(unlockedAt8.length, 1)
-assert.equal(unlockedAt8[0].id, 'burst')
-
-slotPlayer.level = 20
-assert.equal(slotPlayer.refreshReactionSlots().length, 0, '无剩余候选时不再接入')
-assert.equal(slotPlayer.secondarySlots, 4, '无基因加持时封顶 2 + 2')
-slotPlayer.baseSecondarySlots = 4
-slotPlayer.refreshReactionSlots()
-assert.equal(slotPlayer.secondarySlots, MAX_REACTION_SLOTS, '基因 + 等级共同封顶 5 槽')
-ok('等级里程碑扩张副反应槽（Lv.4 / Lv.8），并自动接入被满槽挤掉的反应')
+slotPlayer.level = 8 // 升级不再扩张任何槽位：反应结构只随元素等级改写
+assert.equal(slotPlayer._primaryReaction, 'steam')
+assert.equal(slotPlayer._secondaryIds.size, 2)
+ok('元素等级排名：主/副反应由 rankElements 派生，升级不影响反应结构')
 
 // 36) 元素 → 吞噬联动：消化档位随元素等级解锁，四系吞噬效果差异化
 assert.equal(getDigestTier('fire', 1), null, 'Lv.1 尚无消化效果')

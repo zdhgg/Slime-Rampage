@@ -44,7 +44,7 @@ check('origin', '震荡伤害、范围、首领不击退、路线替代职业联
   near(e.hp, before - 1.7); near(e.x, g.player.x + 106)
   assert.equal(outside.hp, 100); assert.equal(boss.x, bossX)
   assert.equal(g.strainSkill.id, 'slime_shock')
-  assert.equal(g.player.originEnergy, 8)
+  assert.equal(g.player.originEnergy, 10, '命中两名敌人，震荡充能 8 + 2')
   g.player.level = 5
   assert.equal(g.applySkill(originRouteOptions(g)[0]), true)
   assert.equal(g.originRoute, 'expansion')

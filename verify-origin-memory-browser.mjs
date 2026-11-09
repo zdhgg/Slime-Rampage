@@ -93,6 +93,7 @@ try {
   await page.locator('.supply-options').waitFor()
   assert.equal(await game(() => playtestGame.originSourceMemories.length), 1, '记忆写入局内状态')
   assert.deepEqual(await game(() => playtestGame.originSourceMemories), [{ id: 'knight_breach', level: 1 }])
+  assert.equal(await game(() => playtestGame.configureOriginCombo(['knight_breach', 'primal_orbit'], 'knight_breach')), true)
 
   // 完成章间整备 → 进入下一章，HUD 常驻显示源质记忆槽
   await page.locator('.supply-options .rest').click()
@@ -100,7 +101,7 @@ try {
   const hudText = await page.locator('.hud-memory').innerText()
   assert.match(hudText, /破阵凝胶波/)
   assert.match(hudText, /Lv\.1/)
-  assert.match(hudText, /下次超载释放：\s*破阵凝胶波/)
+  assert.match(hudText, /主技能：\s*破阵凝胶波/)
   assert.equal(await page.locator('.memory-slot').count(), 1)
   assert.equal(await page.locator('.memory-slot.next').count(), 1, '当前轮换位高亮')
   await shot('03-hud-memory-desktop')

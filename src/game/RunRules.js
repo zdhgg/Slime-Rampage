@@ -204,6 +204,9 @@ export const EXPEDITION_STAGES = [
     brief: '摧毁迁跃信标，切断王城增援',
     target: 1,
     eventType: 'beacon',
+    // 章节时限：信标事件失败后不再无限补怪等待下一个事件，
+    // 到点仍未完成即判本局失败（原因见 GameEngine._updateExpedition）。
+    deadline: 90,
     region: '勇者营道',
     theme: 'frontier',
     variant: 'camp-road',

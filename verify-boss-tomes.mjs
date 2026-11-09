@@ -78,7 +78,7 @@ test('ricochet', '等级总量替换，不逐级重复乘算；回响按轮次�
 test('origin', '充能/超载费用固定；源质调谐不放余震只给移速；护盾不叠容量', g => {
   learn(g, 'origin_conduit', 3); learn(g, 'origin_aftershock', 3); learn(g, 'origin_membrane', 3)
   for (const [i, source] of ['projectile', 'shock', 'projectile'].entries()) gainPrimalEnergy(g, source, i * .35)
-  assert.equal(g.player.primalEnergy, 30)
+  assert.equal(g.player.primalEnergy, 18, '普攻 2 + 震荡 8 + 普攻 2 + 导流 6')
   g.player.primalEnergy = 80
   const enemies = Array.from({ length: 8 }, (_, i) => spawn(g, { x: 45 + i, hp: 100 }))
   assert.equal(trySpendPrimalOverload(g), true); assert.equal(g.player.primalEnergy, 40)

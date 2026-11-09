@@ -3,7 +3,7 @@ import { getOriginGrowth, originOverloadDescription, resetOriginState, ORIGIN_BA
 /**
  * 异源能量（原生黏液 origin 独占资源）：
  * 「异源充能 → 被动超载自动释放」。飞弹、震荡、元素附着是不同的伤害来源；
- * 交替使用会获得更高充能，攒到阈值后由被动超载控制器自动释放源质技能。
+ * 普攻、有效震荡和元素各自限频充能，达到阈值后自动释放源质技能。
  *
  * 路线效果与印记回响刻意不充能（共振路线只提高充能效率），
  * 避免“路线附加伤害 → 更多能量 → 更多超载”的递归。
@@ -35,7 +35,7 @@ export const PRIMAL_GAIN_WINDOW = 1
 export const PRIMAL_GAIN_WINDOW_MAX = 3
 
 /** 战斗涌流：附近有敌人时持续充能，保证不按空格也有完整的被动超载循环。 */
-export const ORIGIN_FLOW_RATE = 1.5
+export const ORIGIN_FLOW_RATE = 2
 export const ORIGIN_FLOW_RANGE = 480
 
 export function isOrigin(player) {
@@ -69,6 +69,7 @@ export function resetOriginEnergy(player) {
   player._lastDamageSource = null
   player._primalWindowStart = -Infinity
   player._primalWindowCount = 0
+  player._originElementAt = -Infinity
   resetOriginState({ player })
 }
 
@@ -88,29 +89,33 @@ function recordSource(engine, source, now) {
 }
 
 /**
- * 异源充能：
- *  - 来源与上一次不同 → +8（+ origin_flux 加成）；相同 → +1；
- *  - 每秒最多结算 3 次，被节流的判定不改变“上一次来源”；
- *  - 路线来源只记录共振回路，不产生能量。
+ * 普攻每秒最多两次、元素每两秒最多一次；震荡按命中数充能。
+ * 路线来源只记录共振回路，不产生能量。
  */
-export function gainOriginEnergy(engine, source, now = engine?.elapsed ?? 0) {
+export function gainOriginEnergy(engine, source, now = engine?.elapsed ?? 0, hitCount = 1) {
   const p = engine?.player
   if (!isOrigin(p) || p.dead) return 0
   recordSource(engine, source, now)
   if (source === ORIGIN_SOURCES.ROUTE) return 0
   if (p.originEnergy >= ORIGIN_ENERGY_MAX) return 0
-  if (now - p._primalWindowStart >= PRIMAL_GAIN_WINDOW) {
-    p._primalWindowStart = now
-    p._primalWindowCount = 0
-  }
-  if (p._primalWindowCount >= PRIMAL_GAIN_WINDOW_MAX) return 0
-  p._primalWindowCount++
+  if (source === ORIGIN_SOURCES.PROJECTILE) {
+    if (now - p._primalWindowStart >= 1) {
+      p._primalWindowStart = now
+      p._primalWindowCount = 0
+    }
+    if (p._primalWindowCount >= 2) return 0
+    p._primalWindowCount++
+  } else if (source === ORIGIN_SOURCES.ELEMENT) {
+    if (now - (p._originElementAt ?? -Infinity) < 2) return 0
+    p._originElementAt = now
+  } else if (source === ORIGIN_SOURCES.SHOCK && hitCount <= 0) return 0
   const foreign = source !== p._lastDamageSource
   p._lastDamageSource = source
   const growth = getOriginGrowth(engine)
   const circuits = p.routeState?.resonance?.circuits || 0
   const circuitMul = engine.originRoute === 'resonance' ? 1 + growth.circuitEnergy * circuits : 1
-  let amount = (foreign ? PRIMAL_GAIN_FOREIGN + growth.foreignBonus : PRIMAL_GAIN_SAME) * circuitMul
+  const base = source === ORIGIN_SOURCES.SHOCK ? 8 + Math.min(4, Math.max(0, hitCount - 1) * 2) + growth.shockRank : 2
+  let amount = base * (1 + growth.foreignBonus * 0.05) * circuitMul
   // 「多源切换」独立 3 秒节流：不吃每秒充能窗口，也不会被同源命中刷新。
   if (foreign && growth.switchLevel > 0 && now >= (p.originSwitchReadyAt ?? -Infinity)) {
     amount += growth.switchLevel * 2

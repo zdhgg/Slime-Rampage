@@ -3,12 +3,12 @@ import {
   ORIGIN_ORBIT_STATS,
   ORIGIN_SOURCE_BY_ID,
   ORIGIN_SOURCE_RULES,
-  advanceOriginMemoryCursor,
   originMemoryLevel,
   originSourceCastMods,
   originSourceLevel,
 } from './OriginSourceSkills.js'
 import { ORIGIN_ROUTES, getOriginGrowth } from './OriginBuild.js'
+import { createOriginInjectionToken, skillInjectionToken, applyOriginInjection } from './OriginInjection.js'
 
 const TAU = Math.PI * 2
 const clamp = (value, lo, hi) => Math.max(lo, Math.min(hi, value))
@@ -46,7 +46,9 @@ export class OriginSourceCombat {
   snapshot() {
     const p = this.player
     return {
-      stacks: p?.mutationState?.stacks || 0,
+      stacks: p?.mutationState?.empowered
+        ? Math.max(p.mutationState.stacks || 0, getOriginGrowth(this.game).maxStacks)
+        : p?.mutationState?.stacks || 0,
       circuits: p?.routeState?.resonance?.circuits || 0,
       route: this.game?.originRoute || null,
     }
@@ -71,17 +73,21 @@ export class OriginSourceCombat {
   /**
    * 立即释放一次被动超载（由控制器在确认支付后调用）。
    * 返回 { profile } 供印记回响做预算基准；失败返回 null。
-   * 只有这里有「轮换游标 + 1」——默认技能不进轮换。
+   * 主技能、协同选择与单次支付由控制器管理。
    */
-  castNow(entry, snapshot = null) {
+  castNow(entry, snapshot = null, options = {}) {
     const p = this.player
     if (!entry || !p || p.dead || this.game?.runFinished) return null
     const def = entry.def || ORIGIN_SOURCE_BY_ID[entry.id]
     if (!def) return null
     const snap = snapshot || this.snapshot()
-    const mods = originSourceCastMods(this.game, snap)
+    const mods = originSourceCastMods(this.game, options.secondary ? { ...snap, stacks: 0 } : snap)
+    mods.damage *= options.scale ?? 1
+    if (options.secondary && this.game.originRoute === 'resonance') mods.damage *= 1.1
+    if (options.secondary) { mods.consumeStacks = false; mods.consumeCircuits = false; mods.echo = false }
     const base = (this.weapon.damage || 1) * (this.weapon.levelMul || 1)
-    const token = { echoUsed: false }
+    const token = skillInjectionToken(options.token || createOriginInjectionToken(this.game), !!options.secondary, options.category || 'main')
+    const previousLastCast = this.game.originSourceLastCast
     // 路线资源归属（D3）：同化满层 / 共振满回路只由被动超载兑现与消耗，
     // 黏液震荡只负责积累，不再消费这些资源。
     if (mods.consumeStacks && p.mutationState) {
@@ -111,7 +117,7 @@ export class OriginSourceCombat {
       const level = originMemoryLevel(this.game, entry.id)
       const stat = originSourceLevel(def, level)
       if (!stat || level <= 0) return null
-      advanceOriginMemoryCursor(this.game)
+      // Fixed primary and shuffled auxiliary selection are owned by OriginOverload.
       this.game.originSourceLastCast = { id: def.id, name: def.name, level, at: this.game.elapsed || 0 }
       anchor = this._cast(def, stat, base, mods, level, token)
       profile = {
@@ -120,8 +126,12 @@ export class OriginSourceCombat {
       }
     }
     // 扩张：超载在技能落点沉淀一块超载液域（独立计数上限 1，击杀不返还充能）。
-    if (mods.route === 'expansion' && anchor) {
+    if (!options.secondary && mods.route === 'expansion' && anchor) {
       this.weapon.originCombat?.spawnOverloadField(anchor.x, anchor.y)
+    }
+    if (options.secondary) {
+      this.game.originSourceLastAuxiliary = this.game.originSourceLastCast
+      this.game.originSourceLastCast = previousLastCast
     }
     return { id: def.id, profile }
   }
@@ -155,13 +165,17 @@ export class OriginSourceCombat {
   // ---------------------------------------------------------------- jobs
 
   _runJob(job) {
+    if (job.kind === 'element_tick') {
+      if (job.target?.active && !job.target.devouring) this._hit(job.target, job.damage, null, 'element')
+      return
+    }
     if (job.kind === 'echo') {
-      this._area(this.player, job.radius, job.damage)
+      this._area(this.player, job.radius, job.damage, null, 'echo')
       this.weapon._ring?.(this.player.x, this.player.y, job.color || '#ffd166', job.radius)
       return
     }
     if (job.kind === 'burst') {
-      this._area(job, job.radius, job.damage)
+      this._area(job, job.radius, job.damage, job.token)
       this.weapon._ring?.(job.x, job.y, job.color || '#a29bfe', job.radius)
       this.weapon._burstColor?.(job.x, job.y, job.color || '#a29bfe', 8, false)
       return
@@ -177,7 +191,7 @@ export class OriginSourceCombat {
     ws._burstColor?.(p.x, p.y, def.color, 7, false)
     const label = def.innate
       ? `${def.icon} 被动超载：${def.name}`
-      : `${def.icon} 源质记忆：${def.name} Lv.${level}`
+      : def.basic ? `${def.icon} 原生协同：${def.name}` : `${def.icon} 源质记忆：${def.name} Lv.${level}`
     this.game.enemyManager?.addText?.(p.x, p.y - 48, label, null, def.color, 16)
     this.game.sound?.originWard?.()
   }
@@ -210,7 +224,7 @@ export class OriginSourceCombat {
     })
     const picked = this._distinctTargets(targets.length ? targets : this._targets(), stat.orbs)
     const echo = mods.echo
-      ? { share: ORIGIN_SOURCE_RULES.echoShare, radius: ORIGIN_SOURCE_RULES.echoRadius * mods.area }
+      ? { share: mods.echoShare, radius: ORIGIN_SOURCE_RULES.echoRadius * mods.area }
       : null
     for (let i = 0; i < stat.orbs; i++) {
       this.orbs.push({
@@ -278,7 +292,7 @@ export class OriginSourceCombat {
       for (const enemy of this._targets()) {
         const reach = 10 + (enemy.radius || 0)
         if ((enemy.x - orb.x) ** 2 + (enemy.y - orb.y) ** 2 > reach * reach) continue
-        this._hit(enemy, orb.damage)
+        this._hit(enemy, orb.damage, orb.token)
         if (enemy.active && !enemy.isBoss) enemy.primeSlow = Math.max(enemy.primeSlow || 0, orb.slow)
         this._orbitSplash(enemy, orb)
         if (orb.echo) this._scheduleEcho(orb.token, orb.damage, orb.echo, orb.color)
@@ -299,7 +313,7 @@ export class OriginSourceCombat {
       const dy = other.y - impact.y
       const reach = orb.splashRadius + (other.radius || 0)
       if (dx * dx + dy * dy > reach * reach) continue
-      this._hit(other, orb.damage * orb.splash)
+      this._hit(other, orb.damage * orb.splash, orb.token)
       if (this.player?.dead || this.game?.runFinished) return
     }
   }
@@ -331,7 +345,7 @@ export class OriginSourceCombat {
       color: def.color,
       level,
       burst: stat.burst ? { damageMul: stat.burst.damageMul, radius: stat.burst.radius * mods.area } : null,
-      echo: mods.echo ? { share: ORIGIN_SOURCE_RULES.echoShare, radius: ORIGIN_SOURCE_RULES.echoRadius * mods.area } : null,
+      echo: mods.echo ? { share: mods.echoShare, radius: ORIGIN_SOURCE_RULES.echoRadius * mods.area } : null,
       token,
     })
     return { x: p.x + Math.cos(angle) * distance * 0.6, y: p.y + Math.sin(angle) * distance * 0.6 }
@@ -355,14 +369,14 @@ export class OriginSourceCombat {
         if (wave.hit.has(enemy)) continue
         if (!this._segmentHits(wave, enemy, halfW)) continue
         wave.hit.add(enemy)
-        this._hit(enemy, wave.damage)
+        this._hit(enemy, wave.damage, wave.token)
         if (enemy.active && !enemy.isBoss) this._push(enemy, wave.angle, wave.knock)
       }
       if (this.player?.dead || this.game?.runFinished) return
 
       if (wave.travel < wave.maxTravel && wave.travel < 900) continue
       if (wave.burst) {
-        this._area(wave, wave.burst.radius, wave.damage * wave.burst.damageMul)
+        this._area(wave, wave.burst.radius, wave.damage * wave.burst.damageMul, wave.token)
         this.weapon._ring?.(wave.x, wave.y, wave.color, wave.burst.radius)
         this.weapon._burstColor?.(wave.x, wave.y, wave.color, 8, false)
       }
@@ -411,7 +425,7 @@ export class OriginSourceCombat {
       extra: stat.extra
         ? { damageMul: stat.extra.damageMul, radius: stat.extra.radius * mods.area, delay: stat.extra.delay }
         : null,
-      echo: mods.echo ? { share: ORIGIN_SOURCE_RULES.echoShare, radius: ORIGIN_SOURCE_RULES.echoRadius * mods.area } : null,
+      echo: mods.echo ? { share: mods.echoShare, radius: ORIGIN_SOURCE_RULES.echoRadius * mods.area } : null,
       token,
     })
     return { x: center.x, y: center.y }
@@ -423,13 +437,14 @@ export class OriginSourceCombat {
       core.t += dt
       if (!core.fired && core.t >= core.delay) {
         core.fired = true
-        this._area(core, core.radius, core.damage)
+        this._area(core, core.radius, core.damage, core.token)
         this.weapon._ring?.(core.x, core.y, core.color, core.radius)
         this.weapon._burstColor?.(core.x, core.y, core.color, 10, false)
         this.game.shakeScreen?.(3, 0.18)
         if (core.extra) {
           this.jobs.push({
             kind: 'burst',
+            token: core.token,
             due: this.time + (core.extra.delay || 0.3),
             x: core.x, y: core.y,
             radius: core.extra.radius,
@@ -501,7 +516,7 @@ export class OriginSourceCombat {
         life: 1.9,
         hit: new Set(),
         color: def.color,
-        echo: mods.echo ? { share: ORIGIN_SOURCE_RULES.echoShare, radius: ORIGIN_SOURCE_RULES.echoRadius * mods.area } : null,
+        echo: mods.echo ? { share: mods.echoShare, radius: ORIGIN_SOURCE_RULES.echoRadius * mods.area } : null,
         token,
       })
     }
@@ -545,7 +560,7 @@ export class OriginSourceCombat {
       if (!impact) continue
 
       spike.hit.add(impact)
-      this._hit(impact, spike.damage)
+      this._hit(impact, spike.damage, spike.token)
       this._splash(impact, spike)
       if (spike.echo) this._scheduleEcho(spike.token, spike.damage, spike.echo, spike.color)
 
@@ -573,7 +588,7 @@ export class OriginSourceCombat {
       const dy = other.y - impact.y
       const reach = radius + (other.radius || 0)
       if (dx * dx + dy * dy > reach * reach) continue
-      this._hit(other, spike.damage * spike.splash)
+      this._hit(other, spike.damage * spike.splash, spike.token)
       if (this.player?.dead || this.game?.runFinished) return
     }
     this.weapon._ring?.(impact.x, impact.y, spike.color, radius)
@@ -584,8 +599,9 @@ export class OriginSourceCombat {
 
   /** 一次超载只兑现一次共振余波：token 由本次释放持有，多段命中不会叠加多次。 */
   _scheduleEcho(token, damage, echo, color) {
-    if (!token || token.echoUsed) return
-    token.echoUsed = true
+    const shared = token?.shared || token
+    if (!shared || shared.echoUsed) return
+    shared.echoUsed = true
     const share = Math.min(ORIGIN_SOURCE_RULES.echoShare, echo.share ?? ORIGIN_SOURCE_RULES.echoShare)
     this.jobs.push({
       kind: 'echo',
@@ -623,10 +639,21 @@ export class OriginSourceCombat {
   }
 
   /** 统一伤害收口：击杀保留经验/掉落/统计，但标记来源以阻断异源充能。 */
-  _hit(enemy, damage) {
+  _hit(enemy, damage, token = null, category = null) {
     if (!enemy?.active || enemy.devouring || damage <= 0) return false
-    enemy.hit(damage)
+    const hpBefore = enemy.hp
+    enemy.hit(damage, { originDamageKind: category || token?.category || 'main' })
+    if (!(enemy.hp < hpBefore)) return false
+    applyOriginInjection(this, enemy, damage, token)
+    this.weapon.originCombat?.applyRiders(null, 0, 1, true, 'hit')
+    const growth = getOriginGrowth(this.game)
+    const combat = this.weapon.originCombat
+    if (growth.recoveryLevel > 0 && this.player.hp < this.player.maxHp && combat?.ready('recovery')) {
+      this.player.heal(1)
+      combat.setIcd('recovery', growth.recoveryLevel >= 2 ? 10 : 12)
+    }
     if (!enemy.active) {
+      if (enemy._settled) return false
       enemy._originDerivedKill = true
       this.weapon._onKill(enemy)
       return true
@@ -634,7 +661,7 @@ export class OriginSourceCombat {
     return false
   }
 
-  _area(center, radius, damage) {
+  _area(center, radius, damage, token = null, category = null) {
     if (!(damage > 0)) return 0
     let hits = 0
     for (const enemy of this._targets()) {
@@ -642,7 +669,7 @@ export class OriginSourceCombat {
       const dy = enemy.y - center.y
       const reach = radius + (enemy.radius || 0)
       if (dx * dx + dy * dy > reach * reach) continue
-      this._hit(enemy, damage)
+      this._hit(enemy, damage, token, category)
       hits++
       if (this.player?.dead || this.game?.runFinished) break
     }

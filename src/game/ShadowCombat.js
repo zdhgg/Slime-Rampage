@@ -117,7 +117,8 @@ export class ShadowCombat {
   }
 
   direction() {
-    const dir = this.player.input.getMoveVector()
+    // 传玩家坐标：点地移动时影袭沿「目标落点方向」突进，而不是回落到面朝方向。
+    const dir = this.player.input.getMoveVector(this.player.x, this.player.y)
     return dir.x || dir.y ? Math.atan2(dir.y, dir.x) : this.player.facing
   }
 

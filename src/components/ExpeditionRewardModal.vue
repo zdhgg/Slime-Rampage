@@ -41,7 +41,7 @@ function trap(event) {
         <ol v-if="info.chapter" class="reward-steps" aria-label="通关结算步骤"><li :class="{ current: !info.summary }">01 秘典</li><li :class="{ current: !!info.summary }">02 整备</li></ol>
       </header>
       <p v-if="info.summary" class="reward-summary" role="status"><span>已获得</span>{{ info.summary }}</p>
-      <LevelUpModal v-if="ordinary" embedded :key="info.phase" :options="info.options" :level="info.level" :role-spec="info.roleSpec" :can-use-elements="info.canUseElements" :secondary-slots="info.secondarySlots" :reward-title="info.phase === 'study' ? '选择一项普通强化' : '秘典已满级 · 选择一项普通强化'" @select="choose" />
+      <LevelUpModal v-if="ordinary" embedded :key="info.phase" :options="info.options" :level="info.level" :role-spec="info.roleSpec" :can-use-elements="info.canUseElements" :reward-title="info.phase === 'study' ? '选择一项普通强化' : '秘典已满级 · 选择一项普通强化'" @select="choose" />
       <div v-else-if="supply" class="reward-options supply-options">
         <button v-for="(reward, index) in info.rewards" :key="reward.id" :disabled="reward.disabled" :class="[reward.id, { selected: selectedCard?.id === reward.id }]" @click="choose(reward)">
           <div class="card-top"><span class="supply-icon" aria-hidden="true">{{ icons[reward.id] }}</span><kbd>{{ index + 1 }}</kbd></div>

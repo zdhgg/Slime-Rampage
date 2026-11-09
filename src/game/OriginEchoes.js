@@ -1,7 +1,6 @@
 import { Projectile } from './entities/Projectile.js'
 import { getElement } from './ElementSystem.js'
 import { ORIGIN_MARKS, ORIGIN_RULES } from './OriginBuild.js'
-import { applyOriginCoreResonance } from './OriginCoreResonance.js'
 
 /**
  * 异源印记的轻量战斗执行器。
@@ -103,21 +102,17 @@ export function triggerOriginMarkEcho(engine, { overloaded = false, center = eng
   }
 
   if (mark === 'elemental') {
-    const resonance = applyOriginCoreResonance(engine, radius, damage)
-    if (resonance) {
-      engine.enemyManager?.addText?.(
-        p.x, p.y - 48,
-        `晶核回响：${resonance.icons.join('＋')} ${resonance.effect}`,
-        null, resonance.color, 14
-      )
-    }
-    return !!resonance
+    // Injection and combo reactions share the overload token, so the mark
+    // strengthens that budget instead of launching a second reaction.
+    ws._ring?.(p.x, p.y, ORIGIN_MARKS.elemental.color, radius)
+    return true
   }
 
   if (mark === 'assassin') {
     p.stealthTimer = Math.max(p.stealthTimer || 0, rank >= 2 ? 1.6 : 1.2)
     p.guaranteedCrit = true
     p.originNextHitMul = Math.max(p.originNextHitMul || 1, 1 + 0.15 * rank)
+    p.originNextHitFromOverload = true
     ws._ring?.(p.x, p.y, '#ff6b6b', p.radius + 20)
     return true
   }
@@ -127,7 +122,7 @@ export function triggerOriginMarkEcho(engine, { overloaded = false, center = eng
     if ((state.bubble || 0) > 0) {
       const burstRadius = rank >= 2 ? 100 : 80
       ws._suppressKillCharge = true // 回响爆裂是印记衍生伤害，击杀不返还超载充能
-      try { ws._explode?.(p.x, p.y, damage, null, burstRadius) }
+      try { ws._explode?.(p.x, p.y, damage, { originDamageKind: 'mark' }, burstRadius) }
       finally { ws._suppressKillCharge = false }
       ws._ring?.(p.x, p.y, '#edc479', burstRadius)
     }

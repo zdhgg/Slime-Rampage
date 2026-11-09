@@ -402,7 +402,7 @@ ok('元素权限：元素按等级学法术、原生吸收属性核心，其余�
     const mage = new Enemy({ x: engine.player.x + 40, y: engine.player.y, speed: 80, hp: 5, type: 'mage' })
     mage.attach(engine)
     engine.weaponSystem.onDevoured(mage)
-    assert.equal(countCores() > 0, allowed, `吞噬核心产出与权限一致：${tag}`)
+    assert.equal(countCores() > 0, allowed && strainId !== 'origin', `原生普通法师不会产出核心：${tag}`)
 
     // ④ hunt 世界事件奖励
     engine.gemManager.reset()
@@ -412,17 +412,17 @@ ok('元素权限：元素按等级学法术、原生吸收属性核心，其余�
       state: 'active',
       x: engine.player.x,
       y: engine.player.y,
-      def: { title: '讨伐队猎营', reward: (g) => (g?.canUseElements === false || g?.startingStrain === 'elemental' ? '大型经验' : '元素核心 + 大型经验'), color: '#d6a642' },
+      def: { title: '讨伐队猎营', reward: (g) => (g?.canUseElements === false || ['elemental', 'origin'].includes(g?.startingStrain) ? '大型经验' : '元素核心 + 大型经验'), color: '#d6a642' },
       timeLeft: 1,
       goal: 3,
       progress: 3,
     }
     ev._complete(ev.current)
-    assert.equal(countCores() > 0, allowed, `hunt 事件核心产出与权限一致：${tag}`)
+    assert.equal(countCores() > 0, allowed && strainId !== 'origin', `hunt 事件不再直接产出原生核心：${tag}`)
     // 文案必须与实发一致：不允许「说有核心但实际没有」
     const rewardText = ev.objectiveInfo?.reward
     if (rewardText !== undefined && rewardText !== null) {
-      assert.equal(rewardText.includes('核心'), allowed, `hunt 奖励文案与实发一致：${tag}`)
+      assert.equal(rewardText.includes('核心'), allowed && strainId !== 'origin', `hunt 奖励文案与实发一致：${tag}`)
     }
 
     // ⑤ 吞噬 → 消化链：非元素角色不再累计/转化，有权限角色照旧
@@ -553,10 +553,10 @@ ok('重置归位：元素权限、元素等级、反应与附魔缓存在换角�
 }
 ok('技能池权限过滤：职业血统单一专精，原生黏液改为路线/印记组合')
 
-// —— 2h. Lv.4 / Lv.8 槽位里程碑提示只对有元素权限的角色显示 ——
+// —— 2h. 元素相关 UI 只对有元素权限的角色显示 ——
 {
   const { canUseElements, STRAIN_IDS } = await import('./src/game/Strains.js')
-  // 提示是 UI 层依据 stats.canUseElements 决定的；这里锁定「引擎快照口径」与权限一致，
+  // 元素区块是 UI 层依据 stats.canUseElements 决定的；这里锁定「引擎快照口径」与权限一致，
   // 以及 UI 判定所依赖的字段确实存在（形状契约由 verify-p2 兜底）。
   for (const strainId of STRAIN_IDS) {
     engine.applyStartingStrain(strainId)
@@ -573,12 +573,12 @@ ok('技能池权限过滤：职业血统单一专精，原生黏液改为路线/
     assert.equal(
       stats.canUseElements,
       canUseElements(strainId),
-      `${strainId}：_pushStats 必须下发 canUseElements（槽位提示据此隐藏）`
+      `${strainId}：_pushStats 必须下发 canUseElements（元素区块据此隐藏）`
     )
   }
   engine.onStats = null
 }
-ok('槽位里程碑提示：canUseElements 随角色正确下发，非元素角色不会看到空槽承诺')
+ok('元素权限提示：canUseElements 随角色正确下发，非元素角色不会看到元素承诺')
 
 // —— 2i. 黑市永久基因：购买规则不随当前角色变化 ——
 {

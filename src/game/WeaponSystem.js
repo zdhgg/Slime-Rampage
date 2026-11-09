@@ -328,7 +328,7 @@ export class WeaponSystem extends Entity {
 
   /**
    * 飞弹辉光颜色（阶段十五：武器行为可视化）：
-   * 主形态（第一个融合的反应）优先——飞弹颜色 = 物种身份；
+   * 主反应（元素等级排名前两名的组合）优先——飞弹颜色 = 物种身份；
    * 其次其他激活反应/单元素，默认黏液绿。
    */
   _glowColor() {
@@ -422,7 +422,8 @@ export class WeaponSystem extends Entity {
           y: py + perpY * spread,
           target,
           // 实际伤害 = 基础（技能叠加）× 等级成长 × 捕食原核吞噬加成（读实时值，非快照）
-          damage: this.damage * this.levelMul * this.devourDamageMul * (STRAINS[this.game?.startingStrain]?.bodyProjectileDamageMul || 1),
+          damage: this.damage * this.levelMul * this.devourDamageMul * (STRAINS[this.game?.startingStrain]?.bodyProjectileDamageMul || 1)
+            * (this.game?.startingStrain === 'origin' && (this.game.skillLevels?.origin_discovery || this.game.originSourceMemories?.length) ? 0.65 : 1),
           speed: this.projectileSpeed,
           vx: Math.cos(a) * this.projectileSpeed,
           vy: Math.sin(a) * this.projectileSpeed,
@@ -830,9 +831,9 @@ export class WeaponSystem extends Entity {
    * 其余角色不生成「捡不起来的空资源」。
    * 这是所有核心产出路径的统一收口（Boss / 精英 / 吞噬 / hunt 事件）。
    */
-  _spawnElementCore(x, y, type) {
+  _spawnElementCore(x, y, type, meta = null) {
     if (!this.game.canUseElements || this.spellCombat.enabled) return null
-    return this.game.gemManager.spawn(x, y, 0, type)
+    return this.game.gemManager.spawn(x, y, 0, type, meta)
   }
 
   /** 击杀结算唯一汇聚点：计数 + 连杀 + 音效 + 掉落（Boss 大爆 / 精英核心） */
@@ -879,14 +880,25 @@ export class WeaponSystem extends Entity {
       const gemCount = chapterGuardian
         ? 3
         : squadMember ? squadLast ? Math.max(2, 8 - e.bossGroupSize * 2) : 2 : 6
-      const coreCount = chapterGuardian
+      let coreCount = chapterGuardian
         ? 1
         : squadMember ? squadLast ? Math.max(1, 4 - e.bossGroupSize) : 1 : 3
+      if (this.game.startingStrain === 'origin') {
+        const state = this.game.originCoreDropState ||= { eliteSeen: false, misses: 0, guardianStages: [] }
+        if (chapterGuardian) {
+          const stage = this.game.expeditionStage || 1
+          coreCount = state.guardianStages.includes(stage) ? 0 : 1
+          if (coreCount) state.guardianStages.push(stage)
+        } else coreCount = squadMember && !squadLast ? 0 : 1
+      }
       const v = Math.max(5, Math.round(e.expValue / gemCount))
       for (let i = 0; i < gemCount; i++) this.game.gemManager.spawn(e.x, e.y, v)
       const els = ['fire', 'water', 'poison', 'lightning']
       for (let i = 0; i < coreCount; i++) {
-        this._spawnElementCore(e.x, e.y, els[(Math.random() * 4) | 0])
+        const index = (Math.random() * 4) | 0
+        const choices = this.game.startingStrain === 'origin'
+          ? [els[index], els[(index + 1 + ((Math.random() * 3) | 0)) % 4]] : null
+        this._spawnElementCore(e.x, e.y, els[index], choices ? { coreChoices: choices } : null)
       }
       if (!this.spellCombat.enabled && !chapterGuardian && (!squadMember || squadLast)) {
         this.game.gemManager.spawn(e.x, e.y, 0, 'tome')
@@ -901,7 +913,17 @@ export class WeaponSystem extends Entity {
       // 核心回归「狩猎精英/Boss」的掉落定位（Boss 大爆 3 个在 Boss 分支）；
       // 吞噬路径（法师/精英必掉、其他 12%）仍是主动获取核心的技巧型途径。
       // 第三批：非元素角色（暴食/弹射/暗影）不产出核心。
-      if (e.isElite) {
+      let dropCore = !!e.isElite
+      if (dropCore && this.game.startingStrain === 'origin') {
+        const state = this.game.originCoreDropState ||= { eliteSeen: false, misses: 0, guardianStages: [] }
+        if (e.summoned) dropCore = false
+        else {
+          dropCore = !state.eliteSeen || state.misses >= 4 || Math.random() < 0.25
+          state.eliteSeen = true
+          state.misses = dropCore ? 0 : state.misses + 1
+        }
+      }
+      if (dropCore) {
         const els = ['fire', 'water', 'poison', 'lightning']
         this._spawnElementCore(e.x, e.y, els[(Math.random() * els.length) | 0])
       }
@@ -986,7 +1008,7 @@ export class WeaponSystem extends Entity {
             // 原生印记副弹：只结算一次直接伤害，不参与暴击/元素/分裂/充能/击杀加成，
             // 避免“印记副弹 → 更多能量 → 更多超载”的递归。
             if (p.isOriginEcho) {
-              e.hit(p.damage)
+              e.hit(p.damage, { originDamageKind: 'mark' })
               this._burstColor(e.x, e.y, p.visual.impact, 4, false)
               this.game.sound.hit(p.visual.sound)
               this.game.enemyManager.addText(e.x, e.y, String(Math.round(p.damage * 10) / 10), null, '#ffffff', 13)
@@ -1006,10 +1028,13 @@ export class WeaponSystem extends Entity {
               critMultiplier *= 2.0
             }
             let damage = p.damage * critMultiplier
+            let originHitBonus = 0
             // 暗影印记：震荡后的下一次本体命中强化；只消费一次。
             if (this.player.originNextHitMul > 1) {
+              if (this.player.originNextHitFromOverload) originHitBonus = damage * (this.player.originNextHitMul - 1)
               damage *= this.player.originNextHitMul
               this.player.originNextHitMul = 1
+              this.player.originNextHitFromOverload = false
             }
 
             // 刺客：暗影无相主宰 暴击瞬发影分身斩
@@ -1022,6 +1047,7 @@ export class WeaponSystem extends Entity {
             const rMul = (this.reactionDmgMul || 1.0) * (this.geneReactionDmgMul || 1.0)
             const tickDmg = Math.max(1, Math.round(damage * 0.4 * rMul))
             const effects = { bossTomeContext: { basic: p.isBasicAttack && !p.isSplit } }
+            if (originHitBonus > 0) effects.originDamageParts = { mark: originHitBonus / damage }
             let elementProcApplied = false // 拟态能量：本次命中是否触发了元素附魔（来源③）
             if (p.freezeChance > 0 && Math.random() < p.freezeChance) effects.freeze = 1.5
             if (p.burnChance > 0 && Math.random() < p.burnChance) {
@@ -1181,7 +1207,7 @@ export class WeaponSystem extends Entity {
     // 元素核心：法师必掉火/雷、精英必掉随机、其他 12%（普通怪吞噬的核心收益收敛为小概率彩头）
     // 第三批角色化：非元素角色（暴食/弹射/暗影）不产出核心。
     let coreType = null
-    if (e.type === 'mage' || e.isElite || Math.random() < 0.12) {
+    if ((this.game.startingStrain !== 'origin' || e.isElite || e.isBoss) && (e.type === 'mage' || e.isElite || Math.random() < 0.12)) {
       const pool = e.type === 'mage' ? ['fire', 'lightning'] : ['fire', 'water', 'poison', 'lightning']
       const picked = pool[(Math.random() * pool.length) | 0]
       coreType = this._spawnElementCore(e.x, e.y, picked) ? picked : null

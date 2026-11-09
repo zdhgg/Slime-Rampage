@@ -4,7 +4,6 @@
  */
 import { computed, onBeforeUnmount, onMounted } from 'vue'
 import SkillIcon from './SkillIcon.vue'
-import { REACTION_SLOT_LEVELS, getReactionSlotLevelBonus } from '../game/entities/Player.js'
 import { useCardFocus } from './useCardFocus.js'
 import RicochetRouteChoice from './RicochetRouteChoice.vue'
 import GluttonRouteChoice from './GluttonRouteChoice.vue'
@@ -49,10 +48,8 @@ const props = defineProps({
   // 角色身份（阶段十九）：非空 = 四角色血统，Lv.1~4 只开放本树；
   // 空 = origin 原生体系，走原生核心/碎片 + Lv.5 三路线 + Lv.9 五印记。
   roleSpec: { type: String, default: null },
-  // 元素权限（第四批）：无权限角色的槽位里程碑是空承诺，需隐藏
+  // 元素权限（第四批）：无权限角色拿不到刺客元素赋能，需隐藏该规则
   canUseElements: { type: Boolean, default: true },
-  // 当前实际副反应槽数（P2 统一口径：基础 + 基因 + 等级里程碑，由 Player 单点汇总）
-  secondarySlots: { type: Number, default: 0 },
   // 备选蓝图（黑市）：本局剩余刷新次数，>0 时在普通选卡面板显示刷新按钮
   rerolls: { type: Number, default: 0 },
 })
@@ -89,26 +86,6 @@ const onRerollKey = (e) => {
 }
 onMounted(() => window.addEventListener('keydown', onRerollKey))
 onBeforeUnmount(() => window.removeEventListener('keydown', onRerollKey))
-
-/**
- * 槽位里程碑提示（等级 → 元素联动的高亮时刻）：
- * 恰好跨过 Lv.4 / Lv.8 时宣告新槽位（此刻已由 Player.refreshReactionSlots 生效），
- * 否则预告下一个里程碑——让升级面板第一次把「元素构筑」纳入决策视野。
- *
- * 第四批：无元素权限的角色（暴食/弹射/暗影）不显示——它们不会吸收任何元素，
- * 槽位再扩也是空槽，提示等于一句空承诺。底层槽位计算不改。
- */
-const slotMilestone = computed(() => {
-  if (!props.canUseElements || props.roleSpec === 'elemental') return null
-  const level = props.level || 1
-  if (REACTION_SLOT_LEVELS.includes(level)) {
-    // 优先用引擎汇总后的实际槽数（含基因加成）；无该数据时退回「基础 2 + 等级加成」口径
-    const total = props.secondarySlots || 2 + getReactionSlotLevelBonus(level)
-    return { hit: true, text: `🎉 副反应槽 +1（现 ${total} 个槽位，已自动接入可用反应）` }
-  }
-  const next = REACTION_SLOT_LEVELS.find((milestone) => level < milestone)
-  return next ? { hit: false, text: `⬡ 下一槽位里程碑：Lv.${next}（副反应槽 +1）` } : null
-})
 
 // 是否处于专精觉醒里程碑
 const isMilestone = computed(() => !!props.options?.[0]?.isMilestone)
@@ -268,9 +245,6 @@ const visibleTags = (s) => s.isRicochetSkill && s.tags?.[0] === roleLabel(s) ? s
             ? '🌱 阶段说明：Lv.1~4 只开放本角色专属技能树（Lv.5 自动觉醒为你的主专精，无需选择）'
             : '🌱 阶段说明：Lv.1~4 为自由变异期（原生核心/碎片/通用卡自由混搭，Lv.5 三选一原生路线）')
           : '📈 等级成长：攻击力自动提升 8%（已生效，可与技能叠加）') }}
-      </div>
-      <div v-if="slotMilestone" class="levelup-slot" :class="{ hit: slotMilestone.hit }">
-        {{ slotMilestone.text }}
       </div>
       <div class="levelup-cards">
         <button
@@ -502,25 +476,6 @@ const visibleTags = (s) => s.isRicochetSkill && s.tags?.[0] === roleLabel(s) ? s
   font-size: 13px;
   letter-spacing: 1px;
   color: rgba(255, 209, 102, 0.9);
-}
-
-/* 槽位里程碑（等级 → 元素联动）：跨过 Lv.4 / Lv.8 时高亮宣告，其余时候低强度预告 */
-.levelup-slot {
-  margin: -16px 0 20px;
-  font-size: 12px;
-  letter-spacing: 1px;
-  color: rgba(156, 138, 212, 0.82);
-}
-
-.levelup-slot.hit {
-  display: inline-block;
-  padding: 5px 14px;
-  border-radius: 999px;
-  font-weight: 700;
-  color: #e6dcff;
-  background: rgba(156, 138, 212, 0.18);
-  border: 1px solid rgba(156, 138, 212, 0.5);
-  box-shadow: 0 0 18px rgba(156, 138, 212, 0.3);
 }
 
 .levelup-cards {
@@ -891,17 +846,11 @@ const visibleTags = (s) => s.isRicochetSkill && s.tags?.[0] === roleLabel(s) ? s
   }
 
   .levelup-grow,
-  .levelup-slot,
   .milestone-sub {
     margin: 0 0 18px;
     font-size: 11.5px;
     line-height: 1.5;
     letter-spacing: 0;
-  }
-
-  .levelup-slot.hit {
-    display: block;
-    padding: 5px 10px;
   }
 
   .levelup-cards {

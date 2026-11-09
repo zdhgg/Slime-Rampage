@@ -11,7 +11,7 @@ export const STRAIN_PRESENTATION = {
   origin: {
     ...SLIME_FAMILY_ART.origin,
     label: '液态变异', epithet: '没有固定形态，只有适应',
-    intro: '未分化的液态变异体。前期在原生核心、异源碎片与通用卡之间自由探索；Lv.5 选择原质扩张/基因同化/异源共振路线，Lv.9 烙下一枚异源印记。空格始终是黏液震荡，路线决定形态，印记只提供轻量附加特征。',
+    intro: '用固定主技能与随机协同组成超载连招，吸收稀有元素核心改造技能。升级时可发现原生能力，击败首领可吸收源质；Lv.5 确立路线，Lv.9 选择印记。空格震荡控场并催化充能，超载自动释放。',
   },
   glutton: {
     ...SLIME_FAMILY_ART.glutton,

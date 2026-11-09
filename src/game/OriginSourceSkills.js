@@ -1,4 +1,5 @@
 import { ORIGIN_RULES, getOriginGrowth, originInvestment } from './OriginBuild.js'
+import { reconcileOriginCombo } from './OriginCombo.js'
 
 /**
  * 源质记忆（Origin Essence Memory）——原生黏液吸收 BOSS 源质后「重新长出来」的技能。
@@ -26,7 +27,7 @@ export const ORIGIN_SOURCE_RULES = Object.freeze({
   /** 源质技能只对普通敌人击退；首领免疫位移。 */
   bossKnockback: 0,
   /** 被动超载统一乘区：源质技能倍率换算到「超载口径」的基准系数。 */
-  passiveDamageScale: 1.3,
+  passiveDamageScale: 3.25,
 })
 
 /** 被动超载（OriginOverload 控制器）的触发参数。 */
@@ -44,7 +45,7 @@ export const ORIGIN_OVERLOAD_RULES = Object.freeze({
 /**
  * 原生史莱姆先天具备的源质能力——「原质环流」。
  * 不是 BOSS 源质、不占记忆槽、不出现在奖励卡池；
- * 存在有效源质记忆时退出自动释放序列，但不被删除。
+ * 获得源质记忆后仍保留在可装备能力中。
  */
 export const ORIGIN_INNATE_SKILL = Object.freeze({
   id: 'primal_orbit',
@@ -54,7 +55,7 @@ export const ORIGIN_INNATE_SKILL = Object.freeze({
   color: '#8cffc8',
   exec: 'orbit',
   innate: true,
-  castRange: 240,
+  castRange: 400,
   tags: ['原生', '被动超载'],
   desc: '身体中的原质核心分离出三枚液态原质球，环绕后追踪近距离敌人，命中产生小型液态爆裂。',
   trigger: '被动超载自动释放：原质球追踪并爆裂',
@@ -62,7 +63,7 @@ export const ORIGIN_INNATE_SKILL = Object.freeze({
 /** 原质环流数值（单档，不受记忆等级影响；成长来自路线/棱镜/秘典乘区）。 */
 export const ORIGIN_ORBIT_STATS = Object.freeze({
   orbs: 3,
-  duration: 1.2,
+  duration: 1.8,
   damageMul: 1.0,
   splash: 0.35,
   splashRadius: 36,
@@ -148,9 +149,35 @@ export const ORIGIN_SOURCE_SKILLS = Object.freeze([
   },
 ])
 
+export const ORIGIN_BASIC_WAVE = Object.freeze({
+  id: 'native_wave', name: '原质冲波', cardId: 'origin_discovery', basic: true, icon: '🌊', iconKey: 'waves',
+  color: '#5ad1c8', exec: 'breach', castRange: 500, source: '原生能力',
+  desc: '向敌人推出一道原质冲击波。',
+  levels: [{ damageMul: 1.2, width: 48, distance: 500, knock: 40 }],
+})
 export const ORIGIN_SOURCE_BY_ID = Object.freeze(
-  Object.fromEntries(ORIGIN_SOURCE_SKILLS.map(skill => [skill.id, skill]))
+  Object.fromEntries([...ORIGIN_SOURCE_SKILLS, ORIGIN_BASIC_WAVE].map(skill => [skill.id, skill]))
 )
+
+export function originComboEntries(game) {
+  return [{ id: ORIGIN_INNATE_SKILL.id, level: 1, def: ORIGIN_INNATE_SKILL, innate: true },
+    ...(game?.skillLevels?.origin_discovery ? [{ id: 'native_wave', level: 1, def: ORIGIN_BASIC_WAVE }] : []),
+    ...originMemories(game).map(entry => ({ ...entry, def: ORIGIN_SOURCE_BY_ID[entry.id] }))]
+}
+
+export function originComboState(game) {
+  const entries = originComboEntries(game)
+  const ids = entries.map(entry => entry.id)
+  const old = game.originCombo
+  const state = reconcileOriginCombo(old, ids)
+  const seen = new Set(Array.isArray(state.seen) ? state.seen : [])
+  for (const id of ids) {
+    if (!seen.has(id) && !state.equipped.includes(id) && state.equipped.length < 4) state.equipped.push(id)
+  }
+  state.seen = ids
+  game.originCombo = state
+  return state
+}
 export const ORIGIN_SOURCE_BY_CARD = Object.freeze(
   Object.fromEntries(ORIGIN_SOURCE_SKILLS.map(skill => [skill.cardId, skill]))
 )
@@ -193,7 +220,7 @@ export function originMemories(game) {
   for (const entry of raw) {
     const id = typeof entry === 'string' ? entry : entry?.id
     const def = ORIGIN_SOURCE_BY_ID[id]
-    if (!def || seen.has(id)) continue
+    if (!def?.bossType || seen.has(id)) continue
     seen.add(id)
     const level = Math.max(1, Math.min(ORIGIN_SOURCE_RULES.maxLevel, Math.floor(Number(entry?.level) || 1)))
     out.push({ id, level })
@@ -203,6 +230,7 @@ export function originMemories(game) {
 }
 
 export function originMemoryLevel(game, id) {
+  if (id === 'native_wave') return game?.skillLevels?.origin_discovery ? 1 : 0
   return originMemories(game).find(entry => entry.id === id)?.level || 0
 }
 
@@ -225,13 +253,11 @@ export function nextOriginMemory(game) {
 }
 
 /**
- * 被动超载的「下一次释放」统一判定：
- * 有源质记忆 → 当前轮换位；没有 → 默认技能「原质环流」。
+ * 被动超载的主技能。旧轮换函数保留供旧调用方读取记忆目录。
  */
 export function nextOriginCast(game) {
-  const memory = nextOriginMemory(game)
-  if (memory) return memory
-  return { id: ORIGIN_INNATE_SKILL.id, level: 1, def: ORIGIN_INNATE_SKILL, index: -1, innate: true }
+  const state = originComboState(game)
+  return originComboEntries(game).find(entry => entry.id === state.main)
 }
 
 export function advanceOriginMemoryCursor(game) {
@@ -245,6 +271,9 @@ export function resetOriginSourceMemories(game) {
   game.originSourceMemories = []
   game.originSourceCursor = 0
   game.originSourceLastCast = null
+  game.originSourceLastAuxiliary = null
+  game.originCombo = null
+  game.originTripleCount = 0
 }
 
 /**
@@ -254,7 +283,7 @@ export function resetOriginSourceMemories(game) {
  */
 export function learnOriginMemory(game, memoryId) {
   const def = ORIGIN_SOURCE_BY_ID[memoryId]
-  if (!def || game?.startingStrain !== 'origin') return null
+  if (!def?.bossType || game?.startingStrain !== 'origin') return null
   if (!Array.isArray(game.originSourceMemories)) game.originSourceMemories = []
   const list = originMemories(game)
   game.originSourceMemories = list
@@ -315,7 +344,7 @@ export function originSourceCastMods(game, snapshot = null) {
   } else if (route === 'resonance') {
     // 共振核心+超载爆发的回路增伤作用于源质技能（合计封顶 30%）；
     // 单次伤害整体 ×0.9 换更高超载频率。
-    damage *= 0.9 * (1 + Math.min(0.3, (growth.circuitDamage + growth.overloadBurstBonus) * circuits))
+    damage *= 0.9 * (1 + Math.min(0.3, growth.circuitDamage * circuits))
     if (circuits >= ORIGIN_RULES.resonanceMaxCircuits) {
       echo = true
       consumeCircuits = true
@@ -329,6 +358,7 @@ export function originSourceCastMods(game, snapshot = null) {
     echo,
     stacks,
     circuits,
+    echoShare: growth.overloadBurstBonus || ORIGIN_SOURCE_RULES.echoShare,
     consumeStacks,
     consumeCircuits,
   }
@@ -371,7 +401,7 @@ export function originMemoryCard(game, def) {
     isBossSkill: false,
     tags: [...def.tags, '超载释放'],
     stats: originMemoryStats(def, level),
-    buildNote: '击败首领吸收的源质：超载时自动释放 · 不占用普通升级次数',
+    buildNote: '首领源质不占普通升级次数；掌握额外能力后本体飞弹伤害为65%，输出转向超载连招。',
   }
 }
 
@@ -398,13 +428,14 @@ export function rollOriginMemoryCard(game, bossTypes) {
   return best ? originMemoryCard(game, best) : null
 }
 
-/** HUD 快照：三个槽位、当前轮换位、下一次释放预告、最近一次释放（用于高亮）。 */
+/** HUD 快照：源质目录、固定主技能、最近主/协同释放（用于高亮）。 */
 export function originMemoryHud(game) {
   if (game?.startingStrain !== 'origin') return null
   const list = originMemories(game)
   const cursor = originMemoryCursor(game)
-  const next = nextOriginMemory(game)
+  const next = nextOriginCast(game)
   const last = game.originSourceLastCast || null
+  const auxiliary = game.originSourceLastAuxiliary || null
   return {
     known: list.length > 0,
     cap: ORIGIN_SOURCE_RULES.maxSlots,
@@ -420,17 +451,19 @@ export function originMemoryHud(game) {
         iconKey: def?.iconKey || null,
         color: def?.color || '#8cffc8',
         level: entry.level,
-        next: index === cursor,
+        next: entry.id === next?.id,
         total: def?.source || '',
       }
     }),
     nextId: next?.id || ORIGIN_INNATE_SKILL.id,
     nextName: next?.def?.name || ORIGIN_INNATE_SKILL.name,
     nextLevel: next?.level || 1,
-    nextInnate: !next,
+    nextInnate: !!next?.innate,
     lastId: last?.id || null,
     lastName: last?.name || null,
     lastLevel: last?.level || 0,
     lastAge: last ? Math.max(0, (game.elapsed || 0) - (last.at || 0)) : Infinity,
+    auxiliaryId: auxiliary?.id || null,
+    auxiliaryAge: auxiliary ? Math.max(0, (game.elapsed || 0) - (auxiliary.at || 0)) : Infinity,
   }
 }

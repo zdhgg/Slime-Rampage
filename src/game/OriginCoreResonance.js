@@ -5,7 +5,7 @@ import { getElement } from './ElementSystem.js'
  *
  * 元素等级继续由 Player.elements 统一维护；这里仅从已经激活的主/副反应
  * 中选择一对等级最高的元素，并把它翻译成一次有限的超载附加效果。
- * 回响不改变主形态、不授予未入槽反应，也不再次产生异源能量。
+ * 回响不改变主反应、不授予未激活反应，也不再次产生异源能量。
  */
 
 const ELEMENT_ORDER = ['fire', 'water', 'poison', 'lightning']

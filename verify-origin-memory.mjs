@@ -7,7 +7,8 @@ import {
   ORIGIN_SOURCE_BY_ID,
   ORIGIN_SOURCE_RULES,
   ORIGIN_SOURCE_SKILLS,
-  learnOriginMemory,
+  learnOriginMemory as learnMemory,
+  originComboState, originComboEntries,
   nextOriginMemory,
   originMemoryHud,
   originMemoryLevel,
@@ -17,6 +18,16 @@ import {
   resetOriginSourceMemories,
   rollOriginMemoryCard,
 } from './src/game/OriginSourceSkills.js'
+import { setOriginComboLoadout } from './src/game/OriginCombo.js'
+
+// Source-specific combat tests explicitly equip the first learned source as primary.
+// Default innate retention and live loadout changes are covered by combo-live.
+function learnOriginMemory(g, id) {
+  const first = originMemories(g).length === 0
+  const result = learnMemory(g, id)
+  if (first && result) setOriginComboLoadout(originComboState(g), [id], id, originComboEntries(g).map(e => e.id))
+  return result
+}
 
 let passed = 0
 const check = (name, run) => {
@@ -218,40 +229,45 @@ check('B4 只有一个技能时每次超载都释放', g => {
   }
 })
 
-check('B5/B6 两个技能顺序轮换、三个技能循环', g => {
+check('B5/B6 主技能固定、协同在一轮内不重复', g => {
   learnOriginMemory(g, 'knight_breach')
   learnOriginMemory(g, 'mage_collapse')
-  spawn(g, { x: 160, hp: 100000 })
+  spawnBoss(g, 100000)
   const order = []
   for (let i = 0; i < 4; i++) {
     overload(g)
     advance(g, 0.4)
     order.push(g.originSourceLastCast.id)
   }
-  assert.deepEqual(order, ['knight_breach', 'mage_collapse', 'knight_breach', 'mage_collapse'])
+  assert.deepEqual(order, Array(4).fill('knight_breach'))
 
   learnOriginMemory(g, 'archer_hunt')
   const cycle = []
+  const auxiliary = []
   for (let i = 0; i < 5; i++) {
     overload(g)
     advance(g, 0.4)
     cycle.push(g.originSourceLastCast.id)
+    auxiliary.push(g.originSourceLastAuxiliary?.id)
   }
   // 游标承接上一段（4 次释放后回到槽位 0），第三个技能追加到末尾 → 三技能循环
-  assert.deepEqual(cycle, ['knight_breach', 'mage_collapse', 'archer_hunt', 'knight_breach', 'mage_collapse'])
+  assert.deepEqual(cycle, Array(5).fill('knight_breach'))
+  assert.notEqual(auxiliary[0], auxiliary[1])
+  assert.deepEqual(new Set(auxiliary), new Set(['mage_collapse', 'archer_hunt']))
 })
 
 check('B7 连续超载不丢失轮换状态（游标始终合法）', g => {
   for (const skill of ORIGIN_SOURCE_SKILLS) learnOriginMemory(g, skill.id)
-  spawn(g, { x: 160, hp: 100000 })
+  spawnBoss(g, 100000)
   const seen = new Set()
   for (let i = 0; i < 9; i++) {
     overload(g)
     advance(g, 0.4)
     assert.ok(g.originSourceCursor >= 0 && g.originSourceCursor < 3, '游标在合法范围')
-    seen.add(g.originSourceLastCast.id)
+    assert.equal(g.originSourceLastCast.id, 'knight_breach')
+    seen.add(g.originSourceLastAuxiliary?.id)
   }
-  assert.equal(seen.size, 3, '三个技能都轮到过')
+  assert.deepEqual(seen, new Set(['mage_collapse', 'archer_hunt']), '两项协同都有机会出场')
 })
 
 check('B8 无有效目标时不扣能量、不卡死轮换、不浪费轮换位', g => {
@@ -261,7 +277,7 @@ check('B8 无有效目标时不扣能量、不卡死轮换、不浪费轮换位'
   spawn(g, { x: 150, hp: 100000 })
   overload(g)
   assert.equal(g.originSourceLastCast.id, 'knight_breach')
-  assert.equal(g.originSourceCursor, 1, '有目标时正常推进')
+  assert.equal(g.originSourceCursor, 0, '旧游标不再决定主技能')
   const paidAt = g.player.overloadState.lastPaidAt
   g.enemyManager._enemies.length = 0
   g.weaponSystem.originOverload.reset()
@@ -269,13 +285,13 @@ check('B8 无有效目标时不扣能量、不卡死轮换、不浪费轮换位'
   advance(g, 0.4, 0.02)
   assert.equal(g.player.overloadState.lastPaidAt, paidAt, '无目标不支付超载')
   assert.ok(g.player.originEnergy >= ORIGIN_BASE.overloadCost, '能量保留不空耗')
-  assert.equal(g.originSourceCursor, 1, '无目标时保持游标')
+  assert.equal(g.originSourceCursor, 0, '无目标时不改变配置')
   assert.equal(g.originSourceLastCast.id, 'knight_breach', '没有释放任何技能')
   assert.equal(g.weaponSystem.originSourceCombat.jobs.length, 0, '不残留悬挂任务')
   // 目标回来后，轮换从上次的位置继续
   spawn(g, { x: 150, hp: 100000 })
   overload(g)
-  assert.equal(g.originSourceLastCast.id, 'mage_collapse')
+  assert.equal(g.originSourceLastCast.id, 'knight_breach')
 })
 
 check('B9 超载印记回响仍然正常触发', g => {
@@ -360,8 +376,8 @@ check('C3 异源共振 3 回路追加有限余波，且不超过 25%', g => {
   advance(g, 1.5, 0.03)
   const lost = 100000 - later.hp
   assert.ok(lost > 0, '3 回路时确实追加了共振余波')
-  assert.ok(Math.abs(lost - mainDamage * ORIGIN_SOURCE_RULES.echoShare) < 1e-6,
-    `余波伤害应为主技能的 25%（实际 ${lost.toFixed(2)} / ${(mainDamage * 0.25).toFixed(2)}）`)
+  assert.ok(Math.abs(lost - mainDamage * 0.15) < 1e-6,
+    `基础余波伤害应为主技能的 15%（实际 ${lost.toFixed(2)}）`)
   assert.ok(front.hp < 100000, '主目标仍吃到主体伤害')
 
   const control = createArena('origin')
@@ -566,8 +582,8 @@ check('E3/E4 HUD 正确显示三槽位、释放顺序，并在学习/升级/释�
   g._pushStats()
   assert.equal(stats.origin.memory.lastId, 'knight_breach', '释放后 HUD 记录最近一次')
   assert.ok(stats.origin.memory.lastAge < 1.4, '高亮窗口内')
-  assert.equal(stats.origin.memory.nextName, '奥术坍缩', '预告切到下一次')
-  assert.deepEqual(stats.origin.memory.slots.map(slot => slot.next), [false, true])
+  assert.equal(stats.origin.memory.nextName, '破阵凝胶波', '主技能保持固定')
+  assert.deepEqual(stats.origin.memory.slots.map(slot => slot.next), [true, false])
 })
 
 check('E5 暂停/恢复/结算不产生异常', g => {
@@ -589,8 +605,8 @@ check('E5 暂停/恢复/结算不产生异常', g => {
 check('E6 窄屏 UI：HUD 有紧凑样式与窄屏断点', () => {
   const source = fs.readFileSync(new URL('./src/components/HudOverlay.vue', import.meta.url), 'utf8')
   assert.match(source, /class="hud-memory"/)
-  assert.match(source, /下次超载释放/)
-  assert.match(source, /尚未吸收源质/)
+  assert.match(source, /主技能/)
+  assert.match(source, /升级发现协同能力/)
   assert.match(source, /@media \(max-width: 650px\)[\s\S]{0,400}\.hud-memory/)
 })
 

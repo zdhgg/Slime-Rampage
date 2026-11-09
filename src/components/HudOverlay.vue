@@ -6,7 +6,7 @@
  * 数据源约定：stats 由引擎 onStats 以 ~2Hz 整树替换（shallowRef 快照），
  * cooldown 由 onCooldown 以 ~10Hz 推送（连续条平滑数据源）。
  */
-import { computed } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import SkillIcon from './SkillIcon.vue'
 import { routeIconId } from './skillIconRegistry.js'
 import { Pause, Play, Volume2, VolumeX } from 'lucide-vue-next'
@@ -14,7 +14,6 @@ import { SPEC_INFO, getSpecInfo } from '../game/SkillPool.js'
 import { ORIGIN_ROUTES, ORIGIN_MARKS } from '../game/OriginBuild.js'
 import { formatRunClock } from '../game/RunRules.js'
 import { DIGEST_EFFECTS } from '../game/ElementSystem.js'
-import { REACTION_SLOT_LEVELS } from '../game/entities/Player.js'
 
 const props = defineProps({
   stats: { type: Object, required: true },
@@ -29,6 +28,29 @@ const props = defineProps({
   variant: { type: String, default: 'arena' },
 })
 const emit = defineEmits(['toggle-mute', 'toggle-pause', 'toggle-resume', 'activate-skill'])
+// 触屏设备：底部提示改为摇杆操作说明（真正的摇杆在画布左半屏，由引擎绘制）
+const touchControls = ref(false)
+let coarsePointerMedia = null
+const syncTouchControls = () => { touchControls.value = !!coarsePointerMedia?.matches }
+// 技能块键帽文案：面板由样式末段 @media (pointer: coarse) 挪到右下角，所以判定也用
+// 「主指针」——touchControls 走的是 any-pointer，触屏笔记本插着鼠标时会把 SPACE 误改成「点按」。
+const touchSkillKey = ref(false)
+let coarsePrimaryMedia = null
+const syncTouchSkillKey = () => { touchSkillKey.value = !!coarsePrimaryMedia?.matches }
+onMounted(() => {
+  coarsePointerMedia = window.matchMedia?.('(any-pointer: coarse)') || null
+  syncTouchControls()
+  coarsePointerMedia?.addEventListener?.('change', syncTouchControls)
+  coarsePrimaryMedia = window.matchMedia?.('(pointer: coarse)') || null
+  syncTouchSkillKey()
+  coarsePrimaryMedia?.addEventListener?.('change', syncTouchSkillKey)
+})
+onUnmounted(() => {
+  coarsePointerMedia?.removeEventListener?.('change', syncTouchControls)
+  coarsePointerMedia = null
+  coarsePrimaryMedia?.removeEventListener?.('change', syncTouchSkillKey)
+  coarsePrimaryMedia = null
+})
 const WEAPON_MUTATIONS = new Set(['gluttony', 'gatling', 'elemental', 'assassin'])
 const isWeaponEvolution = computed(() => WEAPON_MUTATIONS.has(props.evolution?.mutation))
 
@@ -49,6 +71,10 @@ const runStatusText = computed(() => {
   }
   if (run.mode === 'expedition') {
     if (run.state === 'expedition-intro') return '章节部署'
+    // 带时限的章节（如第二章信标）实时显示剩余时间；超时会直接判负。
+    if (run.stageDeadline && run.state === 'active') {
+      return `第 ${run.stage || 1} / ${run.totalStages || 6} 章 · 剩余 ${formatRunClock(Math.ceil(run.stageRemaining || 0))}`
+    }
     return `第 ${run.stage || 1} / ${run.totalStages || 6} 章`
   }
   const multiplier = Number(run.effectiveMultiplier || run.rewardMultiplier || 1).toFixed(2)
@@ -112,6 +138,14 @@ const skillPercent = computed(() => {
 const skillReady = computed(() => !!props.cooldown.shadow?.followup || props.cooldown.skillCd <= 0.02)
 const skillLabel = computed(() => props.cooldown.shadow?.followup ? '影袭追击' : props.cooldown.skillCd <= 0.02 ? props.cooldown.skillName : `${props.cooldown.skillCd.toFixed(1)}s`)
 const hasStrainSkill = computed(() => !!props.cooldown.skillId && (props.cooldown.skillMax || 0) > 0)
+/**
+ * 技能块的两个瞬时反馈（引擎置位、逐帧递减，这里只布尔化）：
+ *  - readyFlash：冷却归零那一帧弹一下 —— 唯一能在「不看角落」时被余光捕捉到的信号
+ *  - castPulse：按下成功时轻微下压 —— 闭合「亮 → 用掉 → 暗 → 亮」
+ * 静态的就绪强化在 CSS（.ready），不消耗这里的状态。
+ */
+const skillReadyFlash = computed(() => (props.cooldown.skillReadyFlash || 0) > 0)
+const skillCastPulse = computed(() => (props.cooldown.skillCastPulse || 0) > 0)
 
 /**
  * 猎食点（暴食专有）：资源型 空格 —— 没有主冷却，只有「点数 + 吞噬进度」。
@@ -183,13 +217,6 @@ function elementTitle(id) {
   return `${base.effect} | ${base.combo} | 吞噬消化（${tier}）：${detail.name}（当前 ${lv} 级）`
 }
 
-/** 下一个槽位里程碑提示：让「升级还会给槽位」这件事在 HUD 上可见 */
-const slotMilestone = computed(() => {
-  const level = props.stats.level || 1
-  const next = REACTION_SLOT_LEVELS.find((milestone) => level < milestone)
-  return next ? `Lv.${next} 副反应槽 +1` : ''
-})
-
 /** 消化进度（吞噬 → 元素联动）：吃肉积累，满槽转化元素等级 */
 const digestRatio = computed(() => {
   const digest = props.stats.digest
@@ -207,11 +234,11 @@ const digestTitle = computed(() => {
   return `吞噬积累消化能量（${Math.round(digestRatio.value * 100)}%）· 满槽转化元素等级｜已爆发 ${digest.bursts} 次`
 })
 
-/** 异源能量（origin 独占）：异源充能 → ≥40 空格技超载；满格脉冲提示 */
+/** 异源能量按单次超载费用显示，额外能量作为储备。 */
 const primalRatio = computed(() => {
   const origin = props.stats.origin || props.stats.primal
-  if (!origin?.max) return 0
-  return Math.max(0, Math.min(1, (origin.energy ?? origin.value ?? 0) / origin.max))
+  if (!origin?.cost) return 0
+  return Math.max(0, Math.min(1, (origin.energy ?? origin.value ?? 0) / origin.cost))
 })
 const primalReady = computed(() => {
   const origin = props.stats.origin || props.stats.primal
@@ -222,9 +249,23 @@ const primalTitle = computed(() => {
   if (!origin) return ''
   const effect = origin.effect || '路线决定超载主体，印记提供有限回响'
   const value = origin.energy ?? origin.value ?? 0
-  if (primalRatio.value >= 1) return `异源能量已满 · 被动超载就绪后自动释放：${effect}`
-  if (primalReady.value) return `异源能量 ${value}/${origin.max} · 被动超载就绪后自动释放：${effect}`
-  return `异源能量 ${value}/${origin.max} · 交替使用飞弹/震荡/元素/路线来源充能，≥${origin.cost} 后被动超载自动释放：${effect}`
+  return `异源能量 ${value}/${origin.max} · ${primalStatus.value} · ${effect}`
+})
+const primalStatus = computed(() => {
+  const origin = props.stats.origin || props.stats.primal
+  if (!origin) return ''
+  const value = origin.energy ?? origin.value ?? 0
+  const passive = origin.passive
+  if (passive?.state === 'windup') return '超载启动'
+  if (passive?.state === 'cooldown') return `冷却 ${Math.ceil(passive.cooldown * 10) / 10} 秒`
+  if (passive?.state === 'waiting') return '等待目标'
+  if (value >= origin.cost) return '充能完成'
+  return `${value} / ${origin.cost}`
+})
+const primalReserve = computed(() => {
+  const origin = props.stats.origin || props.stats.primal
+  if (!origin?.cost) return 0
+  return Math.max(0, (origin.energy ?? origin.value ?? 0) - origin.cost)
 })
 const originRouteInfo = computed(() => ORIGIN_ROUTES[props.stats.originRoute] || null)
 const originMarkInfo = computed(() => ORIGIN_MARKS[props.stats.originMark] || null)
@@ -326,21 +367,20 @@ const originMemoryChip = (slot) => ({
         <!-- 激活反应徽章（阶段十五）：主形态 ★ 标识，副反应并列，悬停看效果 -->
         <div v-if="stats.reactions.length && !stats.spells" class="hud-reactions">
           <span class="reaction-meta">
-            副反应 {{ stats.secondaryCount }}/{{ stats.secondarySlots }}
-            <em v-if="slotMilestone">{{ slotMilestone }}</em>
+            副反应 {{ stats.secondaryCount }}
           </span>
           <span
             v-for="r in stats.reactions"
             :key="r.id"
             class="reaction-chip"
             :class="{ primary: r.id === stats.primaryReaction }"
-            :title="r.id === stats.primaryReaction ? '主形态（物种身份）｜' + r.desc : '副反应（叠加生效）｜' + r.desc"
+            :title="r.id === stats.primaryReaction ? '主反应（物种身份，由元素等级前两名决定）｜' + r.desc : '副反应（第 3 位元素的组合，叠加生效）｜' + r.desc"
           >
             <i v-if="r.id === stats.primaryReaction" class="chip-star">★</i>{{ r.name }}
           </span>
         </div>
         <div
-          v-if="stats.coreResonance && stats.originMark === 'elemental' && !stats.spells"
+          v-if="stats.coreResonance && stats.strainId !== 'origin' && !stats.spells"
           class="hud-core-resonance"
           :style="{ '--resonance-color': stats.coreResonance.color }"
           :title="`${stats.coreResonance.name}：${stats.coreResonance.effect} · 两种元素等级 ${stats.coreResonance.levels.join(' / ')}`"
@@ -361,18 +401,27 @@ const originMemoryChip = (slot) => ({
           <b v-if="digestRatio >= 1">{{ stats.elements.length ? '爆发就绪' : '待吸收元素' }}</b>
           <b v-else>{{ Math.round(digestRatio * 100) }}%</b>
         </div>
-        <!-- 异源能量（原生黏液独占）：异源充能条，5 格 × 20，≥40 可超载、满格脉冲 -->
+        <!-- 异源能量：按一次超载费用显示，额外能量单独显示 -->
         <div
           v-if="stats.strainId === 'origin'"
           class="hud-primal"
-          :class="{ ready: primalReady, full: primalRatio >= 1 }"
+          :class="{ ready: primalReady, full: (stats.origin?.energy ?? stats.primal?.value ?? 0) >= (stats.origin?.max ?? stats.primal?.max ?? 100) }"
           :title="primalTitle"
         >
-          <span>🫧 异源</span>
+          <span>🫧 超载<span v-if="primalReserve"> +{{ primalReserve }}</span></span>
           <i><em :style="{ width: Math.round(primalRatio * 100) + '%' }"></em></i>
-          <b v-if="primalRatio >= 1">已满</b>
-          <b v-else-if="primalReady">超载就绪</b>
-          <b v-else>{{ stats.origin?.energy ?? stats.primal?.value ?? 0 }}</b>
+          <b>{{ primalStatus }}</b>
+        </div>
+        <div v-if="stats.strainId === 'origin' && stats.origin?.combo?.inject?.primary" class="hud-specs">
+          <span class="spec-chip secondary" title="主技能注入第 1 位元素、协同注入第 2 位、第三技能注入第 3 位；同一目标集齐组合元素即触发连招">
+            {{ ELEMENTS.find(item => item.id === stats.origin.combo.inject.primary)?.icon }} 超载注入
+            <template v-if="stats.origin.combo.reactionName"> · {{ stats.origin.combo.reactionName }}</template>
+          </span>
+        </div>
+        <div v-if="stats.strainId === 'origin' && stats.origin?.combo?.tripleUnlocked" class="hud-specs">
+          <span class="spec-chip secondary" title="每第三次成功超载追加一项不同协同技能">
+            ✨ 三重超载 {{ stats.origin.combo.tripleCount }}/3
+          </span>
         </div>
         <!-- 原生路线/印记/碎片：不显示职业主副专精，只显示液态变异方向 -->
         <div v-if="stats.strainId === 'origin' && (originRouteInfo || originMarkInfo || originFragments.length)" class="hud-specs">
@@ -407,20 +456,20 @@ const originMemoryChip = (slot) => ({
               class="memory-slot"
               :class="{
                 next: slot.next,
-                casting: originMemory.lastId === slot.id && originMemory.lastAge < 1.4,
+                casting: (originMemory.lastId === slot.id && originMemory.lastAge < 1.4) || (originMemory.auxiliaryId === slot.id && originMemory.auxiliaryAge < 1.4),
               }"
               :style="{ '--memory-color': slot.color }"
-              :title="`${slot.name} Lv.${slot.level}/${originMemory.maxLevel} · ${slot.next ? '下一次超载释放' : '等待轮换'}`"
+              :title="`${slot.name} Lv.${slot.level}/${originMemory.maxLevel} · ${slot.next ? '主技能' : stats.origin?.combo?.equipped?.includes(slot.id) ? '协同候选' : '未装备'}`"
             >
               <SkillIcon :skill="originMemoryChip(slot)" size="inline" />
               <b>{{ slot.name }}</b>
               <em>Lv.{{ slot.level }}</em>
             </span>
             <span class="memory-next" :title="`超载后自动释放：${originMemory.nextName}`">
-              下次超载释放：<b>{{ originMemory.nextName }}</b>
+              主技能：<b>{{ originMemory.nextName }}</b> · 协同随机
             </span>
           </template>
-          <span v-else class="memory-empty" title="击败骑士王 / 大法师 / 弓王后可在首领奖励中吸收源质">🫧 尚未吸收源质</span>
+          <span v-else class="memory-empty">🫧 主技能：{{ originMemory.nextName }} · {{ stats.origin?.combo?.equipped?.length >= 2 ? '协同随机' : '升级发现协同能力' }}</span>
         </div>
         <!-- 流派专精指示（专职角色） -->
         <div v-if="!stats.ricochet && stats.strainId !== 'origin' && (stats.primarySpec || stats.secondarySpec)" class="hud-specs">
@@ -456,7 +505,7 @@ const originMemoryChip = (slot) => ({
       </div>
     </div>
     <div class="hud-hint">
-      WASD / 方向键移动<template v-if="stats.spells"> · 法术自动施放</template><template v-else-if="stats.canUseElements"> · 元素核心靠近后自动吸收</template><template v-if="hasStrainSkill"> · 空格 {{ cooldown.skillName }}<template v-if="cooldown.skillName === '影袭'">（沿移动方向）</template></template><template v-else-if="gluttonCharge"> · 空格 暴食重咬（消耗猎食点）</template> · Esc 暂停
+      <template v-if="touchControls">左侧拖动移动</template><template v-else>WASD / 方向键或点按地面移动</template><template v-if="stats.spells"> · 法术自动施放</template><template v-else-if="stats.canUseElements"> · 元素核心靠近后自动吸收</template><template v-if="hasStrainSkill"> · {{ touchSkillKey ? '点按' : '空格' }} {{ cooldown.skillName }}<template v-if="cooldown.skillName === '影袭'">（沿移动方向）</template></template><template v-else-if="gluttonCharge"> · {{ touchSkillKey ? '点按' : '空格' }} 暴食重咬（消耗猎食点）</template> · Esc 暂停
     </div>
     <div class="hud-stats">
       <span>攻击 <b>{{ stats.dmg }}</b></span>
@@ -512,9 +561,9 @@ const originMemoryChip = (slot) => ({
             <small>{{ cooldown.spellShield.points > 0 ? '保护中' : `重建 ${Math.ceil(cooldown.spellShield.remaining)} 秒` }}</small>
             <i v-if="cooldown.spellShield.points <= 0"><em :style="{ width: `${100 * (1 - cooldown.spellShield.remaining / cooldown.spellShield.cooldown)}%` }"></em></i>
           </div>
-    <div v-if="hasStrainSkill" role="button" tabindex="0" @click="emit('activate-skill')" @keydown.enter.prevent="emit('activate-skill')" @keydown.space.prevent="!$event.repeat && emit('activate-skill')" :aria-label="skillLabel" :title="cooldown.skillDesc" class="hud-action hud-action--skill" :class="{ ready: skillReady }">
+    <div v-if="hasStrainSkill" role="button" tabindex="0" @click="emit('activate-skill')" @keydown.enter.prevent="emit('activate-skill')" @keydown.space.prevent="!$event.repeat && emit('activate-skill')" :aria-label="skillLabel" :title="cooldown.skillDesc" class="hud-action hud-action--skill" :class="{ ready: skillReady, 'is-ready-flash': skillReadyFlash, 'is-cast-pulse': skillCastPulse }">
       <div class="hud-action-label">
-        <span>SPACE</span>
+        <span>{{ touchSkillKey ? '点按' : 'SPACE' }}</span>
         <b><SkillIcon :skill="cooldown.skillId" size="inline" /> {{ skillLabel }}</b>
       </div>
       <i><em :style="{ width: skillPercent + '%' }"></em></i>
@@ -528,7 +577,7 @@ const originMemoryChip = (slot) => ({
       :title="gluttonTitle"
     >
       <div class="hud-action-label">
-        <span><SkillIcon skill="devour_pulse" size="inline" /> SPACE 重咬</span>
+        <span><SkillIcon skill="devour_pulse" size="inline" /> {{ touchSkillKey ? '点按' : 'SPACE' }} 重咬</span>
         <b>{{ gluttonDots }} {{ stats.boss ? gluttonCharge.bossProgress : gluttonCharge.progress }}/{{ stats.boss ? gluttonCharge.bossProgressPer : gluttonCharge.progressPer }}</b>
       </div>
       <i><em :style="{ width: Math.round(gluttonProgressRatio * 100) + '%' }"></em></i>
@@ -1150,18 +1199,6 @@ const originMemoryChip = (slot) => ({
   white-space: nowrap;
 }
 
-/* 下一个槽位里程碑（等级 → 元素联动的可读提示） */
-.reaction-meta em {
-  margin-left: 6px;
-  padding: 1px 6px;
-  border-radius: 999px;
-  font-style: normal;
-  font-size: 10px;
-  color: rgba(156, 138, 212, 0.92);
-  background: rgba(156, 138, 212, 0.14);
-  border: 1px solid rgba(156, 138, 212, 0.32);
-}
-
 /* 消化进度（吞噬 → 元素联动）：吃下去的猎物正在变成元素养分 */
 .hud-digest {
   display: flex;
@@ -1751,12 +1788,74 @@ const originMemoryChip = (slot) => ({
   background: linear-gradient(90deg, #4fc3d9, #a29bfe);
 }
 
+/* 就绪（静态强化）：
+   原来只有 42% 的淡紫边 + 满格 3px 细条，而「冷却中」是 34% 的淡金边——两者亮度
+   几乎一样，余光里分不出来，只剩「3.2s → 黏液震荡」这行字要读。这里把边框、键帽、
+   文字、进度条一起抬到同一条「亮」的线上：不读字、不盯角落也能看出可放。 */
 .hud-action--skill.ready {
-  border-color: rgba(162, 155, 254, 0.42);
+  border-color: rgba(162, 155, 254, 0.9);
+  background-color: rgba(18, 14, 30, 0.78);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 246, 214, 0.06),
+    0 0 14px rgba(162, 155, 254, 0.42),
+    0 8px 22px rgba(0, 0, 0, 0.2);
+}
+
+.hud-action--skill.ready .hud-action-label > span {
+  border-color: rgba(201, 194, 255, 0.9);
+  background: rgba(162, 155, 254, 0.22);
+  color: #fff;
 }
 
 .hud-action--skill.ready .hud-action-label b {
-  color: #c9c2ff;
+  /* 11px 的字别再叠辉光了：光晕只会把笔画糊粗、反而更难读。
+     「亮」由边框、键帽、进度条三处承担，文字只负责纯白对比。 */
+  color: #fff;
+}
+
+/* 只提亮填充、不加高度：改高度会让整块面板随就绪/冷却来回抖 1px */
+.hud-action--skill.ready > i em {
+  background: linear-gradient(90deg, #7ef0ff, #c9c2ff);
+  box-shadow: 0 0 6px rgba(201, 194, 255, 0.85);
+}
+
+.hud-action--skill.ready:hover {
+  border-color: #d8d3ff;
+}
+
+/* 就绪弹：冷却归零那一帧弹一下，随后回落到上面的稳态。
+   故意做成一次性而非常驻呼吸——黏液震荡 6.5s 冷却、就绪态占比过半，常驻动效会变成
+   噪声并和暴食的 chargePulse 抢注意力；而「动」本身才是余光的强信号。 */
+.hud-action--skill.is-ready-flash {
+  animation: skillReadyFlash 0.42s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes skillReadyFlash {
+  /* 峰值只推「外圈光环 + 轻微放大」，不整块提亮：整块 brightness 在暗场景里
+     会变成一次发白的闪烁，峰值那一两帧字也糊了；光环则保留可读性又够显眼。 */
+  0% {
+    transform: scale(1);
+    box-shadow: inset 0 1px 0 rgba(255, 246, 214, 0.06), 0 0 14px rgba(162, 155, 254, 0.42), 0 8px 22px rgba(0, 0, 0, 0.2);
+  }
+  35% {
+    transform: scale(1.07);
+    box-shadow: inset 0 1px 0 rgba(255, 246, 214, 0.06), 0 0 0 3px rgba(201, 194, 255, 0.6), 0 0 30px rgba(162, 155, 254, 0.95), 0 8px 22px rgba(0, 0, 0, 0.2);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: inset 0 1px 0 rgba(255, 246, 214, 0.06), 0 0 14px rgba(162, 155, 254, 0.42), 0 8px 22px rgba(0, 0, 0, 0.2);
+  }
+}
+
+/* 施放回弹：按下成功的确认（轻微下压 0.18s），闭合「亮 → 用掉 → 暗 → 亮」 */
+.hud-action--skill.is-cast-pulse {
+  animation: skillCastPulse 0.18s ease-out;
+}
+
+@keyframes skillCastPulse {
+  0% { transform: scale(1); }
+  40% { transform: scale(0.965); }
+  100% { transform: scale(1); }
 }
 
 /* 暴食猎食点（资源型 空格）：与技能条同构，「●○ 3/5」= 点数 + 吞噬进度 */
@@ -2473,6 +2572,11 @@ const originMemoryChip = (slot) => ({
   .chapter-intro section {
     animation: none;
   }
+  /* 就绪/施放脉冲只是装饰提醒：关掉动效，静态强化（.ready）仍然说明可放 */
+  .hud-action--skill.is-ready-flash,
+  .hud-action--skill.is-cast-pulse {
+    animation: none;
+  }
 }
 .hud-tomes { display:flex; flex-wrap:wrap; gap:6px 12px; max-width:560px; margin:6px 0; color:#c2d2b4; font-size:10px; }
 .hud-tomes > span { display:inline-flex; align-items:center; gap:4px; }.hud-tomes b { color:#e0cf92; font-weight:500; }
@@ -2483,5 +2587,20 @@ const originMemoryChip = (slot) => ({
   .hud-memory .memory-slot { padding: 1px 6px 1px 3px; }
   .hud-memory .memory-slot b { max-width: 74px; overflow: hidden; text-overflow: ellipsis; }
   .hud-memory .memory-label { display: none; }
+}
+
+/* 触屏：技能键移到右下，左下整块留给虚拟摇杆（摇杆由引擎在画布左半屏接管）。
+   统计面板上移，避免与技能键叠在一起。 */
+@media (pointer: coarse) {
+  .hud-action {
+    left: auto;
+    right: 14px;
+    bottom: 14px;
+  }
+
+  .hud-stats {
+    right: 14px;
+    bottom: 92px;
+  }
 }
 </style>

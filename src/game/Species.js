@@ -77,7 +77,7 @@ const SINGLE_SPECIES = {
 export function buildSpecies(player, genes, wave, kills, behavior = {}) {
   const elMap = player.elements // Map：元素 → 等级
 
-  // 1) 物种名：主形态锁定优先（第一个融合的反应 = 物种身份，阶段十五设计改造），
+  // 1) 物种名：当前主反应优先（元素等级排名前两名的组合 = 物种身份），
   //    其次按反应表匹配，其次单元素，再次普通
   let name = null
   const spellFusion = player.game?.weaponSystem?.spellCombat?.enabled ? player.game.weaponSystem.spellCombat.fusion : null
@@ -147,7 +147,7 @@ export function buildSpecies(player, genes, wave, kills, behavior = {}) {
   if (behavior.slowClouds > 0) behaviorText.push(`蒸汽云雾 ${behavior.slowClouds} 次`)
   if (behavior.venomStorms > 0) behaviorText.push(`毒雷风暴 ${behavior.venomStorms} 次`)
 
-  // 6.5) 副反应（阶段十五/十六）：仅列出已占用槽位的激活副反应
+  // 6.5) 副反应（元素等级排名第 3 名与前两名的组合，最多两个）
   const secondary = REACTIONS.filter(
     (r) =>
       r.id !== player._primaryReaction &&

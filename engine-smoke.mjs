@@ -399,8 +399,29 @@ assert.equal(engine.expeditionStage, 2)
 assert.equal(engine.player.hp, engine.player.maxHp)
 finishStageIntro()
 assert.equal(engine.worldEvents.current.type, 'beacon')
+assert.equal(engine.worldEvents._lockedType, 'beacon', '第二关锁定信标事件类型')
 
-engine.worldEvents.completed++
+// 章节进度只认信标：其它类型完成数不得把第二关推进到首领战。
+engine.worldEvents.completedByType.hunt++
+engine.update(0)
+assert.equal(engine.runState, 'active')
+assert.equal(engine._expeditionProgress().events, 0, 'hunt 完成不满足信标目标')
+
+// 真实完成一次信标（进场 → 激活 → 驻留填满），而不是直接改全局总数
+const stageTwoBeacon = engine.worldEvents.current
+engine.player.x = stageTwoBeacon.x
+engine.player.y = stageTwoBeacon.y
+engine.worldEvents.update(1)
+assert.equal(stageTwoBeacon.state, 'active')
+engine.worldEvents.update(stageTwoBeacon.goal)
+assert.equal(stageTwoBeacon.state, 'complete')
+assert.equal(engine.worldEvents.completedByType.beacon, 1)
+assert.equal(engine._expeditionProgress().events, 1)
+
+// 离开信标掉落点再推进一帧：避免测试里顺手吃经验触发升级面板，
+// 把「过关清场 → 补给」的断言卡在暂停锁上。
+engine.player.x = Math.min(engine.worldWidth - 60, stageTwoBeacon.x + 400)
+engine.player.y = stageTwoBeacon.y
 engine.update(0)
 defeatStageGuardian()
 finishStageClearing()
@@ -433,6 +454,7 @@ assert.equal(engine.worldEvents.current.type, 'surge')
 
 engine.weaponSystem.kills += 75
 engine.worldEvents.completed++
+engine.worldEvents.completedByType.surge++
 engine.update(0)
 defeatStageGuardian()
 finishStageClearing()
@@ -450,6 +472,7 @@ assert.equal(engine.worldEvents.current.type, 'surge')
 
 engine.weaponSystem.kills += 90
 engine.worldEvents.completed++
+engine.worldEvents.completedByType.surge++
 engine.update(0)
 defeatStageGuardian()
 finishStageClearing()
@@ -479,4 +502,46 @@ assert.equal(settlement.stage, 8)
 assert.equal(settlement.totalStages, 8)
 assert.equal(settlement.epilogue.text, '原来一路进犯的……是我们。')
 console.log('✓ 王庭逆袭完成八章独立目标、章节过场、逐章首领、补给与王庭真相闭环')
+
+// 第二章章节时限：未完成信标时到点判负，不能靠持续刷怪无限拖关。
+engine.configureRun({ mode: 'expedition', difficulty: 'normal' })
+engine.reset()
+finishStageIntro()
+engine.weaponSystem.kills += 60
+engine.update(0)
+defeatStageGuardian()
+finishStageClearing()
+engine.resolveExpeditionReward('rest')
+assert.equal(engine.expeditionStage, 2)
+finishStageIntro()
+assert.equal(engine._expeditionDefinition.deadline, 90, '第二关带 90 秒章节时限')
+
+// 失败重试锁定：清掉当前信标后，未指定类型的重新生成仍必须是 beacon
+engine.worldEvents.cancelForEncounter()
+const retriedBeacon = engine.worldEvents.spawnEvent()
+assert.equal(retriedBeacon.type, 'beacon', '信标失败重试仍生成信标而非随机事件')
+
+// HUD 快照：章节剩余时间随 active 实时输出
+let deadlineStats = null
+engine.onStats = (stats) => { deadlineStats = stats }
+engine.expeditionStageElapsed = 30
+engine._pushStats()
+assert.equal(deadlineStats.run.stageDeadline, 90)
+assert.equal(deadlineStats.run.stageRemaining, 60)
+
+engine.expeditionStageElapsed = 89.9
+engine.update(0.2)
+assert.equal(engine.runState, 'defeat')
+assert.equal(engine.runFinished, true)
+assert.equal(engine.defeatReason, 'beacon-timeout')
+assert.equal(settlement.result, 'defeat')
+assert.equal(settlement.defeatReason, 'beacon-timeout')
+
+// 判负后帧管线立即收口：事件倒计时与敌群都不再推进
+const eventTimeLeftAtTimeout = engine.worldEvents.current?.timeLeft
+const enemyCountAtTimeout = em.enemies.length
+engine.update(1)
+assert.equal(engine.worldEvents.current?.timeLeft, eventTimeLeftAtTimeout)
+assert.equal(em.enemies.length, enemyCountAtTimeout)
+console.log('✓ 第二关信标超时判负：目标类型锁定、实时倒计时与终止刷怪')
 console.log('\n无头渲染可见性测试通过 ✓')

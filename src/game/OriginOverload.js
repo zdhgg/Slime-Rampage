@@ -1,6 +1,9 @@
 import { canOriginOverload, trySpendOriginOverload, tickOriginCombatFlow } from './PrimalEnergy.js'
-import { ORIGIN_OVERLOAD_RULES, nextOriginCast } from './OriginSourceSkills.js'
+import { ORIGIN_OVERLOAD_RULES, nextOriginCast, originComboEntries, originComboState } from './OriginSourceSkills.js'
+import { drawOriginAuxiliary } from './OriginCombo.js'
 import { triggerOriginMarkEcho } from './OriginEchoes.js'
+import { getOriginGrowth } from './OriginBuild.js'
+import { createOriginInjectionToken } from './OriginInjection.js'
 
 /**
  * 被动源质超载控制器（原生黏液独占）。
@@ -28,6 +31,8 @@ export class OriginOverload {
     this.cooldown = 0
     this.retry = 0
     this.pending = null
+    this.targetWait = 0
+    this.auxiliary = null
   }
 
   /** 共振路线的超载节奏优势：更短冷却（数值见 OriginSourceSkills.ORIGIN_OVERLOAD_RULES）。 */
@@ -46,6 +51,23 @@ export class OriginOverload {
     }
     // 战斗涌流：附近有敌人时缓慢充能，保证 Lv.1~4 也有完整的超载循环。
     tickOriginCombatFlow(this.game, dt)
+    if (this.auxiliary) {
+      this.auxiliary.delay -= dt
+      if (this.auxiliary.delay <= 0) {
+        const pending = this.auxiliary
+        this.auxiliary = null
+        const entries = originComboEntries(this.game)
+        const state = originComboState(this.game)
+        const id = drawOriginAuxiliary(pending.selection, candidate =>
+          !pending.used.includes(candidate) && this.weapon.originSourceCombat?.hasTargetsFor(entries.find(entry => entry.id === candidate)))
+        if ((state.revision || 0) === pending.revision) state.bag = [...pending.selection.bag]
+        const entry = entries.find(item => item.id === id)
+        if (entry) this.weapon.originSourceCombat.castNow(entry, pending.snapshot,
+          { secondary: true, scale: pending.third ? 0.4 : 0.6, category: pending.third ? 'third' : 'auxiliary', token: pending.token })
+        if (entry) pending.used.push(entry.id)
+        if (!pending.third && pending.triple && entry) this.auxiliary = { ...pending, delay: 0.35, third: true }
+      }
+    }
 
     if (this.cooldown > 0) this.cooldown = Math.max(0, this.cooldown - dt)
     if (this.retry > 0) this.retry = Math.max(0, this.retry - dt)
@@ -60,14 +82,26 @@ export class OriginOverload {
       return
     }
 
-    if (this.retry > 0 || this.cooldown > 0) return
+    if (this.cooldown > 0) return
+    if (this.targetWait > 0) this.targetWait += dt
+    if (this.retry > 0) return
     if (!canOriginOverload(p)) return
     // 只有能量与冷却都就绪时才执行目标搜索，不做逐帧扫描。
-    const next = nextOriginCast(this.game)
+    let next = nextOriginCast(this.game)
     if (!next) return
     if (!this.weapon.originSourceCombat?.hasTargetsFor(next)) {
-      this.retry = ORIGIN_OVERLOAD_RULES.retryDelay
-      return
+      if (!this.targetWait) this.targetWait = dt || 0.001
+      const equipped = originComboState(this.game).equipped
+      const alternatives = this.targetWait >= 2 ? originComboEntries(this.game)
+        .filter(entry => entry.id !== next.id && equipped.includes(entry.id))
+        .map(entry => ({ ...entry, fallback: true })) : []
+      next = alternatives.find(entry => this.weapon.originSourceCombat?.hasTargetsFor(entry))
+      if (!next) {
+        this.retry = ORIGIN_OVERLOAD_RULES.retryDelay
+        return
+      }
+    } else {
+      this.targetWait = 0
     }
     this.state = 'windup'
     this.windup = ORIGIN_OVERLOAD_RULES.windup
@@ -93,15 +127,29 @@ export class OriginOverload {
       this.retry = ORIGIN_OVERLOAD_RULES.retryDelay
       return
     }
-    const info = cs.castNow(next, snapshot)
+    const token = createOriginInjectionToken(this.game)
+    const info = cs.castNow(next, snapshot, { token })
     if (!info) {
       // 极端情况：扣费后未能释放（等级失效等），短冷却后重试，不退款。
       this.cooldown = 1
       return
     }
+    this.weapon.originCombat?.applyRiders(null, 0, 1, true, true)
+    const motility = getOriginGrowth(this.game).motilityBonus
+    if (motility > 0) {
+      p.originMoveBuff = Math.max(p.originMoveBuff || 0, motility)
+      p.originMoveBuffTimer = Math.max(p.originMoveBuffTimer || 0, 1.5)
+    }
     // 超载印记回响：每次超载最多一次，预算基准为本次技能的乘区倍率。
     triggerOriginMarkEcho(this.game, { overloaded: true, center: p, profile: info.profile })
     this.cooldown = this.cooldownFor()
+    const tripleEnabled = (this.game.skillLevels?.origin_multicast || 0) > 0
+    const count = tripleEnabled ? ((this.game.originTripleCount || 0) + 1) % 3 : 0
+    this.game.originTripleCount = count
+    const selection = originComboState(this.game)
+    this.auxiliary = { delay: 0.35, snapshot, token, used: [next.id], triple: tripleEnabled && count === 0,
+      selection: { ...selection, equipped: [...selection.equipped], bag: [...selection.bag] }, revision: selection.revision || 0 }
+    this.targetWait = 0
   }
 
   /** HUD 快照：状态、剩余冷却、下一次释放预告。 */

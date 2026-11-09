@@ -585,6 +585,7 @@ export class EnemyManager extends Entity {
       attackTempo: (profile.attackTempoMul || 1) * (wave.attackTempoMul || 1),
     })
     enemy.eventToken = options.eventToken || null
+    enemy.summoned = !!options.summoned
     enemy.objectiveTarget = options.objectiveTarget || null
     enemy.attach(this.game)
     this._enemies.push(enemy)

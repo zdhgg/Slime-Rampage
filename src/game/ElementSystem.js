@@ -86,6 +86,23 @@ export const hasReaction = (elements, id) => getActiveReactions(elements).some((
 /** 取元素定义（未知 id 返回 null） */
 export const getElement = (id) => ELEMENTS[id] || null
 
+/** 取反应定义（未知 id 返回 null） */
+export const getReaction = (id) => REACTIONS.find((r) => r.id === id) || null
+
+/** 两个不同元素构成的反应（同元素或无匹配返回 null） */
+export const reactionForPair = (a, b) =>
+  (a !== b && REACTIONS.find((r) => r.combo.includes(a) && r.combo.includes(b))) || null
+
+/**
+ * 元素等级排名：等级降序；同级时 keep（当前主反应的两个元素）在前——只有严格超过才切换主反应；
+ * 仍并列时按 reached（升到当前等级的先后序号，越小越早）排序，缺省按 Map 插入序。
+ */
+export const rankElements = (elements, { keep = [], reached = null } = {}) =>
+  [...(elements?.keys() || [])].sort((a, b) =>
+    (elements.get(b) || 0) - (elements.get(a) || 0) ||
+    (keep.includes(b) ? 1 : 0) - (keep.includes(a) ? 1 : 0) ||
+    (reached ? (reached.get(a) ?? Infinity) - (reached.get(b) ?? Infinity) : 0))
+
 /**
  * 元素消化表（元素等级 → 吞噬联动）——暴食拟态的元素词缀层：
  * 吞噬是四条成长轴的天然交汇点——这里把「已吸收元素的等级」翻译成吞噬时的即时效果，
@@ -95,8 +112,8 @@ export const getElement = (id) => ELEMENTS[id] || null
  * （吞噬权限 canDevour × 元素权限 canUseElements 的交集，见 WeaponSystem.addDigestCharge）；
  * 非暴食拟态没有吞噬触发，暴食血统没有元素权限，都不会有悬空的元素消化收益。
  *
- * 两档解锁：Lv2 基础消化、Lv4 强化消化（刻意错开 Lv4 / Lv8 的槽位里程碑，
- * 让升级点的收益分散在不同系统上）。damageMul 相对当前武器伤害换算。
+ * 两档解锁：Lv2 基础消化、Lv4 强化消化（让升级点的收益分散在不同系统上）。
+ * damageMul 相对当前武器伤害换算。
  */
 export const DIGEST_EFFECTS = {
   fire: {

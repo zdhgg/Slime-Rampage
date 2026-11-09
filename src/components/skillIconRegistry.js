@@ -244,6 +244,8 @@ export const SKILL_ICON_KEYS = Object.freeze({
   lightning_storm: 'cloud',
   origin_concord: 'link2',
   origin_flux: 'repeat2',
+  origin_discovery: 'waves',
+  origin_multicast: 'sparkles',
   origin_overload: 'gem',
   origin_adapt: 'shield_check',
   origin_motility: 'movement',

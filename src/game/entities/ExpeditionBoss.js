@@ -241,7 +241,7 @@ export class ExpeditionBoss extends Boss {
           clamp(this.x + Math.cos(angle) * radius, 24, this.game.worldWidth - 24),
           clamp(this.y + Math.sin(angle) * radius, 24, this.game.worldHeight - 24),
           formation[i % formation.length],
-          { elite: this.phase === 2 && i === 0 }
+          { elite: this.phase === 2 && i === 0, summoned: true }
         )
       }
     } else if (mechanic === 'royal-chess') {

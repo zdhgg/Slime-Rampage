@@ -40,6 +40,7 @@ export class Gem {
     this.y = y
     this.value = value // 经验值（元素核心时无意义，取 0）
     this.type = type // 'exp' | 'fire' | 'water' | 'poison' | 'lightning'
+    this.coreChoices = Array.isArray(meta?.coreChoices) ? [...new Set(meta.coreChoices)].filter(id => ELEMENTS[id]).slice(0, 2) : null
     this.mastery = !!meta?.mastery // type='tome' 时区分普通王级秘籍与职业秘典
     this.state = 'idle' // 'idle' | 'magnet'
     this.vx = 0 // 吸附速度（magnet 状态使用）

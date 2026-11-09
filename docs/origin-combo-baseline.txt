@@ -1,0 +1,99 @@
+
+=== expansion / mark=gatling / memory=true ===
+随机种子 1 · 核心掉落 229 · 首颗 32.7s · 状态秒数 {"charging":15,"cooldown":555,"waiting":6,"windup":25,"ready":0}
+模拟 600s · Lv.27 · 击杀 2232（首领 6）· 结束=running
+强制恢复日志 [{"t":26,"lock":1,"site":"at GameEngine.evolutionEvent (file:///D:/My%20Programs/Slime%20Rampage/src/game/GameEngine"},{"t":72,"lock":1,"site":"at GameEngine.evolutionEvent (file:///D:/My%20Programs/Slime%20Rampage/src/game/GameEngine"},{"t":84,"lock":1,"site":"at GameEngine.evolutionEvent (file:///D:/My%20Programs/Slime%20Rampage/src/game/GameEngine"},{"t":166,"lock":1,"site":"at GameEngine.reactionSlotsFull (file:///D:/My%20Programs/Slime%20Rampage/src/game/GameEng"}]
+超载 93 次 · 源质释放 93 次 · 无目标等待 11 次 · 强退暂停 4 次
+源质伤害 3170.60 / 全来源 32879.44 = 9.6% · 命中 337 次 · 击杀 165
+源质对首领 316.88 · 对精英 555.94
+分桶：源质 2061.59 6.3% · 震荡系 3925.80 11.9% · 秘典 0.00 0.0% · 其他 26892.05 81.8%
+对首领：源质 356.52 10.5% · 震荡系 403.70 11.9% · 秘典 0.00 0.0% · 其他 2645.42 77.7%
+超载节奏：首次 11.1s · 平均间隔 6.4s · 最长 9.4s
+每次释放命中目标：平均 3.6 · 最高 23 · 空放 0/92
+  原质环流: 33 次 · 平均命中 5.06 · 空放 0（0%）
+  破阵凝胶波: 36 次 · 平均命中 2.44 · 空放 0（0%）
+  奥术坍缩: 17 次 · 平均命中 3.53 · 空放 0（0%）
+  棘刺追猎雨: 6 次 · 平均命中 3.33 · 空放 0（0%）
+  空放时最近目标距离 0px · 命中时 159px
+  最近目标是首领的比例 4.3% · 空放中最近目标距离>540 的比例 0%
+源质卡出现 4 次（knight_breach,mage_collapse,archer_hunt,archer_hunt）· 首枚记忆在 222 秒
+技能分布：{"primal_orbit":33,"knight_breach":37,"mage_collapse":17,"archer_hunt":6} · 记忆 ["knight_breach:1","mage_collapse:1","archer_hunt:2"] · 游标 1
+性能：0.05 ms/帧（总 1.6s）
+
+=== assimilation / mark=assassin / memory=true ===
+随机种子 1 · 核心掉落 246 · 首颗 33.8s · 状态秒数 {"charging":13,"cooldown":558,"waiting":4,"windup":25,"ready":0}
+模拟 600s · Lv.27 · 击杀 2269（首领 6）· 结束=running
+强制恢复日志 [{"t":26,"lock":1,"site":"at GameEngine.evolutionEvent (file:///D:/My%20Programs/Slime%20Rampage/src/game/GameEngine"},{"t":90,"lock":1,"site":"at GameEngine.evolutionEvent (file:///D:/My%20Programs/Slime%20Rampage/src/game/GameEngine"},{"t":103,"lock":1,"site":"at GameEngine.evolutionEvent (file:///D:/My%20Programs/Slime%20Rampage/src/game/GameEngine"},{"t":108,"lock":1,"site":"at GameEngine.reactionSlotsFull (file:///D:/My%20Programs/Slime%20Rampage/src/game/GameEng"}]
+超载 93 次 · 源质释放 93 次 · 无目标等待 8 次 · 强退暂停 4 次
+源质伤害 4100.07 / 全来源 34841.37 = 11.8% · 命中 389 次 · 击杀 201
+源质对首领 401.66 · 对精英 845.33
+分桶：源质 2519.54 7.2% · 震荡系 1483.66 4.3% · 秘典 0.00 0.0% · 其他 30838.18 88.5%
+对首领：源质 424.32 12.3% · 震荡系 109.92 3.2% · 秘典 0.00 0.0% · 其他 2906.13 84.5%
+超载节奏：首次 11.1s · 平均间隔 6.4s · 最长 8.6s
+每次释放命中目标：平均 4.2 · 最高 21 · 空放 1/92
+  原质环流: 30 次 · 平均命中 6.67 · 空放 0（0%）
+  破阵凝胶波: 37 次 · 平均命中 3.11 · 空放 1（3%）
+  奥术坍缩: 20 次 · 平均命中 2.80 · 空放 0（0%）
+  棘刺追猎雨: 5 次 · 平均命中 3.00 · 空放 0（0%）
+  空放时最近目标距离 155px · 命中时 135px
+  最近目标是首领的比例 2.2% · 空放中最近目标距离>540 的比例 0%
+源质卡出现 4 次（knight_breach,mage_collapse,archer_hunt,mage_collapse）· 首枚记忆在 201 秒
+技能分布：{"primal_orbit":30,"knight_breach":37,"mage_collapse":20,"archer_hunt":6} · 记忆 ["knight_breach:1","mage_collapse:2","archer_hunt:1"] · 游标 0
+性能：0.03 ms/帧（总 1.2s）
+
+=== resonance / mark=elemental / memory=true ===
+随机种子 1 · 核心掉落 230 · 首颗 35.0s · 状态秒数 {"charging":15,"cooldown":558,"waiting":0,"windup":27,"ready":0}
+模拟 600s · Lv.27 · 击杀 2266（首领 4）· 结束=running
+强制恢复日志 [{"t":26,"lock":1,"site":"at GameEngine.evolutionEvent (file:///D:/My%20Programs/Slime%20Rampage/src/game/GameEngine"},{"t":105,"lock":1,"site":"at GameEngine.evolutionEvent (file:///D:/My%20Programs/Slime%20Rampage/src/game/GameEngine"},{"t":111,"lock":1,"site":"at GameEngine.evolutionEvent (file:///D:/My%20Programs/Slime%20Rampage/src/game/GameEngine"},{"t":121,"lock":1,"site":"at GameEngine.reactionSlotsFull (file:///D:/My%20Programs/Slime%20Rampage/src/game/GameEng"}]
+超载 101 次 · 源质释放 101 次 · 无目标等待 0 次 · 强退暂停 4 次
+源质伤害 3829.73 / 全来源 35257.37 = 10.9% · 命中 503 次 · 击杀 197
+源质对首领 381.64 · 对精英 579.73
+分桶：源质 2608.83 7.4% · 震荡系 1602.22 4.5% · 秘典 0.00 0.0% · 其他 31046.32 88.1%
+对首领：源质 445.30 11.2% · 震荡系 110.43 2.8% · 秘典 0.00 0.0% · 其他 3437.69 86.1%
+超载节奏：首次 11.1s · 平均间隔 5.8s · 最长 7.0s
+每次释放命中目标：平均 5.0 · 最高 23 · 空放 2/100
+  原质环流: 39 次 · 平均命中 7.46 · 空放 0（0%）
+  破阵凝胶波: 38 次 · 平均命中 3.39 · 空放 1（3%）
+  奥术坍缩: 16 次 · 平均命中 3.88 · 空放 0（0%）
+  棘刺追猎雨: 7 次 · 平均命中 2.86 · 空放 1（14%）
+  空放时最近目标距离 143px · 命中时 144px
+  最近目标是首领的比例 2.0% · 空放中最近目标距离>540 的比例 0%
+源质卡出现 3 次（knight_breach,mage_collapse,archer_hunt）· 首枚记忆在 242 秒
+技能分布：{"primal_orbit":39,"knight_breach":39,"mage_collapse":16,"archer_hunt":7} · 记忆 ["knight_breach:1","mage_collapse:1","archer_hunt:1"] · 游标 1
+性能：0.03 ms/帧（总 1.1s）
+
+=== expansion / mark=gatling / memory=false ===
+随机种子 1 · 核心掉落 256 · 首颗 32.7s · 状态秒数 {"charging":15,"cooldown":553,"waiting":8,"windup":25,"ready":0}
+模拟 600s · Lv.27 · 击杀 2301（首领 5）· 结束=running
+强制恢复日志 [{"t":26,"lock":1,"site":"at GameEngine.evolutionEvent (file:///D:/My%20Programs/Slime%20Rampage/src/game/GameEngine"},{"t":72,"lock":1,"site":"at GameEngine.evolutionEvent (file:///D:/My%20Programs/Slime%20Rampage/src/game/GameEngine"},{"t":84,"lock":1,"site":"at GameEngine.evolutionEvent (file:///D:/My%20Programs/Slime%20Rampage/src/game/GameEngine"},{"t":166,"lock":1,"site":"at GameEngine.reactionSlotsFull (file:///D:/My%20Programs/Slime%20Rampage/src/game/GameEng"}]
+超载 92 次 · 源质释放 92 次 · 无目标等待 15 次 · 强退暂停 4 次
+源质伤害 2152.61 / 全来源 35220.70 = 6.1% · 命中 393 次 · 击杀 130
+源质对首领 126.87 · 对精英 713.27
+分桶：源质 1741.39 4.9% · 震荡系 3605.61 10.2% · 秘典 0.00 0.0% · 其他 29873.70 84.8%
+对首领：源质 145.81 4.3% · 震荡系 318.57 9.4% · 秘典 0.00 0.0% · 其他 2921.80 86.3%
+超载节奏：首次 11.1s · 平均间隔 6.4s · 最长 9.4s
+每次释放命中目标：平均 4.3 · 最高 23 · 空放 0/91
+  原质环流: 91 次 · 平均命中 4.27 · 空放 0（0%）
+  空放时最近目标距离 0px · 命中时 161px
+  最近目标是首领的比例 4.4% · 空放中最近目标距离>540 的比例 0%
+源质卡出现 3 次（knight_breach,mage_collapse,mage_collapse）· 首枚记忆在 222 秒
+技能分布：{"primal_orbit":92} · 记忆 [] · 游标 0
+性能：0.03 ms/帧（总 1.0s）
+
+=== resonance / mark=elemental / memory=true ===
+随机种子 1 · 核心掉落 0 · 首颗 -s · 状态秒数 {"charging":11,"cooldown":9,"waiting":0,"windup":1,"ready":0}
+模拟 20s · Lv.3 · 击杀 9（首领 0）· 结束=defeat
+结束原因 slime-defeated · 生命 0 · 无敌 0.5
+强制恢复日志 [{"t":20,"lock":1,"site":"at GameEngine.finishRun (file:///D:/My%20Programs/Slime%20Rampage/src/game/GameEngine.js:1"}]
+超载 2 次 · 源质释放 2 次 · 无目标等待 0 次 · 强退暂停 1 次
+源质伤害 8.60 / 全来源 40.87 = 21.1% · 命中 7 次 · 击杀 1
+源质对首领 0.00 · 对精英 0.00
+分桶：源质 8.30 20.3% · 震荡系 13.08 32.0% · 秘典 0.00 0.0% · 其他 19.48 47.7%
+超载节奏：首次 11.1s · 平均间隔 6.7s · 最长 6.7s
+每次释放命中目标：平均 3.0 · 最高 3 · 空放 0/1
+  原质环流: 1 次 · 平均命中 3.00 · 空放 0（0%）
+  空放时最近目标距离 0px · 命中时 177px
+  最近目标是首领的比例 0.0% · 空放中最近目标距离>540 的比例 0%
+源质卡出现 0 次（）· 首枚记忆在 - 秒
+技能分布：{"primal_orbit":2} · 记忆 [] · 游标 0
+性能：0.00 ms/帧（总 0.0s）

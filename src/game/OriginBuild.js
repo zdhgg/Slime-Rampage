@@ -46,12 +46,12 @@ export const ORIGIN_ROUTES = Object.freeze({
     icon: '🌊',
     color: '#5ad1c8',
     tint: 'rgba(90,209,200,0.22)',
-    desc: '把震荡扩散成层叠冲击环，用残留液痕与波纹外延持续压缩怪群空间。',
-    bonus: '震荡范围 +12%，每第 3 次震荡追加一道 35% 伤害的副环；震荡自带液痕；超载覆盖更大并在落点留下液域',
-    shockDesc: '范围冲击 + 副环 + 残留液痕',
+    desc: '让超载扩散成层叠冲击环，用液域和震荡液痕持续压缩怪群空间。',
+    bonus: '震荡范围 +12% 并留下液痕；超载覆盖更大，在落点留下液域，每第 3 次超载追加副环',
+    shockDesc: '范围冲击 + 残留液痕',
     overloadDesc: '超载范围 +10%~15%，落点生成液域',
     roadmap: [
-      'T1: 层叠冲击环（每 3 次震荡追加副环）',
+      'T1: 层叠冲击环（每 3 次超载追加副环）',
       'T2: 残留液痕强化（路线自带液痕；提升持续/伤害/减速）',
       'T3: 波纹外延（边缘伤害与击退强化）',
     ],
@@ -107,9 +107,9 @@ export const ORIGIN_MARKS = Object.freeze({
   },
   elemental: {
     id: 'elemental', name: '元素印记', icon: '🔮', color: '#a29bfe',
-    desc: '震荡附带轻量元素附着；超载时触发一次有上限的晶核共鸣。',
+    desc: '强化超载元素注入与连招反应，并保留震荡的轻量元素附着。',
     shockDesc: '25% 概率附加已吸收元素（时长按元素 0.6~3 秒）',
-    overloadDesc: '触发晶核共鸣（最多 5 个目标）',
+    overloadDesc: '元素注入与连招反应效果 +20%（最多 5 个目标）',
   },
   assassin: {
     id: 'assassin', name: '暗影印记', icon: '🗡️', color: '#ff6b6b',
@@ -160,30 +160,43 @@ const markUpgrade = (mark, id, name, icon, desc, stats) => ({
 
 export const ORIGIN_COMMON_SKILLS = [
   {
-    id: 'com_shock', name: '震荡扩能', icon: '🫧',
+    id: 'origin_multicast', name: '多重超载', icon: '✨', spec: 'origin', originOnly: true,
+    originPool: 'common', originCommit: 'route', maxLevel: 1, discreteUnlock: true, growthClass: 'core', tier: 2,
+    tags: ['原生核心', '超载'], desc: '每第三次成功超载，额外释放一项不同的协同技能。',
+    stats: () => '第三次超载追加第三项技能 · 伤害为独立释放的 40%', apply() {},
+  },
+  {
+    id: 'origin_discovery', name: '原质冲波', icon: '🌊', iconKey: 'waves',
+    spec: 'origin', originOnly: true, originPool: 'common', maxLevel: 1, discreteUnlock: true,
+    growthClass: 'common', tier: 1, weight: 1.2, tags: ['原生核心', '协同技能'],
+    desc: '发现原质冲波并加入超载配置。掌握协同能力后本体飞弹伤害为65%，输出转向超载连招。',
+    stats: () => '解锁原质冲波 · 协同伤害为独立释放的 60%', apply() {},
+  },
+  {
+    id: 'com_shock', name: '震荡催化', icon: '🫧',
     spec: 'origin', originOnly: true, originPool: 'common', originCommit: 'route',
     maxLevel: 3, growthClass: 'common', tier: 1, weight: 1.2,
-    desc: '强化原生唯一的主动技「黏液震荡」；路线与印记只改变形态，不改变主动身份。',
+    desc: '扩大震荡并提高有效命中时获得的异源能量。',
     tags: ['原生核心', '主动技'],
-    stats(lv) { return `震荡伤害 +${(lv + 1) * 8}% · 范围 +${(lv + 1) * 6}px` },
+    stats(lv) { return `震荡伤害 +${(lv + 1) * 8}% · 范围 +${(lv + 1) * 6}px · 命中充能 +${lv + 1}` },
     apply() {},
   },
   {
     id: 'origin_flux', name: '异源校准', icon: '🔄',
-    spec: 'origin', originOnly: true, originPool: 'common', originRequires: { route: true },
+    spec: 'origin', originOnly: true, originPool: 'common',
     originCommit: 'route', maxLevel: 6, growthClass: 'core', tier: 2, weight: 1,
-    desc: '让不同伤害来源之间的异源能量轮换更高效；同源收益不变，异源收益递减封顶。',
+    desc: '提高普攻、震荡和元素命中的充能效率，收益递减。',
     tags: ['原生核心', '异源能量'],
     stats(lv, game) {
       const before = getOriginGrowth({ ...game, skillLevels: { ...(game?.skillLevels || {}), origin_flux: lv } }).foreignBonus
       const after = getOriginGrowth({ ...game, skillLevels: { ...(game?.skillLevels || {}), origin_flux: lv + 1 } }).foreignBonus
-      return `异源充能额外 +${before.toFixed(1)} → +${after.toFixed(1)}（上限 +3）`
+      return `命中充能 +${Math.round(before * 5)}% → +${Math.round(after * 5)}%`
     },
     apply() {},
   },
   {
     id: 'origin_overload', name: '超载棱镜', icon: '🔆',
-    spec: 'origin', originOnly: true, originPool: 'common', originRequires: { route: true },
+    spec: 'origin', originOnly: true, originPool: 'common',
     originCommit: 'route', maxLevel: 6, growthClass: 'core', tier: 2, weight: 1,
     desc: '强化被动超载的源质技能与原质环流：提高伤害与范围，并受全局硬上限约束。',
     tags: ['原生核心', '超载'],
@@ -207,47 +220,47 @@ export const ORIGIN_COMMON_SKILLS = [
     id: 'origin_motility', name: '流体机动', icon: '💨',
     spec: 'origin', originOnly: true, originPool: 'common', originCommit: 'route',
     maxLevel: 3, growthClass: 'common', tier: 1, weight: 0.9,
-    desc: '震荡后短暂提高移动速度，让原生在释放主动后更容易重新拉开距离。',
+    desc: '震荡或成功超载后短暂提高移动速度，同类效果刷新但不叠加。',
     tags: ['原生核心', '机动'],
-    stats(lv) { return `震荡后移速 +${4 + (lv + 1) * 4}%（持续 1.5 秒）` },
+    stats(lv) { return `震荡或超载后移速 +${4 + (lv + 1) * 4}%（持续 1.5 秒）` },
     apply() {},
   },
   {
     id: 'origin_recovery', name: '液态回流', icon: '🌱',
     spec: 'origin', originOnly: true, originPool: 'common', originCommit: 'route',
     maxLevel: 2, growthClass: 'common', tier: 2, weight: 0.8,
-    desc: '震荡击杀敌人时回复生命；共享独立冷却，不能靠怪海无限续航。',
+    desc: '超载技能命中敌人时回复生命，受独立冷却限制。',
     tags: ['原生核心', '恢复'],
-    stats(lv) { return `震荡击杀回复 1 生命（${lv === 0 ? 12 : 10} 秒 ICD）` },
+    stats(lv) { return `超载命中回复 1 生命（${lv === 0 ? 12 : 10} 秒冷却）` },
     apply() {},
   },
 ]
 
 export const ORIGIN_FRAGMENT_SKILLS = [
   fragment('glutton', 'ori_frag_glutton', '暴食碎片', '🍽️',
-    '震荡命中残血目标时获得 1 层护甲；不回复生命，也不能吞噬。',
-    () => '残血命中获得 1 层护甲 · 6 秒 ICD'),
+    '超载命中时获得短暂护甲。',
+    () => '超载命中获得 1 层护甲 · 6 秒冷却'),
   fragment('gatling', 'ori_frag_gatling', '弹射碎片', '🔫',
-    '震荡有概率追加 1 枚弱化副弹；不获得分裂、连锁或穿透。',
-    () => '50% 概率追加 1 枚 35% 副弹 · 3 秒 ICD'),
+    '超载追加 1 枚弱化追踪弹。',
+    () => '追加 1 枚 35% 副弹 · 3 秒冷却'),
   fragment('elemental', 'ori_frag_elemental', '元素碎片', '🔮',
-    '震荡有概率附加已吸收元素的短暂附着；需先吸收元素核心，且不会开启元素法术树。',
+    '超载的元素注入效果提高 10%；需先吸收元素核心。',
     (lv, game) => (game?.player?.elements?.size || 0) > 0
-      ? '35% 概率附加 1 种已吸收元素（时长按元素 0.6~3 秒）'
+      ? '超载元素注入效果 +10%'
       : '未吸收任何元素核心 · 当前不会触发（先吃一颗元素核心）'),
   fragment('assassin', 'ori_frag_assassin', '暗影碎片', '🗡️',
-    '震荡后短暂隐匿并小幅强化下一次攻击；不获得分身与闪避。',
+    '超载后短暂隐匿并强化下一次攻击。',
     () => '0.5 秒隐匿 · 下一次攻击 +12% · 6 秒 ICD'),
   fragment('symbiosis', 'ori_frag_symbiosis', '共生碎片', '🐾',
-    '震荡生成 1 点支援泡泡；不会生成伙伴，也不提供鼓舞。',
+    '成功超载时生成 1 点支援泡泡。',
     () => '获得 1 点支援泡泡 · 10 秒 ICD'),
 ]
 
 export const ORIGIN_ROUTE_SKILLS = {
   expansion: [
     routeSkill('expansion', 'ori_exp_ring', '层叠冲击环', '🌊', 3,
-      '每第 3 次黏液震荡追加一道延迟副环；副环伤害低于主环，且不产生异源能量。',
-      lv => `副环伤害 ${Math.round((0.35 + 0.05 * (lv + 1)) * 100)}% · 半径为主环的 60%`,
+      '每第 3 次超载在落点追加一道延迟副环；副环不产生异源能量。',
+      lv => `副环伤害为武器伤害的 ${Math.round((0.35 + 0.05 * (lv + 1)) * 100)}% · 半径 100`,
       () => {}),
     routeSkill('expansion', 'ori_exp_residue', '残留液痕', '💧', 3,
       '强化路线自带的震荡液痕与超载液域：延长持续、提高周期伤害与减速；两种液域各自最多 1 个。',
@@ -264,7 +277,7 @@ export const ORIGIN_ROUTE_SKILLS = {
   ],
   assimilation: [
     routeSkill('assimilation', 'ori_asm_stack', '不稳定基因纹路', '🧬', 3,
-      '提高同化层数上限与每层伤害；层数在基础 8 秒内未刷新会衰减，可由同化持续延长。',
+      '提高同化层数上限与每层伤害；未满层时超过持续时间会消失，满层奖励保留至下次超载。',
       lv => `层数上限 ${5 + lv + 1} · 每层伤害 +${(2.5 + 0.5 * (lv + 1)).toFixed(1)}%`,
       () => {}),
     routeSkill('assimilation', 'ori_asm_recompose', '局部形态重组', '🦠', 3,
@@ -286,16 +299,16 @@ export const ORIGIN_ROUTE_SKILLS = {
       lv => `回路充能 +${Math.round((0.04 + 0.02 * (lv + 1)) * 100)}% · 持续时间 ${8 + lv + 1} 秒`,
       () => {}),
     routeSkill('resonance', 'ori_res_core', '共振核心', '◈', 3,
-      '每层共振回路提高被动超载伤害；这是共振路线的主要爆发成长。',
-      lv => `每层回路超载伤害 +${Math.round((0.05 + 0.03 * (lv + 1)) * 100)}%（与超载爆发合计封顶 30%）`,
+      '每层共振回路提高被动超载伤害，上限 30%。',
+      lv => `每层回路超载伤害 +${Math.round((0.05 + 0.03 * (lv + 1)) * 100)}%（封顶 30%）`,
       () => {}),
     routeSkill('resonance', 'ori_res_switch', '多源切换', '🔄', 2,
       '切换伤害来源时额外获得少量异源能量；独立 3 秒冷却，不能靠高频多段刷能。',
       lv => `切换来源额外 +${(lv + 1) * 2} 能量 · 3 秒 ICD`,
       () => {}),
     routeSkill('resonance', 'ori_res_burst', '超载爆发', '💥', 2,
-      '每层共振回路使被动超载伤害额外提高；与共振核心合计封顶 30%，满 3 回路时再追加一次共振余波。',
-      lv => `每层回路超载伤害额外 +${(lv + 1) * 15}%（合计封顶 30%）`,
+      '强化满 3 回路时追加的共振余波，每次超载最多一次。',
+      lv => `共振余波伤害 ${15 + (lv + 1) * 5}%`,
       () => {}),
   ],
 }
@@ -308,8 +321,8 @@ export const ORIGIN_MARK_SKILLS = [
     '强化副弹数量；总伤害仍受超载回响 35% 预算约束，不会随深化超预算。',
     () => '副弹数量 +1 · 超载回响总伤害仍受 35% 预算'),
   markUpgrade('elemental', 'ori_mark_elemental', '元素印记·深化', '🔮',
-    '提高震荡元素附着的概率与持续时间；超载晶核回响仍受 35% 预算。',
-    () => '附着概率 +15% · 持续时间 +0.75 秒'),
+    '提高震荡元素附着的概率与持续时间，元素注入与连招反应强化至 30%。',
+    () => '超载元素效果 +30% · 震荡附着概率 +15% · 持续时间 +0.75 秒'),
   markUpgrade('assassin', 'ori_mark_assassin', '暗影印记·深化', '🗡️',
     '延长隐匿并强化下一次攻击；仍然不会生成分身。',
     () => '隐匿 +0.4 秒 · 下一次攻击 +15%'),
@@ -401,7 +414,7 @@ export function getOriginGrowth(game, overrideLevels = null) {
     circuitEnergy: route === 'resonance' ? 0.04 + 0.02 * circuitLevel : 0,
     circuitDamage: route === 'resonance' ? 0.05 + 0.03 * coreLevel : 0,
     circuitWindow: ORIGIN_RULES.resonanceWindow + circuitLevel,
-    overloadBurstBonus: route === 'resonance' ? 0.15 * burstLevel : 0,
+    overloadBurstBonus: route === 'resonance' ? Math.min(0.25, 0.15 + 0.05 * burstLevel) : 0,
     adaptReduction: 0.1 * lv(levels, 'origin_adapt'),
     motilityBonus: lv(levels, 'origin_motility') > 0 ? 0.04 + 0.04 * lv(levels, 'origin_motility') : 0,
     recoveryLevel: lv(levels, 'origin_recovery'),
@@ -521,6 +534,7 @@ export function resetOriginState(game) {
   p.originGuard = 0
   p.originGuardTimer = 0
   p.originNextHitMul = 1
+  p.originNextHitFromOverload = false
   p.originRiderIcd = {}
   p.originAdaptReduction = 0
   p.originFormDr = 0
@@ -586,6 +600,7 @@ export function originBuildNote(game) {
 
 function originSkillUsable(game, skill, role) {
   if (!skill || game?.startingStrain !== 'origin') return false
+  if (skill.id === 'origin_multicast' && (game?.originCombo?.equipped?.length || 0) < 3) return false
   const level = lv(game.skillLevels, skill.id)
   const max = getEffectiveSkillMaxLevel(game, skill, role)
   if (level >= max) return false
@@ -672,7 +687,10 @@ export function rollOriginSkills(game, count = 3, commonSkills = [], random = Ma
   while (pool.length && choices.length < count) {
     // 探索期/路线期都保证至少 1 张原生卡，避免三张全通用。
     const firstOrigin = choices.length === 0 && pool.some(skill => skill.originOnly)
-    const from = firstOrigin ? pool.filter(skill => skill.originOnly) : pool
+    const earlyOverload = firstOrigin && level <= 3
+      ? pool.filter(skill => ['origin_flux', 'origin_overload'].includes(skill.id)) : []
+    const discovery = choices.length === 1 && level <= 4 ? pool.filter(skill => skill.id === 'origin_discovery') : []
+    const from = discovery.length ? discovery : earlyOverload.length ? earlyOverload : firstOrigin ? pool.filter(skill => skill.originOnly) : pool
     const skill = drawWeighted(from.length ? from : pool)
     pool.splice(pool.indexOf(skill), 1)
     const cur = lv(levels, skill.id)

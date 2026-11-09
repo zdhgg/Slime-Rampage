@@ -442,11 +442,13 @@ export const GENES = [
     requires: [{ id: 'lore', level: 1 }],
     name: '共鸣基因',
     icon: '🔗',
-    desc: '元素史莱姆按路线强化法术与融合；原生黏液每级增加 1 个副反应槽位',
+    desc: '元素史莱姆按路线强化法术与融合；原生黏液每级反应伤害 +10%',
     costs: [300, 600, 1000],
     maxLevel: 3,
     apply(game, lv) {
-      game.player.geneSlotBonus = lv
+      if (game.startingStrain === 'origin') {
+        game.weaponSystem.geneReactionDmgMul = (game.weaponSystem.geneReactionDmgMul || 1) * (1 + lv * .1)
+      }
       game.weaponSystem.spellGeneReactionMul = 1 + lv * .12
       game.weaponSystem.spellGeneRoutePowerMul = 1 + lv * .04
     },
@@ -552,13 +554,15 @@ export const GENES = [
     requires: [{ id: 'lore', level: 2 }, { id: 'resonance', level: 1 }],
     name: '共鸣原核',
     icon: '◆',
-    desc: '反应伤害 +25%；元素史莱姆主动术基础范围 +15px，额外强化路线；原生黏液增加 1 个副反应槽位',
+    desc: '反应伤害 +25%；元素史莱姆主动术基础范围 +15px，额外强化路线；原生黏液反应伤害再 +20%',
     costs: [2200],
     maxLevel: 1,
     apply(game) {
-      game.weaponSystem.geneReactionDmgMul = 1.25
+      game.weaponSystem.geneReactionDmgMul = (game.weaponSystem.geneReactionDmgMul || 1) * 1.25
       game.weaponSystem.spellGeneRoutePowerMul = (game.weaponSystem.spellGeneRoutePowerMul || 1) * 1.08
-      game.player.geneSlotBonus = (game.player.geneSlotBonus || 0) + 1
+      if (game.startingStrain === 'origin') {
+        game.weaponSystem.geneReactionDmgMul *= 1.2
+      }
     },
   },
   {
@@ -670,7 +674,6 @@ export function applyGenes(game, genes) {
   p.expGainMul = 1
   p.regen = 0
   p.pickupRadius = 150
-  p.geneSlotBonus = 0
   p.geneDevourHeal = 0
   p.geneDevourExpMul = 1
   p.geneDevourDamage = 0
@@ -714,9 +717,5 @@ export function applyGenes(game, genes) {
   }
   weapon.splitChance = weapon.baseSplitChance
   weapon.spellGenePowerMul = 1 + weapon.baseSplitChance * .3
-  // 派生展示值（黑市收益预览读 baseSecondarySlots 差值）；最终槽位与等级加成
-  // 由 refreshReactionSlots 统一结算（重开时元素已清空，是纯重算）
-  p.baseSecondarySlots = 2 + (p.geneSlotBonus || 0)
-  p.refreshReactionSlots?.()
   p.hp = p.maxHp
 }

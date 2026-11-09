@@ -28,7 +28,7 @@ export const CORE_SKILL_RANK_CAPS = Object.freeze({
 
 export function getEffectiveSkillMaxLevel(game, skill, role = skill?.role) {
   const base = Number.isFinite(skill?.maxLevel) ? Math.max(0, skill.maxLevel) : Infinity
-  if (!skill || skill.isBossSkill || skill.isMilestone || skill.isCapstone || skill.isPartnerChoice) return base
+  if (!skill || skill.discreteUnlock || skill.isBossSkill || skill.isMilestone || skill.isCapstone || skill.isPartnerChoice) return base
   const progressionRole = skill.progressionRole || role
 
   const mode = game?.runSelection?.mode || 'timed'

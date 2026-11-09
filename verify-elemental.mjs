@@ -189,12 +189,12 @@ check('普通升级无旧附魔与四系终极，已有基因有效且幂等，�
   g.genes = genes; applyGenes(g, genes); const grown = s.power, grownReaction = s.reactionPower
   assert.ok(grown > power); assert.ok(grownReaction > reaction)
   applyGenes(g, genes); near(s.power, grown); near(s.reactionPower, grownReaction)
-  assert.deepEqual(g.player._procs, {}); assert.equal(g.player.secondarySlots, 0)
+  assert.deepEqual(g.player._procs, {}); assert.equal(g.player._secondaryIds.size, 0)
   s.applyCore(s.coreOptions()[0]); g.reset()
   assert.equal(s.cores, 0); assert.equal(s.elements.size, 0); assert.deepEqual(s.upgrades, {})
   assert.equal(g._spellCoreSeen.size, 0); assert.equal(s.marks.size, 0)
   g.applyStartingStrain('origin'); g.reset(); g.player.absorbElement('fire'); g.player.absorbElement('poison')
-  assert.equal(g.player._primaryReaction, 'acid'); assert.ok(g.player._procs.burn); assert.ok(g.player.secondarySlots > 0)
+  assert.equal(g.player._primaryReaction, 'acid'); assert.ok(g.player._procs.burn); assert.equal(g.player._secondaryIds.size, 0)
 })
 check('暂停、无效空格、死亡清理与高密度区域/反应预算', (g, s) => {
   pressSpace(g); assert.equal(g.player.strainSkillCd, 0)
@@ -792,34 +792,33 @@ check('已有毒雾和传染在融合后切换配色，雷暴形态继承当前�
   s.render(ctx2d)
 }, 'poison')
 
-// —— 副反应槽统一口径（P2）：基础 + 基因加成 + 等级里程碑，单点汇总、幂等、旧字段折算不丢槽 ——
+// —— 元素等级排名驱动主/副反应 + 共鸣基因/原核反应伤害加成（幂等、无槽位经济）——
 {
   const g = createArena('origin')
   try {
     const genes = { lore: 4, resonance: 3, element_origin: 1 }
     applyGenes(g, genes)
-    assert.equal(g.player.geneSlotBonus, 4, '共鸣基因 Lv.3 + 共鸣原核 = +4 基因槽位加成')
-    assert.equal(g.player.baseSecondarySlots, 6, '派生展示值 = 基础 2 + 基因 4')
-    assert.equal(g.player.secondarySlots, 5, 'Lv.1 无等级加成，封顶 MAX_REACTION_SLOTS = 5')
+    // 共鸣基因 Lv.3 → ×1.3，共鸣原核 → ×1.25 × 1.2（原生专属），合计 ×1.95
+    assert.ok(Math.abs(g.weaponSystem.geneReactionDmgMul - 1.3 * 1.25 * 1.2) < 1e-9)
     applyGenes(g, genes) // 幂等：重复应用不累加
-    assert.equal(g.player.geneSlotBonus, 4); assert.equal(g.player.secondarySlots, 5)
-
+    assert.ok(Math.abs(g.weaponSystem.geneReactionDmgMul - 1.3 * 1.25 * 1.2) < 1e-9)
     applyGenes(g, {})
-    assert.equal(g.player.geneSlotBonus, 0); assert.equal(g.player.secondarySlots, 2, '无基因：Lv.1 基础 2 槽')
-    g.player.level = 4; g.player.refreshReactionSlots()
-    assert.equal(g.player.secondarySlots, 3, 'Lv.4 里程碑 +1')
-    g.player.level = 8; g.player.refreshReactionSlots()
-    assert.equal(g.player.secondarySlots, 4, 'Lv.8 里程碑再 +1')
+    assert.equal(g.weaponSystem.geneReactionDmgMul, 1)
 
-    // 旧字段读取路径：遗留对象只有 baseSecondarySlots（旧规则写入），折算后不丢槽
-    g.player.level = 1
-    delete g.player.geneSlotBonus
-    g.player.baseSecondarySlots = 5 // 旧规则：基础 2 + 共鸣基因 Lv.3
-    g.player.refreshReactionSlots()
-    assert.equal(g.player.geneSlotBonus, 3, '旧字段按 base − 2 折算为基因加成')
-    assert.equal(g.player.secondarySlots, 5, '旧档已获得的槽位不静默丢失')
+    // 排名驱动：第 1、2 名组成主反应，第 3 名两个副反应，第 4 名只给附魔
+    g.player.elements.set('fire', 3); g.player.elements.set('lightning', 2)
+    g.player.elements.set('water', 1); g.player.elements.set('poison', 1)
+    g.player._refreshElements()
+    assert.equal(g.player._primaryReaction, 'burst', '火3雷2 = 主反应爆裂')
+    assert.deepEqual([...g.player._secondaryIds].sort(), ['gel', 'steam'], '副反应 = 第 3 名（水）配前两名')
+    assert.ok(!g.player._reactionIds.has('acid') && !g.player._reactionIds.has('corrode') && !g.player._reactionIds.has('venom'))
+    g.player.elements.set('water', 4); g.player._refreshElements()
+    assert.equal(g.player._primaryReaction, 'steam', '水 4 反超 → 主反应蒸汽')
+    assert.deepEqual([...g.player._secondaryIds].sort(), ['burst', 'gel'], '副反应 = 第 3 名（雷）配前两名')
+    g.player.level = 4; g.player.level = 8 // 升级不再改变反应结构
+    assert.equal(g.player._primaryReaction, 'steam')
   } finally { dispose(g) }
-  console.log(`✓ ${++checks}. 副反应槽统一口径：基因/等级叠加、封顶、幂等与旧字段折算`)
+  console.log(`✓ ${++checks}. 元素等级排名驱动主/副反应，基因反应伤害加成幂等`)
 }
 
 console.log(`\n双元素法术验证通过：${checks} 组机制与回归检查`)

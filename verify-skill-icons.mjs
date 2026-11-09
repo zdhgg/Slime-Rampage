@@ -80,7 +80,7 @@ for (const spec of Object.keys(SPEC_INFO)) check({ id: routeIconId(spec) })
 assert.equal(resolveSkillIcon('unknown_future_skill').missing, true, 'unknown ID stays detectable instead of using emoji')
 
 // Prevent accidental return of the legacy character-specific / emoji render path.
-for (const name of ['LevelUpModal', 'SpellCoreModal', 'HudOverlay', 'FusionConfirmModal', 'ReactionSwapModal', 'RicochetRouteChoice', 'GluttonRouteChoice', 'SymbiosisRouteChoice', 'ShadowRouteChoice', 'ElementalRouteChoice']) {
+for (const name of ['LevelUpModal', 'SpellCoreModal', 'HudOverlay', 'FusionConfirmModal', 'RicochetRouteChoice', 'GluttonRouteChoice', 'SymbiosisRouteChoice', 'ShadowRouteChoice', 'ElementalRouteChoice']) {
   const source = await fs.readFile(`src/components/${name}.vue`, 'utf8')
   assert.match(source, /import SkillIcon from/, `${name}: shared renderer`)
   assert.doesNotMatch(source, /\{\{[^}]*\b(?:s|option|el|c|info|stats\.[a-z]+)\.icon\b[^}]*\}\}/, `${name}: no emoji icon interpolation`)

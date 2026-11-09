@@ -50,7 +50,7 @@ export class OriginCombat {
       p.mutationState.max = g.maxStacks
       if (p.mutationState.timer > 0) {
         p.mutationState.timer = Math.max(0, p.mutationState.timer - dt)
-        if (p.mutationState.timer <= 0) {
+        if (p.mutationState.timer <= 0 && !p.mutationState.empowered) {
           p.mutationState.stacks = 0
           p.mutationState.empowered = false
         }
@@ -112,7 +112,7 @@ export class OriginCombat {
         for (const enemy of this.weapon.enemyManager?.enemies || []) {
           if (!enemy.active || enemy.devouring) continue
           if ((enemy.x - field.x) ** 2 + (enemy.y - field.y) ** 2 > field.r * field.r) continue
-          enemy.hit(field.dmg)
+          enemy.hit(field.dmg, field.overloadField ? { originDamageKind: 'route' } : null)
           if (enemy.active && !enemy.isBoss) enemy.primeSlow = Math.max(enemy.primeSlow || 0, field.slow)
           if (!enemy.active) {
             enemy._originDerivedKill = true // 路线衍生伤害击杀不返还超载充能
@@ -129,7 +129,7 @@ export class OriginCombat {
       ring.delay -= dt
       if (ring.delay > 0) continue
       this.weapon._suppressKillCharge = true // 副环是路线衍生伤害，击杀不返还超载充能
-      try { this.weapon._explode(ring.x, ring.y, ring.damage, null, ring.radius) }
+      try { this.weapon._explode(ring.x, ring.y, ring.damage, { originDamageKind: 'route' }, ring.radius) }
       finally { this.weapon._suppressKillCharge = false }
       this.weapon._ring?.(ring.x, ring.y, ring.color, ring.radius)
       this.pendingRings.splice(i, 1)
@@ -206,8 +206,7 @@ export class OriginCombat {
     const lowHpBefore = this.hasLowHpEnemy(radius, 0.35)
 
     ws._explode(p.x, p.y, damage, null, radius)
-    const kills = Math.max(0, hitCount - this.countEnemies(radius))
-    gainOriginEnergy(this.game, ORIGIN_SOURCES.SHOCK)
+    if (hitCount > 0) gainOriginEnergy(this.game, ORIGIN_SOURCES.SHOCK, this.game.elapsed, hitCount)
     if (p.dead || this.game.runFinished) return true
 
     this.repel(radius, profile.knockback)
@@ -223,12 +222,6 @@ export class OriginCombat {
     else if (route === 'resonance') this.applyResonance(profile)
 
     this.applyRiders(profile, damage, hitCount, lowHpBefore)
-
-    // 液态回流：震荡击杀回复 1 点生命，独立 ICD。
-    if (growth.recoveryLevel > 0 && kills > 0 && this.ready('recovery') && p.hp < p.maxHp) {
-      p.heal(1)
-      this.setIcd('recovery', growth.recoveryLevel >= 2 ? 10 : 12)
-    }
 
     if (growth.motilityBonus > 0) {
       p.originMoveBuff = Math.max(p.originMoveBuff || 0, growth.motilityBonus)
@@ -254,7 +247,7 @@ export class OriginCombat {
     p.mutationState.stacks = Math.min(g.maxStacks, p.mutationState.stacks + n)
     p.mutationState.max = g.maxStacks
     p.mutationState.timer = g.stackDuration
-    p.mutationState.empowered = p.mutationState.stacks >= g.maxStacks
+    p.mutationState.empowered = p.mutationState.empowered || p.mutationState.stacks >= g.maxStacks
   }
 
   addStacks(hitCount) {
@@ -290,6 +283,15 @@ export class OriginCombat {
     const g = this.game
     if (g?.originRoute !== 'expansion' || !this.player || this.player.dead) return
     const growth = getOriginGrowth(g)
+    const state = this.player.routeState?.expansion
+    if (state) {
+      state.shockCount = (state.shockCount || 0) + 1
+      if (state.shockCount % 3 === 0) this.pendingRings.push({
+        x, y, delay: 0.12,
+        damage: this.weapon.damage * this.weapon.levelMul * growth.ringDamage,
+        radius: 100, color: ORIGIN_ROUTES.expansion.color,
+      })
+    }
     const index = this.fields.findIndex(f => f.overloadField === true)
     if (index >= 0) this.fields.splice(index, 1)
     const life = (growth.residueDuration || 3) + 1.5
@@ -308,18 +310,6 @@ export class OriginCombat {
     const g = profile.growth
     const state = p.routeState?.expansion
     if (!state) return
-    state.shockCount++
-    const rings = state.shockCount % 3 === 0 ? 1 : 0
-    for (let i = 0; i < rings; i++) {
-      this.pendingRings.push({
-        x: p.x, y: p.y,
-        delay: 0.12 + i * 0.12,
-        damage: damage * g.ringDamage,
-        radius: profile.radius * 0.6,
-        color: ORIGIN_ROUTES.expansion.color,
-      })
-    }
-
     // 边缘伤害：只补一次，避免重复结算主体伤害。
     if (g.edgeDamageBonus > 0) {
       const inner = profile.radius * 0.7
@@ -370,12 +360,12 @@ export class OriginCombat {
     }
   }
 
-  applyRiders(profile, damage, hitCount, lowHpBefore = false) {
+  applyRiders(profile, damage, hitCount, lowHpBefore = false, onOverload = false) {
     const mark = this.game.originMark
     const p = this.player
     if (!p?.markState) return
-    const hasMark = (family) => mark === family
-    const fragmentActive = (family) => hasOriginFragment(this.game, family) && mark !== family
+    const hasMark = (family) => !onOverload && mark === family
+    const fragmentActive = (family) => onOverload && (onOverload === 'hit' ? family === 'glutton' : family !== 'glutton') && hasOriginFragment(this.game, family) && mark !== family
     const rank = Math.max(1, p.markState?.rank || 1)
 
     // 暴食：残血回复/护甲（不吞噬）
@@ -401,7 +391,7 @@ export class OriginCombat {
           const count = Math.min(3, 1 + (hitCount >= 3 ? 1 : 0) + (rank >= 2 ? 1 : 0))
           fireOriginEchoBolts(this.game, count, 0.5 * (rank >= 2 ? 1.5 : 1))
           this.setIcd('gatling', 4)
-        } else if (Math.random() < 0.5) {
+        } else {
           fireOriginEchoBolts(this.game, 1, 0.35)
           this.setIcd('gatling', 3)
         }
@@ -411,9 +401,9 @@ export class OriginCombat {
     // 元素：轻量附着
     if (hasMark('elemental') || fragmentActive('elemental')) {
       if (this.ready('elemental')) {
-        const chance = hasMark('elemental') ? 0.25 + (rank >= 2 ? 0.15 : 0) : 0.35
+        const chance = hasMark('elemental') ? 0.25 + (rank >= 2 ? 0.15 : 0) : 1
         const bonus = hasMark('elemental') && rank >= 2 ? 0.75 : 0
-        applyElementalMarkProc(this.game, chance, bonus)
+        if (!onOverload) applyElementalMarkProc(this.game, chance, bonus)
         this.setIcd('elemental', 2)
       }
     }
@@ -426,6 +416,7 @@ export class OriginCombat {
         const mul = (strong ? 0.2 : 0.12) + (strong && rank >= 2 ? 0.15 : 0)
         p.stealthTimer = Math.max(p.stealthTimer || 0, duration)
         p.originNextHitMul = Math.max(p.originNextHitMul || 1, 1 + mul)
+        p.originNextHitFromOverload = !!onOverload
         this.weapon.enemyManager?.addText?.(p.x, p.y - 30, '🗡 隐匿', null, ORIGIN_MARKS.assassin.color, 13)
         this.game.sound?.shadowBlade?.(false, false)
         this.setIcd('assassin', 6)

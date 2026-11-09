@@ -1,6 +1,6 @@
 import { SHADOW_BASE_EVASION, SHADOW_MAX_EVASION } from '../ShadowSkills.js'
 import { Entity } from '../core/Entity.js'
-import { getActiveReactions, getElement } from '../ElementSystem.js'
+import { getActiveReactions, getElement, getReaction, reactionForPair, rankElements } from '../ElementSystem.js'
 import { ENDLESS_FORMATION_BREAK_SPEED_MUL } from '../EndlessMode.js'
 import { AssetManager } from '../AssetManager.js'
 import { renderSlimeFamilyBody, renderSlimeFamilyFace, paintSlimeFamilySilhouette, slimeFamilyBodyState, slimeFamilyFaceState } from '../SlimeFamilyArtRenderer.js'
@@ -24,23 +24,12 @@ const ELEMENT_PROC_CHANCE_CAP = 0.6
 export const ELEMENTAL_SPEC_PROC_CAP = 0.85
 
 /**
- * 副反应槽统一口径（P2 收口，单一计算入口 refreshReactionSlots）：
- *   槽位 = BASE_SECONDARY_SLOTS(2) + geneSlotBonus（局外基因） + 等级里程碑加成（Lv.4/Lv.8 各 +1），
- *   最终封顶 MAX_REACTION_SLOTS——反应表 6 种组合去掉主形态后恰好 5 种副反应，再多也无槽可填。
- * 叠加规则：两个来源加法叠加、无优先级冲突——基因加成由 applyGenes 幂等写入
- * geneSlotBonus（共鸣基因每级 +1、共鸣原核 +1，重开重算不累加）；等级加成由
- * getReactionSlotLevelBonus 按当前等级纯函数推导。baseSecondarySlots 只是
- * 「基础 + 基因」的派生展示值（黑市收益预览读取），不再是独立写入点。
+ * 主/副反应统一口径（元素等级排名驱动，单一结算入口 _refreshElements）：
+ *   元素按等级降序排名（同级时当前主反应的元素在前——只有严格超过才切换；再并列按先升到该等级者）；
+ *   第 1、2 名元素组成主反应（物种身份与外形随之转变），
+ *   第 3 名元素分别与前两名组成两个副反应，第 4 名只保留附魔概率收益。
+ * 不设槽位经济与等级里程碑：每颗核心都可能改写构筑，升级只负责数值成长。
  */
-export const BASE_SECONDARY_SLOTS = 2
-export const REACTION_SLOT_LEVELS = [4, 8]
-export const MAX_REACTION_SLOTS = 5
-
-/** 等级带来的槽位加成（升级面板与 HUD 共用同一口径，避免两处漂移）。 */
-export function getReactionSlotLevelBonus(level) {
-  return REACTION_SLOT_LEVELS.filter((milestone) => level >= milestone).length
-}
-
 export const STARTING_EXP_THRESHOLD = 40
 
 // 开局放慢选择面板密度，随后逐级收敛到原有中期阈值。
@@ -125,6 +114,9 @@ export class Player extends Entity {
     this.facing = -Math.PI / 2 // 初始面朝上方
     this.moveBlend = 0 // 移动拉伸平滑系数 0~1（起步/刹车的缓冲）
     this._wasMoving = false
+    // 点地移动的进度看门狗：贴近障碍/边界或被技能位移占用时靠它放弃目标
+    this._tapStall = 0
+    this._tapPrevDist = Infinity
     this.elapsed = 0
 
     // —— 等级与经验（阶段四） ——
@@ -153,17 +145,17 @@ export class Player extends Entity {
     this._procs = {}
     // 附魔概率封顶（专精 → 元素联动）：默认 60%，元素炼金主专精抬升到 85%
     this.elementProcCap = ELEMENT_PROC_CHANCE_CAP
-    // 主形态（阶段十五设计改造）：第一个融合的反应锁定为「物种身份」——
-    // 后续反应以副反应叠加生效，不再改变外形。进化是身份承诺，不是换肤。
+    // 主反应 = 元素等级排名前两名的组合（物种身份与外形随其转变）；
+    // 副反应 = 第 3 名元素分别与前两名的组合；第 4 名只给附魔。
     this._primaryReaction = null
-    // 副反应槽位（阶段十六设计改造）：默认 2 个，黑市「共鸣基因」每级 +1；
-    // 槽满后新组合触发替换面板——稀缺掉落 + 有限槽位 = 硬决策。
-    // 基因加成唯一写入点是 geneSlotBonus（applyGenes 幂等维护）；
-    // baseSecondarySlots 为派生展示值，最终槽位由 refreshReactionSlots 单点汇总。
-    this.geneSlotBonus = 0
-    this.baseSecondarySlots = BASE_SECONDARY_SLOTS
-    this.secondarySlots = BASE_SECONDARY_SLOTS
     this._secondaryIds = new Set()
+    this._elementRanks = [] // 等级降序的元素 id（_refreshElements 单点维护）
+    // 平局决胜：元素 → 升到当前等级的先后序号（_refreshElements 比对等级变化维护）
+    this._elementReached = new Map()
+    this._elementSeenLv = new Map()
+    this._elementReachSeq = 0
+    // 原生黏液超载主注入元素：排名派生的展示缓存（不再手动配置）
+    this.originOverloadElement = null
     // 异源能量（origin 独占资源）：归零初始化，获取/消耗口径见 PrimalEnergy.js
     resetPrimalEnergy(this)
     this.originMoveBuff = 0
@@ -212,7 +204,10 @@ export class Player extends Entity {
     // 而 resource 型分支由 GameEngine 依据「是否拥有猎食点」自动切换。
     this.strainSkillCd = 0 // 剩余冷却（秒）
     this.strainSkillMax = 0 // 当前技能冷却上限（HUD 进度条用）
-    this.strainSkillReadyPulse = 0 // 施放瞬间的反馈脉冲（秒）
+    this.strainSkillReadyPulse = 0 // 施放瞬间的反馈脉冲（秒）：HUD 的「按下回弹」
+    this.strainSkillReadyFlash = 0 // 冷却归零瞬间的反馈脉冲（秒）：HUD 的「就绪弹」
+    // 两个脉冲由 GameEngine 在各自时刻置位、逐帧递减，HUD 只做 >0 的布尔化；
+    // 分开是因为「刚可用」和「刚用掉」在视觉上必须能区分（见 HudOverlay 的动画）。
     // —— 暴食猎食点资源（暴食 空格 主动捕食） ——
     // 与「空格 冷却」是两套语义：暴食没有主冷却，只有资源 + 0.3s 再次释放锁。
     // 状态放在 Player 上（与 strainSkillCd 同层）：随 resetRunState 归零、
@@ -419,6 +414,7 @@ export class Player extends Entity {
     this.strainSkillCd = 0 // 空格 角色技能冷却归位（角色身份随 applyStrain 重建）
     this.strainSkillMax = 0
     this.strainSkillReadyPulse = 0
+    this.strainSkillReadyFlash = 0
     // 暴食猎食点资源归零（新局/重开不得残留；非暴食角色随后由 applyStrain 置 -1 关闭）
     this.gluttonCharge = 0
     this.gluttonDevourProgress = 0
@@ -459,6 +455,23 @@ export class Player extends Entity {
    * 热路径零分配：所有查询直接读缓存，不重复扫反应表。
    */
   _refreshElements() {
+    for (const id of this._elementSeenLv.keys()) {
+      if (!this.elements.has(id)) {
+        this._elementSeenLv.delete(id)
+        this._elementReached.delete(id)
+      }
+    }
+    for (const [id, lv] of this.elements) {
+      if (this._elementSeenLv.get(id) === lv) continue
+      this._elementSeenLv.set(id, lv)
+      this._elementReached.set(id, ++this._elementReachSeq)
+    }
+    // 同级时保持当前主反应：只有严格超过才切换（元素清空时主反应失效，不再参与决胜）
+    const keep = this.elements.size ? getReaction(this._primaryReaction)?.combo || [] : []
+    const ranked = rankElements(this.elements, { keep, reached: this._elementReached })
+    this._elementRanks = ranked
+    // 超载注入元素 = 排名派生（HUD/注入计划共用），非原生角色恒为 null
+    this.originOverloadElement = this.strainId === 'origin' ? ranked[0] || null : null
     const spells = this.game?.weaponSystem?.spellCombat
     if (spells?.enabled) {
       const fusion = spells.fusion
@@ -468,8 +481,17 @@ export class Player extends Entity {
       this._procs = {}
       return
     }
-    // 激活 = 元素满足 且（主形态 或 已占用副反应槽位）——槽位经济（阶段十六）：
-    // 未入槽的组合不产生任何反应效果（元素附魔仍按等级生效）
+    // 激活 = 元素满足 且（主反应 或 副反应位）——排名驱动（元素等级构筑）：
+    // 排名之外的组合不产生任何反应效果（元素附魔仍按等级生效）
+    const primary = ranked.length >= 2 ? reactionForPair(ranked[0], ranked[1]) : null
+    this._primaryReaction = primary?.id || null
+    this._secondaryIds.clear()
+    if (ranked.length >= 3) {
+      for (const pair of [[ranked[0], ranked[2]], [ranked[1], ranked[2]]]) {
+        const secondary = reactionForPair(pair[0], pair[1])
+        if (secondary) this._secondaryIds.add(secondary.id)
+      }
+    }
     const satisfied = getActiveReactions(this.elements)
     const active = satisfied.filter(
       (r) => r.id === this._primaryReaction || this._secondaryIds.has(r.id)
@@ -496,9 +518,9 @@ export class Player extends Entity {
     this._procs = procs
   }
 
-  /** 元素异变形态：主形态锁定优先（第一个融合的反应），其次单元素，渲染配置查缓存表（零分配） */
+  /** 元素异变形态：主反应（排名前两名的组合）优先，其次单元素，渲染配置查缓存表（零分配） */
   _mutation() {
-    // 主形态（阶段十五设计改造）：外形稳定，副反应叠加不再换肤
+    // 主反应决定外形：排名改写时外形/物种名一同转变，副反应叠加不换肤
     if (this._primaryReaction) {
       const pr = this._reactionMap.get(this._primaryReaction)
       if (pr) {
@@ -529,118 +551,60 @@ export class Player extends Entity {
     // 这是防御性兜底闸门——上游（核心生成、自动吸收、吞噬消化）已按同一权限
     // 拦截，这里保证任何未来新增的调用路径都不会绕过权限白拿到元素。
     if (this.game?.canUseElements === false) return
-    const beforeSat = new Set(getActiveReactions(this.elements).map((r) => r.id)) // 吸收前满足的组合
     const lv = (this.elements.get(type) || 0) + 1
     this.elements.set(type, lv)
     this.game.sound.absorb()
     if (lv > 1) this.game.sound.elementUp() // 元素等级提升：吸收音上叠加钟鸣（💧1→💧2）
 
-    const satisfied = getActiveReactions(this.elements) // 吸收后满足的所有组合
-    const newly = satisfied.filter((r) => !beforeSat.has(r.id))
-    if (newly.length === 0) {
-      this._refreshElements() // 仅等级变化 → 重建附魔缓存
-      return
-    }
+    // —— 排名驱动（元素等级构筑）：重算主/副反应，变化时触发进化事件 ——
+    const prevPrimary = this._primaryReaction
+    const prevSecondaries = new Set(this._secondaryIds)
+    this._refreshElements()
+    const gained = [...this._secondaryIds].filter((id) => !prevSecondaries.has(id)).map(getReaction)
+    const lost = [...prevSecondaries].filter((id) => !this._secondaryIds.has(id)).map(getReaction)
+    const lostNote = lost.length > 0 ? `（${lost.map((r) => r.name).join('、')} 不再生效）` : ''
 
-    // —— 主形态（阶段十五）：第一个融合的组合 = 物种身份（首次融合必恰好 1 个） ——
-    if (!this._primaryReaction) {
-      this._primaryReaction = newly[0].id
-      this._refreshElements()
-      const [a, b] = newly[0].combo
+    if (this._primaryReaction !== prevPrimary) {
+      // 主反应：首次成型 = 融合进化；之后随元素排名转变（外形/物种名一并更换）
+      const primary = this._reactionMap.get(this._primaryReaction)
+      const [a, b] = primary.combo
       const ea = getElement(a)
       const eb = getElement(b)
+      const prev = prevPrimary ? getReaction(prevPrimary) : null
+      const suffix = gained.length > 0
+        ? `；副反应转为 ${gained.map((r) => r.name).join('、')}${lostNote}`
+        : lostNote
       this.game.evolutionEvent(
-        `融合进化：${newly[0].name}！`,
-        `${ea.icon} ${ea.name} + ${eb.icon} ${eb.name} → ${newly[0].species}`,
-        newly[0].mutation,
-        newly[0].desc
+        prev ? `主反应转变：${primary.name}！` : `融合进化：${primary.name}！`,
+        prev
+          ? `${prev.name} → ${ea.icon} ${ea.name} + ${eb.icon} ${eb.name} → ${primary.species}`
+          : `${ea.icon} ${ea.name} + ${eb.icon} ${eb.name} → ${primary.species}`,
+        primary.mutation,
+        `${primary.desc}${suffix}`
       )
       return
     }
-
-    // —— 副反应（阶段十六槽位经济）：候选入槽 → 满槽弹替换面板 ——
-    const candidates = newly.filter((r) => r.id !== this._primaryReaction)
-    const fitting = []
-    for (const r of candidates) {
-      if (this._secondaryIds.size < this.secondarySlots) {
-        this._secondaryIds.add(r.id)
-        fitting.push(r)
-      } else break
-    }
-    this._refreshElements()
-    if (fitting.length > 0) {
-      const subLines = fitting.map((r) => {
+    if (gained.length > 0) {
+      const subLines = gained.map((r) => {
         const [ca, cb] = r.combo
         const ga = getElement(ca)
         const gb = getElement(cb)
         return `${ga.icon} ${ga.name} + ${gb.icon} ${gb.name} → ${r.species}`
       })
       this.game.evolutionEvent(
-        `副反应激活：${fitting[0].name}！`,
+        `副反应激活：${gained[0].name}！`,
         subLines.join(' ／ '),
-        fitting[0].mutation,
-        fitting.map((r) => r.desc).join('；') + '（叠加生效，不改变主形态）'
+        gained[0].mutation,
+        gained.map((r) => r.desc).join('；') + `（叠加生效，不改变主反应）${lostNote}`
       )
     }
-    // 槽满且还有候选：暂停 + 回调 Vue 弹替换面板（第一个候选）
-    const overflow = candidates.slice(fitting.length)
-    if (overflow.length > 0) {
-      this.game.reactionSlotsFull(overflow[0].id)
-    }
-  }
-
-  /** 副反应替换（阶段十六）：替换面板选择后由引擎调用；replacedId 为 null 表示放弃新反应 */
-  resolveSecondarySwap(newId, replacedId) {
-    if (replacedId) {
-      this._secondaryIds.delete(replacedId)
-      this._secondaryIds.add(newId)
-      this._refreshElements()
-    }
-  }
-
-  /**
-   * 重算副反应槽位（等级 → 元素联动）——全项目唯一的槽位计算入口：
-   *  - 槽位 = BASE_SECONDARY_SLOTS + geneSlotBonus + 等级里程碑加成（Lv.4 / Lv.8 各 +1），
-   *    封顶 MAX_REACTION_SLOTS；
-   *  - 旧字段读取路径：若基因加成只存在于旧字段 baseSecondarySlots（旧档/旧代码写入，
-   *    geneSlotBonus 未设置），按旧规则（base − 2）折算并入——已获得的槽位不静默丢失；
-   *  - 槽位扩张时，把「元素已经满足但当初因满槽被挤掉」的反应自动接入——
-   *    升级本身就成为一次元素构筑的兑现，而不是只加数值。
-   * @returns {Array} 本次自动接入的反应（供调用方播放提示；无变化时为空数组）
-   */
-  refreshReactionSlots() {
-    if (this.game?.weaponSystem?.spellCombat?.enabled) { this.secondarySlots = 0; return [] }
-    const geneBonus = Math.max(
-      this.geneSlotBonus ?? 0,
-      // 旧档兜底：基因加成只存在于旧字段 baseSecondarySlots 时按旧规则折算并入。
-      // 取大者而非 ?? 短路——构造函数把 geneSlotBonus 初始化为 0，?? 会让旧档
-      // （只有 baseSecondarySlots=4）永远进不了折算分支；新档两处同值，取大者不双算。
-      Math.max(0, (this.baseSecondarySlots ?? BASE_SECONDARY_SLOTS) - BASE_SECONDARY_SLOTS)
-    )
-    this.geneSlotBonus = geneBonus
-    this.baseSecondarySlots = BASE_SECONDARY_SLOTS + geneBonus
-    this.secondarySlots = Math.min(
-      MAX_REACTION_SLOTS,
-      this.baseSecondarySlots + getReactionSlotLevelBonus(this.level)
-    )
-    const equipped = []
-    if (this._secondaryIds.size < this.secondarySlots) {
-      for (const r of getActiveReactions(this.elements)) {
-        if (this._secondaryIds.size >= this.secondarySlots) break
-        if (r.id === this._primaryReaction || this._secondaryIds.has(r.id)) continue
-        this._secondaryIds.add(r.id)
-        equipped.push(r)
-      }
-      if (equipped.length > 0) this._refreshElements()
-    }
-    return equipped
   }
 
   /**
    * 吃下该核心是否需要确认（阶段十六追加）：
-   *  - 第一颗元素：元素永久入体不可移除，且决定后续融合方向；
-   *  - 首次融合：主形态整局锁定不可逆。
-   * 同款升级与后续元素无需确认（后续组合的选择权在槽位/替换面板）。
+   *  - 第一颗元素：元素永久入体不可移除，且奠定排名起点；
+   *  - 首次融合：首个主反应成型、物种身份确立，值得一次确认。
+   * 同款升级与后续元素无需确认（排名构筑随每次吸收自然改写）。
    */
   shouldConfirmElement(type) {
     if (this.elements.size === 0) return true // 第一颗元素
@@ -648,8 +612,7 @@ export class Player extends Entity {
   }
 
   /**
-   * 吃下该核心是否会触发首次融合（阶段十六追加：主形态锁定不可逆，吃前确认）。
-   * 条件：尚无主形态 + 该元素是新增元素 + 吃下后出现首个满足的组合。
+   * 吃下该核心是否会触发首次融合（尚无主反应 + 新增元素 + 吃下后形成首个组合）。
    */
   wouldFuseFirst(type) {
     if (this._primaryReaction || this.elements.has(type)) return false
@@ -695,18 +658,6 @@ export class Player extends Entity {
     this.level++
     this.maxExp = getNextExpThreshold(this.maxExp, this.level)
     this.game.weaponSystem.onLevelUp() // 等级攻击力成长（每级 ×1.08）
-    // 等级里程碑：槽位扩张 + 自动接入被挤掉的反应（Lv.4 / Lv.8 各 +1 槽）
-    const unlocked = this.refreshReactionSlots()
-    if (unlocked.length > 0) {
-      this.game.enemyManager?.addText?.(
-        this.x,
-        this.y - 42,
-        `🧬 副反应槽扩展 ${this._secondaryIds.size}/${this.secondarySlots}`,
-        `自动接入：${unlocked.map((r) => r.name).join('、')}`,
-        '#9c8ad4',
-        15
-      )
-    }
     this.game.triggerLevelUp() // 暂停 + 生成 3 个技能选项 + onLevelUp 回调
   }
 
@@ -970,7 +921,21 @@ export class Player extends Entity {
       if (pa.life <= 0) this._aura.splice(i, 1)
     }
 
-    const dir = this.input.getMoveVector()
+    // 点地移动：贴墙/贴边界推不动时（位移连续 0.45s 无进展）放弃目标，
+    // 否则会一直顶着障碍原地播放行走动画，且玩家没有「停下」的手段。
+    const tapTarget = this.input.moveTarget
+    if (tapTarget) {
+      const tapDist = Math.hypot(tapTarget.x - this.x, tapTarget.y - this.y)
+      if (this._tapPrevDist - tapDist < 0.5) this._tapStall += dt
+      else this._tapStall = 0
+      this._tapPrevDist = tapDist
+      if (this._tapStall > 0.45) this.input.clearMoveTarget()
+    } else {
+      this._tapStall = 0
+      this._tapPrevDist = Infinity
+    }
+
+    const dir = this.input.getMoveVector(this.x, this.y)
     const moving = dir.x !== 0 || dir.y !== 0
     const previousX = this.x
     const previousY = this.y
@@ -995,6 +960,14 @@ export class Player extends Entity {
         (1 + rushBonus + adrenaline + feast + originFlow) * terrainMul * formationMul * (this.volleyMoveTimer > 0 ? 1.2 : 1) * (this.game?.bossTomes?.moveMultiplier || 1)
       this.x += dir.x * curSpeed * dt
       this.y += dir.y * curSpeed * dt
+      // 点地移动：本帧位移越过落点时贴到目标并收掉目标点，
+      // 否则高移速/冲刺加成下会在终点两侧反复来回（一帧走过头、下一帧走回来）。
+      const arrive = this.input.moveTarget
+      if (arrive && (arrive.x - this.x) * dir.x + (arrive.y - this.y) * dir.y <= 0) {
+        this.x = arrive.x
+        this.y = arrive.y
+        this.input.clearMoveTarget()
+      }
       // 面朝方向平滑转向（dt 归一化，帧率无关）
       this.facing = angleLerp(this.facing, Math.atan2(dir.y, dir.x), Math.min(1, dt * 12))
       // 酸液拖尾（火+毒 / 水+毒 组合）：移动时留下腐蚀液滴

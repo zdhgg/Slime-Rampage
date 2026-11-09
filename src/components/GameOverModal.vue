@@ -29,7 +29,9 @@ const totalStages = computed(() => props.info?.totalStages || 6)
 const resultTitle = computed(() => {
   if (extracted.value) return '带着战力点安全撤离'
   if (!victory.value) {
-    return props.info?.defeatReason === 'nest-destroyed' ? '巢心被净化了' : '史莱姆倒下了'
+    if (props.info?.defeatReason === 'nest-destroyed') return '巢心被净化了'
+    if (props.info?.defeatReason === 'beacon-timeout') return '信标任务超时'
+    return '史莱姆倒下了'
   }
   return props.info?.mode === 'expedition' ? '讨伐统帅已被吞噬' : '终审勇者已被吞噬'
 })
@@ -219,7 +221,7 @@ const pointsText = computed(() => `${Math.floor(props.info?.earnedDrops || 0)}`)
         <button class="rules-btn" @click="emit('menu')">返回主页</button>
       </div>
       <button class="market-btn" @click="emit('market')">🏪 去黑市强化基因</button>
-      <div class="gameover-hint">{{ victory ? '新的威胁等级正等待挑战。' : extracted ? '这批战力点已完整入账，可以整备后再次深入。' : info.defeatReason === 'nest-destroyed' ? '净化兵突破了防线，优先拦截奔向巢心的近战单位。' : '调整构筑或规则，再次迎战勇者。' }}</div>
+      <div class="gameover-hint">{{ victory ? '新的威胁等级正等待挑战。' : extracted ? '这批战力点已完整入账，可以整备后再次深入。' : info.defeatReason === 'nest-destroyed' ? '净化兵突破了防线，优先拦截奔向巢心的近战单位。' : info.defeatReason === 'beacon-timeout' ? '未能在时限内摧毁迁跃信标，王城增援已经抵达。' : '调整构筑或规则，再次迎战勇者。' }}</div>
     </div>
   </div>
 </template>

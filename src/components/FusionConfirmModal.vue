@@ -6,7 +6,7 @@ import SkillIcon from './SkillIcon.vue'
  *  - props.info：{ type, icon, name, reaction: { name, species, desc, combo } }
  *  - 「吃下并融合」→ emit('resolve', true)
  *  - 「吐掉」→ emit('resolve', false)（宝石吐回地上，2s 内不再提示）
- *  - 主形态整局锁定不可逆，这是唯一一次「吃或不吃」的选择
+ *  - 首颗元素永久入体、首次融合确立物种身份，这是仅有的两次「吃或不吃」确认
  */
 defineProps({
   info: { type: Object, required: true },
@@ -17,6 +17,14 @@ const emit = defineEmits(['resolve'])
 <template>
   <div class="fusion-overlay" role="dialog" aria-modal="true" aria-label="首次融合确认">
     <div class="fusion-panel">
+      <template v-if="info.coreChoice">
+        <h2 class="fusion-title">首领元素核心</h2>
+        <p class="fusion-desc">选择一种元素吸收，只获得一颗核心。</p>
+        <div class="fusion-btns">
+          <button v-for="choice in info.choices" :key="choice.id" class="fusion-eat" @click="emit('resolve', choice.id)">{{ choice.icon }} {{ choice.name }}</button>
+        </div>
+      </template>
+      <template v-else>
       <div class="fusion-kicker">发现元素核心：<SkillIcon :skill="{ id: info.type, spec: 'elemental', element: info.type }" size="inline" /> {{ info.name }}</div>
 
       <!-- 首颗元素：预览可融合方向（阶段十六追加反馈） -->
@@ -32,14 +40,14 @@ const emit = defineEmits(['resolve'])
         </div>
       </template>
 
-      <!-- 首次融合：主形态锁定（阶段十六追加设计） -->
+      <!-- 首次融合：确立首个主反应（之后随元素等级排名转变） -->
       <template v-else>
         <h2 class="fusion-title">吃下将触发首次融合！</h2>
         <div class="fusion-result">
           {{ info.reaction.combo }} → <b>{{ info.reaction.species }}</b>
         </div>
         <p class="fusion-warn">
-          ⚠️ 主形态将永久锁定为该物种（外形/飞弹颜色/物种名），整局无法更改
+          ⚠️ 该反应将成为你的主反应（外形/飞弹颜色/物种名），之后随元素等级排名转变
         </p>
         <p class="fusion-desc">⚔️ {{ info.reaction.desc }}</p>
       </template>
@@ -48,7 +56,8 @@ const emit = defineEmits(['resolve'])
         <button class="fusion-eat" @click="emit('resolve', true)">🍽️ 吃下{{ info.firstElement ? '' : '并融合' }}</button>
         <button class="fusion-spit" @click="emit('resolve', false)">🤢 吐掉（放回地上）</button>
       </div>
-      <div class="fusion-hint">之后靠近核心会自动吸收；入槽/替换另有面板选择</div>
+      <div class="fusion-hint">之后靠近核心会自动吸收；元素等级排名决定主/副反应</div>
+      </template>
     </div>
   </div>
 </template>

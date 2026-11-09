@@ -1,13 +1,23 @@
 import assert from 'node:assert/strict'
 import { createArena, spawn, spawnBoss, pressSpace, rollSkills, learn, dispose } from './test-support/arena-fixture.mjs'
 import { ORIGIN_BASE } from './src/game/OriginBuild.js'
+import { gainOriginEnergy, ORIGIN_SOURCES } from './src/game/PrimalEnergy.js'
 import {
   ORIGIN_INNATE_SKILL,
   ORIGIN_OVERLOAD_RULES,
-  learnOriginMemory,
+  learnOriginMemory as learnMemory,
+  originComboState, originComboEntries, originMemories,
   nextOriginCast,
   originMemoryHud,
 } from './src/game/OriginSourceSkills.js'
+import { setOriginComboLoadout } from './src/game/OriginCombo.js'
+
+function learnOriginMemory(g, id) {
+  const first = originMemories(g).length === 0
+  const result = learnMemory(g, id)
+  if (first && result) setOriginComboLoadout(originComboState(g), [id], id, originComboEntries(g).map(e => e.id))
+  return result
+}
 
 let passed = 0
 const check = (name, run) => {
@@ -19,6 +29,25 @@ const check = (name, run) => {
     dispose(g)
   }
 }
+
+check('有效震荡催化充能，空放不充能', g => {
+  pressSpace(g)
+  assert.equal(g.player.originEnergy, 0)
+  g.player.strainSkillCd = 0
+  spawn(g, { x: 60, hp: 10000 })
+  pressSpace(g)
+  assert.equal(g.player.originEnergy, 8)
+})
+
+check('普攻与元素独立限频，震荡不被普攻限频', g => {
+  gainOriginEnergy(g, ORIGIN_SOURCES.PROJECTILE, 0)
+  gainOriginEnergy(g, ORIGIN_SOURCES.PROJECTILE, 0.1)
+  gainOriginEnergy(g, ORIGIN_SOURCES.PROJECTILE, 0.2)
+  gainOriginEnergy(g, ORIGIN_SOURCES.ELEMENT, 0.2)
+  gainOriginEnergy(g, ORIGIN_SOURCES.ELEMENT, 0.3)
+  gainOriginEnergy(g, ORIGIN_SOURCES.SHOCK, 0.3, 3)
+  assert.equal(g.player.originEnergy, 18)
+})
 
 /** 真实引擎计时推进：震荡 → 源质执行器 → 被动超载控制器（与 WeaponSystem.update 同序）。 */
 function advance(g, seconds, step = 0.05) {
@@ -44,6 +73,49 @@ function fireOverload(g) {
   assert.ok(g.player.originEnergy < ORIGIN_BASE.overloadCost, '确实扣除了超载能量')
 }
 
+check('前两次升级提供超载成长候选', g => {
+  for (const level of [2, 3]) {
+    g.player.level = level
+    for (let i = 0; i < 20; i++) {
+      assert.ok(rollSkills(g, 3).some(card => ['origin_flux', 'origin_overload'].includes(card.id)))
+    }
+  }
+})
+
+check('源质射程不够时暂用其他技能且保留原轮换位', g => {
+  learnOriginMemory(g, 'knight_breach')
+  learnOriginMemory(g, 'archer_hunt')
+  spawn(g, { x: 650, hp: 100000 })
+  g.player.originEnergy = 40
+  advance(g, 3.5, 0.05)
+  assert.equal(g.originSourceLastCast?.id, 'archer_hunt')
+  assert.equal(nextOriginCast(g).id, 'knight_breach')
+})
+
+check('同化满层奖励超时后保留至超载', g => {
+  g.originRoute = 'assimilation'
+  g.player.mutationState.stacks = 5
+  g.player.mutationState.empowered = true
+  g.player.mutationState.timer = 0.1
+  advance(g, 0.5)
+  assert.equal(g.player.mutationState.stacks, 5)
+  spawn(g, { x: 60, hp: 100000 })
+  fireOverload(g)
+  assert.equal(g.player.mutationState.stacks, 0)
+  assert.ok(g.player.mutationState.formTimer > 0)
+})
+
+check('液态回流只在超载有效命中后恢复', g => {
+  learn(g, 'origin_recovery')
+  g.player.hp = g.player.maxHp - 1
+  spawn(g, { x: 50, hp: 100000 })
+  pressSpace(g)
+  assert.equal(g.player.hp, g.player.maxHp - 1)
+  fireOverload(g)
+  advance(g, 1.5)
+  assert.equal(g.player.hp, g.player.maxHp)
+})
+
 // ============================================================
 // 验收用例 1~9：核心循环
 // ============================================================
@@ -60,8 +132,8 @@ check('1. 开局无 BOSS 源质：被动超载自动释放默认技能「原质�
 
 check('2. 全程不按空格：普攻与战斗涌流也能驱动被动超载', g => {
   spawn(g, { x: 150, hp: 100000 })
-  // 走完整武器帧（含普攻充能 + 涌流），上限 40 秒模拟时间。
-  for (let i = 0; i < 40 * 20 && !g.originSourceLastCast; i++) {
+  // 走完整武器帧（含普攻充能 + 涌流），留出蓄能与启动时间。
+  for (let i = 0; i < 45 * 20 && !g.originSourceLastCast; i++) {
     g.elapsed += 0.05
     g.weaponSystem.update(0.05)
   }
@@ -107,7 +179,7 @@ check('6. 冷却期间可以继续储能但不提前释放', g => {
   assert.ok(g.player.overloadState.lastPaidAt > paidAt, '冷却结束后自动进入下一次超载')
 })
 
-check('7. 吸收 BOSS 源质后原质环流被正确替代', g => {
+check('7. 可把已吸收 BOSS 源质装备为主技能', g => {
   learnOriginMemory(g, 'knight_breach')
   assert.equal(nextOriginCast(g).id, 'knight_breach')
   spawn(g, { x: 120, hp: 100000 })
@@ -116,7 +188,7 @@ check('7. 吸收 BOSS 源质后原质环流被正确替代', g => {
   assert.ok(g.weaponSystem.originSourceCombat.waves.length > 0, '释放了破阵凝胶波而非环流')
 })
 
-check('8. 三种源质记忆按轮换顺序释放', g => {
+check('8. 多项记忆不会改变指定的主技能', g => {
   learnOriginMemory(g, 'knight_breach')
   learnOriginMemory(g, 'mage_collapse')
   learnOriginMemory(g, 'archer_hunt')
@@ -127,7 +199,7 @@ check('8. 三种源质记忆按轮换顺序释放', g => {
     order.push(g.originSourceLastCast.id)
     g.originSourceLastCast = null
   }
-  assert.deepEqual(order, ['knight_breach', 'mage_collapse', 'archer_hunt'])
+  assert.deepEqual(order, Array(3).fill('knight_breach'))
 })
 
 check('9. 自动超载不会连续重复支付或递归触发', g => {

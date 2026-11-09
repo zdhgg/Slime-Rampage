@@ -1,7 +1,10 @@
 import { setCritSource } from './CritSources.js'
+import { setOriginComboLoadout } from './OriginCombo.js'
+import { originInjectionPlan } from './OriginInjection.js'
 import { resolveShadowSkill } from './ShadowSkills.js'
 import { resolveElementalSkill, ordinarySpellCoreSkills } from './SpellRules.js'
 import { InputManager } from './InputManager.js'
+import { VirtualStick } from './VirtualStick.js'
 import { ELEMENTAL_SPEC_PROC_CAP, Player, STARTING_EXP_THRESHOLD } from './entities/Player.js'
 import { EnemyManager } from './EnemyManager.js'
 import { WeaponSystem } from './WeaponSystem.js'
@@ -17,7 +20,7 @@ import { ENDLESS_SKILL_BY_ID } from './EndlessSkills.js'
 import { getEffectiveSkillMaxLevel } from './SkillProgression.js'
 import { applyGenes } from './GenePool.js'
 import { buildSpecies } from './Species.js'
-import { REACTIONS, getElement, getActiveReactions } from './ElementSystem.js'
+import { REACTIONS, getElement, getReaction, rankElements, reactionForPair } from './ElementSystem.js'
 import { generateDecor, drawBgItem, drawFgItem, getMapTheme } from './MapDecor.js'
 import { isFrontierScenery, paintFrontierGround, prepareFrontierSprites } from './FrontierScenery.js'
 import { paintChapterGround, prepareChapterSprites } from './ChapterScenery.js'
@@ -33,6 +36,7 @@ import { ORIGIN_ROUTES, ORIGIN_MARKS, ORIGIN_RULES, ORIGIN_SKILL_BY_ID, originSk
 import {
   learnOriginMemory,
   originMemoryHud,
+  originComboEntries, originComboState,
   originMemories,
   resetOriginSourceMemories,
   rollOriginMemoryCard,
@@ -77,6 +81,9 @@ import {
 
 const MAX_DT = 0.05 // 单帧时间上限（50ms）：切后台回来时防止物理「爆炸」
 const EXPEDITION_INTRO_DURATION = 1.6
+// 空格技能「冷却归零」那一帧的 HUD 反馈脉冲时长（秒）。0.42s 是 HUD 10Hz 推送下
+// 还能拿到约 4 帧采样的最短可用值：再短会被采样吃掉，再长会拖到下一次操作。
+const SKILL_READY_FLASH_DURATION = 0.42
 
 /**
  * 吞噬线口径（阶段十九集中化）：
@@ -119,7 +126,6 @@ export function createDefaultStats() {
     coreResonance: null,
     primaryReaction: null,
     secondaryCount: 0,
-    secondarySlots: 2,
     skillRerolls: 0,
     primarySpec: null,
     secondarySpec: null,
@@ -149,6 +155,8 @@ export function createDefaultStats() {
       difficultyName: '',
       state: 'idle',
       remaining: null,
+      stageDeadline: null,
+      stageRemaining: null,
       finaleTime: 0,
       rewardMultiplier: 1,
       endlessRewardBonus: 0,
@@ -219,6 +227,9 @@ export class GameEngine {
     this._shakeMag = 0
 
     this.input = new InputManager()
+    // 触屏虚拟摇杆：只产出方向与推力，位移仍由 Player 统一结算
+    this.virtualStick = new VirtualStick()
+    this._stickPointer = null // 正在拖动摇杆的 pointerId（null = 未接管）
     this.entities = []
     this.player = new Player({ input: this.input })
     this.enemyManager = new EnemyManager()
@@ -256,7 +267,7 @@ export class GameEngine {
     this.expeditionStage = 1
     this.expeditionStageElapsed = 0
     this.expeditionIntroTime = 0
-    this._expeditionBaseline = { kills: 0, elites: 0, events: 0 }
+    this._expeditionBaseline = { kills: 0, elites: 0, events: 0, eventsByType: {} }
     this._expeditionDefinition = null
     this._pendingExpeditionStage = 0
     this.endlessCalamities = {}
@@ -304,7 +315,7 @@ export class GameEngine {
     this.originMark = null // 异源印记：'glutton' | 'gatling' | 'elemental' | 'assassin' | 'symbiosis'
     // 源质记忆（原生黏液独占）：击败 BOSS 吸收的源质技能，超载时轮换释放。
     this.originSourceMemories = [] // [{ id, level }]，最多 3 槽、每槽 Lv.3
-    this.originSourceCursor = 0 // 下一次超载释放的槽位
+    this.originSourceCursor = 0 // 旧记忆目录游标，保留兼容；实际释放由 originCombo 管理
     this.originSourceLastCast = null // { id, name, level, at }：HUD 释放高亮用
     this._originSourceSeen = new Set() // 本局已「保底发放」过的源质 id（每种只保底一次）
     this.startingStrain = 'origin' // 开局血统预选（先天属性，reset 末尾叠加应用）
@@ -339,9 +350,6 @@ export class GameEngine {
     this.onEvolution = null // (title, subtitle, mutation) => void
     this._evolutionTimer = 0
 
-    // 副反应替换面板桥接（阶段十六）：槽满时暂停 + 回调 Vue 弹替换面板
-    this.onReactionFull = null // (payload) => void
-
     // 首融确认桥接（阶段十六追加）：吃下将触发首次融合的核心时暂停 + 回调 Vue
     this.onFusionConfirm = null // (payload) => void
 
@@ -368,10 +376,20 @@ export class GameEngine {
     this._tick = this._tick.bind(this)
     this._onResize = this._onResize.bind(this)
     this._onVisibility = this._onVisibility.bind(this)
+    this._onPointerDown = this._onPointerDown.bind(this)
+    this._onPointerMove = this._onPointerMove.bind(this)
+    this._onPointerEnd = this._onPointerEnd.bind(this)
 
     this._onResize()
     window.addEventListener('resize', this._onResize)
     document.addEventListener('visibilitychange', this._onVisibility)
+    // 指针输入（Arena）：鼠标 = 点地移动；触屏 = 左半屏虚拟摇杆。
+    // HUD 层 pointer-events:none，只有真实按钮会吞掉自己的事件，其余点击落到画布。
+    this.canvas?.addEventListener?.('pointerdown', this._onPointerDown)
+    this.canvas?.addEventListener?.('pointermove', this._onPointerMove)
+    this.canvas?.addEventListener?.('pointerup', this._onPointerEnd)
+    this.canvas?.addEventListener?.('pointercancel', this._onPointerEnd)
+    this.canvas?.addEventListener?.('lostpointercapture', this._onPointerEnd)
 
     // 浏览器策略：AudioContext 需用户手势解锁，首次按键/点击时初始化音效
     this._unlockAudio = () => {
@@ -432,6 +450,11 @@ export class GameEngine {
     this._pauseLock = 0
     this.gameplayId = normalizeGameplayId(id)
     this.gameplay = createGameplay(this.gameplayId)
+    // 点地目标与摇杆推力都是 Arena 的操作语义，切玩法时一并丢弃
+    this._endStick()
+    this.virtualStick.reset()
+    this.input.clearMoveTarget()
+    this.input.clearVirtualStick()
     this.gameplay.attach(this)
     return this.gameplay
   }
@@ -611,6 +634,7 @@ export class GameEngine {
     if (!skill) {
       p.strainSkillCd = 0 // 无空格技（未知血统 id）：空格 不响应，冷却恒为 0；origin 自身持有黏液震荡，不走此分支
       p.strainSkillReadyPulse = 0
+      p.strainSkillReadyFlash = 0
       return
     }
     const resourceSkill = typeof skill.getHud === 'function'
@@ -621,9 +645,14 @@ export class GameEngine {
       p.strainSkillCd = 0
     } else {
       p.strainSkillMax = skill.cooldown * (p.activeSkillCdMultiplier || 1) * (p.geneActiveSkillCdMultiplier || 1)
+      const prevCd = p.strainSkillCd
       p.strainSkillCd = Math.max(0, p.strainSkillCd - dt)
+      // 冷却归零的那一帧：给 HUD 一个「就绪弹」脉冲。一次性而非常驻呼吸，
+      // 因为黏液震荡 6.5s 冷却意味着就绪态占比过半，常驻动效会变成视觉噪声。
+      if (prevCd > 0 && p.strainSkillCd <= 0) p.strainSkillReadyFlash = SKILL_READY_FLASH_DURATION
     }
     if (p.strainSkillReadyPulse > 0) p.strainSkillReadyPulse -= dt
+    if (p.strainSkillReadyFlash > 0) p.strainSkillReadyFlash -= dt
     if (!this.running || this.runFinished) return
     // 边沿消费 空格：无论是否满足释放条件都必须取走，否则输入会在一帧后「幽灵释放」
     const pressed = this.input.consumeFever?.()
@@ -642,6 +671,8 @@ export class GameEngine {
     if (skill.use(this) === false) return // 方向被障碍完全挡住或动作冲突时，不消耗冷却。
     if (!shadowFollowup) p.strainSkillCd = p.strainSkillMax
     p.strainSkillReadyPulse = 0.4
+    // 抢在「就绪瞬间」按下时，弹跳让位给按下回弹：两个脉冲不同时叠在同一帧。
+    p.strainSkillReadyFlash = 0
   }
 
   // ------------------------------------------------------------
@@ -659,13 +690,47 @@ export class GameEngine {
 
   stop() {
     this.running = false
-    // 挂起键盘并清空队列：面板打开期间按下的 Space/E 不再在恢复后「幽灵冲刺/吸核」
+    // 挂起键盘并清空队列：面板打开期间按下的 Space/E 不再在恢复后「幽灵冲刺/吸核」；
+    // 摇杆同理——暂停时若正按着手指，收不到 pointerup 会留下残余推力。
     this.input.suspended = true
+    this._endStick()
+    this.virtualStick.reset()
     this.input.reset()
     cancelAnimationFrame(this._rafId)
   }
 
   /** 暂停主循环（升级面板/进化事件/手动暂停等场景）；持有暂停锁 + BGM 淡出 */
+  configureOriginCombo(equipped, main) {
+    if (this.startingStrain !== 'origin' || this.running || this.runFinished) return false
+    if (!setOriginComboLoadout(originComboState(this), equipped, main, originComboEntries(this).map(entry => entry.id))) return false
+    const overload = this.weaponSystem.originOverload
+    if (overload?.state === 'windup') {
+      overload.state = 'charging'; overload.pending = null; overload.windup = 0
+    }
+    this._pushStats()
+    return true
+  }
+
+
+  askOriginCoreChoice(choices) {
+    if (this._originCoreChoice || this.startingStrain !== 'origin' || this.runFinished) return false
+    if (!Array.isArray(choices) || choices.length !== 2 || new Set(choices).size !== 2 || choices.some(id => !getElement(id))) return false
+    this._originCoreChoice = [...choices]
+    this.pause()
+    this.onFusionConfirm?.({ coreChoice: true, choices: choices.map(id => ({ id, name: getElement(id)?.name || id, icon: getElement(id)?.icon })) })
+    return true
+  }
+
+  resolveOriginCoreChoice(element) {
+    if (!this._originCoreChoice?.includes(element) || !this.gemManager._heldGem || this.player.dead || this.runFinished) return false
+    this._originCoreChoice = null
+    this.gemManager.resolveHeld(true)
+    this.player.absorbElement(element)
+    this._pushStats()
+    this.resume()
+    return true
+  }
+
   pause() {
     this._pauseLock++
     this.sound.pauseMusic()
@@ -849,7 +914,6 @@ export class GameEngine {
       stage: this.expeditionStage, nextStage: this.expeditionStage + 1, stageTitle: current.title,
       nextTitle: next.title, nextRegion: next.region,
       level: this.player.level, roleSpec: this.roleSpec, canUseElements: this.canUseElements,
-      secondarySlots: this.player.secondarySlots,
       rewards: EXPEDITION_REWARDS.map(reward => ({ ...reward,
         disabled: reward.id === 'blood' && this.player.maxHp <= 1,
         preview: reward.id === 'rest' ? `生命 ${this.player.hp}/${this.player.maxHp} → ${this.player.maxHp}/${this.player.maxHp}${this.player.hp === this.player.maxHp ? ' · 当前已满血' : ''}`
@@ -1538,7 +1602,12 @@ export class GameEngine {
       kills: this.weaponSystem.kills,
       elites: this.weaponSystem.eliteKills,
       events: this.worldEvents.completed,
+      eventsByType: { ...this.worldEvents.completedByType },
     }
+    // 事件/混合章节锁定本章目标事件类型：失败重试仍生成同一类型，
+    // 章节进度也只统计该类型（避免 hunt/surge 误完成信标任务）。
+    const locksEvent = definition.type === 'event' || definition.type === 'mixed'
+    this.worldEvents.lockEventType(locksEvent ? definition.eventType : null)
     this.onRunState?.({
       kind: 'expedition-stage',
       stage: this.expeditionStage,
@@ -1579,7 +1648,11 @@ export class GameEngine {
     const definition = getExpeditionStage(this.runSelection.difficulty, this.expeditionStage)
     const kills = Math.max(0, this.weaponSystem.kills - this._expeditionBaseline.kills)
     const elites = Math.max(0, this.weaponSystem.eliteKills - this._expeditionBaseline.elites)
-    const events = Math.max(0, this.worldEvents.completed - this._expeditionBaseline.events)
+    // 事件章节按「本章锁定的类型」计数：全局 completed 会把 hunt/surge 算进信标目标。
+    const baselineByType = this._expeditionBaseline.eventsByType || {}
+    const events = definition.eventType
+      ? Math.max(0, (this.worldEvents.completedByType[definition.eventType] || 0) - (baselineByType[definition.eventType] || 0))
+      : Math.max(0, this.worldEvents.completed - this._expeditionBaseline.events)
     const progress = definition.type === 'kills'
       ? kills
       : definition.type === 'event'
@@ -1632,7 +1705,15 @@ export class GameEngine {
     const progress = this._expeditionProgress()
     // 首领登场收口：把章节完成度推给敌军管理器，越接近目标增援越稀疏
     this.enemyManager.setStagePressure(progress.total > 0 ? progress.progress / progress.total : 0)
-    if (!progress.complete) return
+    if (!progress.complete) {
+      // 章节时限兜底：到点仍未完成即判负，避免事件失败后靠持续刷怪无限拖关。
+      // 完成判定优先于超时——同一帧达成目标不会误判失败。
+      const deadline = progress.definition.deadline
+      if (deadline && this.expeditionStageElapsed >= deadline) {
+        this.failExpeditionObjective(`${progress.definition.eventType || 'stage'}-timeout`)
+      }
+      return
+    }
 
     if (progress.definition.type === 'defend') this.mapFeatures.completeNestDefense()
     this.runState = 'expedition-guardian'
@@ -1704,7 +1785,7 @@ export class GameEngine {
     return true
   }
 
-  /** 反应信息（替换面板展示用：图标组合/名称/物种/效果） */
+  /** 反应信息（融合确认面板展示用：图标组合/名称/物种/效果） */
   _reactionInfo(id) {
     const r = REACTIONS.find((x) => x.id === id)
     if (!r) return null
@@ -1715,24 +1796,6 @@ export class GameEngine {
       desc: r.desc,
       combo: r.combo.map((el) => getElement(el)?.icon || '?').join(' + '),
     }
-  }
-
-  /** 副反应位已满（阶段十六槽位经济）：暂停 + 回调 Vue 弹替换面板 */
-  reactionSlotsFull(candidateId) {
-    this.pause()
-    this.sound.uiClick()
-    this.onReactionFull?.({
-      candidate: this._reactionInfo(candidateId),
-      secondaries: Array.from(this.player._secondaryIds, (id) => this._reactionInfo(id)),
-      slots: this.player.secondarySlots,
-      count: this.player._secondaryIds.size,
-    })
-  }
-
-  /** 替换面板选择结果（阶段十六）：replacedId 为 null = 放弃新反应；否则替换该副反应 */
-  resolveReactionSwap(newId, replacedId) {
-    this.player.resolveSecondarySwap(newId, replacedId)
-    this.resume()
   }
 
   /**
@@ -1754,9 +1817,11 @@ export class GameEngine {
         return { element: other, icon: oe?.icon || '?', name: oe?.name || '', species: r.species }
       })
     } else {
+      // 预览吃下后的主反应：排名前两名的组合（元素等级构筑）
       const test = new Map(this.player.elements)
       test.set(type, 1)
-      const r = getActiveReactions(test)[0]
+      const ranked = rankElements(test)
+      const r = ranked.length >= 2 ? reactionForPair(ranked[0], ranked[1]) : null
       if (r) reaction = this._reactionInfo(r.id)
     }
     this.onFusionConfirm?.({
@@ -1806,9 +1871,12 @@ export class GameEngine {
    */
   reset() {
     const p = this.player
+    this.originCoreDropState = { eliteSeen: false, misses: 0, guardianStages: [] }
     this._mapSeed = ((Math.random() * 0xffffffff) >>> 0) || 1
     this._mapSpawn = { x: 0.5, y: 0.5 }
     this.input.reset()
+    this._endStick()
+    this.virtualStick.reset()
     p.resetRunState() // 先清掉上一局专精/临时状态，再恢复基础值并应用永久基因
     p.x = this.worldWidth / 2 // 出生点：世界中心
     p.y = this.worldHeight / 2
@@ -1822,9 +1890,8 @@ export class GameEngine {
     p.maxExp = STARTING_EXP_THRESHOLD
     p.pickupRadius = 150
     p.elements.clear() // 清空本局吸收的元素
-    p._refreshElements() // 重建元素派生缓存（激活反应/附魔概率归零）
-    p._primaryReaction = null // 主形态锁定清空（新局新身份，阶段十五）
-    p._secondaryIds.clear() // 副反应槽位清空（阶段十六；槽位数由 applyGenes 重置）
+    this._originCoreChoice = null
+    p._refreshElements() // 重建元素派生缓存（排名/主副反应/附魔概率归零）
     p._trail.length = 0 // 清空酸液拖尾
     p._devourPulse = 0
     p._ripple = 0
@@ -1934,6 +2001,11 @@ export class GameEngine {
     clearTimeout(this._worldBgTimer) // 取消待执行的世界背景重建
     window.removeEventListener('resize', this._onResize)
     document.removeEventListener('visibilitychange', this._onVisibility)
+    this.canvas?.removeEventListener?.('pointerdown', this._onPointerDown)
+    this.canvas?.removeEventListener?.('pointermove', this._onPointerMove)
+    this.canvas?.removeEventListener?.('pointerup', this._onPointerEnd)
+    this.canvas?.removeEventListener?.('pointercancel', this._onPointerEnd)
+    this.canvas?.removeEventListener?.('lostpointercapture', this._onPointerEnd)
     window.removeEventListener('keydown', this._unlockAudio)
     window.removeEventListener('click', this._unlockAudio)
     // Gameplay 是上层生命周期对象：在 Input / entities / 回调等 Engine 基础设施
@@ -1956,7 +2028,6 @@ export class GameEngine {
     this.onExpeditionReward = null
     this.onEndlessDecision = null
     this.onEvolution = null
-    this.onReactionFull = null
     this.onFusionConfirm = null
     clearTimeout(this._evolutionTimer)
     if (GameEngine.#instance === this) GameEngine.#instance = null
@@ -2028,6 +2099,10 @@ export class GameEngine {
       skillDesc: this.strainSkill?.getDesc?.(this) || this.strainSkill?.desc || '',
       skillCd: this.player.strainSkillCd,
       skillMax: this.player.strainSkillMax,
+      // 两个短脉冲只做「>0 即挂动画 class」的布尔量；HUD 不自行计时，
+      // 避免显示层与引擎的时间轴各走一套。
+      skillReadyFlash: this.player.strainSkillReadyFlash,
+      skillCastPulse: this.player.strainSkillReadyPulse,
       charge: this.strainSkill?.getHud?.(this.player) || null,
     })
     this._cdAcc = 0
@@ -2065,7 +2140,7 @@ export class GameEngine {
       elements: Array.from(this.player.elements, ([id, lv]) => ({ id, lv })), // 元素等级（HUD 显示 💧2）
       // 激活反应（阶段十五：HUD 常驻徽章 + 效果说明，进化「有什么效果」一眼可读）
       reactions: this.player._reactions.map((r) => ({ id: r.id, name: r.name, desc: r.desc })),
-      primaryReaction: this.player._primaryReaction, // 主形态（★ 徽章标识）
+      primaryReaction: this.player._primaryReaction, // 主反应（★ 徽章标识）
       coreResonance: (() => {
         const resonance = getOriginCoreResonance(this)
         return resonance
@@ -2081,8 +2156,7 @@ export class GameEngine {
             }
           : null
       })(),
-      secondaryCount: this.player._secondaryIds.size, // 副反应占用（阶段十六）
-      secondarySlots: this.player.secondarySlots,
+      secondaryCount: this.player._secondaryIds.size, // 副反应（第 3 名元素的两个组合）
       skillRerolls: this.player.geneRerolls || 0,
       primarySpec: this.primarySpec,
       secondarySpec: this.secondarySpec,
@@ -2101,7 +2175,7 @@ export class GameEngine {
             icon: info.icon,
             name: info.name.replace('印记', '碎片'),
             color: info.color,
-            title: inactive ? '尚未吸收元素核心：震荡的元素附着不会触发' : effect,
+            title: inactive ? '尚未吸收元素核心：超载的元素附着不会触发' : effect,
           }
         })
         : [],
@@ -2145,6 +2219,20 @@ export class GameEngine {
         passive: this.weaponSystem.originOverload?.hud() || null,
         // 源质记忆：三槽位、当前轮换位、下一次超载预告、最近一次释放（HUD 高亮）。
         memory: originMemoryHud(this),
+        combo: this.startingStrain === 'origin' ? (() => {
+          const state = originComboState(this)
+          const plan = originInjectionPlan(this)
+          return { main: state.main, equipped: [...state.equipped], tripleUnlocked: !!this.skillLevels?.origin_multicast,
+            tripleCount: this.originTripleCount || 0,
+            // 注入与连招由元素等级排名派生（只读展示，不再手动配置）：
+            // 主技能注入第 1 名、协同第 2 名、第三技能第 3 名；连招 = 主/副反应。
+            inject: { primary: plan.primary, secondary: plan.secondary, third: plan.third },
+            reaction: plan.reaction || 'none',
+            reactionName: plan.reaction ? getReaction(plan.reaction)?.name || null : null,
+            secondaryReactions: plan.secondaries.map((r) => ({ id: r.id, name: r.name })),
+            elements: [...this.player.elements.keys()].map(id => ({ id, name: getElement(id)?.name || id })),
+            skills: originComboEntries(this).map(entry => ({ id: entry.id, name: entry.def.name, level: entry.level })) }
+        })() : null,
       },
       // 兼容旧 HUD：primal 仍指向同一份异源能量
       primal: {
@@ -2175,6 +2263,13 @@ export class GameEngine {
         state: this.runState,
         remaining: this.runSelection.mode === 'timed' && this.runState === 'active'
           ? Math.max(0, RUN_DURATION - this.elapsed)
+          : null,
+        // 章节时限（带 deadline 的远征章节）：HUD 实时倒计时，仅 active 阶段有意义。
+        stageDeadline: this.runSelection.mode === 'expedition'
+          ? this._expeditionDefinition?.deadline || null
+          : null,
+        stageRemaining: this.runSelection.mode === 'expedition' && this._expeditionDefinition?.deadline
+          ? Math.max(0, this._expeditionDefinition.deadline - this.expeditionStageElapsed)
           : null,
         finaleTime: this.finaleTime,
         rewardMultiplier: this.runProfile.rewardMul,
@@ -2236,6 +2331,7 @@ export class GameEngine {
    */
   _updateArenaFrame(dt) {
     if (this._shakeT > 0) this._shakeT -= dt // 屏幕震动计时衰减
+    this.virtualStick.update(dt) // 摇杆松手淡出（拖住时保持显示）
     this._updateStrainSkill(dt) // 空格 角色技能：边沿触发 + 自身冷却（origin 短路）
     this._updateRunState(dt)
     if (this._pauseLock > 0 || this.runFinished) return
@@ -2316,6 +2412,7 @@ export class GameEngine {
     // 实体渲染（世界坐标系，整体随相机平移）
     ctx.save()
     ctx.translate(-camX, -camY)
+    this._renderMoveTarget(ctx) // 点地移动落点：压在角色脚下、实体之下
     this.bossArena.renderWorld(ctx) // 决斗圈圈环：压在敌人与预警层之下
     for (const e of this.entities) {
       if (!e.active || e === this.dialogue) continue
@@ -2343,6 +2440,31 @@ export class GameEngine {
     ctx.globalAlpha = 1
 
     this.bossArena.renderOverlay(ctx, width, height) // 决斗圈屏幕层：狂暴红闪 / 界外泛红 + 回圈箭头
+    this.virtualStick.render(ctx) // 触屏摇杆：屏幕空间最上层（HUD 为 DOM，按钮仍在它之上）
+  }
+
+  /**
+   * 点地移动落点标记：脉冲圆环 + 中心点，绘制在世界坐标系、角色与敌人之下。
+   * 只用 elapsed 驱动（无新增计时器）；无目标时零绘制开销。
+   */
+  _renderMoveTarget(ctx) {
+    const target = this.input?.moveTarget
+    if (!target) return
+    const pulse = (this.elapsed * 1.6) % 1
+    ctx.save()
+    ctx.translate(target.x, target.y)
+    ctx.globalAlpha = 0.38 * (1 - pulse)
+    ctx.strokeStyle = '#f3dfa4'
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    ctx.arc(0, 0, 10 + pulse * 16, 0, Math.PI * 2)
+    ctx.stroke()
+    ctx.globalAlpha = 0.85
+    ctx.fillStyle = '#f3dfa4'
+    ctx.beginPath()
+    ctx.arc(0, 0, 3, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.restore()
   }
 
   // ------------------------------------------------------------
@@ -2354,7 +2476,7 @@ export class GameEngine {
     const cam = this.camera
     const player = this.player
     // 运动方向预判（阶段十三）：朝移动/冲刺方向提前 70px，走位时前方信息量更大
-    const mv = player.input.getMoveVector()
+    const mv = player.input.getMoveVector(player.x, player.y)
     const lead = 70
     // 目标：玩家居中（+ 方向预判偏移）
     const tx = player.x + mv.x * lead - this.width / 2
@@ -2375,6 +2497,105 @@ export class GameEngine {
     const maxY = Math.max(0, this.worldHeight - this.height)
     cam.x = cam.x < 0 ? 0 : cam.x > maxX ? maxX : cam.x
     cam.y = cam.y < 0 ? 0 : cam.y > maxY ? maxY : cam.y
+  }
+
+  /**
+   * 指针输入（Arena）：
+   *  - 触屏 / 触控笔：左半屏按下即接管为虚拟摇杆（按住拖动控制方向与推力）；
+   *    右半屏与普通点按不触发移动——割草时误触地图不该让史莱姆自己跑。
+   *  - 鼠标：点按地面 = 点地移动（把点击换算成世界坐标交给 InputManager）。
+   * 键盘方向键始终优先，并在按下瞬间作废点地目标与摇杆推力。
+   *
+   * 只处理「主循环运行中 + Arena」：暂停/结算/升级面板期间 running=false；
+   * 章节开场演出（expedition-intro）世界暂停推进，也不接收输入。
+   * 坐标换算与 TowerDefenseGameplay._eventPosition 一致：CSS 像素 → 引擎像素。
+   */
+  _onPointerDown(e) {
+    if (!this.running || this.gameplayId !== 'arena' || this.input.suspended) return
+    if (this.runState === 'expedition-intro' || this.player?.dead) return
+    if (e.button !== undefined && e.button > 0) return // 只响应左键 / 触摸 / 触控笔
+    if (!this.width || !this.height) return
+    const point = this._pointerPoint(e)
+    if (!point) return
+    if (e.pointerType === 'touch' || e.pointerType === 'pen') {
+      // 左半屏是摇杆区；右侧留给 HUD 按钮与后续手势
+      if (point.x <= this.width * 0.5) this._beginStick(e, point.x, point.y)
+      return
+    }
+    let tx = this.camera.x + point.x
+    let ty = this.camera.y + point.y
+    // 夹进世界边界：点在屏幕外缘/世界外时，目标贴着最近的可行走位置
+    const pad = this.player.radius
+    tx = Math.max(pad, Math.min(Math.max(pad, this.worldWidth - pad), tx))
+    ty = Math.max(pad, Math.min(Math.max(pad, this.worldHeight - pad), ty))
+    // 决斗圈是软结界（出界灼烧）：点地目标收在圈内，避免一次误点把自己送到圈外烧血。
+    const ring = this.bossArena
+    if (ring?.active && ring.radius > 0) {
+      const dx = tx - ring.cx
+      const dy = ty - ring.cy
+      const dist = Math.hypot(dx, dy)
+      const limit = ring.radius * 0.94
+      if (dist > limit) {
+        tx = ring.cx + (dx / dist) * limit
+        ty = ring.cy + (dy / dist) * limit
+      }
+    }
+    this.input.setMoveTarget(tx, ty)
+  }
+
+  /** 画布指针坐标 → 引擎 CSS 像素坐标；clampToBounds 用于拖拽出画布时贴边继续 */
+  _pointerPoint(e, clampToBounds = false) {
+    const rect = this.canvas.getBoundingClientRect?.()
+    if (!rect || !rect.width || !rect.height) return null
+    let x = (e.clientX - (rect.left || 0)) * (this.width / rect.width)
+    let y = (e.clientY - (rect.top || 0)) * (this.height / rect.height)
+    if (clampToBounds) {
+      x = Math.max(0, Math.min(this.width, x))
+      y = Math.max(0, Math.min(this.height, y))
+      return { x, y }
+    }
+    if (x < 0 || y < 0 || x > this.width || y > this.height) return null
+    return { x, y }
+  }
+
+  _beginStick(e, x, y) {
+    if (this._stickPointer !== null) return // 已有手指在拖摇杆：忽略后续手指
+    const pointerId = e.pointerId ?? 0
+    if (!this.virtualStick.begin(pointerId, x, y, this.width, this.height)) return
+    this._stickPointer = pointerId
+    this.canvas.setPointerCapture?.(pointerId)
+    // 摇杆接管移动：立刻作废鼠标留下的点地目标
+    this.input.clearMoveTarget()
+    this.input.setVirtualStick(0, 0)
+  }
+
+  _onPointerMove(e) {
+    if (this._stickPointer === null || e.pointerId !== this._stickPointer) return
+    if (!this.running || this.gameplayId !== 'arena') {
+      this._endStick()
+      return
+    }
+    const point = this._pointerPoint(e, true)
+    if (!point) return
+    if (this.virtualStick.move(e.pointerId, point.x, point.y)) {
+      this.input.setVirtualStick(this.virtualStick.vector.x, this.virtualStick.vector.y)
+    }
+  }
+
+  /** pointerup / pointercancel / lostpointercapture 共用一个收尾入口 */
+  _onPointerEnd(e) {
+    if (this._stickPointer === null) return
+    if (e.pointerId !== undefined && e.pointerId !== this._stickPointer) return
+    this._endStick()
+  }
+
+  _endStick() {
+    if (this._stickPointer === null) return
+    const pointerId = this._stickPointer
+    this._stickPointer = null
+    this.virtualStick.end(pointerId)
+    this.input.clearVirtualStick()
+    if (this.canvas.hasPointerCapture?.(pointerId)) this.canvas.releasePointerCapture?.(pointerId)
   }
 
   // ------------------------------------------------------------

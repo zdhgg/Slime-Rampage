@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { createArena, dispose, spawn, rollSkills } from './test-support/arena-fixture.mjs'
 import { ORIGIN_RULES, getOriginShockProfile, getOriginGrowth } from './src/game/OriginBuild.js'
-import { ORIGIN_INNATE_SKILL, ORIGIN_ORBIT_STATS, ORIGIN_OVERLOAD_BUDGET, ORIGIN_SOURCE_RULES, ORIGIN_SOURCE_BY_ID, originSourceCastMods, originSourceLevel, learnOriginMemory } from './src/game/OriginSourceSkills.js'
+import { ORIGIN_INNATE_SKILL, ORIGIN_ORBIT_STATS, ORIGIN_OVERLOAD_BUDGET, ORIGIN_SOURCE_RULES, ORIGIN_SOURCE_BY_ID, originSourceCastMods, originSourceLevel, learnOriginMemory, originComboState, originComboEntries } from './src/game/OriginSourceSkills.js'
+import { setOriginComboLoadout } from './src/game/OriginCombo.js'
 import { BOSS_TOME_BY_ID } from './src/game/BossTomes.js'
 import { Enemy } from './src/game/entities/Enemy.js'
 
@@ -126,7 +127,7 @@ function levelsOf(b, id) {
 function patchCombat(g, stats) {
   const cs = g.weaponSystem.originSourceCombat
   const origHit = cs._hit.bind(cs)
-  cs._hit = (enemy, damage) => {
+  cs._hit = (enemy, damage, ...args) => {
     const prev = stats._ctx
     stats._ctx = 'source'
     stats.sourceDamage += damage
@@ -135,7 +136,7 @@ function patchCombat(g, stats) {
     if (stats.pendingCast) stats.pendingCast.hits += 1
     if (enemy.isBoss) stats.bossDamage += Math.min(damage, Math.max(0, enemy.hp))
     else if (enemy.isElite) stats.eliteDamage += Math.min(damage, Math.max(0, enemy.hp))
-    const killed = origHit(enemy, damage)
+    const killed = origHit(enemy, damage, ...args)
     if (killed) stats.sourceKills += 1
     stats._ctx = prev
     return killed
@@ -159,8 +160,8 @@ function patchCombat(g, stats) {
     return ok
   }
   const origCastNow = cs.castNow.bind(cs)
-  cs.castNow = (entry, snapshot) => {
-    const info = origCastNow(entry, snapshot)
+  cs.castNow = (entry, snapshot, options) => {
+    const info = origCastNow(entry, snapshot, options)
     if (!info) return info
     if (stats.pendingCast) stats.castLog.push(stats.pendingCast)
     stats.casts += 1
@@ -187,16 +188,31 @@ const ORIGINAL_HIT = Enemy.prototype.hit
 let ACTIVE_STATS = null
 Enemy.prototype.hit = function (damage, effects) {
   const s = ACTIVE_STATS
+  const hpBefore = Math.max(0, this.hp)
+  const context = s?._ctx
+  const result = ORIGINAL_HIT.call(this, damage, effects)
   if (s && damage > 0) {
-    const dealt = Math.min(damage, Math.max(1, this.hp))
+    const dealt = Math.max(0, hpBefore - Math.max(0, this.hp))
     s.totalDamage += dealt
     const bucket = effects?.bossTomeDerived ? 'tome'
-      : s._ctx === 'source' ? 'source'
-      : s._ctx === 'shock' ? 'shock' : 'other'
+      : context === 'source' ? 'source'
+      : context === 'shock' ? 'shock' : 'other'
     s.damageBySource[bucket] += dealt
     if (this.isBoss) s.bossBySource[bucket] += dealt
+    const kind = effects?.originDamageKind
+    if (kind && kind in s.overloadDamage) {
+      s.overloadDamage[kind] += dealt
+      if (this.isBoss) s.bossOverloadDamage += dealt
+    }
+    for (const [part, share] of Object.entries(effects?.originDamageParts || {})) {
+      if (part in s.overloadDamage) {
+        const value = dealt * Math.max(0, Math.min(1, share))
+        s.overloadDamage[part] += value
+        if (this.isBoss) s.bossOverloadDamage += value
+      }
+    }
   }
-  return ORIGINAL_HIT.call(this, damage, effects)
+  return result
 }
 
 function kiteInput(g, stats) {
@@ -228,10 +244,18 @@ function kiteInput(g, stats) {
   stats.kiting = true
 }
 
-function runSim({ route, mark, withMemory = true, minutes = 10, seed = 1, invincible = false }) {
+function runSim({ route, mark, withMemory = true, minutes = 10, seed = 1, invincible = false, comboBuild = false }) {
+  const originalRandom = Math.random
+  let randomState = seed >>> 0 || 1
+  Math.random = () => {
+    randomState = (Math.imul(randomState, 1664525) + 1013904223) >>> 0
+    return randomState / 4294967296
+  }
   const g = createArena('origin')
   const stats = {
-    route, mark, withMemory, casts: 0, castIds: [], castLevels: [], hitsPerCast: [], hitsThisCast: 0,
+    route, mark, withMemory, seed, comboBuild, casts: 0, castIds: [], castLevels: [], hitsPerCast: [], hitsThisCast: 0,
+    waitSeconds: { charging: 0, cooldown: 0, waiting: 0, windup: 0, ready: 0 }, coreDrops: 0, firstCoreAt: null,
+    overloadDamage: { main: 0, auxiliary: 0, third: 0, element: 0, reaction: 0, route: 0, mark: 0, echo: 0 }, bossOverloadDamage: 0,
     sourceDamage: 0, sourceHits: 0, sourceKills: 0, bossDamage: 0, eliteDamage: 0,
     totalDamage: 0, skips: 0, overloads: 0, overloadAt: [], forcedResume: 0, forcedLog: [], failedPanels: [], deaths: 0, lastCastAt: -1,
     damageBySource: { source: 0, shock: 0, tome: 0, other: 0 },
@@ -246,6 +270,7 @@ function runSim({ route, mark, withMemory = true, minutes = 10, seed = 1, invinc
       const ordered = [
         options.find(o => o.isOriginRoute && o.originRoute === route),
         options.find(o => o.isOriginMark && o.originMark === mark),
+        ...(comboBuild ? [options.find(o => o.id === 'origin_discovery'), options.find(o => o.id === 'origin_multicast')] : []),
         ...options,
       ].filter(Boolean)
       for (const card of ordered) {
@@ -265,12 +290,15 @@ function runSim({ route, mark, withMemory = true, minutes = 10, seed = 1, invinc
         ? (memoryCard || info.options.find(o => !o.isOriginMemory) || info.options[0])
         : (info.options.find(o => !o.isOriginMemory) || info.options[0])
       g.resolveExpeditionReward(pick.id)
+      if (comboBuild) {
+        const entries = originComboEntries(g)
+        const state = originComboState(g)
+        const main = ['archer_hunt', 'mage_collapse', 'knight_breach', 'primal_orbit'].find(id => entries.some(entry => entry.id === id))
+        const equipped = [main, ...entries.map(entry => entry.id).filter(id => id !== main)].slice(0, 4)
+        setOriginComboLoadout(state, equipped, main, entries.map(entry => entry.id))
+      }
     }
-    g.onReactionFull = (info) => {
-      if (!info) return
-      g.resolveReactionSwap(info.candidate?.id || null, info.secondaries?.[0]?.id || null)
-    }
-    g.onFusionConfirm = (info) => { if (info) g.resolveFusionConfirm(info.type, true) }
+    g.onFusionConfirm = (info) => { if (info?.coreChoice) g.resolveOriginCoreChoice(info.choices[0].id); else if (info) g.resolveFusionConfirm(info.type, true) }
     g.onGameOver = () => {}
 
     const origPause = g.pause.bind(g)
@@ -283,6 +311,15 @@ function runSim({ route, mark, withMemory = true, minutes = 10, seed = 1, invinc
     g.start()
 
     patchCombat(g, stats)
+    const spawnGem = g.gemManager.spawn.bind(g.gemManager)
+    g.gemManager.spawn = (x, y, value, type, ...rest) => {
+      const result = spawnGem(x, y, value, type, ...rest)
+      if (result && ['fire', 'water', 'poison', 'lightning'].includes(type)) {
+        stats.coreDrops++
+        if (stats.firstCoreAt === null) stats.firstCoreAt = g.elapsed
+      }
+      return result
+    }
     const totalFrames = Math.round(minutes * 60 * 60)
     const DT = 1 / 60
     let lastPaid = -Infinity
@@ -296,6 +333,8 @@ function runSim({ route, mark, withMemory = true, minutes = 10, seed = 1, invinc
       }
       g.elapsed += DT
       g.update(DT)
+      const state = g.weaponSystem.originOverload.hud().state
+      if (state in stats.waitSeconds) stats.waitSeconds[state] += DT
       const paidAt = g.player.overloadState?.lastPaidAt
       if (!Number.isFinite(paidAt)) {
         lastPaid = paidAt // 重开/重置后回到 -Infinity，避免把重置误记为一次支付
@@ -343,12 +382,14 @@ function runSim({ route, mark, withMemory = true, minutes = 10, seed = 1, invinc
   } finally {
     ACTIVE_STATS = null
     dispose(g)
+    Math.random = originalRandom
   }
 }
 
 function printSim(s) {
   const share = s.totalDamage > 0 ? (s.sourceDamage / s.totalDamage) * 100 : 0
   console.log(`\n=== ${s.route ?? 'no-route'} / mark=${s.mark ?? '-'} / memory=${s.withMemory} ===`)
+  console.log(`随机种子 ${s.seed} · 核心掉落 ${s.coreDrops} · 首颗 ${s.firstCoreAt?.toFixed(1) ?? '-'}s · 状态秒数 ${JSON.stringify(Object.fromEntries(Object.entries(s.waitSeconds).map(([key, value]) => [key, Math.round(value)])))}`)
   console.log(`模拟 ${s.simSeconds.toFixed(0)}s · Lv.${s.level} · 击杀 ${s.kills}（首领 ${s.bossKills}）· 结束=${s.ended}`)
   if (s.ended !== 'running') console.log(`结束原因 ${s.defeatReason} · 生命 ${s.hp} · 无敌 ${s.invincible}`)
   if (s.forcedLog?.length) console.log(`强制恢复日志 ${JSON.stringify(s.forcedLog)}`)
@@ -366,6 +407,9 @@ function printSim(s) {
     console.log(`对首领：源质 ${fmt(bt.source)}${pct(bt.source, bossTotal)} · 震荡系 ${fmt(bt.shock)}${pct(bt.shock, bossTotal)} · 秘典 ${fmt(bt.tome)}${pct(bt.tome, bossTotal)} · 其他 ${fmt(bt.other)}${pct(bt.other, bossTotal)}`)
   }
   console.log(`超载节奏：首次 ${s.firstOverloadAt ?? '-'}s · 平均间隔 ${s.overloadGapAvg.toFixed(1)}s · 最长 ${s.overloadGapMax.toFixed(1)}s`)
+  const overloadTotal = Object.values(s.overloadDamage).reduce((a, b) => a + b, 0)
+  console.log(`完整超载伤害 ${fmt(overloadTotal)} / ${fmt(s.totalDamage)} = ${(overloadTotal / Math.max(1, s.totalDamage) * 100).toFixed(1)}% · 分项 ${JSON.stringify(s.overloadDamage)}`)
+  console.log(`完整超载对首领 ${fmt(s.bossOverloadDamage)} / ${fmt(bossTotal)} = ${(s.bossOverloadDamage / Math.max(1, bossTotal) * 100).toFixed(1)}%`)
   const log = s.castLog || []
   const zero = log.filter(c => c.hits === 0)
   const hit = log.filter(c => c.hits > 0)
@@ -536,17 +580,19 @@ if (mode === 'safety') {
   safetyProbes()
 } else if (mode === 'numbers') {
   printBudget()
-} else if (mode === 'sim') {
+} else if (mode === 'sim' || mode === 'sim-combo') {
   const minutes = Number(process.argv[3]) || 10
+  const seed = Number(process.argv[4]) || 1
   for (const [route, mark] of [['expansion', 'gatling'], ['assimilation', 'assassin'], ['resonance', 'elemental']]) {
-    printSim(runSim({ route, mark, minutes, invincible: true }))
+    printSim(runSim({ route, mark, minutes, seed, invincible: true, comboBuild: mode === 'sim-combo' }))
   }
-  printSim(runSim({ route: 'expansion', mark: 'gatling', withMemory: false, minutes, invincible: true }))
-  printSim(runSim({ route: 'resonance', mark: 'elemental', minutes, invincible: false }))
+  printSim(runSim({ route: 'expansion', mark: 'gatling', withMemory: false, minutes, seed, invincible: true }))
+  printSim(runSim({ route: 'resonance', mark: 'elemental', minutes, seed, invincible: false }))
 } else if (mode === 'sim-one') {
   const route = process.argv[3] || 'expansion'
   const mark = process.argv[4] || 'gatling'
   const minutes = Number(process.argv[5]) || 10
   const invincible = process.argv[6] === 'invincible'
-  printSim(runSim({ route, mark, minutes, invincible }))
+  const seed = Number(process.argv[7]) || 1
+  printSim(runSim({ route, mark, minutes, seed, invincible }))
 }

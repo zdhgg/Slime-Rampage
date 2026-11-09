@@ -15,7 +15,7 @@ const EVENTS = {
     // 第三批角色化：非元素角色（暴食/弹射/暗影）拿不到元素核心，
     // 因此文案必须与实发奖励一致——不允许「说有核心但实际没有」。
     reward: (game) =>
-      game?.canUseElements === false || game?.startingStrain === 'elemental' ? '大型经验' : '元素核心 + 大型经验',
+      game?.canUseElements === false || ['elemental', 'origin'].includes(game?.startingStrain) ? '大型经验' : '元素核心 + 大型经验',
     duration: 28,
     goal: 3,
   },
@@ -176,6 +176,10 @@ export class WorldEventManager extends Entity {
     this.nextIn = FIRST_EVENT_DELAY
     this.completed = 0
     this.failed = 0
+    // 按类型完成计数：远征章节目标必须匹配本章事件类型，
+    // 不能再用全局 completed 总数（否则 hunt/surge 会误满足信标任务）。
+    this.completedByType = { hunt: 0, beacon: 0, surge: 0 }
+    this._lockedType = null
     this._serial = 0
     this._lastType = null
     this._pulse = 0
@@ -187,10 +191,17 @@ export class WorldEventManager extends Entity {
     this.nextIn = FIRST_EVENT_DELAY
     this.completed = 0
     this.failed = 0
+    this.completedByType = { hunt: 0, beacon: 0, surge: 0 }
+    this._lockedType = null
     this._serial = 0
     this._lastType = null
     this._pulse = 0
     this.scars.length = 0
+  }
+
+  /** 远征事件章节锁定目标事件类型；传 null 解除。 */
+  lockEventType(type = null) {
+    this._lockedType = EVENTS[type] ? type : null
   }
 
   get objectiveInfo() {
@@ -312,8 +323,13 @@ export class WorldEventManager extends Entity {
   _spawnEvent(forcedType = null) {
     let type = forcedType
     if (!EVENTS[type]) {
-      const pool = EVENT_TYPES.filter((candidate) => candidate !== this._lastType)
-      type = pool[(Math.random() * pool.length) | 0]
+      // 章节锁定优先：信标失败后的重试仍必须是信标，避免随机成其它事件后任务语义漂移。
+      if (EVENTS[this._lockedType]) {
+        type = this._lockedType
+      } else {
+        const pool = EVENT_TYPES.filter((candidate) => candidate !== this._lastType)
+        type = pool[(Math.random() * pool.length) | 0]
+      }
     }
     this._lastType = type
     const def = EVENTS[type]
@@ -424,13 +440,14 @@ export class WorldEventManager extends Entity {
     e.linger = 2.4
     e.timeLeft = 0
     this.completed++
+    this.completedByType[e.type] = (this.completedByType[e.type] || 0) + 1
     this.scars.push({ type: e.type, x: e.x, y: e.y })
     if (this.scars.length > 8) this.scars.shift()
 
     if (e.type === 'hunt') {
       // 第三批角色化：非元素角色把「元素核心」换成已有的经验奖励——
       // 不新增资源类型，只复用大型经验（65），与 eventReward 的文案一一对应。
-      if (this.game.canUseElements && this.game.startingStrain !== 'elemental') {
+        if (this.game.canUseElements && !['elemental', 'origin'].includes(this.game.startingStrain)) {
         const elements = ['fire', 'water', 'poison', 'lightning']
         this.game.gemManager.spawn(e.x, e.y, 0, elements[(Math.random() * elements.length) | 0])
         this.game.gemManager.spawn(e.x, e.y, 65)
