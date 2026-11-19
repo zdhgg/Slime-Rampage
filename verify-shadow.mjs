@@ -102,6 +102,17 @@ check('多目标致死仅返还一次 0.5 秒，奖励去重且不吞噬', g => 
   for (const e of enemies) g.weaponSystem._onKill(e)
   assert.equal(g.weaponSystem.kills, 3)
 })
+check('冷却返还总预算不超过最大冷却的 60%，多次击杀不超支', g => {
+  const p = g.player, c = g.weaponSystem.shadowCombat
+  c.huntRefundLevel = 7
+  p.facing = 0
+  spawn(g, { x: 45, hp: 0.5, type: 'archer' })
+  spawn(g, { x: 85, hp: 0.5, type: 'archer' })
+  spawn(g, { x: 130, hp: 0.5, type: 'archer' })
+  assault(g, 0.26)
+  near(p.strainSkillCd, 2)
+  assert.ok(c.refundLeft < 1e-9)
+})
 check('护盾吸收首目标影袭，后续目标不继承首击倍率；无虚假命中与返还', g => {
   const shield = spawn(g, { x: 55 }), next = spawn(g, { x: 100 })
   shield.shieldHits = 1; g.player.facing = 0

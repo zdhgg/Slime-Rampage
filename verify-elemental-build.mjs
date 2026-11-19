@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { createArena, spawn, dispose, pressSpace } from './test-support/arena-fixture.mjs'
 import { rollSkills } from './src/game/SkillPool.js'
-import { ELEMENTAL_ROUTES, elementalRouteOptions } from './src/game/ElementalBuild.js'
+import { ELEMENTAL_ROUTES, ELEMENTAL_ROUTE_SKILLS, elementalRouteOptions } from './src/game/ElementalBuild.js'
 import { ELEMENTAL_SKILLS } from './src/game/SpellRules.js'
 import { ELEMENTAL_MILESTONE_LEVELS } from './src/game/ElementalProgression.js'
 
@@ -103,6 +103,14 @@ check('三种路线终极互斥且需要投入与战局门槛', (g, s) => {
   assert.ok(ultimate); assert.equal(g.applySkill(ultimate), true); assert.equal(s.routeUltimate, 'single')
   assert.ok(!rollSkills(g, 30).some(option => option.isCapstone && option.route !== 'single'))
   const enemy = spawn(g, { hp: 100000, x: 90 }); pressSpace(g); assert.ok(s.stats.activeCasts > 0 && enemy.hp < 100000)
+})
+
+check('路线卡面与实现口径一致', () => {
+  const stats = (id, lv) => ELEMENTAL_ROUTE_SKILLS.find(skill => skill.id === id).stats(lv)
+  assert.equal(stats('ele_single_focus', 4), '主元素伤害 +32% · 终极范围 +32px')
+  assert.equal(stats('ele_fusion_resonance', 10), '融合反应伤害 +72% · 间隔 −0.64 秒')
+  assert.equal(stats('ele_fusion_amplify', 3), '余波范围 72px · 伤害 40%')
+  assert.equal(stats('ele_cycle_tempo', 8), '轮转间隔 −32% · 轮转伤害 +64%')
 })
 
 console.log(`\n元素构筑路线验证通过：${checks} 组检查`)

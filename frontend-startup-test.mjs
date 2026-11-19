@@ -2,7 +2,9 @@ import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { resolve } from 'node:path'
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 
 // 用临时后端验证代理；不创建或修改真实玩家账号。
 const backend = createServer(async (req, res) => {
@@ -14,13 +16,14 @@ const backend = createServer(async (req, res) => {
   res.end(JSON.stringify({ path: req.url, cookie: req.headers.cookie, body }))
 }).listen(0, '127.0.0.1')
 await once(backend, 'listening')
+const backendPort = backend.address().port
 const reservation = createServer().listen(0, '127.0.0.1')
 await once(reservation, 'listening')
 const port = reservation.address().port
 await new Promise(resolve => reservation.close(resolve))
 const child = spawn(process.execPath, [resolve('server/frontend.mjs')], {
   cwd: resolve('frontend'), windowsHide: true,
-  env: { ...process.env, VITE_PORT: String(port), SLIME_PORT: String(backend.address().port) },
+  env: { ...process.env, VITE_PORT: String(port), SLIME_PORT: String(backendPort) },
   stdio: ['ignore', 'pipe', 'pipe'],
 })
 let logs = ''
@@ -67,7 +70,49 @@ try {
   const unavailable = await fetch(`${base}/api/status`)
   assert.equal(unavailable.status, 502)
   assert.equal((await unavailable.json()).error.code, 'backend_unavailable')
-  console.log('✓ 门户启动：生产资源、首屏提示、资源缓存、账号 Cookie/请求代理、后端未就绪均通过')
+
+  const fixture = await mkdtemp(join(tmpdir(), 'slime-portal-startup-'))
+  const distDir = join(fixture, 'dist')
+  const accountServer = spawn(process.execPath, ['index.mjs', '--portal'], {
+    cwd: resolve('server'), windowsHide: true, stdio: 'ignore',
+    env: {
+      ...process.env,
+      SLIME_PORT: String(backendPort),
+      SLIME_HOST: '127.0.0.1',
+      SLIME_DIST_DIR: distDir,
+      SLIME_DATA_DIR: join(fixture, 'data'),
+      SLIME_AUTO_BACKUP: '0',
+    },
+  })
+  try {
+    const backendUrl = `http://127.0.0.1:${backendPort}`
+    let status
+    for (let attempt = 0; attempt < 50; attempt++) {
+      assert.equal(accountServer.exitCode, null, '门户后端必须能在资源未构建时启动')
+      const response = await fetch(`${backendUrl}/api/status`).catch(() => null)
+      if (response?.ok) {
+        status = await response.json()
+        break
+      }
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
+    assert.equal(status?.service, 'slime-rampage')
+    assert.equal((await fetch(backendUrl)).status, 404)
+    assert.deepEqual(await fetch(`${base}/api/auth/me`).then(response => response.json()), { account: null })
+
+    await mkdir(distDir)
+    const index = '<!doctype html><title>Slime Rampage</title>'
+    await writeFile(join(distDir, 'index.html'), index)
+    assert.equal(await fetch(backendUrl).then(response => response.text()), index)
+  } finally {
+    if (accountServer.exitCode === null && accountServer.signalCode === null) {
+      const exited = once(accountServer, 'exit')
+      accountServer.kill()
+      await exited
+    }
+    await rm(fixture, { recursive: true, force: true, maxRetries: 5 })
+  }
+  console.log('✓ 门户启动：无构建资源时启动后端、生产资源、首屏提示、资源缓存与账号代理均通过')
 } finally {
   child.kill()
   if (backend.listening) await new Promise(resolve => backend.close(resolve))

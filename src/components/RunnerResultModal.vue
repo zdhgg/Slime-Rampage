@@ -74,7 +74,7 @@ const weaponMetric = computed(() => {
   display: grid;
   place-items: center;
   padding: 24px;
-  background: rgba(4, 10, 15, 0.72);
+  background: var(--adventure-scrim);
   backdrop-filter: blur(5px);
 }
 
@@ -84,9 +84,9 @@ const weaponMetric = computed(() => {
   border: 1px solid rgba(232, 116, 93, 0.42);
   border-top: 3px solid #df765f;
   border-radius: 6px;
-  color: #edf4f1;
-  background: #111b23;
-  box-shadow: 0 22px 64px rgba(0, 0, 0, 0.56);
+  color: var(--adventure-ink);
+  background: var(--adventure-paper);
+  box-shadow: var(--adventure-shadow);
   font-family: "Segoe UI", "PingFang SC", sans-serif;
   letter-spacing: 0;
   text-align: center;
@@ -94,29 +94,29 @@ const weaponMetric = computed(() => {
 
 .result-panel.victory {
   border-color: rgba(131, 223, 81, 0.42);
-  border-top-color: #83df51;
+  border-top-color: var(--adventure-green);
 }
 
 .result-kicker {
-  color: #82d7e9;
+  color: var(--adventure-slate);
   font-size: 11px;
   font-weight: 800;
 }
 
 h2 {
   margin: 7px 0 4px;
-  color: #f4f7f2;
+  color: var(--adventure-ink);
   font-size: 30px;
   line-height: 1.2;
 }
 
 .victory h2 {
-  color: #cfffaa;
+  color: var(--adventure-green);
 }
 
 .result-summary {
   margin: 0;
-  color: rgba(237, 244, 241, 0.58);
+  color: var(--adventure-muted);
   font-size: 13px;
 }
 
@@ -126,7 +126,7 @@ h2 {
 
 .score-block span {
   display: block;
-  color: rgba(237, 244, 241, 0.48);
+  color: var(--adventure-muted);
   font-size: 10px;
   font-weight: 800;
 }
@@ -134,7 +134,7 @@ h2 {
 .score-block strong {
   display: block;
   margin-top: 2px;
-  color: #f3d879;
+  color: var(--adventure-gold);
   font-size: 42px;
   font-variant-numeric: tabular-nums;
   line-height: 1.1;
@@ -164,15 +164,15 @@ h2 {
 }
 
 .weapon-result span {
-  color: rgba(237, 244, 241, 0.46);
+  color: var(--adventure-muted);
 }
 
 .weapon-result strong {
-  color: var(--weapon-color);
+  color: color-mix(in srgb, var(--weapon-color) 35%, var(--adventure-ink));
 }
 
 .weapon-result em {
-  color: rgba(237, 244, 241, 0.5);
+  color: var(--adventure-muted);
   font-size: 10px;
   font-style: normal;
 }
@@ -193,13 +193,13 @@ h2 {
 
 .result-stats span {
   overflow-wrap: anywhere;
-  color: rgba(237, 244, 241, 0.46);
+  color: var(--adventure-muted);
   font-size: 10px;
 }
 
 .result-stats b {
   margin-top: 3px;
-  color: #ecf2ef;
+  color: var(--adventure-ink);
   font-size: 16px;
   font-variant-numeric: tabular-nums;
 }
@@ -217,10 +217,10 @@ button {
   justify-content: center;
   gap: 8px;
   min-height: 44px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  border: 1px solid var(--adventure-line);
   border-radius: 5px;
-  color: rgba(245, 248, 246, 0.86);
-  background: rgba(255, 255, 255, 0.06);
+  color: var(--adventure-muted);
+  background: var(--adventure-leaf);
   font: inherit;
   font-size: 13px;
   font-weight: 800;
@@ -229,19 +229,19 @@ button {
 }
 
 button.primary {
-  border-color: #a8ed7f;
-  color: #0c160d;
-  background: #83df51;
+  border-color: var(--adventure-green);
+  color: #fff;
+  background: var(--adventure-green);
 }
 
 button:hover {
-  border-color: rgba(255, 255, 255, 0.4);
-  background: rgba(255, 255, 255, 0.11);
+  border-color: #a9b6a9;
+  background: #dce9de;
 }
 
 button.primary:hover {
-  border-color: #c4ffa2;
-  background: #94e969;
+  border-color: var(--adventure-green-hover);
+  background: var(--adventure-green-hover);
 }
 
 button:active {
@@ -255,7 +255,7 @@ button:focus-visible {
 
 .trial-note {
   margin-top: 14px;
-  color: rgba(237, 244, 241, 0.36);
+  color: var(--adventure-muted);
   font-size: 10px;
 }
 

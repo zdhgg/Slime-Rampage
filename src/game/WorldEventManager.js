@@ -4,8 +4,47 @@ const TAU = Math.PI * 2
 const FIRST_EVENT_DELAY = 16
 const NEXT_EVENT_DELAY = 42
 const EVENT_MARGIN = 150
-const EVENT_RADIUS = 108
+// 事件圈需要同时容纳“站圈推进”和“躲远程弹幕”两件事。
+// 108px 对第 2 章信标过于狭窄：玩家一旦横移躲箭就会立刻丢进度。
+const EVENT_RADIUS = 124
 const ACTIVATION_TIME = 0.7
+
+/**
+ * 信标是第 2 章第一次要求玩家在远程火力下持续占点的事件。
+ * 简单难度给出明确的学习窗口：开场只来一名近战和一名法师，
+ * 后续增援更稀疏，离圈时进度回退也更慢；弓手仍会在后续增援中出现，
+ * 但不会在事件刚激活时与法师同时形成交叉火力。
+ */
+const BEACON_TUNING = Object.freeze({
+  easy: Object.freeze({
+    openingTypes: ['knight', 'mage'],
+    interval: 4.4,
+    outsideDecay: 0.18,
+    ambientSpawnPressureMul: 1.2,
+  }),
+  normal: Object.freeze({
+    openingTypes: ['knight', 'mage', 'archer'],
+    interval: 3.2,
+    outsideDecay: 0.35,
+    ambientSpawnPressureMul: 1,
+  }),
+  hard: Object.freeze({
+    openingTypes: ['knight', 'mage', 'archer'],
+    interval: 3.2,
+    outsideDecay: 0.35,
+    ambientSpawnPressureMul: 1,
+  }),
+  hell: Object.freeze({
+    openingTypes: ['knight', 'mage', 'archer'],
+    interval: 3.2,
+    outsideDecay: 0.35,
+    ambientSpawnPressureMul: 1,
+  }),
+})
+
+function beaconTuning(game) {
+  return BEACON_TUNING[game?.runSelection?.difficulty] || BEACON_TUNING.normal
+}
 
 const EVENTS = {
   hunt: {
@@ -286,7 +325,7 @@ export class WorldEventManager extends Entity {
     if (e.type === 'beacon') {
       e.progress = inside
         ? Math.min(e.goal, e.progress + dt)
-        : Math.max(0, e.progress - dt * 0.35)
+        : Math.max(0, e.progress - dt * (e.outsideDecay ?? 0.35))
       this._updateAmbush(dt, ['knight', 'mage', 'archer'], 3.2)
       if (e.progress >= e.goal) this._complete()
     } else if (e.type === 'surge') {
@@ -334,6 +373,7 @@ export class WorldEventManager extends Entity {
     this._lastType = type
     const def = EVENTS[type]
     const pos = this._pickPosition()
+    const tuning = type === 'beacon' ? beaconTuning(this.game) : null
     this.current = {
       token: `world-event-${++this._serial}`,
       type,
@@ -347,6 +387,13 @@ export class WorldEventManager extends Entity {
       timeLeft: 44,
       spawnTimer: 0,
       linger: 0,
+      ...(tuning
+        ? {
+            beaconInterval: tuning.interval,
+            outsideDecay: tuning.outsideDecay,
+            ambientSpawnPressureMul: tuning.ambientSpawnPressureMul,
+          }
+        : {}),
     }
     this.game.onWorldEvent?.({ kind: 'appeared', title: def.title, reward: eventReward(def, this.game) })
     return this.current
@@ -393,7 +440,9 @@ export class WorldEventManager extends Entity {
         )
       }
     } else if (e.type === 'beacon') {
-      this._spawnAmbush(['knight', 'mage', 'archer'], 3)
+      const tuning = beaconTuning(this.game)
+      this._spawnBeaconOpening(tuning.openingTypes)
+      e.spawnTimer = tuning.interval
     } else {
       this.game.player.heal(2)
       this._spawnAmbush(['assassin', 'berserker', 'knight'], 4)
@@ -404,9 +453,14 @@ export class WorldEventManager extends Entity {
     const e = this.current
     e.spawnTimer -= dt
     if (e.spawnTimer > 0) return
-    e.spawnTimer = interval
+    e.spawnTimer = e.type === 'beacon' ? (e.beaconInterval || interval) : interval
     const count = Math.min(3, 1 + Math.floor(this.game.enemyManager.wave / 6))
     this._spawnAmbush(types, count)
+  }
+
+  /** 信标开场固定给出可读的敌人组合，避免简单难度随机到双远程。 */
+  _spawnBeaconOpening(types) {
+    for (const type of types) this._spawnAmbush([type], 1)
   }
 
   _spawnAmbush(types, count) {

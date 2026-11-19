@@ -51,6 +51,85 @@ check('守望路线在鼓舞期间提供本体减伤与冲击波', game => {
   const pet = game.weaponSystem.petCombat, enemy = spawn(game, { x: 70, hp: 1000 }); pet.sync()
   game.player.hp = 100; game.player.maxHp = 100; game.player.invincible = 0; pet.rally()
   assert.ok(enemy.hp < 1000); const before = game.player.hp; game.player.hit(10, { enemyAttack: true }); assert.ok(game.player.hp > before - 10)
+  pet.routeGuardLevel = 4; pet.routeGuardAegisLevel = 5; pet.routeUltimate = 'guard'
+  assert.ok(Math.abs(pet.playerDamageReduction - .30) < 1e-9, '守望本体减伤封顶 30%')
+})
+
+check('猎团协同攻击按标记命中数触发，派生伤害不递归', game => {
+  game.primarySpec = 'symbiosis'; game.weaponSystem.petCombat.route = 'hunt'
+  learn(game, 'sym_hunt_link'); learn(game, 'sym_hunt_mark', 3)
+  const pet = game.weaponSystem.petCombat; pet.sync()
+  const attacker = pet.items[0], enemy = spawn(game, { x: 70, hp: 1000 })
+  pet.dealHit(attacker, enemy, 10)
+  assert.ok(Math.abs(enemy.hp - 990) < 1e-6)
+  pet.dealHit(attacker, enemy, 10)
+  assert.ok(Math.abs(enemy.hp - 978.2) < 1e-6)
+  assert.equal(enemy.petHuntChainHits, 1)
+  pet.dealHit(attacker, enemy, 10)
+  assert.ok(Math.abs(enemy.hp - (978.2 - 11.8 - 11.8 * .56)) < 1e-6)
+  assert.equal(enemy.petHuntChainHits, 0)
+  const before = enemy.hp
+  pet.dealHit(attacker, enemy, 10)
+  assert.ok(Math.abs(enemy.hp - (before - 11.8)) < 1e-6)
+  assert.equal(enemy.petHuntChainHits, 1)
+})
+
+check('群猎标记命中短暂牵引附近伙伴', game => {
+  game.primarySpec = 'symbiosis'; game.weaponSystem.petCombat.route = 'hunt'
+  learn(game, 'sym_hunt_link'); learn(game, 'sym_hunt_mark')
+  game.skillLevels.pet_partner = 1
+  const pet = game.weaponSystem.petCombat; pet.sync()
+  const attacker = pet.items.find(p => p.type === 'guardian'), other = pet.items.find(p => p.type === 'hunter')
+  const enemy = spawn(game, { x: 70, hp: 1000 }), decoy = spawn(game, { x: -200, hp: 1000 })
+  other.target = decoy; other.retarget = 0.25
+  pet.dealHit(attacker, enemy, 10)
+  assert.equal(other.target, decoy)
+  pet.dealHit(attacker, enemy, 10)
+  assert.equal(other.target, enemy)
+  assert.ok(other.retarget >= 0.5)
+})
+
+check('猎团回响：鼓舞期间标记冻结且延长，无回响时照常衰减', game => {
+  game.primarySpec = 'symbiosis'; game.weaponSystem.petCombat.route = 'hunt'
+  learn(game, 'sym_hunt_link'); learn(game, 'sym_hunt_chain', 2)
+  const pet = game.weaponSystem.petCombat; pet.sync()
+  const attacker = pet.items[0], enemy = spawn(game, { x: 70, hp: 1000 })
+  pet.dealHit(attacker, enemy, 10)
+  assert.ok(Math.abs(enemy.petHuntMarkTime - 3) < 1e-6)
+  assert.ok(pet.rally())
+  for (const p of pet.items) p.down = 99
+  pet.update(1)
+  assert.ok(Math.abs(enemy.petHuntMarkTime - 3) < 1e-6)
+  assert.equal(enemy.petHuntMarkDamage, .18)
+  pet.dealHit(attacker, enemy, 10)
+  assert.ok(Math.abs(enemy.petHuntMarkTime - 5) < 1e-6)
+  pet.rallyTime = 0
+  pet.update(1)
+  assert.ok(Math.abs(enemy.petHuntMarkTime - 4) < 1e-6)
+  pet.routeHuntEchoLevel = 0
+  pet.dealHit(attacker, enemy, 10)
+  assert.ok(Math.abs(enemy.petHuntMarkTime - 3) < 1e-6)
+  assert.ok(pet.rally())
+  pet.update(1)
+  assert.ok(Math.abs(enemy.petHuntMarkTime - 2) < 1e-6)
+})
+
+check('猎团回响扩大追猎范围，伙伴优先追击标记目标', game => {
+  game.primarySpec = 'symbiosis'; game.weaponSystem.petCombat.route = 'hunt'
+  game.mapFeatures.barricades = []
+  learn(game, 'sym_hunt_link'); learn(game, 'sym_hunt_chain', 2)
+  const pet = game.weaponSystem.petCombat; pet.sync()
+  const guardian = pet.items[0]
+  guardian.x = game.player.x; guardian.y = game.player.y
+  const far = spawn(game, { x: 450, hp: 100 })
+  pet.routeHuntEchoLevel = 0
+  assert.equal(pet.nearest(guardian), null)
+  pet.routeHuntEchoLevel = 2
+  assert.equal(pet.nearest(guardian), far)
+  const near = spawn(game, { x: 300, hp: 100 })
+  assert.equal(pet.nearest(guardian), near)
+  far.petHuntMarkTime = 3; far.petHuntMarkDamage = .18
+  assert.equal(pet.nearest(guardian), far)
 })
 
 console.log(`共生路线验证：${checks} 组通过`)

@@ -4,6 +4,7 @@ import { originInjectionPlan } from './OriginInjection.js'
 import { resolveShadowSkill } from './ShadowSkills.js'
 import { resolveElementalSkill, ordinarySpellCoreSkills } from './SpellRules.js'
 import { InputManager } from './InputManager.js'
+import { CombatFeedback } from './CombatFeedback.js'
 import { VirtualStick } from './VirtualStick.js'
 import { ELEMENTAL_SPEC_PROC_CAP, Player, STARTING_EXP_THRESHOLD } from './entities/Player.js'
 import { EnemyManager } from './EnemyManager.js'
@@ -33,6 +34,7 @@ import { STRAIN_IDS, applyStrain, canDevour, canUseElements, getStrainSkill } fr
 import { PRIMAL_ENERGY_MAX, PRIMAL_OVERLOAD_COST, resetPrimalEnergy, primalOverloadDescription } from './PrimalEnergy.js'
 import { getOriginCoreResonance } from './OriginCoreResonance.js'
 import { ORIGIN_ROUTES, ORIGIN_MARKS, ORIGIN_RULES, ORIGIN_SKILL_BY_ID, originSkillAvailable, originFragmentFamilies, initOriginRouteState, initOriginMarkState } from './OriginBuild.js'
+import { captureExpeditionCheckpoint, withRunRandom } from './RunCheckpoint.js'
 import {
   learnOriginMemory,
   originMemoryHud,
@@ -44,8 +46,7 @@ import {
 import { BossTomeCombat } from './BossTomeCombat.js'
 import { BossArena } from './BossArena.js'
 import {
-  GLUTTON_CHARGE_MAX,
-  GLUTTON_DEVOURS_PER_CHARGE,
+  GLUTTON_SATIETY_MAX,
   hasGluttonResource,
   resetGluttonResource,
   tickGluttonResource,
@@ -81,6 +82,9 @@ import {
 
 const MAX_DT = 0.05 // 单帧时间上限（50ms）：切后台回来时防止物理「爆炸」
 const EXPEDITION_INTRO_DURATION = 1.6
+// 章节时限提醒梯度：激活时宣告总时限 → 剩余 60s / 30s 里程碑 → 末 10s 逐秒滴答
+const DEADLINE_MILESTONES = [60, 30]
+const DEADLINE_FINAL_AT = 10
 // 空格技能「冷却归零」那一帧的 HUD 反馈脉冲时长（秒）。0.42s 是 HUD 10Hz 推送下
 // 还能拿到约 4 帧采样的最短可用值：再短会被采样吃掉，再长会拖到下一次操作。
 const SKILL_READY_FLASH_DURATION = 0.42
@@ -144,8 +148,8 @@ export function createDefaultStats() {
     // 异源能量（origin 独占）：异源充能 → ≥cost 时空格技升档为超载版
     origin: { energy: 0, max: 100, cost: 40, effect: primalOverloadDescription(), route: null, mark: null, overload: null, mutation: null, circuits: 0, memory: null },
     primal: { value: 0, max: 100, cost: 40, effect: primalOverloadDescription() },
-    // 暴食猎食点（仅暴食角色在 _pushStats 里给出 true 与真实数值）
-    glutton: { has: false, charge: 0, max: 2, progress: 0, progressPer: 5, ready: false },
+    // 暴食状态与构筑进度（仅暴食角色在 _pushStats 里给出 has:true 与真实数值）
+    glutton: { has: false, satiety: 0, satietyMax: GLUTTON_SATIETY_MAX, bursts: 0, guard: 0, guardMax: 2 },
     x: 0,
     y: 0,
     run: {
@@ -225,6 +229,7 @@ export class GameEngine {
     this._shakeT = 0
     this._shakeDur = 1
     this._shakeMag = 0
+    this.combatFeedback = new CombatFeedback(this)
 
     this.input = new InputManager()
     // 触屏虚拟摇杆：只产出方向与推力，位移仍由 Player 统一结算
@@ -267,6 +272,7 @@ export class GameEngine {
     this.expeditionStage = 1
     this.expeditionStageElapsed = 0
     this.expeditionIntroTime = 0
+    this._deadlineWarn = null
     this._expeditionBaseline = { kills: 0, elites: 0, events: 0, eventsByType: {} }
     this._expeditionDefinition = null
     this._pendingExpeditionStage = 0
@@ -550,6 +556,7 @@ export class GameEngine {
 
   get canStartWorldEvent() {
     if (this.runFinished || this.runState !== 'active') return false
+    if (this.enemyManager.crowds.active) return false
     if (this.runSelection.mode === 'timed') return this.elapsed < EVENT_LOCK_AT
     if (this.runSelection.mode === 'expedition') {
       return ['event', 'mixed'].includes(
@@ -638,13 +645,14 @@ export class GameEngine {
       return
     }
     const resourceSkill = typeof skill.getHud === 'function'
+    if (hasGluttonResource(p)) tickGluttonResource(p, dt)
     if (resourceSkill) {
-      // 资源型：再次释放锁每帧推进；主冷却语义整条不参与
-      tickGluttonResource(p, dt)
+      // 资源型兼容分支
       p.strainSkillMax = 0
       p.strainSkillCd = 0
     } else {
-      p.strainSkillMax = skill.cooldown * (p.activeSkillCdMultiplier || 1) * (p.geneActiveSkillCdMultiplier || 1)
+      const tomeCdMul = this.startingStrain === 'glutton' ? (this.bossTomes?.gluttonPounceCooldownMultiplier?.() || 1) : 1
+      p.strainSkillMax = skill.cooldown * (p.activeSkillCdMultiplier || 1) * (p.geneActiveSkillCdMultiplier || 1) * tomeCdMul
       const prevCd = p.strainSkillCd
       p.strainSkillCd = Math.max(0, p.strainSkillCd - dt)
       // 冷却归零的那一帧：给 HUD 一个「就绪弹」脉冲。一次性而非常驻呼吸，
@@ -666,10 +674,10 @@ export class GameEngine {
       return
     }
     const shadow = this.startingStrain === 'shadow' ? this.weaponSystem.shadowCombat : null
-    const shadowFollowup = !!shadow?.canFollowup
-    if (p.strainSkillCd > 0 && !shadowFollowup) return
+    const followup = !!shadow?.canFollowup
+    if (p.strainSkillCd > 0 && !followup) return
     if (skill.use(this) === false) return // 方向被障碍完全挡住或动作冲突时，不消耗冷却。
-    if (!shadowFollowup) p.strainSkillCd = p.strainSkillMax
+    if (!followup) p.strainSkillCd = p.strainSkillMax
     p.strainSkillReadyPulse = 0.4
     // 抢在「就绪瞬间」按下时，弹跳让位给按下回弹：两个脉冲不同时叠在同一帧。
     p.strainSkillReadyFlash = 0
@@ -937,10 +945,15 @@ export class GameEngine {
     this.onExpeditionReward?.(null)
     if (chapter) this._enterExpeditionStage(this.expeditionStage + 1)
     this.resume()
+    if (chapter) this.onCheckpoint?.(captureExpeditionCheckpoint(this))
   }
 
   /** 应用技能；成功返回 true，无效选择返回 false，让 UI 保留选卡面板。 */
   applySkill(skill) {
+    return withRunRandom(this, () => this._applySkill(skill))
+  }
+
+  _applySkill(skill) {
     if (!skill) return false
     // 弹射路线是唯一需要二阶段确认的中期节点；路线卡本身不进入技能等级表。
     if (skill.isRicochetRoute) {
@@ -1148,7 +1161,7 @@ export class GameEngine {
         `武器进化：${info?.name || skill.spec}`,
         skill.name.replace(/^🌟\s*/, ''),
         skill.spec,
-        skill.isRicochetSkill ? skill.desc : skill.spec === 'symbiosis' ? (SYMBIOSIS_ROUTES[skill.route]?.ultimateDesc || '伙伴协同与鼓舞机制完成终极异化') : skill.spec === 'gluttony' ? '咬击范围与伤害提升，重咬和冲撞可吞噬半血猎物' : this.startingStrain === 'shadow' ? '分身影刃贯穿敌群，影袭协同进化为十字夹击' : '弹体轮廓、出膛反馈与命中音色完成终极异化'
+        skill.isRicochetSkill ? skill.desc : skill.spec === 'symbiosis' ? (SYMBIOSIS_ROUTES[skill.route]?.ultimateDesc || '伙伴协同与鼓舞机制完成终极异化') : skill.spec === 'gluttony' ? (GLUTTON_ROUTES[skill.route]?.ultimateDesc || '吞噬与近战体系完成终极异化') : this.startingStrain === 'shadow' ? '分身影刃贯穿敌群，影袭协同进化为十字夹击' : '弹体轮廓、出膛反馈与命中音色完成终极异化'
       )
     }
 
@@ -1462,6 +1475,7 @@ export class GameEngine {
       eventsCompleted: this.worldEvents.completed,
       eventsFailed: this.worldEvents.failed,
       behavior: this.weaponSystem.stats, // 代表行为（连锁/引爆，物种档案）
+      highlights: { ...this.weaponSystem.stats },
       species: buildSpecies(this.player, this.genes, this.enemyManager.wave, this.weaponSystem.kills, this.weaponSystem.stats), // 物种档案（评审：可截图的传播点）
       epilogue: this.dialogue.epilogue,
     }
@@ -1577,6 +1591,8 @@ export class GameEngine {
   }
 
   _enterExpeditionStage(stage, forceMap = false) {
+    this.combatFeedback.reset()
+    this.weaponSystem.gluttonCombat.clearOverflow()
     this.bossTomes?.clearStage()
     this.weaponSystem.shadowCombat.reset({ preserveBuild: true })
     this.weaponSystem.petCombat.reset()
@@ -1588,6 +1604,7 @@ export class GameEngine {
     this.expeditionStage = Math.max(1, Math.min(total, stage))
     this.expeditionStageElapsed = 0
     this.expeditionIntroTime = 0
+    this._deadlineWarn = null
     const definition = getExpeditionStage(this.runSelection.difficulty, this.expeditionStage)
     this._expeditionDefinition = definition
     this._mapSpawn = definition.spawn || { x: 0.5, y: 0.5 }
@@ -1641,7 +1658,42 @@ export class GameEngine {
     } else if (definition.type === 'boss') {
       this.enemyManager.beginExpeditionBoss(getExpeditionBoss(definition.bossId))
     }
+    // 章节时限从 activation 起算：开场演出结束时宣告一次总额，玩家不必自己发现 HUD 小字
+    if (definition.deadline) {
+      this.sound.wave()
+      this.onRunState?.({
+        kind: 'deadline-start',
+        seconds: definition.deadline,
+        brief: definition.brief,
+      })
+    }
     this._pushStats()
+  }
+
+  /**
+   * 章节时限提醒（remaining = 剩余秒数，逐帧调用、Set 去重）：
+   *  - 剩余 60s / 30s：里程碑事件（HUD toast）+ 双短音警示；
+   *  - ≤10s：发一次 deadline-final（HUD 切大屏倒数），并逐秒滴答（音高递增）。
+   * 每章独立去重：_enterExpeditionStage 重置 _deadlineWarn。
+   */
+  _updateDeadlineWarnings(remaining, deadline) {
+    const warn = this._deadlineWarn || (this._deadlineWarn = { fired: new Set(), lastSecond: Infinity })
+    for (const mark of DEADLINE_MILESTONES) {
+      // 里程碑必须小于本章总时限：时限更短的章节不会开场就误报「剩余 60 秒」。
+      if (mark >= deadline || remaining > mark || warn.fired.has(mark)) continue
+      warn.fired.add(mark)
+      this.sound.deadlineAlert()
+      this.onRunState?.({ kind: 'deadline-warning', seconds: mark })
+    }
+    if (remaining > DEADLINE_FINAL_AT) return
+    if (!warn.fired.has('final')) {
+      warn.fired.add('final')
+      this.onRunState?.({ kind: 'deadline-final', seconds: DEADLINE_FINAL_AT })
+    }
+    const second = Math.ceil(remaining)
+    if (second === warn.lastSecond) return
+    warn.lastSecond = second
+    if (second >= 1) this.sound.countdownTick(second)
   }
 
   _expeditionProgress() {
@@ -1709,8 +1761,11 @@ export class GameEngine {
       // 章节时限兜底：到点仍未完成即判负，避免事件失败后靠持续刷怪无限拖关。
       // 完成判定优先于超时——同一帧达成目标不会误判失败。
       const deadline = progress.definition.deadline
-      if (deadline && this.expeditionStageElapsed >= deadline) {
-        this.failExpeditionObjective(`${progress.definition.eventType || 'stage'}-timeout`)
+      if (deadline) {
+        this._updateDeadlineWarnings(Math.max(0, deadline - this.expeditionStageElapsed), deadline)
+        if (this.expeditionStageElapsed >= deadline) {
+          this.failExpeditionObjective(`${progress.definition.eventType || 'stage'}-timeout`)
+        }
       }
       return
     }
@@ -1870,6 +1925,11 @@ export class GameEngine {
    * 注意：不自动 start()，由调用方（Vue）显式恢复。
    */
   reset() {
+    this._runRandomState = ((Math.random() * 0xffffffff) >>> 0) || 1
+    return withRunRandom(this, () => this._resetRun())
+  }
+
+  _resetRun() {
     const p = this.player
     this.originCoreDropState = { eliteSeen: false, misses: 0, guardianStages: [] }
     this._mapSeed = ((Math.random() * 0xffffffff) >>> 0) || 1
@@ -1944,6 +2004,7 @@ export class GameEngine {
     this.expeditionStage = 1
     this.expeditionStageElapsed = 0
     this.expeditionIntroTime = 0
+    this._deadlineWarn = null
     this._expeditionDefinition = null
     this._pendingExpeditionStage = 0
     this.endlessCalamities = {}
@@ -1958,6 +2019,7 @@ export class GameEngine {
     this._pauseLock = 0 // 清空暂停锁（重开即全新状态）
     this._camInit = false // 相机下一帧瞬间定位到新出生点
     this._shakeT = 0 // 清空屏幕震动（阶段十五）
+    this.combatFeedback.reset()
     this.sound.stopMusic() // 复位 BGM（reset 后由 start() 重建，防孤立播放）
     this.enemyManager.reset()
     this.bossArena.reset() // 决斗圈：纯局内状态，重开归零
@@ -2017,6 +2079,7 @@ export class GameEngine {
     this.onCooldown = null
     this.onGameplayHud = null
     this.onGameplayFinished = null
+    this.onCheckpoint = null
     this.onLevelUp = null
     this.onSpellCore = null
     this.onGameOver = null
@@ -2045,18 +2108,20 @@ export class GameEngine {
     if (!this.running) return
 
     // 增量时间（秒）：首帧 dt=0；上限 MAX_DT 防切后台后的时间跳跃
-    const dt = this._lastTs ? Math.min((ts - this._lastTs) / 1000, MAX_DT) : 0
+    const realDt = this._lastTs ? Math.min((ts - this._lastTs) / 1000, MAX_DT) : 0
+    const dt = this.gameplayId === 'arena' ? this.combatFeedback.advance(realDt) : realDt
     this._lastTs = ts
     this.elapsed += dt
 
-    this.update(dt)
+    // During hitstop leave the queued input intact; every combat timer shares dt.
+    if (dt > 0) this.update(dt)
     this.render()
 
     if (this.gameplayId === 'arena') {
       // Arena 专属桥接；Runner 不遍历无关的敌人、技能和 Boss 状态。
-      this._statAcc += dt
+      this._statAcc += realDt
       if (this._statAcc >= 0.5) this._pushStats()
-      this._cdAcc += dt
+      this._cdAcc += realDt
       if (this._cdAcc >= 0.1) this._pushCooldown()
     }
 
@@ -2083,6 +2148,10 @@ export class GameEngine {
       // 伙伴面板跟随系统开关而非血统名：只有共生血统会开启完整名册。
       pets: this.weaponSystem.petCombat.enabled ? this.weaponSystem.petCombat.hud() : null,
       petRally: this.weaponSystem.petCombat.enabled ? this.weaponSystem.petCombat.rallyHud() : null,
+      // 章节时限倒计时走 10Hz 通道：末段大屏逐秒倒数需要比 2Hz stats 更平滑的数据源
+      stageRemaining: this.runSelection.mode === 'expedition' && this._expeditionDefinition?.deadline
+        ? Math.max(0, this._expeditionDefinition.deadline - this.expeditionStageElapsed)
+        : null,
       tomeShield: this.bossTomes.shield,
       spellShield: this.weaponSystem.spellCombat.available ? this.weaponSystem.spellCombat.shield.hud() : null,
       shadow: this.startingStrain === 'shadow' ? {
@@ -2094,6 +2163,7 @@ export class GameEngine {
         duration: this.weaponSystem.shadowCombat.clones.duration,
         ...this.weaponSystem.shadowCombat.hud(),
       } : null,
+      glutton: this.startingStrain === 'glutton' && this.weaponSystem.gluttonCombat.enabled ? this.weaponSystem.gluttonCombat.hudStatus() : null,
       skillId: this.strainSkill?.id || null,
       skillName: this.strainSkill?.name || '',
       skillDesc: this.strainSkill?.getDesc?.(this) || this.strainSkill?.desc || '',
@@ -2241,19 +2311,19 @@ export class GameEngine {
         cost: PRIMAL_OVERLOAD_COST,
         effect: primalOverloadDescription(this),
       },
-      // 暴食猎食点（stats 侧口径，给常驻面板用；高频冷却条走 cooldown.charge）：
+      // 暴食状态与构筑进度（常驻面板口径；实时状态走 cooldown.glutton）：
       // 非暴食角色 has=false，HUD 整项不渲染
       glutton: hasGluttonResource(this.player)
         ? {
             has: true,
-            charge: this.player.gluttonCharge,
-            max: GLUTTON_CHARGE_MAX,
-            progress: this.player.gluttonDevourProgress,
-            progressPer: GLUTTON_DEVOURS_PER_CHARGE,
-            ready: this.player.gluttonCharge > 0 && this.player.gluttonRecastLock <= 0,
+            satiety: Math.round((this.player.gluttonSatiety || 0) * 10) / 10,
+            satietyMax: GLUTTON_SATIETY_MAX,
+            bursts: this.player.gluttonSatietyBursts || 0,
+            guard: this.player.gluttonGuard || 0,
+            guardMax: this.weaponSystem.gluttonCombat.guardMax,
             ...(this.weaponSystem.gluttonCombat.enabled ? this.weaponSystem.gluttonCombat.hud() : {}),
           }
-        : { has: false, charge: 0, max: GLUTTON_CHARGE_MAX, progress: 0, progressPer: GLUTTON_DEVOURS_PER_CHARGE, ready: false },
+        : { has: false, satiety: 0, satietyMax: GLUTTON_SATIETY_MAX, bursts: 0, guard: 0, guardMax: 2 },
       x: Math.round(this.player.x), // 扁平坐标：UI 端可直接整树赋值（见 createDefaultStats）
       y: Math.round(this.player.y),
       run: {
@@ -2319,6 +2389,10 @@ export class GameEngine {
    * 或由 Gameplay 完全接管（updateWorld）。之后统一 afterUpdate。
    */
   update(dt) {
+    return withRunRandom(this, () => this._updateFrame(dt))
+  }
+
+  _updateFrame(dt) {
     this.gameplay?.beforeUpdate(dt)
     if (this.gameplay?.usesArenaFramePipeline()) this._updateArenaFrame(dt)
     else this.gameplay?.updateWorld(dt)
@@ -2380,8 +2454,9 @@ export class GameEngine {
       jx = (Math.random() * 2 - 1) * this._shakeMag * k
       jy = (Math.random() * 2 - 1) * this._shakeMag * k
     }
-    const camX = this.camera.x + jx
-    const camY = this.camera.y + jy
+    const kick = this.combatFeedback.offset()
+    const camX = this.camera.x + jx + kick.x
+    const camY = this.camera.y + jy + kick.y
 
     // 世界背景：离屏画布一次性绘制（渐变+网格+装饰），
     // 相机滚动时只花一次 drawImage，零逐帧绘制成本；
@@ -2626,7 +2701,7 @@ export class GameEngine {
     const maxR = Math.hypot(cx, cy)
     const v = (this._vignette = ctx.createRadialGradient(cx, cy, maxR * 0.35, cx, cy, maxR))
     v.addColorStop(0, 'rgba(0, 0, 0, 0)')
-    v.addColorStop(1, 'rgba(0, 0, 0, 0.4)')
+    v.addColorStop(1, 'rgba(32, 55, 49, 0.23)')
 
     // 视口尺寸变化后相机重新夹取
     this._camInit = false

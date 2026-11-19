@@ -241,7 +241,7 @@ export const EXPEDITION_STAGES = [
     spawn: { x: 0.5, y: 0.5 },
     narrativeKey: 'home',
     bossId: 'nest_inquisitor',
-    enemyBias: { knight: 1.6, berserker: 1.3, assassin: 0.7 },
+    enemyBias: { knight: 1.6, berserker: 1.3, alchemist: 1.4, assassin: 0.7 },
   },
   {
     id: 5,
@@ -257,7 +257,7 @@ export const EXPEDITION_STAGES = [
     spawn: { x: 0.34, y: 0.5 },
     narrativeKey: 'war',
     bossId: 'gate_marshal',
-    enemyBias: { knight: 1.8, priest: 1.3, assassin: 0.6 },
+    enemyBias: { knight: 1.8, bulwark: 1.6, priest: 1.3, assassin: 0.6 },
   },
   {
     id: 6,
@@ -271,7 +271,7 @@ export const EXPEDITION_STAGES = [
     spawn: { x: 0.5, y: 0.68 },
     narrativeKey: 'truth',
     bossId: 'court_commander',
-    enemyBias: { knight: 1.4, priest: 1.3, mage: 1.2, hound: 0.6 },
+    enemyBias: { knight: 1.4, priest: 1.3, mage: 1.2, bannerman: 1.35, hound: 0.6 },
   },
 ]
 
@@ -370,7 +370,7 @@ const EXPEDITION_INTERLUDES = [
     variant: 'throne-gallery',
     narrativeKey: 'coronation',
     bossId: 'throne_guard',
-    enemyBias: { knight: 2, priest: 1.5, berserker: 1.3 },
+    enemyBias: { knight: 2, bulwark: 1.4, bannerman: 1.35, priest: 1.5, berserker: 1.3 },
   },
   {
     id: 12,
@@ -384,7 +384,7 @@ const EXPEDITION_INTERLUDES = [
     variant: 'war-camp',
     narrativeKey: 'muster',
     bossId: 'last_marshal',
-    enemyBias: { berserker: 2, archer: 1.4, knight: 1.3, mage: 0.6 },
+    enemyBias: { berserker: 2, archer: 1.4, knight: 1.3, bannerman: 1.5, alchemist: 1.25, mage: 0.6 },
   },
 ]
 

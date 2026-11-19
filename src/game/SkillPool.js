@@ -46,15 +46,15 @@ export const SPEC_INFO = {
     name: '暴食巨兽',
     icon: '🦖',
     color: '#ff9f43',
-    desc: '近战冲撞 · 胃袋吞噬 · 自愈肉盾',
+    desc: '腐蚀光环 · 猛扑开团 · 胃铠反伤',
     bonus: '👑 觉醒赋能：吞噬阈值提升至 28% · 生命上限 +1',
     roadmap: [
-      'T1: 深渊胃囊 (吞噬与猎食点强化) / 硬化甲壳 (生命与捕食护甲)',
-      'T2: 腐蚀重碾 (主动技能冷却大幅缩短 & 重咬伤害与范围强化)',
-      'T3: 胃酸迸发 (吞噬触发近身酸液爆发)',
-      '🌟 终极觉醒: 荒古吞噬领主 (体型+30% · 咬击范围/伤害+25% · 重咬与冲撞吞噬半血猎物)',
+      'T1: 深渊胃囊 (吞噬与光环扩展) / 硬化甲壳 (生命、胃铠上限与反伤)',
+      'T1: 腐蚀重碾 (暴食猛扑距离与重咬伤害) / 贪婪巨口 (宽幅扫咬与攻速)',
+      '中期三路线: 腐沼吞城 (移动毒沼) / 裂颚破阵 (连扑清场) / 饕甲反噬 (站撸反伤)',
+      '🌟 终极觉醒: 荒古吞噬领主 / 断岳暴食 / 不灭胃铠',
     ],
-    subBonus: '🥈 副专精共鸣：解锁【坚韧肉壁(生命上限)】与【消化代谢(吞噬恢复+减伤)】',
+    subBonus: '🥈 副专精共鸣：解锁【坚韧肉壁(生命上限)】',
   },
   gatling: {
     key: 'gatling',
@@ -116,22 +116,21 @@ export const SKILL_DATABASE = {
         tier: 1,
         name: '深渊胃囊',
         icon: '🕳️',
-        desc: '提高吞噬线与吸附范围，加快吞噬和近战命中首领的猎食点获取',
+        desc: '提高吞噬线与吸附范围，扩大体表腐蚀光环半径并加快饱食度积蓄',
         tags: ['暴食·T1', '吞噬'],
         maxLevel: 3,
         growthClass: 'core',
-        stats(lv, game) {
+        stats(lv) {
           const rank = lv + 1
           const threshold = Math.min(40, 24 + rank * 4)
-          const radius = Math.min(3, 1 + rank * 0.2)
-          const charge = Math.min(150, rank * 20)
-          // 首领充能走近战普攻命中——拟态 origin 无普攻咬击，该通道不生效，不承诺。
-          const bossPart = game?.startingStrain === 'origin' ? '' : ` · 首领充能 +${Math.min(200, Math.round(rank * 100 / 3))}%`
-          return `吞噬阈值 ${threshold}% · 吸附 +${Math.round((radius - 1) * 100)}% · 吞噬充能 +${charge}%${bossPart}`
+          const radius = Math.min(3, Math.max(1.35, 1 + rank * 0.2))
+          const charge = Math.min(120, rank * 25)
+          return `吞噬阈值 ${threshold}% · 吸附 +${Math.round((radius - 1) * 100)}% · 光环 +${rank * 10}px · 饱食 +${charge}%`
         },
         apply(game, lv) {
           game.devourThreshold = Math.min(0.4, 0.24 + lv * 0.04)
-          game.player.devourRadiusBonus = Math.min(3, 1 + lv * 0.2)
+          game.player.devourRadiusBonus = Math.max(game.player.devourRadiusBonus || 1, Math.min(3, 1 + lv * 0.2))
+          game.player.gluttonMawAuraLevel = lv
         },
       },
       {
@@ -140,66 +139,66 @@ export const SKILL_DATABASE = {
         tier: 1,
         name: '硬化甲壳',
         icon: '🛡️',
-        desc: '增加生命上限，延长吞噬或重咬命中首领后的一层护甲；护甲抵挡 1 点伤害，每 2.5 秒最多获得一次',
+        desc: '增加生命上限、胃铠上限与持续时间，并强化受击/挡伤反震威力',
         tags: ['暴食·T1', '体魄'],
         maxLevel: 3,
         growthClass: 'core',
         stats(lv, game) {
-          return `生命上限 ${game.player.maxHp} → ${game.player.maxHp + 1} · 捕食护甲 ${Math.min(4.8, 1.6 + (lv + 1) * 0.4).toFixed(1)} 秒`
+          const rank = lv + 1
+          const guardBonus = Math.ceil(rank / 2)
+          return `生命上限 ${game.player.maxHp} → ${game.player.maxHp + 1} · 胃铠上限 +${guardBonus} · 持续 ${Math.min(3.4, 2.2 + rank * 0.4).toFixed(1)} 秒 · 反伤 +${rank * 15}%`
         },
-        apply(game) {
+        apply(game, lv) {
           game.player.maxHp += 1
           game.player.hp = Math.min(game.player.maxHp, game.player.hp + 1)
-          game.player.gluttonGuardDuration = Math.min(4.8, game.player.gluttonGuardDuration + 0.4)
+          game.player.gluttonBulkLevel = lv
+          game.player.gluttonBulkGuardBonus = Math.ceil(lv / 2)
+          game.player.gluttonGuardDuration = Math.min(3.4, 2.2 + lv * 0.4)
         },
       },
       {
         id: 'glut_ram',
         spec: 'gluttony',
-        // 裂颚路线的种子入口：与深渊胃囊、硬化甲壳同级开放，保证 Lv.1~4 探索期
-        // 三条路线都摸得到 seed。进阶门槛留给胃酸迸发等 T3 技能，不压在入口上。
         tier: 1,
         name: '腐蚀重碾',
         icon: '🚜',
-        desc: '强化重咬的伤害与范围',
-        tags: ['暴食·T1', '重咬'], maxLevel: 3, growthClass: 'core',
-        stats(lv) { const rank = lv + 1; return `重咬伤害 +${rank * 15}% · 范围 +${rank * 10}%` },
+        desc: '扩大深渊吸噬的引力聚怪与重咬范围，并强化重咬与重击伤害',
+        tags: ['暴食·T1', '吸噬'], maxLevel: 3, growthClass: 'core',
+        stats(lv) { const rank = lv + 1; return `吸噬引力/范围 +${rank * 10}% · 重咬伤害 +${rank * 15}%` },
         apply(game, lv) { game.player.gluttonHeavyLevel = lv },
       },
       {
-        id: 'glut_eruption',
+        id: 'glut_bite_sweep',
         spec: 'gluttony',
-        tier: 3,
-        requires: ['glut_ram'],
-        name: '胃酸迸发',
-        icon: '🧪',
-        desc: '吞噬或重咬命中首领后，在身边爆发酸液并减速普通敌人；密集触发合并，每 0.4 秒最多一次',
-        tags: ['暴食·T3', '酸液'],
-        maxLevel: 2,
+        tier: 1,
+        name: '贪婪巨口',
+        icon: '🦷',
+        desc: '拓宽普通咬击的扇面覆盖角度，提升普攻咬击伤害与出手频率',
+        tags: ['暴食·T1', '扫咬'],
+        maxLevel: 3,
         stats(lv) {
-          return `近身酸爆 ${[100, 110][lv]}px · 伤害 ×${[1, 1.35][lv]} · 减速 0.7 秒`
+          const rank = lv + 1
+          return `咬击弧度 +${rank * 18}° · 普攻伤害 +${rank * 12}% · 攻速 +${rank * 6}%`
         },
-        apply(game, lv) {
-          game.player.devourAcidBurst = lv
-        },
+        apply(game, lv) { game.player.gluttonBiteSweepLevel = lv },
       },
       {
         id: 'glut_capstone',
         spec: 'gluttony',
+        route: 'mire',
         tier: 4,
         isCapstone: true,
-        requires: ['glut_eruption'],
         name: '🌟 荒古吞噬领主',
         icon: '👑',
-        desc: '体型增大 30%，咬击延伸范围与伤害 +25%；重咬将命中后半血以下的血肉敌人直接吞噬，首领充能加快！',
-        tags: ['终极觉醒', '暴食领主'],
+        desc: '体型增大 25%，腐蚀光环与咬击范围/伤害 +20%；深渊吸噬直接吞噬半血以下普通血肉，光环内低于 18% 血量的普通猎物自动卷入吞噬！',
+        tags: ['终极觉醒', '腐沼吞城'],
         maxLevel: 1,
         stats() {
-          return '咬击范围/伤害 +25% · 重咬半血吞噬 · 首领充能 8 次'
+          return '光环/咬击 +20% · 吸噬半血吞噬 · 光环 18% 直吞'
         },
         apply(game) {
           game.player.isGluttonyLord = true
-          game.player.radius *= 1.3
+          game.player.radius *= 1.25
           game.enemyManager.addText(game.player.x, game.player.y - 24, '🌟 荒古吞噬领主 觉醒!', null, '#ff9f43', 18)
         },
       },
@@ -219,22 +218,6 @@ export const SKILL_DATABASE = {
         apply(game) {
           game.player.maxHp += 1
           game.player.hp = game.player.maxHp
-        },
-      },
-      {
-        id: 'glut_sub_digest',
-        spec: 'gluttony',
-        name: '消化代谢',
-        icon: '🍖',
-        desc: '吞噬恢复 1 点生命（与其他吞噬恢复共用 4 秒间隔），并获得 3 秒减伤',
-        tags: ['暴食共鸣', '自愈'],
-        maxLevel: 2,
-        stats(lv) {
-          return `吞噬回血 +1（4 秒间隔）· 减伤 ${lv === 0 ? 15 : 25}%`
-        },
-        apply(game, lv) {
-          game.player.devourHeal = true
-          game.player.devourDamageReduction = lv === 1 ? 0.15 : 0.25
         },
       },
     ],
@@ -767,7 +750,8 @@ export const SKILL_DATABASE = {
 // Only these audited tracks receive extra high-difficulty ranks. Discrete
 // proc/count/evolution skills retain their authored cap to avoid runaway chains.
 const CORE_GROWTH_IDS = new Set([
-  'glut_maw', 'glut_bulk', 'glut_ram', 'gat_velocity', 'ele_resonance',
+  'glut_maw', 'glut_bulk', 'glut_ram', 'glut_acid_aura', 'glut_aftershock', 'glut_counter',
+  'gat_velocity', 'ele_resonance',
   'ass_stride', 'ass_execute', 'pet_power', 'pet_vitality', 'pet_haste',
   'origin_flux', 'origin_overload', 'origin_concord',
 ])

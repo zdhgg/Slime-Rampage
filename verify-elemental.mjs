@@ -528,6 +528,17 @@ check('护盾按游戏时间八秒重建，暂停冻结，升级缩短为六秒�
   g.player.invincible = 0; g.player.hit(2, { enemyAttack: true }); assert.equal(g.player.hp, hp - 1); assert.equal(s.shield.remaining, 6)
   s.render(ctx2d)
 })
+check('护盾未满时缓慢回复，破盾仍走重建冷却', (g, s) => {
+  learnSpell(g, 'spell_shield'); learnSpell(g, 'spell_shield')
+  hold(s); g.player.invincible = 0
+  g.player.hit(1, { enemyAttack: true })
+  assert.equal(s.shield.points, 1)
+  s.update(9); assert.equal(s.shield.points, 1)
+  s.update(1); assert.equal(s.shield.points, 2)
+  g.player.invincible = 0; g.player.hit(2, { enemyAttack: true })
+  assert.equal(s.shield.points, 0); assert.equal(s.shield.remaining, 6)
+  s.update(3); assert.equal(s.shield.points, 0); near(s.shield.remaining, 3)
+})
 check('护盾融合保持当前容量与恢复进度，重开、结算及非元素角色清理', (g, s) => {
   learnSpell(g, 'spell_shield'); learnSpell(g, 'spell_shield'); assert.equal(s.shield.points, 2)
   g.player.hit(2, { enemyAttack: true }); hold(s); s.update(1); const remaining = s.shield.remaining

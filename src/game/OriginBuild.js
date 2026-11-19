@@ -1,5 +1,6 @@
 import { getEffectiveSkillMaxLevel } from './SkillProgression.js'
 import { ENDLESS_SKILLS } from './EndlessSkills.js'
+import { originPrismMarginal } from './OriginSourceSkills.js'
 
 /**
  * 原生黏液（origin）的独立成长体系。
@@ -47,6 +48,9 @@ export const ORIGIN_ROUTES = Object.freeze({
     color: '#5ad1c8',
     tint: 'rgba(90,209,200,0.22)',
     desc: '让超载扩散成层叠冲击环，用液域和震荡液痕持续压缩怪群空间。',
+    summary: '扩大范围，把敌人压在液域里。',
+    instant: '震荡范围 +12%，并留下液痕；每 3 次超载追加副环。',
+    growth: ['范围', '液痕', '副环'],
     bonus: '震荡范围 +12% 并留下液痕；超载覆盖更大，在落点留下液域，每第 3 次超载追加副环',
     shockDesc: '范围冲击 + 残留液痕',
     overloadDesc: '超载范围 +10%~15%，落点生成液域',
@@ -64,6 +68,9 @@ export const ORIGIN_ROUTES = Object.freeze({
     color: '#b8e86a',
     tint: 'rgba(184,232,106,0.22)',
     desc: '用震荡施放积累不稳定基因层数，满层后触发局部形态重组，越打越适应。',
+    summary: '叠层适应，满层时强化超载。',
+    instant: '命中与击杀积累层数；满层超载触发形态重组。',
+    growth: ['叠层', '重组', '适应'],
     bonus: '震荡、普攻命中与精英击杀积累同化层数（震荡命中 3 个以上敌人额外 +1），被动超载读取层数增伤，满层时消耗层数触发形态重组',
     shockDesc: '层数积累 + 每层减伤',
     overloadDesc: '每层同化提高本次超载伤害；满层时消耗层数，强化本次超载并进入形变',
@@ -81,6 +88,9 @@ export const ORIGIN_ROUTES = Object.freeze({
     color: '#ffd166',
     tint: 'rgba(255,209,102,0.22)',
     desc: '交替使用飞弹、震荡、元素与路线效果，积累共振回路，把异源能量转成超载爆发。',
+    summary: '切换伤害来源，让回路引爆超载。',
+    instant: '8 秒内集齐 3 种来源可成回路；超载更快并追加余波。',
+    growth: ['回路', '充能', '爆发'],
     bonus: '8 秒内每出现一种不同伤害来源获得 1 层回路（最多 3 层），提高充能；超载冷却更短，满 3 回路时超载追加共振余波',
     shockDesc: '多源回路积累',
     overloadDesc: '超载冷却缩短，回路提高本次超载伤害，满 3 回路追加共振余波',
@@ -623,6 +633,7 @@ function originSkillUsable(game, skill, role) {
 
 export function originSkillAvailable(game, skill) {
   if (!skill?.originOnly) return true
+  if (skill.id === 'origin_overload' && !originPrismMarginal(game)) return false
   const role = skill.originPool === 'fragment' ? 'origin_fragment'
     : skill.originPool?.startsWith('route_') ? 'origin_route'
     : skill.originPool === 'mark' ? 'origin_mark' : 'origin_common'

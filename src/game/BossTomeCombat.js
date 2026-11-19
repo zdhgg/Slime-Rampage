@@ -105,7 +105,8 @@ export class BossTomeCombat {
     if (rank === 3) this.until.originFirst = this.time + 3
   }
   onOverload() {
-    if (this.rank('origin_reservoir') === 3) this.until.reservoir = this.time + 3
+    const reservoir = this.rank('origin_reservoir')
+    if (reservoir) this.until.reservoir = this.time + (reservoir >= 3 ? 5 : 3)
     const membrane = this.rank('origin_membrane')
     if (membrane) this.grantShield(membrane === 1 ? 2 : 3)
     if (membrane === 3) this.until.move = this.time + 2
@@ -125,13 +126,31 @@ export class BossTomeCombat {
   }
   get moveMultiplier() { return this.until.move > this.time ? 1.2 : 1 }
   get biteHaste() { return this.until.rhythm > this.time ? 1 + bonus(this.rank('glutton_rhythm'), .15, .25) : 1 }
+  gluttonRadianceRadiusBonus() { return bonus(this.rank('glutton_radiance'), 14, 24) }
+  gluttonRadianceDamageMultiplier() { return 1 + bonus(this.rank('glutton_radiance'), .15, .25) }
+  gluttonThornsRadiusBonus() { return bonus(this.rank('glutton_thorns'), 15, 25) }
+  gluttonThornsDamageMultiplier() { return 1 + bonus(this.rank('glutton_thorns'), .15, .28) }
+  gluttonPounceCooldownMultiplier() { return this.rank('glutton_rhythm') === 3 ? .9 : 1 }
   onCharge() {
     const rank = this.rank('glutton_rhythm')
     if (!rank) return
     this.until.rhythm = this.time + (rank === 1 ? 2 : 3)
     if (rank === 3) this.fastBite = true
   }
-  heavyWindup() { return this.fastBite ? .8 : 1 }
+  onGluttonDevour() { this.onCharge() }
+  onGluttonSatietyBurst(p) {
+    const rank = this.rank('glutton_rhythm')
+    if (!rank) return
+    this.until.rhythm = this.time + (rank === 1 ? 2.5 : 3.5)
+    if (rank === 3) {
+      this.fastBite = true
+      if (p && p.strainSkillCd > 0) p.strainSkillCd = Math.max(0, p.strainSkillCd - 1)
+    }
+  }
+  heavyWindup() { return this.fastBite || this.rank('glutton_rhythm') === 3 ? .8 : 1 }
+  onGluttonThornsHit() {
+    if (this.rank('glutton_thorns') === 3) this.until.biteFirst = this.time + 3
+  }
   onHurt() {
     const rank = this.rank('glutton_thorns')
     if (!rank || this.time < (this.ready.thorns || 0)) return
@@ -147,15 +166,13 @@ export class BossTomeCombat {
   hitMultiplier(e, effects) {
     let multiplier = 1
     const reservoir = this.rank('origin_reservoir')
-    if (reservoir && (this.p.primalEnergy >= (reservoir === 1 ? 50 : 40) || this.until.reservoir > this.time)) multiplier *= 1 + bonus(reservoir, .1, .15)
+    if (reservoir && this.until.reservoir > this.time) multiplier *= 1 + bonus(reservoir, .1, .15)
     if (effects?.bossTomeDerived) return multiplier
     const ctx = effects?.bossTomeContext
     if (!ctx) return multiplier
     if (ctx.basic && this.until.originFirst > this.time) multiplier *= 1.3
-    if (ctx.biteBasic) {
-      if (this.until.biteFirst > this.time) multiplier *= 1.3
-      if ((this.jaw.get(e) || 0) > this.time) multiplier *= 1.15
-    }
+    if (ctx.biteBasic && this.until.biteFirst > this.time) multiplier *= 1.3
+    if ((ctx.biteBasic || ctx.gluttonAura || ctx.gluttonCounter) && (this.jaw.get(e) || 0) > this.time) multiplier *= 1.18
     if (ctx.heavy) multiplier *= 1 + bonus(this.rank('glutton_jaw'), .15, .25)
     const execute = this.rank('assassin_mark')
     if (execute && ctx.shadowBody && e.hp <= e.maxHp * .4) { multiplier *= 1 + bonus(execute, .25, .4); ctx.execute = true }

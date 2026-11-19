@@ -1,6 +1,7 @@
 import { Entity } from './core/Entity.js'
+import { CrowdDirector } from './CrowdDirector.js'
 import { shadowCircleEntry } from './ShadowGeometry.js'
-import { Enemy } from './entities/Enemy.js'
+import { Enemy, BANNER_AURA_RADIUS, TIERED_TYPES } from './entities/Enemy.js'
 import { EnemyBullet } from './entities/EnemyBullet.js'
 import { Boss } from './entities/Boss.js'
 import { ExpeditionBoss } from './entities/ExpeditionBoss.js'
@@ -32,7 +33,7 @@ const CLEAR_RATE_WINDOW = 3
  * 不再是「叠着一波满编杂兵」，玩家有干净的读招空间。
  */
 const EXPEDITION_WIND_DOWN_AT = 0.75
-const EXPEDITION_WIND_DOWN_MUL = 0.9
+const EXPEDITION_WIND_DOWN_MUL = 0.15
 /**
  * 捕食引力场（近战补偿·机制层）：已被标记进吞线的猎物在更大的半径内被拖向口部，
  * 只影响「已经该死」的敌人，不扩大处决半径本身。半径与拖拽速度吃同一
@@ -92,14 +93,14 @@ const WAVE_ROSTERS = [
   { min: 1, units: [['knight', 1]] },
   { min: 3, units: [['knight', 0.45], ['mage', 0.28], ['hound', 0.27]] },
   { min: 4, units: [['knight', 0.34], ['mage', 0.16], ['assassin', 0.3], ['hound', 0.2]] },
-  { min: 5, units: [['knight', 0.34], ['mage', 0.14], ['archer', 0.2], ['assassin', 0.14], ['hound', 0.18]] },
-  { min: 6, units: [['knight', 0.3], ['berserker', 0.28], ['assassin', 0.22], ['hound', 0.2]] },
-  { min: 7, units: [['knight', 0.28], ['berserker', 0.2], ['priest', 0.18], ['mage', 0.16], ['hound', 0.18]] },
-  { min: 8, units: [['knight', 0.2], ['mage', 0.13], ['archer', 0.15], ['assassin', 0.15], ['berserker', 0.12], ['priest', 0.09], ['golem', 0.08], ['hound', 0.08]] },
-  { min: 10, units: [['mage', 0.34], ['priest', 0.16], ['knight', 0.18], ['assassin', 0.13], ['golem', 0.1], ['hound', 0.09]] },
-  { min: 12, units: [['knight', 0.3], ['priest', 0.22], ['berserker', 0.18], ['archer', 0.08], ['golem', 0.1], ['wraith', 0.12]] },
-  { min: 15, units: [['assassin', 0.22], ['archer', 0.19], ['berserker', 0.19], ['priest', 0.11], ['mage', 0.08], ['wraith', 0.13], ['golem', 0.08]] },
-  { min: 20, units: [['knight', 0.12], ['mage', 0.14], ['archer', 0.13], ['assassin', 0.16], ['berserker', 0.13], ['priest', 0.1], ['golem', 0.1], ['wraith', 0.12]] },
+  { min: 5, units: [['knight', 0.28], ['bulwark', 0.14], ['mage', 0.14], ['archer', 0.2], ['assassin', 0.12], ['hound', 0.12]] },
+  { min: 6, units: [['knight', 0.24], ['berserker', 0.22], ['bulwark', 0.14], ['alchemist', 0.14], ['assassin', 0.14], ['hound', 0.12]] },
+  { min: 7, units: [['knight', 0.2], ['berserker', 0.16], ['bulwark', 0.12], ['priest', 0.14], ['mage', 0.12], ['alchemist', 0.1], ['bannerman', 0.08], ['hound', 0.08]] },
+  { min: 8, units: [['knight', 0.16], ['bulwark', 0.1], ['mage', 0.11], ['archer', 0.12], ['assassin', 0.13], ['berserker', 0.1], ['priest', 0.08], ['alchemist', 0.07], ['bannerman', 0.06], ['golem', 0.04], ['hound', 0.03]] },
+  { min: 10, units: [['mage', 0.26], ['priest', 0.14], ['knight', 0.14], ['bulwark', 0.1], ['alchemist', 0.1], ['bannerman', 0.06], ['assassin', 0.1], ['golem', 0.06], ['hound', 0.04]] },
+  { min: 12, units: [['knight', 0.22], ['bulwark', 0.12], ['priest', 0.18], ['bannerman', 0.08], ['berserker', 0.14], ['archer', 0.06], ['alchemist', 0.06], ['golem', 0.06], ['wraith', 0.08]] },
+  { min: 15, units: [['assassin', 0.18], ['archer', 0.16], ['berserker', 0.14], ['bulwark', 0.1], ['priest', 0.1], ['mage', 0.08], ['alchemist', 0.07], ['bannerman', 0.06], ['wraith', 0.07], ['golem', 0.04]] },
+  { min: 20, units: [['knight', 0.1], ['bulwark', 0.1], ['mage', 0.12], ['archer', 0.11], ['assassin', 0.13], ['berserker', 0.11], ['priest', 0.09], ['alchemist', 0.07], ['bannerman', 0.06], ['golem', 0.05], ['wraith', 0.06]] },
 ]
 
 const rand = (min, max) => min + Math.random() * (max - min)
@@ -147,8 +148,11 @@ export class EnemyManager extends Entity {
     this._devouring = [] // 正在被吸入的敌人（溶解动画）
     this._routing = [] // 过关溃散中的残敌（原地震散动画，非吞噬）
     this._texts = [] // 浮动提示文本（吞噬等）
+    this._bossFields = [] // 首领制造的临时劣地（落点裂地等）
+    this._hazards = [] // 炼金投弹手抛掷酸液瓶与地面腐蚀池
     this._finale = false
     this._earlyEliteDone = false
+    this.crowds = new CrowdDirector(this)
   }
 
   /** 当前活跃敌人数量（HUD 显示用） */
@@ -211,9 +215,10 @@ export class EnemyManager extends Entity {
 
   get directorInfo() {
     return {
-      phase: this._directorPhase,
+      phase: this.crowds.label || this._directorPhase,
       intensity: this._directorIntensity,
       clearRate: this._clearRate,
+      encounter: this.crowds.label,
     }
   }
 
@@ -244,6 +249,7 @@ export class EnemyManager extends Entity {
 
   /** 重置波次、敌人与弹幕（游戏重开时由引擎调用） */
   reset() {
+    this.crowds.reset()
     for (const enemy of this._enemies) if (enemy.isBoss) enemy.destroy()
     this._enemies.length = 0
     this._bullets.length = 0
@@ -266,6 +272,8 @@ export class EnemyManager extends Entity {
     this._devouring.length = 0
     this._routing.length = 0
     this._texts.length = 0
+    this._bossFields.length = 0
+    this._hazards.length = 0
     this._finale = false
     this._earlyEliteDone = false
     this._stagePressure = 0 // 章节进度（引擎推送）：重开归零
@@ -292,18 +300,18 @@ export class EnemyManager extends Entity {
   }
 
   _populationTarget() {
-    return Math.min(120, 16 + this._effectiveWave() * 7)
+    return Math.min(58, Math.round(25 + this._effectiveWave() * 3))
   }
 
-  /** 下一次生成的随机等待时间：基础曲线叠加导演节拍与场上压力护栏。 */
+  /** 下一次生成的随机等待时间：保持高节奏割草频率，难度转向兵种/阶位强化。 */
   _nextInterval() {
     const effectiveWave = this._effectiveWave()
-    const introMul = effectiveWave === 1 ? 1.35 : effectiveWave === 2 ? 1.15 : 1
+    const introMul = effectiveWave === 1 ? 1.05 : effectiveWave === 2 ? 0.98 : 1
     const pressure =
       (this.game?.runProfile?.spawnPressureMul || 1) *
       (this.game?.endlessModifiers?.spawnPressureMul || 1)
     const interval =
-      (rand(0.4, 1.0) * introMul * Math.pow(0.92, effectiveWave - 1) * this._directorFactor()) /
+      (rand(0.32, 0.64) * introMul * Math.pow(0.95, effectiveWave - 1) * this._directorFactor()) /
       pressure
     // 高难度的刷怪倍率在后期仍然有效，而不是所有档位一起撞上 0.2 秒硬下限。
     return Math.max(0.2 / Math.max(0.75, pressure), interval)
@@ -332,8 +340,7 @@ export class EnemyManager extends Entity {
       this.game?.endlessModifiers?.bossExtraMembers || 0
     )
     if (bossPlan) {
-      this._bossGrace = 4
-      this._spawnTimer = Math.max(this._spawnTimer, this._nextInterval())
+      this._bossGrace = 0
       this.spawnBossGroup(bossPlan)
     }
     // 早期元素入口：第 2 波保底一只精英（每局至多一次），让第一颗元素核心
@@ -416,18 +423,18 @@ export class EnemyManager extends Entity {
     let factor = 1
     if (beat < 0.18) {
       this._directorPhase = '集结'
-      this._directorIntensity = 0.72
-      factor = 1.22
+      this._directorIntensity = 0.85
+      factor = 1.05
     } else if (beat > 0.82) {
       // 波末冲刺（原「喘息」）：以最快增援收尾，清场快的玩家不再有 4~5 秒死时间，
       // 每波以高潮结束并自然顶进下一波
       this._directorPhase = '冲刺'
       this._directorIntensity = 1.3
-      factor = 0.72
+      factor = 0.68
     } else {
       this._directorPhase = '围攻'
       this._directorIntensity = 1.12
-      factor = 0.84
+      factor = 0.78
     }
 
     const effectiveWave = this._effectiveWave()
@@ -454,6 +461,13 @@ export class EnemyManager extends Entity {
       this._directorIntensity = Math.max(0.4, 0.72 - k * 0.3)
     }
 
+    // 信标事件本身会定时补充伏兵。简单难度在占点期间放慢环境刷怪，
+    // 把注意力留给事件内的敌人，避免“占点伏兵 + 场外常规潮”叠成不可读的弹幕墙。
+    const worldEvent = this.game?.worldEvents?.current
+    if (worldEvent?.type === 'beacon' && worldEvent.state === 'active') {
+      factor *= worldEvent.ambientSpawnPressureMul || 1
+    }
+
     const player = this.game?.player
     if (player) {
       const hpRatio = player.maxHp > 0 ? player.hp / player.maxHp : 1
@@ -468,7 +482,7 @@ export class EnemyManager extends Entity {
    * 远征的每个章节因此拥有自己的兵种画像（盾卫城塞 / 怨灵王陵 / 狂战校场），
    * 而非 12 章共用一张权重表。非远征模式 getStageEnemyBias 返回 null，编成不变。
    */
-  _rollType() {
+  _rollRoster() {
     const effectiveWave = this._effectiveWave()
     let roster = WAVE_ROSTERS[0].units
     for (const profile of WAVE_ROSTERS) {
@@ -479,6 +493,11 @@ export class EnemyManager extends Entity {
       const bias = getStageEnemyBias(this.game.runSelection, this.game.expeditionStage || 1)
       roster = applyEnemyBias(roster, bias)
     }
+    return roster
+  }
+
+  _rollType() {
+    const roster = this._rollRoster()
     let roll = Math.random()
     for (const [type, weight] of roster) {
       roll -= weight
@@ -487,14 +506,34 @@ export class EnemyManager extends Entity {
     return roster[roster.length - 1][0]
   }
 
+  /** 核心人形职业阶位抽取：前期多为 1 阶民兵/见习，中期混编 2 阶主力，后期晋升 3 阶精锐。 */
+  _rollRank(effectiveWave, type) {
+    if (!TIERED_TYPES.has(type)) return 2
+    const r = Math.random()
+    if (effectiveWave <= 2) return r < 0.8 ? 1 : 2
+    if (effectiveWave <= 4) return r < 0.45 ? 1 : r < 0.95 ? 2 : 3
+    if (effectiveWave <= 7) return r < 0.15 ? 1 : r < 0.8 ? 2 : 3
+    if (effectiveWave <= 10) return r < 0.55 ? 2 : 3
+    return r < 0.25 ? 2 : 3
+  }
+
   /** 远程职业（法师/弓手）发射弹幕：由 Enemy._shoot 调用 */
   spawnBullet(x, y, angle, kind, options = {}) {
     this._bullets.push(new EnemyBullet({ x, y, angle, kind, ...options }))
   }
 
+  /** 炼金投弹手抛掷酸液瓶：先显示落地圈预警，落地命中后留下短暂减速腐蚀池。 */
+  spawnLobHazard({ startX, startY, targetX, targetY, radius = 52, flightDur = 0.72, lingerDur = 3.4, slowMul = 0.68, damage = 1 }) {
+    const ww = this.game?.worldWidth || 2000
+    const wh = this.game?.worldHeight || 2000
+    const x = Math.max(radius, Math.min(ww - radius, targetX))
+    const y = Math.max(radius, Math.min(wh - radius, targetY))
+    this._hazards.push({ startX, startY, x, y, radius, flightDur, lingerDur, slowMul, damage, age: 0, landed: false, active: true })
+  }
+
   /** 屏幕边缘生成一个勇者（相机视口边缘外侧，营造「涌入」感） */
   spawn() {
-    if (this._finale || this._enemies.length >= MAX_ENEMIES) return
+    if (this._enemies.length >= MAX_ENEMIES) return
     const cam = this.game.camera
     const vw = this.game.width // 视口尺寸（世界坐标下的可见范围）
     const vh = this.game.height
@@ -526,11 +565,15 @@ export class EnemyManager extends Entity {
     x = Math.max(0, Math.min(this.game.worldWidth, x))
     y = Math.max(0, Math.min(this.game.worldHeight, y))
 
-    // 命名波次使用对应的加权敌军编成；精英怪第 3 波起按概率出现，
+    if (this.crowds.spawnDebt > 0) { this.crowds.spawnDebt--; return }
+    if (this.crowds.tide > 0) { this.crowds.spawnTide(x, y); return }
+
+    // 命名波次使用对应的加权敌军编成；Boss 战期间保持全编成与全强度出兵，不降档不暂缓。
     // 另在第 2 波有一只保底精英作为「早期元素入口」（见 EARLY_ELEMENT_WAVE）。
     const type = this._rollType()
     const { profile, wave } = this._combatModifiers()
     const effectiveWave = this._effectiveWave()
+    const rank = this._rollRank(effectiveWave, type)
     const baseEliteChance = 0.03 + effectiveWave * 0.01
     const eliteChance = Math.min(
       (profile.eliteChanceCap || 0.12) + (wave.eliteChanceCapBonus || 0),
@@ -545,6 +588,7 @@ export class EnemyManager extends Entity {
       x,
       y,
       type,
+      rank,
       elite,
       affixes,
       // 波次成长曲线：每波速度 +6%（封顶）、每 2 波基础生命 +1（职业/精英系数在 Enemy 内乘算）
@@ -576,6 +620,7 @@ export class EnemyManager extends Entity {
       x,
       y,
       type,
+      rank: options.rank || 2,
       elite,
       affixes: this._rollAffixes(elite, options.affix || null),
       speed: rand(65, 110) * this._speedGrowth() * (profile.enemySpeedMul || 1) * (options.speedMul || 1),
@@ -637,6 +682,45 @@ export class EnemyManager extends Entity {
       member.active && member !== boss && member.bossGroupId === encounter.id
     ) || encounter.pending.length > 0
     return guards ? 0.65 : 1
+  }
+
+  /**
+   * 首领场（P0 · 骑士王落点裂地）：由首领本体创建、管理器统一持有与销毁。
+   * 只是「劣地」——不改位置、不做碰撞，只按位置给玩家一个移动倍率，
+   * 所以不会把人冻住，也不会出现看不见的墙。
+   */
+  addBossField(field) {
+    if (!field || !(field.until > this.game.elapsed)) return field
+    this._bossFields.push(field)
+    return field
+  }
+
+  removeBossField(field) {
+    const i = this._bossFields.indexOf(field)
+    if (i >= 0) this._bossFields.splice(i, 1)
+  }
+
+  /** 一次清掉某个首领造的全部劣地（死亡/打断/切阶段/双段升级时用） */
+  clearBossFields(source) {
+    if (!this._bossFields.length) return
+    this._bossFields = this._bossFields.filter((field) => field.source !== source)
+  }
+
+  /** 玩家所在位置的首领场与炼金酸液池移动倍率（取最慢的一层，避免叠加后变成龟速）。 */
+  playerFieldMultiplierAt(x, y) {
+    let mul = 1
+    for (const field of this._bossFields) {
+      if (field.until <= this.game.elapsed) continue
+      if (field.source && !field.source.active) continue
+      if ((x - field.x) ** 2 + (y - field.y) ** 2 > field.radius * field.radius) continue
+      mul = Math.min(mul, field.slow)
+    }
+    for (const h of this._hazards) {
+      if (!h.active || !h.landed) continue
+      if ((x - h.x) ** 2 + (y - h.y) ** 2 > h.radius * h.radius) continue
+      mul = Math.min(mul, h.slowMul)
+    }
+    return mul
   }
 
   getBossTempoMultiplier(boss) {
@@ -743,6 +827,8 @@ export class EnemyManager extends Entity {
     this._enemies.push(boss)
     this._bosses.push(boss)
     if (!this._boss?.active) this._boss = boss
+    this.crowds.cancel()
+    this.game.weaponSystem?.gluttonCombat?.clearOverflow?.()
     this.game.sound.bossRoar()
     this.game.shakeScreen(6, 0.35) // Boss 登场震撼（阶段十五美化）
     this.game.onBossSpawn?.(boss)
@@ -955,6 +1041,7 @@ export class EnemyManager extends Entity {
     this._waveTimer = 0
     this._bossGrace = 0
     this._bossRecovery = 0
+    this._spawnTimer = 0.4
     this._directorPhase = '终局审判'
     this._directorIntensity = 1
     return this._startBossEncounter({
@@ -969,9 +1056,11 @@ export class EnemyManager extends Entity {
   }
 
   _clearCombatants() {
+    this.crowds.reset()
     for (const enemy of this._enemies) enemy.destroy()
     this._enemies.length = 0
     this._bullets.length = 0
+    this._hazards.length = 0
     this._devouring.length = 0
     this._routing.length = 0
     this._boss = null
@@ -1017,7 +1106,8 @@ export class EnemyManager extends Entity {
     this._waveTimer = 0
     this._bossGrace = 0
     this._bossRecovery = 0
-    this._stagePressure = 0 // 首领已登场：收口状态清除，交由 _finale 接管生成闸门
+    this._spawnTimer = Math.min(this._spawnTimer, 0.35)
+    this._stagePressure = 0 // 首领已登场：收口状态清除，保持高节奏割草生成
     this._directorPhase = final ? '王庭真相' : '章节首领'
     this._directorIntensity = 1
     return this.spawnBoss({ encounter, expeditionBoss: final })
@@ -1029,6 +1119,7 @@ export class EnemyManager extends Entity {
     this._waveTimer = 0
     this._bossGrace = 0
     this._bossRecovery = 0
+    this._spawnTimer = Math.min(this._spawnTimer, 0.35)
     this._directorPhase = '王庭真相'
     this._directorIntensity = 1
     return this.spawnBoss({ type: 'boss-expedition', expeditionBoss: true })
@@ -1055,12 +1146,13 @@ export class EnemyManager extends Entity {
     }
 
     // 更新导演节拍，即使当前处于生成冷却，HUD/下一次间隔也能得到当前状态。
+    this.crowds.update(dt)
     if (!this._finale) this._directorFactor()
 
-    // 1) 定时生成
+    // 1) 定时生成（首领战与终局保持与常规相同的高节奏割草频率，仅在战后喘息期暂缓）
     this._bossGrace = Math.max(0, this._bossGrace - dt)
     this._bossRecovery = Math.max(0, this._bossRecovery - dt)
-    if (!this._finale && this._bossGrace <= 0 && this._bossRecovery <= 0) {
+    if (this._bossGrace <= 0 && this._bossRecovery <= 0) {
       this._spawnTimer -= dt
       if (this._spawnTimer <= 0) {
         const softCap = Math.ceil(this._populationTarget() * 1.2)
@@ -1069,19 +1161,28 @@ export class EnemyManager extends Entity {
       }
     }
 
-    // 2) 每个敌人各自执行职业行为（追逐/风筝/射击）
+    // 1.5) 战旗官光环实时刷新（战旗倒下即下一帧失效）
+    this._applyBannerAuras()
+
+    // 2) 每个敌人各自执行职业行为（追逐/风筝/射击/投弹）
     for (const e of this._enemies) {
+      if (!e.active) continue
       e.update(dt)
       if (e.active && !e.isBoss && !e._dialogueChecked) this.game.dialogue?.tryMinion(e)
     }
 
-    // 2.5) 敌人弹幕：移动 + 与玩家碰撞 + 回收
+    // 2.5) 敌人弹幕 & 炼金抛投毒瓶：移动 + 落地判定 + 与玩家碰撞 + 回收
     this._updateBullets(dt)
+    this._updateHazards(dt)
 
     // 2.6) 吞噬系统：残血敌人吸入 + 溶解动画推进 + 溃散推进 + 浮动文本
     this._checkDevour(dt)
     this._updateDevouring(dt)
     this._updateRouting(dt)
+    // 2.7) 首领劣地到期回收（持有者已死的场立即失效，不留隐形减速）
+    if (this._bossFields.length) {
+      this._bossFields = this._bossFields.filter((f) => f.until > this.game.elapsed && (!f.source || f.source.active))
+    }
     for (const t of this._texts) t.update(dt)
     let hasText = false
     for (const t of this._texts) {
@@ -1176,6 +1277,7 @@ export class EnemyManager extends Entity {
    * @param {{source?: string}} [ctx] 吞噬来源上下文（缺省 = 普通吞噬）
    */
   _startDevour(e, ctx = null) {
+    if (!e.active || e.devouring || e._settled) return
     e.devouring = true
     e._devourT = 0
     const combat = this.game.weaponSystem.gluttonCombat
@@ -1191,6 +1293,7 @@ export class EnemyManager extends Entity {
    *  弹幕立即清空（不让飞行中的弹幕偷袭庆祝中的玩家）。 */
   routAll() {
     this._bullets.length = 0
+    this._hazards.length = 0
     this._devouring.length = 0
     for (const e of this._enemies) {
       e.devouring = true // 冻结行为 + 武器/吞噬系统跳过（与吞噬共用免交互通道）
@@ -1291,6 +1394,123 @@ export class EnemyManager extends Entity {
     if (hasDead) this._bullets = list.filter((b) => b.active)
   }
 
+  /** 王国战旗官光环：半径 185px 内友军获得 +20% 移速与攻速鼓舞，击杀旗官即刻散去。 */
+  _applyBannerAuras() {
+    const r2 = BANNER_AURA_RADIUS * BANNER_AURA_RADIUS
+    const bannermen = []
+    for (const e of this._enemies) {
+      if (!e.active || e.isBoss) continue
+      e._bannerBuff = 0
+      if (e.type === 'bannerman' && !e.devouring) bannermen.push(e)
+    }
+    if (!bannermen.length) return
+    for (const e of this._enemies) {
+      if (!e.active || e.isBoss || e.type === 'bannerman') continue
+      for (const b of bannermen) {
+        const dx = e.x - b.x
+        const dy = e.y - b.y
+        if (dx * dx + dy * dy <= r2) {
+          e._bannerBuff = 0.2
+          break
+        }
+      }
+    }
+  }
+
+  /** 炼金投弹手抛投酸液瓶：飞行期显示落地圈预警，落地命中玩家后留短暂减速池。 */
+  _updateHazards(dt) {
+    const list = this._hazards
+    if (!list.length) return
+    const player = this.game?.player
+    let hasDead = false
+    for (const h of list) {
+      if (!h.active) { hasDead = true; continue }
+      h.age += dt
+      if (!h.landed) {
+        if (h.age >= h.flightDur) {
+          h.landed = true
+          h.age = 0
+          if (player && !player.dead) {
+            const rr = h.radius + (player.radius || 14)
+            const dx = player.x - h.x
+            const dy = player.y - h.y
+            if (dx * dx + dy * dy <= rr * rr) {
+              player.hit(h.damage, { enemyAttack: true })
+            }
+          }
+        }
+      } else if (h.age >= h.lingerDur) {
+        h.active = false
+        hasDead = true
+      }
+    }
+    if (hasDead) this._hazards = list.filter((h) => h.active)
+  }
+
+  _renderGroundHazards(ctx) {
+    if (!this._hazards.length) return
+    for (const h of this._hazards) {
+      if (!h.active) continue
+      ctx.save()
+      if (!h.landed) {
+        const u = Math.min(1, h.age / Math.max(0.01, h.flightDur))
+        ctx.fillStyle = `rgba(163, 230, 53, ${(0.08 + u * 0.14).toFixed(2)})`
+        ctx.beginPath()
+        ctx.arc(h.x, h.y, h.radius * u, 0, TAU)
+        ctx.fill()
+        ctx.strokeStyle = 'rgba(190, 242, 100, 0.72)'
+        ctx.lineWidth = 1.6
+        ctx.setLineDash([6, 5])
+        ctx.beginPath()
+        ctx.arc(h.x, h.y, h.radius, 0, TAU)
+        ctx.stroke()
+        ctx.setLineDash([])
+      } else {
+        const rem = Math.max(0, 1 - h.age / Math.max(0.01, h.lingerDur))
+        const alpha = Math.min(1, rem * 2.2)
+        ctx.fillStyle = `rgba(132, 204, 22, ${(0.24 * alpha).toFixed(2)})`
+        ctx.beginPath()
+        ctx.arc(h.x, h.y, h.radius, 0, TAU)
+        ctx.fill()
+        ctx.strokeStyle = `rgba(217, 249, 157, ${(0.5 * alpha).toFixed(2)})`
+        ctx.lineWidth = 1.5
+        ctx.beginPath()
+        ctx.arc(h.x, h.y, h.radius * 0.94, 0, TAU)
+        ctx.stroke()
+      }
+      ctx.restore()
+    }
+  }
+
+  _renderAirHazards(ctx) {
+    if (!this._hazards.length) return
+    for (const h of this._hazards) {
+      if (!h.active || h.landed) continue
+      const u = Math.min(1, h.age / Math.max(0.01, h.flightDur))
+      const px = h.startX + (h.x - h.startX) * u
+      const py = h.startY + (h.y - h.startY) * u - Math.sin(u * Math.PI) * 78
+      ctx.save()
+      ctx.translate(px, py)
+      ctx.rotate(u * TAU * 1.4)
+      ctx.fillStyle = 'rgba(163, 230, 53, 0.3)'
+      ctx.beginPath()
+      ctx.arc(0, 0, 11, 0, TAU)
+      ctx.fill()
+      ctx.fillStyle = '#a3e635'
+      ctx.strokeStyle = '#1a2e05'
+      ctx.lineWidth = 1.6
+      ctx.beginPath()
+      ctx.arc(0, 1, 6.5, 0, TAU)
+      ctx.fill()
+      ctx.stroke()
+      ctx.fillStyle = '#fef08a'
+      ctx.beginPath()
+      ctx.arc(-2, -1, 2, 0, TAU)
+      ctx.fill()
+      ctx.restore()
+    }
+  }
+
   /** 把敌人散列进网格：O(n) 构建，供分离阶段快速取邻居 */
   _buildGrid() {
     const grid = this._grid
@@ -1368,6 +1588,7 @@ export class EnemyManager extends Entity {
    */
   renderBodies(ctx, player = null) {
     this._bodiesMerged = true
+    this._renderGroundHazards(ctx)
     const cam = this.game.camera
     const { width, height } = this.game
     // 视口剔除：可见范围（80px 余量，覆盖 Boss 体型与武器伸出）之外的敌人不绘制
@@ -1394,10 +1615,11 @@ export class EnemyManager extends Entity {
     // GameEngine 在 player 槽位已经把本体画过；独立调用（无玩家合并）时才在这里补画
     if (!this._bodiesMerged) this.renderBodies(ctx)
     this._bodiesMerged = false
-    // 弹幕绘制在敌人之上，清晰可见
+    // 弹幕与空中投掷毒瓶绘制在敌人之上，清晰可见
     for (const b of this._bullets) {
       if (b.active) b.render(ctx)
     }
+    this._renderAirHazards(ctx)
     // 溶解中的敌人：被吸向史莱姆时的拉伸半透明精灵
     const assets = AssetManager.getInstance()
     // 溃散中的残敌：过关演出的原地震散（缩小淡出，不飞向玩家——与吞噬区分语义）

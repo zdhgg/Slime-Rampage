@@ -3,11 +3,11 @@ import { projectTowerDefensePoint } from './TowerDefenseLayout.js'
 
 const TAU = Math.PI * 2
 export const TD_SCENERY_PALETTES = {
-  1: { ground: ['#2b4133', '#1c3029'], soil: '#72815a', road: '#63533c', edge: '#3f4d35', detail: '#9b9273', dark: '#283c2d', stone: '#69715d', light: '#9aa780' },
-  2: { ground: ['#344d5b', '#233742'], soil: '#91a9ad', road: '#617e89', edge: '#3d5867', detail: '#b0c6c9', dark: '#304e61', stone: '#628d9f', light: '#bacfd2' },
-  3: { ground: ['#403831', '#292a29'], soil: '#827365', road: '#5b5046', edge: '#634836', detail: '#a78866', dark: '#302d2b', stone: '#635b50', light: '#a28c73' },
-  4: { ground: ['#393b50', '#282d3d'], soil: '#807694', road: '#615c76', edge: '#423e58', detail: '#aaa2bb', dark: '#363347', stone: '#777398', light: '#b9b1d1' },
-  5: { ground: ['#414741', '#2b3434'], soil: '#858675', road: '#6b6b60', edge: '#535b50', detail: '#baad80', dark: '#34433f', stone: '#7b8174', light: '#b7b49b' },
+  1: { ground: ['#c5d7a8', '#a1bd8d'], frame: '#edf0e5', soil: '#6f9362', road: '#e7d5ad', edge: '#c3a981', detail: '#a18360', dark: '#687b51', stone: '#899883', light: '#eff1ca' },
+  2: { ground: ['#cadce1', '#94b0be'], frame: '#e8f0f2', soil: '#83a6af', road: '#e4e8e4', edge: '#94aeb5', detail: '#83a0ac', dark: '#587987', stone: '#7898a6', light: '#f0f5ec' },
+  3: { ground: ['#bda599', '#91847f'], frame: '#eee6df', soil: '#a1755c', road: '#d9ba9a', edge: '#a88870', detail: '#8e6e58', dark: '#756054', stone: '#8f786f', light: '#e3c3a5' },
+  4: { ground: ['#a6aabd', '#818aa0'], frame: '#ebeaf1', soil: '#82799e', road: '#cec9d5', edge: '#a29aaf', detail: '#847c98', dark: '#655d7c', stone: '#867da0', light: '#d8cfe6' },
+  5: { ground: ['#bdc1ae', '#8c9b8b'], frame: '#eceee5', soil: '#899174', road: '#ddd3ab', edge: '#b6a486', detail: '#928464', dark: '#667566', stone: '#939a88', light: '#eee3bc' },
 }
 const tones = { dawn: '#c3b27c0b', noon: '#b5cab204', amber_dusk: '#cc924514', twilight: '#555b9014', midnight: '#101d3622' }
 const oval = (ctx, x, y, rx, ry) => { ctx.beginPath(); ctx.ellipse(x, y, rx, ry, 0, 0, TAU); ctx.fill() }
@@ -229,7 +229,8 @@ function prop(ctx, item, chapter, p, tier) {
 export function paintTowerScenery(ctx, layout, scene, config) {
   const p = TD_SCENERY_PALETTES[scene.chapter] || TD_SCENERY_PALETTES[1]
   const { left, top, boardWidth, boardHeight, width, height, unit } = layout
-  ctx.fillStyle = config.theme?.bgBase || '#0b1613'; ctx.fillRect(0, 0, width, height)
+  ctx.fillStyle = p.frame
+  ctx.fillRect(0, 0, width, height)
   ctx.save(); ctx.beginPath(); ctx.rect(left, top, boardWidth, boardHeight); ctx.clip()
   ground(ctx, layout, scene, p)
   road(ctx, scene, p, unit)

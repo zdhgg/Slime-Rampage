@@ -108,8 +108,9 @@ function setDifficulty(game, difficulty) {
   const warden = g5.enemyManager.beginExpeditionStageBoss(getExpeditionBoss('border_warden'))
   assert.equal(g5.bossArena.active, true, '边防官应挂圈（远征第 1 章主 BOSS）')
   assert.equal(g5.bossArena.boss, warden)
-  assert.equal(g5.bossArena.radius, 640, '边防官圈半径按冲锋位移适配')
-  assert.equal(g5.bossArena.followSpeed, 180, '圈心跟随速度按追击速度适配')
+  assert.equal(g5.bossArena.radius, 850, '边防官固定圈初始半径 850')
+  assert.equal(g5.bossArena.minRadius, 550, '边防官缩圈底线 550')
+  assert.equal(g5.bossArena.followSpeed, 0, '固定决斗圈圆心不再追随飘移')
   assert.equal(g5.bossArena.rageEnabled, false, '独立 AI 不开决斗狂暴')
   assert.equal(g5.bossArena.pincerEnabled, false, '独立 AI 不开决斗夹击')
   assert.equal(warden.maxHp, 314, '远征第 1 章 HP=(100+130)×0.62×2.2（上一论调整已生效）')
@@ -126,7 +127,7 @@ function setDifficulty(game, difficulty) {
   ok('模式覆盖：限时 5/10 波、无尽单体、远征章节首领（含第 1 章边防官）挂圈；编队/终局不挂圈')
 }
 
-// ── 1c. 边防官：挂圈但不触发狂暴/夹击，冲锋位移不灼烧贴身玩家 ──
+// ── 1c. 边防官：固定擂台内对决，圆心不飘移、不开狂暴/夹击 ──
 {
   const game = createArena()
   game.runSelection = { mode: 'expedition', difficulty: 'normal' }
@@ -136,27 +137,29 @@ function setDifficulty(game, difficulty) {
   const arena = game.bossArena
   assert.equal(arena.active, true)
   const p = game.player
+  const anchorX = arena.cx
+  const anchorY = arena.cy
 
-  // 满冲锋位移 600px：BOSS 与贴身玩家仍在 640 圈内，不触发灼烧
-  boss.x = arena.cx + 600
-  boss.y = arena.cy
-  p.x = boss.x - 40
-  p.y = boss.y
+  // BOSS 尝试大幅位移时，固定圆心纹丝不动，且 BOSS 被约束在当前圈内
+  boss.x = anchorX + 800
+  boss.y = anchorY
+  p.x = anchorX
+  p.y = anchorY
   const hp0 = p.hp
   stepArena(game, 1.5)
-  assert.equal(p.hp, hp0, '满冲锋后贴身玩家不受灼烧')
-  // 圈心以 180px/s 回归：1.5s 后已追近 270px
-  assert.ok(Math.abs(arena.cx - (boss.x - 330)) < 1e-6, `圈心按 180px/s 跟随（cx=${arena.cx}）`)
-  stepArena(game, 2.5) // 累计约 4s：完全追上
-  assert.equal(arena.cx, boss.x)
+  assert.equal(p.hp, hp0, '圈内玩家不受灼烧')
+  assert.equal(arena.cx, anchorX, '固定决斗圈圆心不随 BOSS 飘移')
+  assert.equal(arena.cy, anchorY)
+  assert.ok(Math.hypot(boss.x - arena.cx, boss.y - arena.cy) <= arena.radius - boss.radius, 'BOSS 被约束在固定圈内，不会跑出圈外')
 
-  // 残血 20%：不触发决斗狂暴，圈不收、体型不变
+  // 残血 20%：不触发决斗狂暴，也不额外瞬缩
   const radiusBefore = boss.radius
+  const arenaRBefore = arena.radius
   boss.hit(boss.maxHp * 0.85)
   assert.ok(boss.hp / boss.maxHp <= 0.25)
   assert.equal(boss._duelRage, false, '边防官 25% 不触发决斗狂暴')
   assert.equal(boss.radius, radiusBefore, '无狂暴体型变化')
-  assert.equal(arena.radius, 640, '无狂暴收圈')
+  assert.equal(arena.radius, arenaRBefore, '无狂暴瞬缩')
   assert.equal(arena.redFlash, 0, '无狂暴红闪')
 
   // 夹击门控：即使直接调用（边防官 type 同为 boss-knight）也不生效
@@ -168,7 +171,7 @@ function setDifficulty(game, difficulty) {
   assert.equal(p.hp, hp0, '边防官不触发决斗夹击')
   assert.ok(!boss._pincerFx, '无夹击闪光')
   dispose(game)
-  ok('边防官：挂圈不开狂暴/夹击，满冲锋位移不灼烧贴身玩家')
+  ok('边防官：固定圆心不飘移，BOSS 约束在圈内且不开狂暴/夹击')
 }
 // ── 1d. 边防官机制强化：不与决斗圈形成双重惩罚；难度分档生效 ──
 {
@@ -201,7 +204,7 @@ function setDifficulty(game, difficulty) {
   assert.ok(sawHazard, '普通档冲锋落点生成残留危险区')
   assert.equal(p.hp, 2, '整套冲锋最坏 2 伤害（直中），残留被无敌帧挡下、圈内无灼烧')
   assert.equal(p.dead, false, '低血量玩家不被冲锋+落点+圈组合秒杀')
-  assert.ok(boss.x - arena.cx < 640, '满冲锋后 BOSS 仍在圈内（无双惩来源）')
+  assert.ok(Math.hypot(boss.x - arena.cx, boss.y - arena.cy) <= arena.radius, '满冲锋后 BOSS 仍在圈内（无双惩来源）')
 
   // 圈外：灼烧节奏独立，不受受击/残留影响
   boss.freeze = 10 // 冻结 BOSS 动作，隔离灼烧节律
@@ -250,24 +253,36 @@ function setDifficulty(game, difficulty) {
   ok('真实生成路径（spawnBoss）自动激活')
 }
 
-// ── 2. 圈半径与跟随 ──────────────────────────────────────────
+// ── 2. 固定圆心 + 随时间平滑缩圈至底线 + BOSS 不出圈 ───────────────────
 {
   const game = createArena()
   const boss = spawnBoss(game, 300, 'boss-knight')
   const arena = game.bossArena
   arena.activate(boss)
   assert.equal(arena.radius, DUEL_ARENA.radius)
-  assert.equal(arena.cx, boss.x)
-  assert.equal(arena.cy, boss.y)
-  boss.x += 100 // BOSS 离开圈心 100px
-  arena.update(0.5) // 40px/s × 0.5s = 20px
-  const dist = Math.hypot(boss.x - arena.cx, boss.y - arena.cy)
-  assert.ok(Math.abs(dist - 80) < 1e-6, `圈心应跟随 20px（剩余 ${dist}）`)
-  stepArena(game, 5) // 足够时间追上
-  assert.equal(arena.cx, boss.x)
-  assert.equal(arena.cy, boss.y)
+  const cx0 = arena.cx
+  const cy0 = arena.cy
+  boss.x += 120 // BOSS 移动，圈心完全固定不跟随
+  arena.update(2)
+  assert.equal(arena.cx, cx0, '固定圈圆心保持不动')
+  assert.equal(arena.cy, cy0)
+  assert.ok(
+    Math.abs(arena.radius - (DUEL_ARENA.radius - DUEL_ARENA.shrinkRate * 2)) < 1e-6,
+    `2 秒后平滑缩圈 ${DUEL_ARENA.shrinkRate * 2}px（实际 ${arena.radius}）`
+  )
+  stepArena(game, 320) // 足够长时间（每10秒缩10px）：停在 minRadius 不再无限收缩
+  assert.equal(arena.radius, DUEL_ARENA.minRadius, '缩到底线 minRadius 后停止继续缩圈')
+  assert.ok(Math.hypot(boss.x - arena.cx, boss.y - arena.cy) <= arena.radius - boss.radius, '缩圈后 BOSS 仍留在圈内')
+
+  // 骑士王冲锋面向圈外边界时，预警长度也裁剪在圈内，不跑出安全区
+  boss.x = arena.cx + arena.radius - boss.radius - 40
+  boss.y = arena.cy
+  game.player.x = boss.x + 120
+  game.player.y = boss.y
+  boss._startSpecial()
+  assert.ok(boss.dashDistance < 200, `冲锋预警长度被固定圈裁剪在界内（dashDistance=${boss.dashDistance}）`)
   dispose(game)
-  ok('圈半径 520，圈心以 40px/s 跟随 BOSS')
+  ok(`固定圆心、每秒平滑缩 ${DUEL_ARENA.shrinkRate}px 至底线 ${DUEL_ARENA.minRadius}px，并裁剪 BOSS 位移与冲锋`)
 }
 
 // ── 3. 出界宽限与灼烧节奏 ────────────────────────────────────
@@ -280,16 +295,16 @@ function setDifficulty(game, difficulty) {
   p.x = arena.cx + arena.radius + 150 // 稳稳出界
   p.y = arena.cy
   const hp0 = p.hp
-  stepArena(game, 0.7)
-  assert.equal(p.hp, hp0, '0.8s 宽限内不掉血')
-  stepArena(game, 0.35) // 累计 1.05s：越过 0.8s 第一跳
-  assert.equal(hp0 - p.hp, 1, '0.8s 后第一跳扣 1')
-  stepArena(game, 0.5) // 累计 1.55s：1.3s 第二跳
+  stepArena(game, 0.8)
+  assert.equal(p.hp, hp0, `${DUEL_ARENA.graceTime}s 宽限内不掉血`)
+  stepArena(game, 0.35) // 累计 1.15s：越过 0.9s 第一跳
+  assert.equal(hp0 - p.hp, 1, '宽限过后第一跳扣 1')
+  stepArena(game, 0.5)
   assert.equal(hp0 - p.hp, 2, '之后每 0.5s 一跳')
-  stepArena(game, 0.5) // 累计 2.05s：1.8s 第三跳
+  stepArena(game, 0.5)
   assert.equal(hp0 - p.hp, 3, '灼烧节奏稳定 0.5s/跳')
   dispose(game)
-  ok('出界 0.8s 宽限，之后每 0.5s 扣 1 血')
+  ok(`出界 ${DUEL_ARENA.graceTime}s 宽限，之后每 0.5s 扣 1 血`)
 }
 {
   // 宽限重置：被击退出圈立刻跑回，不欠跳；再出界重新计宽限
@@ -306,8 +321,8 @@ function setDifficulty(game, difficulty) {
   stepArena(game, 0.2)
   assert.equal(p.hp, hp0, '宽限内回圈不掉血')
   p.x = arena.cx + arena.radius + 150
-  stepArena(game, 0.7)
-  assert.equal(p.hp, hp0, '再出界宽限重新计满 0.8s')
+  stepArena(game, 0.8)
+  assert.equal(p.hp, hp0, `再出界宽限重新计满 ${DUEL_ARENA.graceTime}s`)
   stepArena(game, 0.35)
   assert.equal(hp0 - p.hp, 1)
   dispose(game)
@@ -362,11 +377,12 @@ function setDifficulty(game, difficulty) {
   const arena = game.bossArena
   arena.activate(boss)
   assert.equal(arena.burnDamage, 2, '地狱灼烧 ×2')
+  const radiusBeforeRage = arena.radius
   boss.hit(boss.maxHp * 0.8)
   assert.equal(boss._duelRage, true)
-  assert.ok(Math.abs(arena.radius - DUEL_ARENA.radius * 0.78) < 1e-9, '地狱狂暴缩圈 22%（×0.78）')
+  assert.equal(arena.radius, radiusBeforeRage, '地狱狂暴不再额外突缩，改由随时间平滑收缩控制空间')
   dispose(game)
-  ok('地狱：灼烧 ×2、狂暴缩圈 ×0.78')
+  ok('地狱：灼烧 ×2、平滑缩圈不突缩')
 }
 {
   const game = createArena()
@@ -395,13 +411,14 @@ function setDifficulty(game, difficulty) {
   assert.equal(boss._reinforced, true, '75% 增援不受影响')
   assert.equal(boss._duelRage, false, '70% 不触发狂暴')
 
+  const radiusBeforeRage = arena.radius
   boss.hit(boss.maxHp * 0.5) // 20%：触发狂暴
   assert.equal(boss._duelRage, true, '25% 触发狂暴')
   assert.ok(Math.abs(boss.radius - before.radius * 1.08) < 1e-9, '体型 +8%')
   // 25% 同时触发既有「困兽之斗」(×0.88) 与狂暴(×0.75)
   assert.ok(Math.abs(boss.attackInterval - before.attackInterval * 0.88 * 0.75) < 1e-9, '攻速 ×0.88(困兽)×0.75(狂暴)')
   assert.equal(boss.damage, before.damage + 1, '狂暴伤害 +1')
-  assert.ok(Math.abs(arena.radius - DUEL_ARENA.radius * 0.85) < 1e-9, '决斗圈再收 15%')
+  assert.equal(arena.radius, radiusBeforeRage, '狂暴不再突然缩圈')
   assert.ok(arena.redFlash > 0, '全屏红闪已触发')
 
   const ragedRadius = boss.radius

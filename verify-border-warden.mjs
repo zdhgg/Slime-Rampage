@@ -210,11 +210,12 @@ check('地狱档：落点残留再扩至 150 / 1.35s，收势窗口与出手冷�
   assert.equal(b.specialCd, .3, '地狱档收势后出手间隔 .3')
 })
 
-for (const fps of [15, 30, 60, 120]) for (const phase of [1, 2]) check(`${fps} FPS 阶段 ${phase}：固定方向绕圈受威胁，预警后变向可避开`, ({ b, p }) => {
+for (const fps of [15, 30, 60, 120]) for (const phase of [1, 2]) check(`${fps} FPS 阶段 ${phase}：固定方向绕圈受威胁，预警后变向可避开`, ({ g, b, p }) => {
   const results = []
   for (const reactive of [false, true]) {
     b.phase = phase; b.specialState = 'idle'; b.specialCd = .1; b._pursuit = 0
     b.x = 1000; b.y = 900; b._lastPlayer = null; b._velocity = { x: 0, y: 0 }
+    if (g.bossArena) { g.bossArena.cx = 1000; g.bossArena.cy = 900 }
     let hits = 0, direction = 1, previous = '', angle = 0
     p.hit = () => hits++
     p.x = 1410; p.y = 900

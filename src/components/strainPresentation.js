@@ -15,8 +15,8 @@ export const STRAIN_PRESENTATION = {
   },
   glutton: {
     ...SLIME_FAMILY_ART.glutton,
-    label: '近身吞噬', epithet: '永不满足的猎食者',
-    intro: '贴近猎物，咬击吞噬。以捕食积累猎食点，用重咬撕开包围，获得短时护甲。',
+    label: '重装吞噬', epithet: '愈战愈厚的活体腐渊',
+    intro: '自带贴身腐蚀光环与可破防反震胃铠，主动释放「深渊吸噬」聚怪重咬并压入吞噬线；吞噬积累饱食度自动爆发酸浪与生命续航。',
   },
   ricochet: {
     ...SLIME_FAMILY_ART.ricochet,
@@ -47,8 +47,8 @@ export function strainTraits(id) {
     ]
     case 'glutton': return [
       { label: '生命上限', value: `+${strain.maxHp}` },
+      { label: '近战光环', value: '腐蚀+反伤' },
       { label: '吞噬范围', value: `+${percent(strain.devourRadius - 1)}%` },
-      { label: '攻击方式', value: '近战咬击' },
     ]
     case 'ricochet': return [
       { label: '齐射飞弹', value: `+${strain.projectileCount}` },

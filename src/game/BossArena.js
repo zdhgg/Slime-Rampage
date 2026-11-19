@@ -1,17 +1,18 @@
 const TAU = Math.PI * 2
 
 /**
- * 决斗圈：软结界——不做硬墙，玩家可以出界，但出界 0.8s 宽限后每 0.5s 受灼烧；
- * 圈心跟随 BOSS，把战斗压缩在移动擂台内；BOSS 死亡即消散。
- * 生效范围由 DUEL_ARENA_RULES 清单决定（按模式 + 首领身份，可带参数覆盖）。
+ * 决斗圈：固定地面软结界——不做硬墙，玩家可出界，但出界 0.9s 宽限后每 0.5s 受灼烧；
+ * 圈心在首领激活时锚定双方之间并固定不动，半径随时间平滑收缩至底线，
+ * 同时把首领自身位移与冲锋限制在当前圈内（保证双方在同一固定擂台内对决）。
  */
 export const DUEL_ARENA = {
-  radius: 520,
-  followSpeed: 40,
-  graceTime: 0.8,
+  radius: 820,
+  minRadius: 520,
+  shrinkRate: 1,
+  followSpeed: 0,
+  graceTime: 0.9,
   tickInterval: 0.5,
   tickDamage: 1,
-  rageShrink: 0.85,
   dissolveTime: 0.6,
 }
 
@@ -25,7 +26,7 @@ export const DUEL_ARENA_DEBUG = { enabled: true }
  * 通用排除（在 activate 里统一卡）：编队成员（bossGroupSize>1）、复合首领（终局/统帅轮转）；
  * TD/Runner 不走 EnemyManager 生成，天然不涉及。
  * 单条规则可带 params 覆盖圈参数与特性开关：
- *  - radius / followSpeed：按 BOSS 自身体型与位移能力适配（默认 520 / 40）
+ *  - radius / minRadius / shrinkRate：固定擂台的初始半径、保底半径与收缩速度
  *  - rage / pincer：残血狂暴与冲锋夹击（默认开；独立 AI 体系的首领应显式关闭）
  */
 export const DUEL_ARENA_RULES = [
@@ -34,15 +35,9 @@ export const DUEL_ARENA_RULES = [
     mode: 'expedition',
     label: '远征第 1 章边防官',
     match: (boss) => boss.encounter?.id === 'border_warden',
-    // 边防官是高频位移的近战压制者：举盾冲锋最远 600px（920px/s）、追击 195px/s。
-    // 沿用 520/40 会让一次满冲锋就把圈心甩开 600px——圈心要 15s 才追得上，
-    // 期间贴着 BOSS 打的玩家会被自己的圈灼烧，属于规则制造的不公平。
-    // radius 640：一次满冲锋落地后 BOSS 与贴身玩家仍留在圈内（600 < 640）；
-    // followSpeed 180 ≈ 其追击速度 195：圈心回归与追击同速，满冲锋后约 3.3s 重新居中，
-    // 过渡期由 640 半径兜住；仍远低于玩家移速 340，玩家不能拖着圈走。
-    // rage/pincer 关闭：边防官是独立 AI（50% 二阶段、无困兽之斗、无骑士王冲锋分支），
-    // 不叠加决斗狂暴/夹击——是否适配另行讨论。
-    params: { radius: 640, followSpeed: 180, rage: false, pincer: false },
+    // 边防官是长距突刺/冲锋压制者，固定擂台给予更大起手与保底空间（850 → 550，每 10 秒仅缩 10px），
+    // 其冲锋与追击会被固定擂台裁剪在圈内，避免 BOSS 自己冲出安全区。
+    params: { radius: 850, minRadius: 550, shrinkRate: 1, followSpeed: 0, rage: false, pincer: false },
   },
   { mode: 'expedition', label: '远征章节首领', match: (boss) => !!boss.encounter },
   { mode: 'endless', label: '无尽单体首领', match: () => true },
@@ -59,7 +54,10 @@ export class BossArena {
     this.boss = null
     this.cx = 0
     this.cy = 0
+    this.initialRadius = DUEL_ARENA.radius
     this.radius = DUEL_ARENA.radius
+    this.minRadius = DUEL_ARENA.minRadius
+    this.shrinkRate = DUEL_ARENA.shrinkRate
     this.followSpeed = DUEL_ARENA.followSpeed
     this.outTime = 0
     this.nextBurnAt = DUEL_ARENA.graceTime
@@ -75,7 +73,7 @@ export class BossArena {
     return this.active ? Math.max(0, DUEL_ARENA.graceTime - this.outTime) : DUEL_ARENA.graceTime
   }
 
-  /** 按 DUEL_ARENA_RULES 清单判定：单体、非复合、模式命中才开圈；规则可覆盖圈参数与特性 */
+  /** 按 DUEL_ARENA_RULES 清单判定：单体、非复合、模式命中才开圈；固定圆心于双方间 */
   activate(boss) {
     if (!boss || this.active || !DUEL_ARENA_DEBUG.enabled) return false
     if (!boss.isBoss || boss.isCompositeBoss || (boss.bossGroupSize || 1) > 1) return false
@@ -86,10 +84,21 @@ export class BossArena {
     const difficulty = this.game.runProfile?.id || 'normal'
     this.active = true
     this.boss = boss
-    this.cx = boss.x
-    this.cy = boss.y
-    this.radius = params.radius ?? DUEL_ARENA.radius
+    this.initialRadius = params.radius ?? DUEL_ARENA.radius
+    this.radius = this.initialRadius
+    this.minRadius = Math.min(this.initialRadius, params.minRadius ?? DUEL_ARENA.minRadius)
+    this.shrinkRate = params.shrinkRate ?? DUEL_ARENA.shrinkRate
     this.followSpeed = params.followSpeed ?? DUEL_ARENA.followSpeed
+
+    const p = this.game.player
+    const rawCx = p ? boss.x * 0.6 + p.x * 0.4 : boss.x
+    const rawCy = p ? boss.y * 0.6 + p.y * 0.4 : boss.y
+    const ww = this.game.worldWidth || 2000
+    const wh = this.game.worldHeight || 2000
+    const margin = Math.min(this.minRadius, Math.min(ww, wh) * 0.25)
+    this.cx = clamp(rawCx, margin, ww - margin)
+    this.cy = clamp(rawCy, margin, wh - margin)
+
     this.outTime = 0
     this.nextBurnAt = DUEL_ARENA.graceTime
     this.dissolve = 0
@@ -104,13 +113,46 @@ export class BossArena {
           ? DUEL_ARENA.tickDamage * 1.5
           : DUEL_ARENA.tickDamage
     boss.duelArena = this
-    this.game.enemyManager.addText(boss.x, boss.y - boss.radius - 52, '决斗圈展开', null, '#ff9f6e', 16)
+    this.game.enemyManager.addText(this.cx, this.cy - 40, '固定决斗圈展开', null, '#ff9f6e', 16)
     return true
   }
 
-  /** 狂暴收圈：半径再收 15%（由 BOSS 狂暴事件调用） */
+  /** 将实体坐标约束在当前固定圈内（用于确保 BOSS 不会走出或冲出安全区） */
+  clampPosition(x, y, entityRadius = 0, pad = 16) {
+    if (!this.active || this.dissolve > 0) return { x, y }
+    const maxR = Math.max(24, this.radius - entityRadius - pad)
+    const dx = x - this.cx
+    const dy = y - this.cy
+    const d2 = dx * dx + dy * dy
+    if (d2 <= maxR * maxR || d2 === 0) return { x, y }
+    const d = Math.sqrt(d2)
+    return {
+      x: this.cx + (dx / d) * maxR,
+      y: this.cy + (dy / d) * maxR,
+    }
+  }
+
+  /** 将直线冲锋射线裁剪在当前决斗圈内，保持地面预警与实际终点一致 */
+  clipRayLength(originX, originY, angle, length, entityRadius = 0, pad = 16) {
+    if (!this.active || this.dissolve > 0) return length
+    const maxR = Math.max(24, this.radius - entityRadius - pad)
+    const ox = originX - this.cx
+    const oy = originY - this.cy
+    const co = Math.cos(angle)
+    const si = Math.sin(angle)
+    const b = ox * co + oy * si
+    const c = ox * ox + oy * oy - maxR * maxR
+    if (c >= 0) return b >= 0 ? 0 : Math.min(length, -2 * b)
+    const disc = Math.max(0, b * b - c)
+    const maxT = -b + Math.sqrt(disc)
+    return Math.min(length, Math.max(0, maxT))
+  }
+
+  /** 兼容保留接口（不再用于残血瞬缩） */
   shrink(factor) {
-    if (this.active) this.radius *= factor
+    if (this.active && factor > 0) {
+      this.radius = Math.max(this.minRadius, this.radius * factor)
+    }
   }
 
   /** 狂暴全屏红闪（由 BOSS 狂暴事件调用） */
@@ -145,18 +187,15 @@ export class BossArena {
       return
     }
 
-    // 圈心跟随 BOSS（慢于玩家移速，玩家不能把圈甩在身后；速度可由规则按 BOSS 适配）
-    const dx = boss.x - this.cx
-    const dy = boss.y - this.cy
-    const dist = Math.hypot(dx, dy)
-    const step = this.followSpeed * dt
-    if (dist <= step) {
-      this.cx = boss.x
-      this.cy = boss.y
-    } else if (dist > 0) {
-      this.cx += (dx / dist) * step
-      this.cy += (dy / dist) * step
+    // 固定圆心不再追随飘移；半径随时间平滑收紧到底线 minRadius
+    if (this.radius > this.minRadius && this.shrinkRate > 0) {
+      this.radius = Math.max(this.minRadius, this.radius - this.shrinkRate * dt)
     }
+
+    // 当圈随时间向内收缩时，同步将 BOSS 保持在圈内
+    const clampedBoss = this.clampPosition(boss.x, boss.y, boss.radius, 16)
+    boss.x = clampedBoss.x
+    boss.y = clampedBoss.y
 
     const p = this.game.player
     if (p.dead) return // 玩家死在界外：结算已触发，圈不再补刀
@@ -166,7 +205,7 @@ export class BossArena {
       this.nextBurnAt = DUEL_ARENA.graceTime
       return
     }
-    // 软结界：0.8s 宽限（覆盖被击退出圈的瞬间），之后每 0.5s 灼烧一次
+    // 软结界：0.9s 宽限（覆盖被击退出圈的瞬间），之后每 0.5s 灼烧一次
     this.outTime += dt
     while (this.outTime >= this.nextBurnAt) {
       this.nextBurnAt += DUEL_ARENA.tickInterval

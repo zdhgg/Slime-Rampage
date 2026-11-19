@@ -41,7 +41,7 @@ export const ELEMENTAL_SPEC_INFO = {
 export const ELEMENTAL_SKILLS = [
   ...ELEMENTAL_SCHOOL_SKILLS,
   { id: 'spell_shield', name: '法术护盾', icon: '🛡️', tier: 1, maxLevel: 2, tags: ['元素·防御', '自动重建'],
-    desc: '强化开局自带的法术护盾。护盾吸收敌人攻击，超出容量的伤害扣生命，破盾后自动重建。',
+    desc: '强化开局自带的法术护盾。护盾吸收敌人攻击，超出容量的伤害扣生命，破盾后自动重建；未满时每 10 秒回复 1 点。',
     stats: lv => lv === 0 ? '护盾容量 1 · 破盾重建 8 → 6 秒' : '护盾容量 1 → 2 · 破盾重建 6 秒',
     apply(game) { game.weaponSystem.spellCombat.shield.upgrade() } },
   { id: 'ele_overload', name: '融合超载', icon: '✦', tier: 2, maxLevel: 3, desc: '强化空格融合术伤害，缩短主动冷却。', stats: lv => `主动伤害 +${(lv + 1) * 20}% · 冷却 −${(lv + 1) * 5}%`, apply() {} },

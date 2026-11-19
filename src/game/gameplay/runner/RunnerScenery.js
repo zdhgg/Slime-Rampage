@@ -1,5 +1,5 @@
 import { RUNNER_SCENE_PROFILES } from './RunnerSceneProfiles.js'
-import { paintSceneSkyline, paintSceneCluster, paintSceneDestination, paintSceneGate, paintCyberTower } from './RunnerSceneArt.js'
+import { paintSceneSkyline, paintSceneCluster, paintSceneDestination, paintSceneGate, paintSceneTower } from './RunnerSceneArt.js'
 
 // Runner scenery: baked parallax backdrops and roadside glow props for the
 // expedition (runner) mode. Static detail is baked once per canvas size (the
@@ -114,7 +114,7 @@ export class RunnerScenery {
     const gate = this._bakeStrip(256, 112, scale, ctx => paintSceneGate(ctx, this.profile))
     const destination = this._bakeStrip(400, 180, scale, ctx => paintSceneDestination(ctx, this.profile))
     const towers = Array.from({ length: 8 }, (_, i) => this._bakeStrip(180, 360, scale,
-      ctx => paintCyberTower(ctx, this.profile, sceneryRandom(this.profile.seed + i * 93), i % 4, i < 4 ? -1 : 1)))
+      ctx => paintSceneTower(ctx, this.profile, sceneryRandom(this.profile.seed + i * 93), i % 4, i < 4 ? -1 : 1)))
     const glow = this.previousSprites?.glow || this._bakeStrip(128, 128, scale, ctx => this._paintGlow(ctx))
     return { scale, stripW, skyline, clusterW, cluster, gate, destination, glow, towers }
   }

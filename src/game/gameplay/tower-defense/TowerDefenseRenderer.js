@@ -2158,52 +2158,54 @@ export class TowerDefenseRenderer {
   }
 
   _drawTutorialGuide(ctx) {
-    const tut = this.gameplay.tutorial
-    if (!tut || !tut.active) return
-    const elapsed = this.gameplay.elapsed || 0
-    const u = this.unit
-    const pulse = Math.sin(elapsed * 6) * 0.3 + 0.7
+    const gp = this.gameplay
+    const tutorial = gp.tutorial
+    if (!tutorial?.active || gp.outcome || gp.selectedSlotIndex >= 0) return
 
-    ctx.save()
-    if (tut.step === 1) {
-      // Guide to first build slot
-      const slotDef = this.gameplay.buildSlots?.[0]
-      if (slotDef && !this.gameplay.getTowerAtSlot(0)) {
-        const pt = this.project(slotDef)
-        // Pulsing green beacon
-        ctx.strokeStyle = `rgba(46, 204, 113, ${pulse})`
-        ctx.lineWidth = 3.5
-        ctx.setLineDash([6, 4])
-        ctx.beginPath()
-        ctx.arc(pt.x, pt.y, u * 0.85, 0, TAU)
-        ctx.stroke()
-        ctx.setLineDash([])
-
-        // Bouncing Arrow
-        const bounce = Math.sin(elapsed * 5) * u * 0.15
-        ctx.fillStyle = '#2ecc71'
-        ctx.font = `900 ${clamp(u * 0.6, 22, 32)}px system-ui, sans-serif`
-        ctx.textAlign = 'center'
-        ctx.fillText('👇', pt.x, pt.y - u * 0.95 + bounce)
-      }
-    } else if (tut.step === 2) {
-      const tower = this.gameplay.towers?.find(t => t.level === 1)
-      if (tower) {
-        const pt = this.project(this.gameplay.buildSlots[tower.slotIndex])
-        // Pulsing orange beacon
-        ctx.strokeStyle = `rgba(243, 156, 18, ${pulse})`
-        ctx.lineWidth = 3.5
-        ctx.beginPath()
-        ctx.arc(pt.x, pt.y, u * 0.85, 0, TAU)
-        ctx.stroke()
-
-        const bounce = Math.sin(elapsed * 5) * u * 0.15
-        ctx.fillStyle = '#f39c12'
-        ctx.font = `900 ${clamp(u * 0.6, 22, 32)}px system-ui, sans-serif`
-        ctx.textAlign = 'center'
-        ctx.fillText('👇', pt.x, pt.y - u * 0.95 + bounce)
-      }
+    const available = (_, i) => gp.unlockedSlots.has(i) && !gp.getTowerAtSlot(i)
+    let slotIndex
+    if (tutorial.step === 1 || (tutorial.step === 2 && gp.towers.length === 0)) {
+      slotIndex = gp.buildSlots.findIndex(available)
+    } else if (tutorial.step === 2) {
+      slotIndex = gp.towers.find(tower => tower.level === 1)?.slotIndex
+    } else if (tutorial.step === 3 && gp.towers.length < 2) {
+      slotIndex = gp.buildSlots.findLastIndex(available)
     }
+    const slot = gp.buildSlots[slotIndex]
+    if (!slot) return
+
+    const { x, y } = this.project(slot)
+    const radius = Math.max(12, this.unit * 0.84)
+    const arrow = Math.max(7, this.unit * 0.23)
+    const direction = y - radius - arrow * 2 < this.top ? -1 : 1
+    ctx.save()
+    ctx.translate(x, y)
+    ctx.beginPath()
+    ctx.arc(0, 0, radius, 0, TAU)
+    ctx.lineWidth = 6
+    ctx.strokeStyle = '#234f37'
+    ctx.stroke()
+    ctx.lineWidth = 2.5
+    ctx.strokeStyle = '#fff7ce'
+    ctx.stroke()
+
+    ctx.translate(0, -direction * (radius + 4))
+    ctx.scale(1, direction)
+    ctx.beginPath()
+    ctx.moveTo(0, 0)
+    ctx.lineTo(-arrow, -arrow)
+    ctx.lineTo(-arrow * 0.44, -arrow)
+    ctx.lineTo(-arrow * 0.44, -arrow * 2)
+    ctx.lineTo(arrow * 0.44, -arrow * 2)
+    ctx.lineTo(arrow * 0.44, -arrow)
+    ctx.lineTo(arrow, -arrow)
+    ctx.closePath()
+    ctx.fillStyle = '#fff7ce'
+    ctx.fill()
+    ctx.lineWidth = 2.5
+    ctx.lineJoin = 'round'
+    ctx.strokeStyle = '#234f37'
+    ctx.stroke()
     ctx.restore()
   }
 }

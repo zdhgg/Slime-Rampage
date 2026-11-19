@@ -1,0 +1,350 @@
+.route-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 11;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  padding: 16px;
+  background: rgba(10, 20, 15, 0.62);
+  backdrop-filter: blur(10px);
+}
+
+.route-panel {
+  box-sizing: border-box;
+  width: min(1080px, 94vw);
+  margin: auto;
+  padding: 28px 26px 24px;
+  color: var(--art-text, #f3ead5);
+  background:
+    radial-gradient(ellipse at 50% 0%, color-mix(in srgb, var(--strain-accent, #a9e8a0) 11%, transparent), transparent 62%),
+    var(--art-surface, rgba(19, 27, 23, 0.88));
+  backdrop-filter: blur(14px);
+  border: 1px solid color-mix(in srgb, var(--strain-accent, #d7b86e) 32%, rgba(225, 211, 170, 0.24));
+  border-radius: 18px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 246, 214, 0.08),
+    0 24px 64px rgba(0, 0, 0, 0.52);
+  text-align: center;
+}
+
+.route-kicker {
+  color: color-mix(in srgb, var(--strain-accent, #d7b86e) 76%, #f3ead5);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+}
+
+h2 {
+  margin: 8px 0 10px;
+  color: #f2d27a;
+  font-size: 26px;
+  font-weight: 800;
+  text-shadow: 0 2px 12px rgba(215, 184, 110, 0.22), 0 2px 6px rgba(0, 0, 0, 0.45);
+}
+
+.route-intro {
+  margin: 0 auto 22px;
+  max-width: 760px;
+  color: var(--art-muted, #a9b6a4);
+  line-height: 1.6;
+  font-size: 13px;
+}
+
+.route-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.route-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 308px;
+  padding: 24px 18px 18px;
+  border: 1.5px solid color-mix(in srgb, var(--route-color) 32%, rgba(225, 211, 170, 0.18));
+  border-radius: 14px;
+  color: var(--art-text, #f3ead5);
+  background:
+    radial-gradient(circle at 50% 14%, color-mix(in srgb, var(--route-color) 15%, transparent) 0%, transparent 56%),
+    linear-gradient(180deg, rgba(30, 46, 38, 0.96) 0%, rgba(19, 31, 25, 0.98) 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 10px 24px rgba(0, 0, 0, 0.3);
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275), border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.route-card:hover:not(:disabled),
+.route-card.is-selected:not(:disabled) {
+  transform: translateY(-5px);
+  border-color: var(--route-color);
+  background:
+    radial-gradient(circle at 50% 14%, color-mix(in srgb, var(--route-color) 24%, transparent) 0%, transparent 58%),
+    linear-gradient(180deg, color-mix(in srgb, var(--route-color) 10%, #1e2e26) 0%, rgba(21, 34, 27, 0.99) 100%);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--route-color) 52%, transparent),
+    0 0 24px color-mix(in srgb, var(--route-color) 28%, transparent),
+    0 16px 32px rgba(0, 0, 0, 0.45);
+}
+
+.route-card:focus-visible,
+.review-actions button:focus-visible {
+  outline: 2px solid var(--art-focus, #a9e8a0);
+  outline-offset: 2px;
+}
+
+.route-card.locked {
+  opacity: 0.46;
+  cursor: not-allowed;
+  filter: saturate(0.4);
+}
+
+.route-card kbd,
+.review-actions kbd {
+  position: absolute;
+  padding: 2px 7px;
+  border-radius: 7px;
+  font-family: inherit;
+  font-size: 10.5px;
+  font-weight: 800;
+  color: var(--art-muted, #a9b6a4);
+  background: rgba(12, 20, 16, 0.78);
+  border: 1px solid rgba(225, 211, 170, 0.22);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+.route-card kbd {
+  top: 10px;
+  left: 10px;
+}
+
+.review-actions kbd {
+  top: 7px;
+  right: 9px;
+}
+
+.review-actions button.confirm kbd {
+  color: #f2d27a;
+  background: rgba(14, 25, 20, 0.85);
+  border-color: rgba(14, 25, 20, 0.45);
+}
+
+.route-card.is-selected:not(:disabled) kbd {
+  color: #0e1914;
+  background: var(--route-color);
+  border-color: color-mix(in srgb, var(--route-color) 70%, #ffffff 30%);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--route-color) 45%, transparent);
+}
+
+.route-card strong {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  gap: 6px;
+  color: color-mix(in srgb, var(--route-color) 74%, #f7f3e8);
+  text-shadow: 0 1px 10px color-mix(in srgb, var(--route-color) 28%, transparent);
+  font-size: 19px;
+  font-weight: 800;
+  text-align: center;
+}
+
+.route-card strong :deep(.skill-glyph),
+.review-route strong :deep(.skill-glyph) {
+  --skill-icon-color: var(--route-color) !important;
+  margin: 0 0 6px;
+  border-color: color-mix(in srgb, var(--route-color) 44%, rgba(255, 255, 255, 0.86));
+  box-shadow:
+    inset 0 -6px 12px color-mix(in srgb, var(--route-color) 42%, rgba(0, 0, 0, 0.35)),
+    0 0 20px color-mix(in srgb, var(--route-color) 38%, transparent);
+}
+
+.route-card span:not(.skill-glyph) {
+  min-height: 54px;
+  color: #c8d4c4;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.route-card > b {
+  padding: 9px 11px;
+  border-radius: 10px;
+  color: var(--art-text, #f3ead5);
+  background: color-mix(in srgb, var(--route-color) 11%, rgba(11, 19, 15, 0.72));
+  border: 1px solid color-mix(in srgb, var(--route-color) 30%, transparent);
+  box-shadow: inset 3px 0 0 var(--route-color);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.route-card .route-ultimate {
+  min-height: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(11, 19, 15, 0.58);
+  border: 1px solid rgba(225, 211, 170, 0.12);
+  color: #c2cfc0;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.route-ultimate b {
+  display: block;
+  margin-bottom: 4px;
+  padding: 0;
+  background: none;
+  border: 0;
+  box-shadow: none;
+  color: #f2d27a;
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+.route-card small {
+  margin-top: auto;
+  color: var(--art-muted, #a9b6a4);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.route-weakness {
+  color: #f5b971 !important;
+}
+
+.route-review {
+  max-width: 620px;
+  margin: 0 auto;
+}
+
+.review-route {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 26px;
+  border: 1.5px solid var(--route-color);
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at 50% 14%, color-mix(in srgb, var(--route-color) 20%, transparent) 0%, transparent 58%),
+    linear-gradient(180deg, rgba(28, 43, 35, 0.96) 0%, rgba(19, 31, 25, 0.98) 100%);
+  box-shadow: 0 0 28px color-mix(in srgb, var(--route-color) 24%, transparent);
+}
+
+.review-route strong {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  gap: 6px;
+  color: color-mix(in srgb, var(--route-color) 76%, #f7f3e8);
+  font-size: 23px;
+  font-weight: 800;
+}
+
+.review-route span:not(.skill-glyph) {
+  color: #c8d4c4;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.review-route b {
+  color: #f2d27a;
+  font-size: 13.5px;
+}
+
+.review-actions {
+  display: flex;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 22px;
+}
+
+.review-actions button {
+  position: relative;
+  min-width: 180px;
+  padding: 14px 28px;
+  border: 1px solid rgba(225, 211, 170, 0.26);
+  border-radius: 12px;
+  color: var(--art-text, #f3ead5);
+  background: rgba(24, 38, 31, 0.92);
+  cursor: pointer;
+  font-weight: 800;
+  transition: transform 0.15s ease, filter 0.15s ease, box-shadow 0.15s ease;
+}
+
+.review-actions button:hover {
+  transform: translateY(-2px);
+  border-color: rgba(225, 211, 170, 0.55);
+}
+
+.review-actions button.confirm {
+  color: #0e1914;
+  background: linear-gradient(135deg, #f7df94, #d7b86e);
+  border-color: #f3d586;
+  box-shadow: 0 4px 16px rgba(215, 184, 110, 0.3);
+}
+
+.review-actions button.is-selected {
+  outline: 2px solid var(--art-focus, #a9e8a0);
+  outline-offset: 2px;
+}
+
+.route-key-hint {
+  display: inline-block;
+  margin-top: 18px;
+  padding: 6px 18px;
+  border-radius: 999px;
+  color: var(--art-muted, #a9b6a4);
+  background: rgba(11, 19, 15, 0.65);
+  border: 1px solid rgba(225, 211, 170, 0.2);
+  font-size: 12px;
+}
+
+.route-touch-hint {
+  display: none;
+  margin-top: 12px;
+  color: var(--art-muted, #a9b6a4);
+  font-size: 11px;
+}
+
+@media (max-width: 700px) {
+  .route-overlay {
+    align-items: flex-start;
+    padding: 16px 10px;
+  }
+
+  .route-panel {
+    padding: 20px 14px 16px;
+  }
+
+  .route-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .route-card {
+    min-height: 0;
+  }
+
+  .route-card:hover:not(:disabled),
+  .route-card.is-selected:not(:disabled) {
+    transform: none;
+  }
+
+  .route-touch-hint {
+    display: block;
+  }
+
+  .review-actions {
+    flex-direction: column;
+  }
+
+  .review-actions button {
+    width: 100%;
+  }
+
+  h2 {
+    font-size: 22px;
+  }
+}

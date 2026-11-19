@@ -3,24 +3,22 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   ArrowLeft,
   ArrowRight,
-  Check,
+  BarChart3,
   Crown,
+  Database,
   Gauge,
   Hourglass,
   Info,
   Infinity as InfinityIcon,
   Play,
-  Route,
   Shield,
-  Swords,
-  TowerControl,
+  Store,
 } from 'lucide-vue-next'
 import {
   DIFFICULTIES,
   DIFFICULTY_IDS,
   MODE_IDS,
   MODES,
-  formatRunClock,
   getNextModeUnlock,
   getUnlockedModeIds,
   isDifficultyUnlocked,
@@ -33,10 +31,12 @@ import { getExpeditionStages } from '../game/RunRules.js'
 import { STRAINS } from '../game/Strains.js'
 import StrainSelect from './StrainSelect.vue'
 import AboutGame from './AboutGame.vue'
-import { STRAIN_PRESENTATION } from './strainPresentation.js'
 import { RUNNER_SUBMODES } from '../game/gameplay/runner/RunnerRules.js'
+import arenaCover from '../assets/playstyles/forest-ruins.webp'
+import runnerCover from '../assets/playstyles/citadel-run.webp'
+import towerCover from '../assets/playstyles/nest-defense.webp'
 
-const emit = defineEmits(['prepare', 'market', 'profiles', 'account', 'leaderboard', 'ui-sound', 'runner', 'tower-defense', 'open-leaderboard', 'records'])
+const emit = defineEmits(['prepare', 'market', 'profiles', 'account', 'storage', 'leaderboard', 'ui-sound', 'runner', 'tower-defense', 'open-leaderboard', 'records', 'resume', 'discard-resume'])
 const props = defineProps({
   initialView: { type: String, default: 'playstyles' },
   records: { type: Object, default: () => ({}) },
@@ -50,6 +50,8 @@ const props = defineProps({
   serviceStatus: { type: Object, default: () => ({ checked: false, online: false }) },
   publicLeaderboard: { type: Object, default: null },
   accountData: { type: Object, default: null },
+  continuation: { type: Object, default: null },
+  resumeBusy: Boolean,
 })
 
 const runnerSubmodesList = Object.values(RUNNER_SUBMODES)
@@ -86,48 +88,40 @@ const MODE_CHIPS = {
   endless: ['无尽波次', '20 波后灾变', '生存纪录'],
 }
 
-/** 模式主题色：仅用于卡片图标与轻微强调，不破坏整体金色体系。 */
+/** 战斗卡用不同的亮色识别战斗类型（深色大厅下保持对比度）。 */
 const MODE_COLORS = {
-  expedition: '#ecc477',
-  timed: '#78c7ff',
-  endless: '#c99bff',
+  expedition: '#4ade80',
+  timed: '#60a5fa',
+  endless: '#c084fc',
 }
 
+/** 玩法海报卡：全出血插画 + 差异化主题强调色（翡翠 / 冰蓝 / 琥珀）。 */
 const PLAYSTYLES = [
   {
     id: 'arena',
-    index: '01',
     name: '主战场',
-    kicker: 'Arena · 开放战场',
-    description: '在开放地图中成长、吞噬与进化，选择一套规则推进这场反攻。',
-    detail: '3 种战斗类型 · 共享成长与档案',
-    accent: '#ecc477',
+    description: '收集宝石，进化专属大招',
+    action: '选择战斗',
+    cover: arenaCover,
+    accent: '#22C55E',
   },
   {
     id: 'runner',
-    index: '02',
     name: '突围',
-    kicker: 'Runner · 三线推进',
-    description: '切换车道、躲避弹幕并融合武器，在王城封锁线上抢出一条生路。',
-    detail: '3 种突围类型 · 账号记录与排名',
-    accent: '#79d5e6',
+    description: '三道冲刺，灵巧躲避障碍',
+    action: '选择突围',
+    cover: runnerCover,
+    accent: '#38BDF8',
   },
   {
     id: 'tower-defense',
-    index: '03',
     name: '塔防',
-    kicker: 'Tower Defense · 巢穴防线',
-    description: '部署防御塔、调度资源并守住巢心，在一波波攻势中稳住最后的阵地。',
-    detail: '即时部署 · 升级与出售 · 波次结算',
-    accent: '#91dc8c',
+    description: '布置史莱姆，守住家园巢心',
+    action: '选关守护',
+    cover: towerCover,
+    accent: '#EAB308',
   },
 ]
-
-const PLAYSTYLE_ICONS = {
-  arena: Swords,
-  runner: Route,
-  'tower-defense': TowerControl,
-}
 
 const RUNNER_MODE_ICONS = {
   blitz: Gauge,
@@ -201,14 +195,13 @@ watch(
 const unlockedModes = computed(() => getUnlockedModeIds(props.progression))
 const nextUnlock = computed(() => getNextModeUnlock(props.progression))
 const modeCards = computed(() =>
-  MODE_IDS.map((mode, index) => ({
+  MODE_IDS.map((mode) => ({
     mode,
-    index,
     locked: !isModeUnlocked(props.progression, mode),
     hint: modeUnlockHint(mode),
   }))
 )
-/** 最新解锁的模式 = 当前推荐挑战项，用于角标与呼吸光；全部解锁后最后一张为终极挑战。 */
+/** 最新解锁的模式显示挑战角标。 */
 const featuredMode = computed(
   () => unlockedModes.value[unlockedModes.value.length - 1]
 )
@@ -226,12 +219,8 @@ const accountLabel = computed(() => {
   if (props.serviceStatus?.online) return '登录 / 注册'
   return props.serviceStatus?.checked ? '连接服务' : '连接中'
 })
-const publicEntries = computed(() => props.publicLeaderboard?.entries || [])
+/* 配置页排行榜预览与右侧记录卡已移除：纪录在结算页与「我的记录」中查看 */
 const selectedStrain = computed(() => STRAINS[selection.value.strain] || STRAINS.origin)
-const record = computed(() => props.records[runKey(selection.value)] || {
-  best: { wave: 1, stage: 1, kills: 0, time: 0, score: 0, clears: 0, fastestFinale: null, fastestClear: null },
-  board: [],
-})
 
 /** 难度卡副标题：远征展示关卡数（随难度变化），其余模式只展示战力点倍率。 */
 function difficultyMeta(difficulty) {
@@ -255,6 +244,25 @@ function modeSummary(mode) {
 const modeSummaries = computed(() =>
   Object.fromEntries(MODE_IDS.map((mode) => [mode, modeSummary(mode)]))
 )
+
+/**
+ * 玩法海报卡右上角毛玻璃徽章：进度/纪录有数据就内聚展示，
+ * 突围暂无云端纪录，退化为模式定位标签（后续接入纪录时替换数据源即可）。
+ */
+const playstyleBadges = computed(() => {
+  const campaign = props.accountData?.campaign
+  const towerBadge = campaign
+    ? `塔防进度 第 ${campaign.unlockedStage || 1} 关 · ${campaign.totalStarsEarned || 0} 星`
+    : null
+  const arenaBestScore = modeSummaries.value.expedition?.bestScore
+    || modeSummaries.value.timed?.bestScore
+    || modeSummaries.value.endless?.bestScore
+  const arenaBadge = props.account
+    ? (arenaBestScore ? `最高分 ${arenaBestScore.toLocaleString('en-US')}` : 'Roguelite 进化')
+    : 'Roguelite 进化'
+  const runnerBadge = '三轨敏捷生存'
+  return { arena: arenaBadge, runner: runnerBadge, 'tower-defense': towerBadge || '战役闯关' }
+})
 
 function showPlaystyleSelection(playstyle = 'arena') {
   view.value = 'playstyles'
@@ -305,7 +313,10 @@ function selectMode(mode) {
   }
   emit('ui-sound', 'select')
   view.value = 'config'
-  nextTick(() => configBackLink.value?.focus())
+  nextTick(() => {
+    menuRoot.value?.scrollTo({ top: 0 })
+    configBackLink.value?.focus({ preventScroll: true })
+  })
 }
 
 /** 模式卡统一入口：已解锁进入配置；锁定则抖动并弹出条件提示。 */
@@ -380,97 +391,107 @@ watch(
 </script>
 
 <template>
-  <div ref="menuRoot" class="start-overlay" :class="{ 'config-active': view === 'config' }" @keydown.esc="onMenuEscape">
-    <!-- 史莱姆主题动态背景：漂浮 goo 光晕 + 上浮气泡，纯 CSS 动画，不挡交互 -->
-    <div class="goo-layer" aria-hidden="true">
-      <div class="goo-blob blob-a"></div>
-      <div class="goo-blob blob-b"></div>
-      <span v-for="n in 12" :key="n" class="goo-bubble"></span>
-    </div>
+  <div
+    ref="menuRoot"
+    class="start-overlay"
+    :class="{
+      'config-active': view === 'config',
+      'hub-night': view === 'playstyles' || view === 'arena-types' || view === 'runner-types' || view === 'config',
+    }"
+    @keydown.esc="onMenuEscape"
+  >
     <main class="start-shell" :class="{ 'config-shell': view === 'config' }">
       <header class="start-header">
-        <h1>史莱姆大暴走<span>SLIME RAMPAGE</span></h1>
-        <div class="header-actions">
-          <button class="account-link" :class="{ online: props.account }" title="游戏账号" @click="emit('account')">
-            <span aria-hidden="true">{{ props.account ? '●' : '○' }}</span>
-            <b>{{ accountLabel }}</b>
-          </button>
-          <button class="profile-link" @click="emit('open-leaderboard')"><span aria-hidden="true">♜</span><b>排行榜</b></button>
-          <button v-if="props.account" class="profile-link" @click="emit('records')"><span aria-hidden="true">▣</span><b>我的记录</b></button>
-          <a ref="aboutLink" class="about-link" href="#/about" :aria-current="view === 'about' ? 'page' : undefined"><Info :size="14" aria-hidden="true" /><span>关于游戏</span></a>
+        <h1 class="game-brand">
+          <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true">
+            <path d="M10 46C10 29 19 16 32 16s22 13 22 30c0 6-7 9-22 9S10 52 10 46Z" fill="currentColor" />
+            <path d="M19 27c3-4 7-6 11-6" fill="none" stroke="#f2f7ed" stroke-opacity=".5" stroke-width="3" stroke-linecap="round" />
+            <circle cx="25" cy="39" r="2.7" fill="#152019" /><circle cx="39" cy="39" r="2.7" fill="#152019" />
+            <path d="M28 46q4 3 8 0" fill="none" stroke="#152019" stroke-width="2" stroke-linecap="round" />
+          </svg>
+          <span class="brand-copy">史莱姆大暴走<small>SLIME RAMPAGE</small></span>
+        </h1>
+        <nav class="header-actions" aria-label="游戏功能">
+          <button class="profile-link" @click="emit('open-leaderboard')"><Crown :size="15" :stroke-width="1.7" aria-hidden="true" /><b>排行榜</b></button>
+          <button v-if="props.account" class="profile-link" @click="emit('records')"><BarChart3 :size="15" :stroke-width="1.7" aria-hidden="true" /><b>我的记录</b></button>
+          <button v-if="props.account" class="profile-link" @click="emit('storage')"><Database :size="15" :stroke-width="1.7" aria-hidden="true" /><b>数据与存档</b></button>
+          <a ref="aboutLink" class="about-link" href="#/about" :aria-current="view === 'about' ? 'page' : undefined"><Info :size="15" :stroke-width="1.7" aria-hidden="true" /><span>关于游戏</span></a>
           <button
             v-if="view === 'arena-types' || view === 'config'"
             class="market-link"
             title="主战场 · 永久基因改造"
             @click="emit('market')"
-          >地下城黑市</button>
-        </div>
+          ><Store :size="15" :stroke-width="1.9" aria-hidden="true" /><b>地下城黑市</b></button>
+          <button class="account-link" :class="{ online: props.account }" title="游戏账号" @click="emit('account')">
+            <span aria-hidden="true"></span>
+            <b>{{ accountLabel }}</b>
+          </button>
+        </nav>
       </header>
 
       <div v-if="!props.account && view !== 'about'" class="account-notice">
         <div><strong>登录，继续你的史莱姆旅程</strong><span>每个账号独立保存三种玩法的进度与成绩。</span></div>
         <button @click="emit('account')">登录 / 注册 <ArrowRight :size="15" aria-hidden="true" /></button>
       </div>
-      <div v-else-if="view === 'playstyles'" class="account-welcome"><span>欢迎回来，{{ props.account.displayName || props.account.username }}</span><span>塔防第 {{ props.accountData?.campaign?.unlockedStage || 1 }} 关 · {{ props.accountData?.campaign?.totalStarsEarned || 0 }} 星</span></div>
-      <AboutGame v-if="view === 'about'" :tab="aboutTab" />
-      <section v-else-if="view === 'playstyles'" class="mode-view playstyle-view" aria-labelledby="playstyle-title">
-        <div class="view-heading">
-          <p>行动档案</p>
-          <div class="title-row">
-            <svg class="slime-buddy" viewBox="0 0 48 38" aria-hidden="true">
-              <path d="M7 33C5 21 13 9 24 9s19 12 17 24c-.3 2-1.7 2.6-3.4 2.6H10.4C8.7 35.6 7.3 35 7 33Z" fill="rgba(142, 173, 131, 0.9)" />
-              <path d="M14 15.5c2-2.4 5-3.8 8-4" stroke="rgba(255, 255, 255, 0.55)" stroke-width="2.2" stroke-linecap="round" fill="none" />
-              <circle cx="18.5" cy="24" r="2.1" fill="#0a0d0c" />
-              <circle cx="29.5" cy="24" r="2.1" fill="#0a0d0c" />
-              <path d="M21 28.4c1.9 1.4 4.1 1.4 6 0" stroke="#0a0d0c" stroke-width="1.8" stroke-linecap="round" fill="none" />
-            </svg>
-            <h2 id="playstyle-title">选择玩法</h2>
+      <div v-if="account && continuation && view !== 'about'" class="resume-banner">
+        <span class="resume-slime" aria-hidden="true">
+          <svg viewBox="0 0 64 64">
+            <path d="M10 46C10 29 19 16 32 16s22 13 22 30c0 6-7 9-22 9S10 52 10 46Z" fill="currentColor" />
+            <circle cx="25" cy="39" r="2.7" fill="#152019" /><circle cx="39" cy="39" r="2.7" fill="#152019" />
+            <path d="M28 46q4 3 8 0" fill="none" stroke="#152019" stroke-width="2" stroke-linecap="round" />
+          </svg>
+        </span>
+        <div class="resume-copy">
+          <div class="resume-title-row">
+            <strong>{{ continuation.snapshot.gameplay === 'tower-defense' && !continuation.snapshot.endless ? `继续守护 · 第 ${continuation.snapshot.stage} 关` : '继续上次冒险' }}</strong>
+            <span class="resume-status-tag"><i aria-hidden="true"></i>进行中 IN PROGRESS</span>
           </div>
-          <span>三套战斗系统，从这里选择你的推进方式。</span>
+          <span class="resume-meta">{{ continuation.snapshot.label }} · {{ new Date(continuation.savedAt).toLocaleString('zh-CN') }}</span>
         </div>
+        <div class="resume-actions">
+          <button class="resume-primary" :disabled="resumeBusy" @click="emit('resume')">{{ resumeBusy ? '正在恢复…' : '继续行动' }}<Play :size="15" aria-hidden="true" /></button>
+          <button class="resume-discard" :disabled="resumeBusy" @click="emit('discard-resume')">放弃</button>
+        </div>
+      </div>
+      <AboutGame v-if="view === 'about'" :tab="aboutTab" />
+      <section v-else-if="view === 'playstyles'" class="mode-view playstyle-view" aria-label="选择玩法">
 
         <div ref="playstyleGrid" class="playstyle-grid">
           <button
             v-for="playstyle in PLAYSTYLES"
             :key="playstyle.id"
             class="playstyle-option"
+            :class="{ hero: playstyle.id === 'arena' }"
             :data-playstyle="playstyle.id"
             :style="{ '--playstyle-accent': playstyle.accent }"
+            :aria-label="`${playstyle.name}：${playstyle.description} ${playstyle.action}`"
             @click="selectPlaystyle(playstyle.id)"
           >
-            <div class="playstyle-topline">
-              <span class="playstyle-index">{{ playstyle.index }}</span>
-              <span class="playstyle-kicker">{{ playstyle.kicker }}</span>
-            </div>
-            <div class="playstyle-title-row">
-              <component :is="PLAYSTYLE_ICONS[playstyle.id]" class="playstyle-icon" :size="28" :stroke-width="1.65" aria-hidden="true" />
+            <img class="playstyle-art" :src="playstyle.cover" alt="" decoding="async" draggable="false" />
+            <span class="playstyle-shade" aria-hidden="true"></span>
+            <span v-if="playstyle.id === 'arena'" class="playstyle-feature-tag">🔥 核心模式</span>
+            <span class="playstyle-badge">{{ playstyleBadges[playstyle.id] }}</span>
+            <span class="playstyle-body">
               <h3>{{ playstyle.name }}</h3>
-            </div>
-            <p>{{ playstyle.description }}</p>
-            <span class="playstyle-detail">{{ playstyle.detail }}</span>
-            <span class="playstyle-enter">{{ playstyle.id === 'arena' ? '选择战斗类型' : playstyle.id === 'runner' ? '选择突围类型' : '直接部署防线' }} <ArrowRight :size="16" :stroke-width="1.8" aria-hidden="true" /></span>
+              <p>{{ playstyle.description }}</p>
+              <i class="playstyle-enter">{{ playstyle.action }} <ArrowRight :size="16" :stroke-width="1.8" aria-hidden="true" /></i>
+            </span>
           </button>
         </div>
       </section>
 
       <section v-else-if="view === 'arena-types'" class="mode-view subtype-view" aria-labelledby="arena-mode-title">
-        <div class="view-heading">
-          <button class="section-kicker" title="返回玩法选择" @click="showPlaystyleSelection('arena')">
+        <div class="view-heading subtype-heading">
+          <img class="subtype-cover" :src="arenaCover" alt="" />
+          <button class="section-kicker" title="返回玩法选择" aria-label="返回玩法选择" @click="showPlaystyleSelection('arena')">
             <span class="back-arrow" aria-hidden="true"><ArrowLeft :size="17" :stroke-width="1.8" /></span>
             <span class="kicker-label">主战场 · ARENA</span>
           </button>
           <div class="title-row">
-            <svg class="slime-buddy" viewBox="0 0 48 38" aria-hidden="true">
-              <path d="M7 33C5 21 13 9 24 9s19 12 17 24c-.3 2-1.7 2.6-3.4 2.6H10.4C8.7 35.6 7.3 35 7 33Z" fill="rgba(142, 173, 131, 0.9)" />
-              <path d="M14 15.5c2-2.4 5-3.8 8-4" stroke="rgba(255, 255, 255, 0.55)" stroke-width="2.2" stroke-linecap="round" fill="none" />
-              <circle cx="18.5" cy="24" r="2.1" fill="#0a0d0c" />
-              <circle cx="29.5" cy="24" r="2.1" fill="#0a0d0c" />
-              <path d="M21 28.4c1.9 1.4 4.1 1.4 6 0" stroke="#0a0d0c" stroke-width="1.8" stroke-linecap="round" fill="none" />
-            </svg>
             <h2 id="arena-mode-title">选择战斗类型</h2>
             <button class="quick-continue" title="按上次规则直接进入战前简报" @click="quickContinue">
               <Play :size="13" :stroke-width="2.1" aria-hidden="true" />
-              继续上次 · {{ selectedMode.name }} {{ selectedDifficulty.name }}
+              沿用配置 · {{ selectedMode.name }} {{ selectedDifficulty.name }}
             </button>
           </div>
           <span>决定本局的推进目标与结算规则。</span>
@@ -500,7 +521,6 @@ watch(
                 </svg>
               </span>
 
-              <span class="mode-index">0{{ card.index + 1 }}</span>
               <div class="mode-title-row">
                 <component
                   :is="MODE_LUCIDE_ICONS[card.mode]"
@@ -535,7 +555,7 @@ watch(
                 <span>{{ card.hint || '尚未解锁' }}</span>
               </div>
               <span class="mode-enter">
-                {{ card.locked ? '查看解锁条件' : '进入设置' }}
+                {{ card.locked ? '查看解锁条件' : '选择难度与角色' }}
                 <ArrowRight v-if="!card.locked" :size="15" :stroke-width="1.9" aria-hidden="true" />
               </span>
             </button>
@@ -549,69 +569,16 @@ watch(
             <span>{{ lockNotice }}</span>
           </div>
         </Transition>
-
-        <div class="unlock-panel" :class="{ complete: !nextUnlock }">
-          <div class="unlock-stepper" aria-label="模式解锁路线">
-            <template v-for="(card, sIndex) in modeCards" :key="card.mode">
-              <div
-                class="unlock-step"
-                :class="{
-                  done: !card.locked,
-                  current: nextUnlock && nextUnlock.mode === card.mode,
-                  waiting: card.locked && (!nextUnlock || nextUnlock.mode !== card.mode),
-                }"
-              >
-                <span class="unlock-dot">
-                  <Check v-if="!card.locked" :size="14" :stroke-width="2.5" aria-hidden="true" />
-                  <component
-                    v-else
-                    :is="MODE_LUCIDE_ICONS[card.mode]"
-                    :size="14"
-                    :stroke-width="1.9"
-                    aria-hidden="true"
-                  />
-                </span>
-                <b>{{ MODES[card.mode].name }}</b>
-                <i>{{ !card.locked ? '已开放' : nextUnlock && nextUnlock.mode === card.mode ? '当前目标' : '未解锁' }}</i>
-              </div>
-              <div
-                v-if="sIndex < modeCards.length - 1"
-                class="unlock-link"
-                :class="{ filled: unlockedModes.length > sIndex + 1 }"
-              >
-                <span>困难通关</span>
-              </div>
-            </template>
-          </div>
-          <div class="unlock-footer">
-            <div class="unlock-segs" aria-hidden="true">
-              <i
-                v-for="mode in MODE_IDS"
-                :key="mode"
-                :class="{ fill: unlockedModes.includes(mode) }"
-              ></i>
-            </div>
-            <b>解锁进度 {{ unlockedModes.length }} / {{ MODE_IDS.length }}</b>
-            <i v-if="nextUnlock">下一模式：{{ nextUnlock.name }} · {{ nextUnlock.hint }}</i>
-            <i v-else>全部开放 · 三种战斗类型均可进入</i>
-          </div>
-        </div>
       </section>
 
       <section v-else-if="view === 'runner-types'" class="mode-view subtype-view runner-view" aria-labelledby="runner-mode-title">
-        <div class="view-heading">
-          <button class="section-kicker runner" title="返回玩法选择" @click="showPlaystyleSelection('runner')">
+        <div class="view-heading subtype-heading">
+          <img class="subtype-cover" :src="runnerCover" alt="" />
+          <button class="section-kicker runner" title="返回玩法选择" aria-label="返回玩法选择" @click="showPlaystyleSelection('runner')">
             <span class="back-arrow" aria-hidden="true"><ArrowLeft :size="17" :stroke-width="1.8" /></span>
             <span class="kicker-label">突围 · RUNNER</span>
           </button>
           <div class="title-row">
-            <svg class="slime-buddy" viewBox="0 0 48 38" aria-hidden="true">
-              <path d="M7 33C5 21 13 9 24 9s19 12 17 24c-.3 2-1.7 2.6-3.4 2.6H10.4C8.7 35.6 7.3 35 7 33Z" fill="rgba(142, 173, 131, 0.9)" />
-              <path d="M14 15.5c2-2.4 5-3.8 8-4" stroke="rgba(255, 255, 255, 0.55)" stroke-width="2.2" stroke-linecap="round" fill="none" />
-              <circle cx="18.5" cy="24" r="2.1" fill="#0a0d0c" />
-              <circle cx="29.5" cy="24" r="2.1" fill="#0a0d0c" />
-              <path d="M21 28.4c1.9 1.4 4.1 1.4 6 0" stroke="#0a0d0c" stroke-width="1.8" stroke-linecap="round" fill="none" />
-            </svg>
             <h2 id="runner-mode-title">选择突围类型</h2>
           </div>
           <span>换道、冲锋，在三线战场突破封锁。</span>
@@ -619,14 +586,13 @@ watch(
 
         <div ref="runnerGrid" class="runner-mode-grid">
           <button
-            v-for="(sub, index) in runnerSubmodesList"
+            v-for="sub in runnerSubmodesList"
             :key="sub.id"
             class="runner-mode-card"
             :class="{ featured: sub.id === 'marathon' }"
             @click="startRunnerWithSubmode(sub.id)"
           >
             <div class="runner-card-top">
-              <span class="runner-card-index">0{{ index + 1 }}</span>
               <component :is="RUNNER_MODE_ICONS[sub.id]" class="runner-mode-icon" :size="22" :stroke-width="1.7" aria-hidden="true" />
               <span v-if="sub.id === 'marathon'" class="runner-recommend-tag">主力推荐</span>
             </div>
@@ -653,27 +619,6 @@ watch(
                 </details>
               </div>
             </div>
-
-            <aside class="config-record" aria-label="当前规则纪录">
-              <span>当前规则纪录 · {{ selectedDifficulty.name }}</span>
-              <strong>{{ record.best.score?.toLocaleString('en-US') || '—' }}</strong>
-              <dl>
-                <div>
-                  <dt>{{ selection.mode === 'expedition' ? '最高章节' : '最高波次' }}</dt>
-                  <dd>{{ selection.mode === 'expedition' ? `${record.best.stage || 1} / ${getExpeditionStages(selection.difficulty).length}` : record.best.wave || 1 }}</dd>
-                </div>
-                <div><dt>最多击杀</dt><dd>{{ record.best.kills || 0 }}</dd></div>
-                <div v-if="selection.mode === 'timed'">
-                  <dt>最快终局</dt>
-                  <dd>{{ record.best.fastestFinale ? formatRunClock(record.best.fastestFinale) : '—' }}</dd>
-                </div>
-                <div v-else-if="selection.mode === 'expedition'">
-                  <dt>最快远征</dt>
-                  <dd>{{ record.best.fastestClear ? formatRunClock(record.best.fastestClear) : '—' }}</dd>
-                </div>
-                <div v-else><dt>最长生存</dt><dd>{{ formatRunClock(record.best.time) }}</dd></div>
-              </dl>
-            </aside>
           </div>
 
           <div class="config-flow">
@@ -722,34 +667,6 @@ watch(
             </section>
 
           </div>
-
-          <!-- 排行榜挪到配置之后：配置页主角是「做选择」；空态折叠成一行，不再占黄金位置 -->
-          <section class="public-board" :class="{ empty: !publicEntries.length }" aria-labelledby="public-board-title">
-            <template v-if="publicEntries.length">
-              <header class="step-heading">
-                <b id="public-board-title">公共排行榜</b>
-                <span>{{ publicLeaderboard?.totalPlayers || 0 }} 名玩家</span>
-              </header>
-              <div class="public-board-list">
-                <div
-                  v-for="entry in publicEntries.slice(0, 5)"
-                  :key="entry.runId"
-                  class="public-board-row"
-                  :class="{ current: entry.current }"
-                >
-                  <span>#{{ entry.rank }}</span>
-                  <b>{{ entry.score.toLocaleString('en-US') }}</b>
-                  <i>{{ entry.username }}</i>
-                  <em>{{ entry.result === 'victory' ? '通关' : entry.result === 'extracted' ? '撤离' : '败退' }}</em>
-                </div>
-              </div>
-              <button class="board-all-link" @click="emit('open-leaderboard')">查看完整排行榜 <ArrowRight :size="14" aria-hidden="true" /></button>
-            </template>
-            <p v-else class="public-board-empty">
-              <b id="public-board-title">公共排行榜</b>
-              <span>{{ props.serviceStatus?.online ? '这套规则还没有公共成绩。' : '暂时无法读取榜单，请检查服务器连接。' }}</span>
-            </p>
-          </section>
         </div>
 
         <!-- 独立底部操作区：内容在上方滚动，不遮挡角色与排行榜。 -->
@@ -758,7 +675,7 @@ watch(
             <b>{{ selectedMode.name }}</b>
             <span>{{ selectedDifficulty.name }}</span>
             <i aria-hidden="true">·</i>
-            <span class="summary-strain" :style="{ color: STRAIN_PRESENTATION[selectedStrain.id].color }">{{ selectedStrain.name }}</span>
+            <span class="summary-strain">{{ selectedStrain.name }}</span>
             <span v-if="selectedStrain.id === 'elemental'">Lv.2 学习法术</span>
           </p>
           <button class="primary-action" @click="prepare">
@@ -772,54 +689,276 @@ watch(
 </template>
 
 <style scoped>
-.account-notice { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-top: 24px; padding: 16px 20px; border: 1px solid #53634966; border-radius: 5px; background: #a1b88d08; }
+/* —— 登录提示（未登录）：子页亮色基底 —— */
+.account-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  margin-top: 20px;
+  padding: 16px 20px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
 .account-notice strong, .account-notice span { display: block; }
-.account-notice strong { font-size: 14px; font-weight: 600; color: #e4e9db; }
-.account-notice span { margin-top: 4px; font-size: 12px; color: #9fa798; }
-.account-notice button { display: flex; gap: 12px; align-items: center; flex-shrink: 0; padding: 10px 14px; border: 1px solid #a4bc92; border-radius: 4px; background: #a4bc92; color: #182012; font: inherit; font-size: 12px; cursor: pointer; }
-.account-welcome { display: flex; justify-content: space-between; gap: 12px; padding-top: 22px; color: #a9b39f; font-size: 12px; }
-.board-all-link { display: flex; align-items: center; gap: 10px; margin-top: 14px; border: 0; padding: 6px 0; background: transparent; color: #d5b578; cursor: pointer; font: inherit; font-size: 12px; }
-@media (max-width: 600px) { .account-notice { align-items: flex-start; padding: 14px; gap: 14px; } .account-notice span { max-width: 220px; line-height: 1.6; } .account-welcome { flex-direction: column; gap: 6px; } .header-actions { flex-wrap: wrap; justify-content: flex-end; } }
+.account-notice strong { color: var(--text); font-size: 14px; font-weight: 650; }
+.account-notice span { margin-top: 4px; color: var(--text-muted); font-size: 12px; }
+.account-notice button {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 0 14px;
+  border: 1px solid var(--accent-bright);
+  border-radius: 8px;
+  background: var(--accent-bright);
+  color: #fff;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
 
+/* 大厅夜林下的登录提示：玻璃卡 + 翡翠 CTA */
+.hub-night .account-notice {
+  border: 2px solid rgba(255, 255, 255, 0.95);
+  border-radius: var(--hub-radius);
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  box-shadow: 0 8px 24px rgba(16, 185, 129, 0.08);
+}
+.hub-night .account-notice strong { color: var(--hub-text); }
+.hub-night .account-notice span { color: var(--hub-text-muted); }
+.hub-night .account-notice button {
+  border-color: transparent;
+  background: linear-gradient(135deg, #22C55E 0%, #10B981 100%);
+  box-shadow: 0 4px 0 #059669, 0 8px 16px rgba(16, 185, 129, 0.3);
+}
+.hub-night .account-notice button:hover { transform: translateY(-1px); }
+.hub-night .account-notice button:active { transform: translateY(2px); box-shadow: 0 2px 0 #059669, 0 4px 8px rgba(16, 185, 129, 0.25); }
+
+/* —— 续玩恢复卡（Resume Banner）：紧凑单行布局，左侧状态徽标 + 右侧并排按钮 —— */
+.resume-banner {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 20px;
+  padding: 14px 18px;
+  border: 1px solid #bcd4c3;
+  border-radius: 12px;
+  background: linear-gradient(120deg, #eef6ef, var(--adventure-paper) 70%);
+  box-shadow: 0 3px 12px #26332e14;
+}
+.resume-slime {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  flex: none;
+  border-radius: 12px;
+  color: #2d624d;
+  background: #dcecdf;
+}
+.resume-slime svg { width: 30px; height: 30px; }
+.resume-copy { min-width: 0; flex: 1; }
+.resume-title-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; }
+.resume-title-row strong { color: var(--adventure-ink); font-size: 15px; font-weight: 750; }
+.resume-status-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #dcecdf;
+  color: #2d624d;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+.resume-status-tag i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #22c55e;
+  box-shadow: 0 0 8px #22c55e;
+  animation: statusBreath 1.8s ease-in-out infinite;
+}
+.resume-meta {
+  display: block;
+  margin-top: 4px;
+  color: var(--adventure-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.resume-actions { display: flex; align-items: center; gap: 12px; flex: none; }
+.resume-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 22px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 999px;
+  background: linear-gradient(135deg, #22C55E 0%, #10B981 100%);
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: 0 4px 0 #059669, 0 8px 16px rgba(16, 185, 129, 0.3);
+  position: relative;
+  overflow: hidden;
+  transition: transform 0.16s ease, box-shadow 0.16s ease;
+}
+/* 扫光效果：hover 时一道高光掠过按钮 */
+.resume-primary::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -70%;
+  width: 45%;
+  border-radius: inherit;
+  background: linear-gradient(105deg, transparent, rgba(255, 255, 255, 0.32), transparent);
+  transform: skewX(-18deg);
+  transition: left 0.45s ease;
+  pointer-events: none;
+}
+.resume-primary:hover:not(:disabled) {
+  transform: translateY(-2px) scale(1.02);
+  box-shadow: 0 6px 0 #059669, 0 12px 22px rgba(16, 185, 129, 0.38);
+}
+.resume-primary:active:not(:disabled) { transform: translateY(3px) scale(0.99); box-shadow: 0 1px 0 #059669, 0 3px 8px rgba(16, 185, 129, 0.25); }
+.resume-primary:hover:not(:disabled)::after { left: 125%; }
+.resume-primary:disabled { opacity: 0.7; cursor: default; }
+.resume-discard {
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid #c3d2c8;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--adventure-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 0.14s ease, border-color 0.14s ease, background 0.14s ease;
+}
+.resume-discard:hover:not(:disabled) { color: var(--adventure-danger); border-color: var(--adventure-danger-line); background: var(--adventure-danger-paper); }
+.resume-discard:disabled { opacity: 0.55; cursor: default; }
+
+/* 大厅晴空下的续玩卡：薄荷奶油悬浮卡 + 翡翠描边 */
+.hub-night .resume-banner {
+  border: 3px solid #A7F3D0;
+  border-radius: var(--hub-radius);
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(var(--glass-blur));
+  box-shadow: 0 10px 25px rgba(16, 185, 129, 0.12);
+}
+.hub-night .resume-slime { background: #D1FAE5; color: #059669; }
+.hub-night .resume-title-row strong { color: var(--hub-text); }
+.hub-night .resume-status-tag { background: #D1FAE5; color: #047857; }
+.hub-night .resume-meta { color: var(--hub-text-muted); }
+.hub-night .resume-discard { border-color: #C7DED2; color: var(--hub-text-muted); }
+.hub-night .resume-discard:hover:not(:disabled) {
+  color: #B45309;
+  border-color: #FDE68A;
+  background: #FEF3C7;
+}
+
+@keyframes statusBreath {
+  0%, 100% { opacity: 1; box-shadow: 0 0 8px #22c55e; }
+  50% { opacity: 0.55; box-shadow: 0 0 3px #22c55e; }
+}
+
+/* ============================================================
+ * Game Hub 晴空果冻童话主题（大厅首页）：晨光森林 + 晶莹白框海报卡。
+ * 子页（战斗类型/配置/突围/关于）沿用原亮色纸面变量，避免子组件返工。
+ * ============================================================ */
 .start-overlay {
-  --accent: #d7a657;
-  --accent-bright: #ecc477;
-  --accent-soft: rgba(215, 166, 87, 0.14);
-  --surface: #12100d;
-  --surface-hover: #17130f;
-  --text: #f4eee6;
-  --text-muted: rgba(244, 238, 230, 0.56);
-  --text-faint: rgba(244, 238, 230, 0.38);
-  --border: rgba(238, 214, 180, 0.15);
+  /* —— 大厅专用变量（海报卡 / 顶栏 / 续玩卡） —— */
+  --hub-radius: 24px;
+  --glass-bg: rgba(255, 255, 255, 0.78);
+  --glass-border: rgba(255, 255, 255, 0.95);
+  --glass-blur: 12px;
+  --primary-glow: 0 0 18px rgba(52, 211, 153, 0.3);
+  --hub-text: #064E3B;
+  --hub-text-muted: #4B6B5E;
+  --hub-card-shadow: 0 14px 32px rgba(15, 118, 110, 0.12), 0 4px 10px rgba(0, 0, 0, 0.04);
+  --accent: var(--adventure-gold);
+  --accent-bright: var(--adventure-green);
+  --accent-soft: var(--adventure-leaf);
+  --surface: var(--adventure-paper);
+  --surface-hover: #f0f4ed;
+  --text: var(--adventure-ink);
+  --text-muted: var(--adventure-muted);
+  --text-faint: var(--adventure-muted);
+  --border: var(--adventure-line);
   position: absolute;
   inset: 0;
   z-index: 30;
   overflow-y: auto;
   color: var(--text);
-  background:
-    radial-gradient(1100px 560px at 82% -8%, rgba(210, 157, 77, 0.16), transparent 62%),
-    radial-gradient(880px 520px at 8% 108%, rgba(134, 63, 42, 0.11), transparent 60%),
-    #090806;
+  background: radial-gradient(ellipse at 50% 0%, #fafbf7 0%, transparent 68%), var(--adventure-bg);
 }
 
-.start-overlay.config-active { overflow: hidden; }
+/* 晴空基底与氛围层只在大厅首页（hub-night）生效，子页恢复原亮色纸面 */
+.start-overlay.hub-night {
+  color: var(--hub-text);
+  background:
+    radial-gradient(circle at 15% 15%, rgba(167, 243, 208, 0.55) 0%, transparent 45%),
+    radial-gradient(circle at 85% 20%, rgba(186, 230, 253, 0.6) 0%, transparent 45%),
+    radial-gradient(circle at 50% 90%, rgba(254, 240, 138, 0.45) 0%, transparent 50%),
+    linear-gradient(180deg, #ECFDF5 0%, #F0F9FF 55%, #FEFCE8 100%);
+}
 
-/* ---- 史莱姆主题动态背景（纯装饰，不响应事件） ---- */
-.goo-layer {
+/* 氛围层 1：晨光柔焦光晕（浅色天空感，覆盖全屏含下半部） */
+.hub-night::before {
+  content: '';
   position: fixed;
   inset: 0;
   z-index: 0;
-  overflow: hidden;
   pointer-events: none;
+  background:
+    radial-gradient(720px circle at 8% 12%, rgba(255, 255, 255, 0.55), transparent 70%),
+    radial-gradient(560px circle at 94% 34%, rgba(255, 255, 255, 0.45), transparent 70%),
+    radial-gradient(640px circle at 50% 96%, rgba(254, 240, 138, 0.28), transparent 70%);
 }
+
+/* 氛围层 2：薄荷/白色波点星光，全屏铺满更明显 */
+.hub-night::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image:
+    radial-gradient(circle, rgba(255, 255, 255, 0.7) 1.8px, transparent 2.8px),
+    radial-gradient(circle, rgba(110, 231, 183, 0.34) 1.4px, transparent 2.4px),
+    radial-gradient(circle, rgba(186, 230, 253, 0.3) 1.2px, transparent 2.2px);
+  background-size: 92px 92px, 61px 61px, 74px 74px;
+  background-position: 0 0, 26px 36px, 48px 12px;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.95) 0%, rgba(0, 0, 0, 0.75) 55%, rgba(0, 0, 0, 0.45) 100%);
+}
+
+/* 大厅节奏收紧：标题行已删，卡片直接顶上 */
+.hub-night .mode-view { padding-top: 8px; }
+.hub-night .playstyle-grid { margin-top: 14px; }
+
+.start-overlay.config-active { overflow: hidden; }
 
 .start-shell {
   position: relative;
   z-index: 1;
-  width: min(1040px, calc(100% - 48px));
+  width: min(1200px, calc(100% - 64px));
   min-height: 100%;
   margin: 0 auto;
-  padding: 26px 0 38px;
+  padding: 24px 0 48px;
 }
 
 .start-shell.config-shell {
@@ -828,75 +967,11 @@ watch(
   width: min(1180px, calc(100% - 64px));
   height: 100%;
   min-height: 0;
-  padding-top: 18px;
-  padding-bottom: max(14px, env(safe-area-inset-bottom));
+  padding-top: 10px;
+  padding-bottom: max(10px, env(safe-area-inset-bottom));
 }
-.config-shell .start-header { flex: none; min-height: 48px; padding-bottom: 16px; }
+.config-shell .start-header { flex: none; min-height: 48px; padding-bottom: 10px; }
 
-.goo-blob {
-  position: absolute;
-  border-radius: 50%;
-  opacity: 0.58;
-  filter: blur(100px);
-  animation: gooFloat 16s ease-in-out infinite alternate;
-}
-
-.blob-a {
-  width: 460px;
-  height: 400px;
-  top: -150px;
-  right: -120px;
-  background: radial-gradient(circle at 35% 35%, rgba(190, 139, 64, 0.28), transparent 70%);
-}
-
-.blob-b {
-  width: 420px;
-  height: 380px;
-  bottom: -130px;
-  left: -140px;
-  background: radial-gradient(circle at 60% 60%, rgba(133, 58, 40, 0.16), transparent 70%);
-  animation-delay: -7s;
-}
-
-.goo-bubble {
-  position: absolute;
-  bottom: -40px;
-  left: var(--x);
-  width: var(--s);
-  height: var(--s);
-  border-radius: 50% 50% 50% 50% / 55% 55% 45% 45%;
-  background: radial-gradient(circle at 32% 30%, rgba(226, 181, 108, 0.4), rgba(150, 98, 49, 0.12) 60%, transparent 78%);
-  opacity: 0;
-  animation: gooRise var(--dur) linear infinite;
-  animation-delay: var(--delay);
-}
-
-.goo-bubble:nth-child(3) { --x: 6%; --s: 14px; --dur: 17s; --delay: -3s; }
-.goo-bubble:nth-child(4) { --x: 14%; --s: 8px; --dur: 13s; --delay: -9s; }
-.goo-bubble:nth-child(5) { --x: 23%; --s: 18px; --dur: 21s; --delay: -14s; }
-.goo-bubble:nth-child(6) { --x: 32%; --s: 10px; --dur: 15s; --delay: -5s; }
-.goo-bubble:nth-child(7) { --x: 41%; --s: 22px; --dur: 24s; --delay: -18s; }
-.goo-bubble:nth-child(8) { --x: 50%; --s: 9px; --dur: 12s; --delay: -1s; }
-.goo-bubble:nth-child(9) { --x: 58%; --s: 15px; --dur: 19s; --delay: -11s; }
-.goo-bubble:nth-child(10) { --x: 67%; --s: 11px; --dur: 14s; --delay: -7s; }
-.goo-bubble:nth-child(11) { --x: 76%; --s: 20px; --dur: 23s; --delay: -16s; }
-.goo-bubble:nth-child(12) { --x: 85%; --s: 9px; --dur: 13s; --delay: -4s; }
-.goo-bubble:nth-child(13) { --x: 92%; --s: 16px; --dur: 20s; --delay: -12s; }
-.goo-bubble:nth-child(14) { --x: 70%; --s: 7px; --dur: 11s; --delay: -2s; }
-
-@keyframes gooRise {
-  0% { opacity: 0; transform: translateY(0) translateX(0) scale(0.8); }
-  12% { opacity: 0.42; }
-  85% { opacity: 0.24; }
-  100% { opacity: 0; transform: translateY(-108vh) translateX(3vw) scale(1.06); }
-}
-
-@keyframes gooFloat {
-  from { transform: translate3d(0, 0, 0) scale(1); }
-  to { transform: translate3d(-34px, 28px, 0) scale(1.09); }
-}
-
-/* 标题旁的小史莱姆：缓慢挤压呼吸 */
 .title-row {
   display: flex;
   align-items: center;
@@ -906,66 +981,120 @@ watch(
 
 .title-row h2 { margin-top: 0; }
 
-/* 快速续局：推到标题行右端，窄屏换行（见媒体查询） */
+/* 一键沿用配置：薄荷绿高光胶囊，快速开打一眼可见 */
 .quick-continue {
   margin-left: auto;
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   flex: none;
-  padding: 8px 14px;
-  border-radius: 5px;
-  border: 1px solid rgba(215, 166, 87, 0.4);
-  color: var(--accent-bright);
-  background: rgba(215, 166, 87, 0.08);
+  padding: 9px 16px;
+  border-radius: 999px;
+  border: 2px solid #6EE7B7;
+  color: #047857;
+  background: linear-gradient(135deg, #D1FAE5 0%, #A7F3D0 100%);
   font: inherit;
-  font-size: 11px;
-  font-weight: 700;
+  font-size: 12px;
+  font-weight: 800;
   cursor: pointer;
-  transition: border-color 0.16s ease, background 0.16s ease, transform 0.12s ease;
+  box-shadow: 0 4px 0 rgba(4, 120, 87, 0.16), 0 6px 14px rgba(16, 185, 129, 0.16);
+  transition: border-color 0.16s ease, background 0.16s ease, transform 0.14s ease, box-shadow 0.14s ease, filter 0.14s ease;
 }
 
 .quick-continue:hover {
-  border-color: var(--accent-bright);
-  background: rgba(215, 166, 87, 0.16);
+  border-color: #34D399;
+  filter: brightness(1.04);
   transform: translateY(-1px);
+  box-shadow: 0 6px 0 rgba(4, 120, 87, 0.16), 0 10px 20px rgba(16, 185, 129, 0.22);
 }
 
-.slime-buddy {
-  width: 42px;
-  flex: none;
-  animation: slimeSquash 2.8s ease-in-out infinite;
-  transform-origin: 50% 100%;
-  filter: drop-shadow(0 5px 12px rgba(142, 173, 131, 0.3));
-}
-
-@keyframes slimeSquash {
-  0%, 100% { transform: scale(1, 1); }
-  45% { transform: scale(1.07, 0.9); }
-  70% { transform: scale(0.97, 1.05); }
-}
+.quick-continue:active { transform: translateY(2px); box-shadow: 0 2px 0 rgba(4, 120, 87, 0.16), 0 3px 8px rgba(16, 185, 129, 0.12); }
 
 .start-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 54px;
-  padding-bottom: 22px;
+  gap: 32px;
+  min-height: 64px;
+  padding-bottom: 18px;
   border-bottom: 1px solid var(--border);
 }
 
 .start-header h1 {
-  font-size: 20px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: none;
+  font-size: 23px;
+  font-weight: 800;
   letter-spacing: 0;
 }
 
-.start-header h1 span {
+.brand-mark {
+  width: 40px;
+  height: 40px;
+  flex: none;
+  color: #83aa71;
+}
+
+.brand-copy { display: block; line-height: 1.25; }
+
+.start-header h1 .brand-copy small {
   display: block;
-  margin-top: 3px;
+  margin-top: 4px;
   color: var(--text-faint);
   font-size: 9px;
   font-weight: 600;
-  letter-spacing: 0;
+  letter-spacing: 0.15em;
+}
+
+/* 大厅晴空下的品牌区：深森林墨绿大标题 + 柔和浅绿投影 + Q 弹徽标 */
+.hub-night .brand-mark { color: #34D399; filter: drop-shadow(0 3px 6px rgba(16, 185, 129, 0.35)); }
+.hub-night .brand-copy {
+  color: #064E3B;
+  font-weight: 900;
+  text-shadow: 0 2px 0 rgba(167, 243, 208, 0.6);
+  background: none;
+  -webkit-text-fill-color: currentColor;
+}
+.hub-night .start-header h1 .brand-copy small {
+  color: #0D9488;
+  background: none;
+  -webkit-text-fill-color: currentColor;
+  letter-spacing: 0.15em;
+}
+
+/* 大厅晴空下的顶栏：奶油白毛玻璃胶囊导航 */
+.hub-night .start-header { border-bottom-color: rgba(110, 231, 183, 0.35); }
+.hub-night .header-actions {
+  gap: 4px;
+  padding: 5px;
+  border: 2px solid rgba(255, 255, 255, 0.95);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 8px 24px rgba(16, 185, 129, 0.08);
+}
+.hub-night .profile-link,
+.hub-night .about-link { border-radius: 999px; color: #1E3A2F; }
+.hub-night .profile-link:hover,
+.hub-night .about-link:hover,
+.hub-night .about-link[aria-current] {
+  color: #064E3B;
+  background: #D1FAE5;
+  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.18);
+}
+.hub-night .account-link {
+  border: 2px solid #A7F3D0;
+  border-radius: 999px;
+  background: #ECFDF5;
+  color: #064E3B;
+}
+.hub-night .account-link:hover { border-color: #6EE7B7; background: #D1FAE5; }
+.hub-night .account-link.online span {
+  background: #22c55e;
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.65);
+  animation: statusBreath 2.2s ease-in-out infinite;
 }
 
 .market-link,
@@ -983,8 +1112,10 @@ watch(
 
 .header-actions {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   align-items: center;
-  gap: 8px;
+  gap: 3px;
 }
 
 .about-link {
@@ -992,72 +1123,93 @@ watch(
   align-items: center;
   justify-content: center;
   gap: 7px;
-  min-height: 36px;
-  padding: 0 10px;
-  color: rgba(244, 238, 230, 0.6);
-  font-size: 11px;
+  min-height: 40px;
+  padding: 0 11px;
+  color: var(--text-muted);
+  font-size: 12px;
   text-decoration: none;
   white-space: nowrap;
   border-radius: 5px;
+  transition: color 0.14s ease, background 0.14s ease;
 }
-.about-link:hover, .about-link[aria-current] { color: var(--accent-bright); background: rgba(215, 166, 87, 0.055); }
-.about-link:focus-visible { outline: 2px solid var(--accent-bright); outline-offset: 3px; }
+.about-link:hover, .about-link[aria-current] { color: var(--text); background: var(--accent-soft); }
+.about-link:focus-visible { outline: 2px solid var(--accent-bright); outline-offset: 2px; }
 
 .market-link,
 .account-link,
 .profile-link {
-  min-height: 36px;
-  padding: 0 14px;
+  min-height: 40px;
+  padding: 0 11px;
   border-radius: 5px;
 }
 
+/* 暖金糖果徽章：琥珀金渐变底 + 深橙描边与文字，带商店小图标 */
 .market-link {
-  border: 1px solid rgba(215, 166, 87, 0.34);
-  color: var(--accent-bright);
-  background: rgba(215, 166, 87, 0.07);
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 2px solid #F59E0B;
+  color: #B45309;
+  background: linear-gradient(135deg, #FEF3C7 0%, #FDE68A 100%);
+  font-size: 12px;
+  font-weight: 800;
+  box-shadow: 0 3px 0 #D97706, 0 6px 14px rgba(245, 158, 11, 0.22);
+  transition: border-color 0.14s ease, filter 0.14s ease, transform 0.14s ease, box-shadow 0.14s ease;
 }
 
-.market-link:hover { border-color: rgba(236, 196, 119, 0.54); background: rgba(215, 166, 87, 0.12); }
+.market-link b { font-weight: 800; }
+.market-link svg { color: #D97706; }
+.market-link:hover { border-color: #D97706; filter: brightness(1.04); transform: translateY(-1px); box-shadow: 0 5px 0 #D97706, 0 9px 18px rgba(245, 158, 11, 0.28); }
+.market-link:active { transform: translateY(2px); box-shadow: 0 1px 0 #D97706, 0 3px 8px rgba(245, 158, 11, 0.18); }
 
 .account-link,
 .profile-link {
   display: flex;
   align-items: center;
-  gap: 8px;
-  border: 1px solid var(--border);
-  color: rgba(244, 238, 230, 0.68);
+  gap: 7px;
+  border: 0;
+  color: var(--text-muted);
   background: transparent;
+  transition: color 0.14s ease, background 0.14s ease, border-color 0.14s ease;
+}
+
+.account-link {
+  margin-left: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface);
 }
 
 .account-link span {
-  color: rgba(244, 238, 230, 0.38);
-  font-size: 10px;
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: #777e7a;
 }
 
-.account-link.online span {
-  color: #7fd18a;
-}
+.account-link.online span { background: #83aa71; }
 
 .account-link b {
   max-width: 118px;
   overflow: hidden;
-  font-size: 11px;
+  font-size: 12px;
+  font-weight: 550;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.profile-link span { color: #b98747; font-size: 12px; }
-.profile-link b { font-size: 11px; }
+.profile-link b { font-size: 12px; font-weight: 500; }
+.profile-link > svg { color: var(--text-faint); }
 .account-link:hover,
 .profile-link:hover {
-  border-color: rgba(215, 166, 87, 0.38);
-  color: #fffaf2;
-  background: rgba(215, 166, 87, 0.055);
+  color: var(--text);
+  background: var(--accent-soft);
 }
+.account-link:hover { border-color: #9fb6a5; }
 
 .mode-view,
 .config-view {
-  padding-top: 54px;
+  padding-top: 48px;
 }
 
 .view-heading,
@@ -1075,16 +1227,17 @@ watch(
 .view-heading h2,
 .config-heading h2 {
   margin-top: 7px;
-  font-size: 29px;
-  letter-spacing: 0;
+  font-size: 32px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
 }
 
 .view-heading > span,
 .config-heading > span {
   display: block;
-  margin-top: 7px;
+  margin-top: 9px;
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .section-kicker {
@@ -1098,257 +1251,339 @@ watch(
   font: inherit;
 }
 
+/* 圆润可爱的白色立体返回小圆钮 */
 .section-kicker .back-arrow {
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
+  width: 38px;
+  height: 38px;
   flex: none;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  color: rgba(244, 238, 230, 0.74);
-  background: transparent;
-  transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease;
+  border: 2px solid #FFFFFF;
+  border-radius: 50%;
+  color: #064E3B;
+  background: #FFFFFF;
+  box-shadow: 0 4px 0 rgba(16, 185, 129, 0.18), 0 6px 14px rgba(16, 185, 129, 0.14);
+  transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease, transform 0.14s ease, box-shadow 0.14s ease;
 }
 
 .section-kicker .kicker-label {
-  color: var(--accent);
+  color: #059669;
   font-size: 11px;
   font-weight: 800;
+  letter-spacing: 0.04em;
 }
 
 .section-kicker:hover .back-arrow {
-  border-color: rgba(215, 166, 87, 0.45);
-  color: var(--accent-bright);
-  background: rgba(215, 166, 87, 0.07);
+  color: #047857;
+  background: #D1FAE5;
+  transform: translateY(-1px);
 }
 
-.section-kicker.runner .kicker-label { color: #79d5e6; }
+.section-kicker:active .back-arrow { transform: translateY(2px); box-shadow: 0 2px 0 rgba(16, 185, 129, 0.18), 0 3px 8px rgba(16, 185, 129, 0.12); }
+
+.section-kicker.runner .kicker-label { color: var(--adventure-slate); }
 .section-kicker.runner:hover .back-arrow {
-  border-color: rgba(121, 213, 230, 0.5);
-  color: #79d5e6;
-  background: rgba(121, 213, 230, 0.07);
+  border-color: #a7bad0;
+  color: var(--adventure-slate);
+  background: #e5edf3;
 }
 
 .playstyle-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
-  margin-top: 34px;
+  grid-template-columns: 1.2fr 1fr 1fr;
+  gap: 22px;
+  margin-top: 18px;
 }
 
+/* —— 全出血海报卡（晴空果冻版）：100% 原图明亮 + 白色画框 + 奶油白悬浮信息舱 —— */
 .playstyle-option {
   position: relative;
   display: flex;
   min-width: 0;
-  min-height: 330px;
+  /* 竖版海报比例：标题行也删掉后空间全给卡片 */
+  height: clamp(460px, calc(100vh - 210px), 680px);
   flex-direction: column;
-  padding: 28px;
+  justify-content: flex-end;
+  padding: 0;
   overflow: hidden;
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--playstyle-accent);
-  border-radius: 6px;
+  border: 4px solid #FFFFFF;
+  border-radius: var(--hub-radius);
   color: inherit;
-  background: rgba(18, 16, 13, 0.86);
+  background: #F0FDFA;
   text-align: left;
-  transition: border-color 0.14s ease, background 0.14s ease, transform 0.08s ease;
+  box-shadow: var(--hub-card-shadow);
+  transition: transform 0.4s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.3s ease;
 }
 
-.playstyle-option:hover {
-  border-color: var(--playstyle-accent);
-  background: rgba(24, 21, 17, 0.94);
+.playstyle-option.hero {
+  box-shadow: 0 14px 32px rgba(16, 185, 129, 0.2), 0 4px 10px rgba(0, 0, 0, 0.04);
 }
 
-.playstyle-option:active { transform: scale(0.99); }
-
-.playstyle-option[data-playstyle='runner'] {
-  background: rgba(14, 23, 26, 0.78);
+.playstyle-art {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  /* 微提亮 + 提饱和：让蓝天白云与果冻史莱姆晶莹剔透 */
+  filter: brightness(1.03) saturate(1.08);
+  transform: scale(1.001);
+  transition: transform 0.4s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.playstyle-option[data-playstyle='runner']:hover {
-  background: rgba(17, 30, 34, 0.9);
+/* 轻柔彩底渐变：只覆盖底部信息舱高度，上方近 70% 画面完全留给插画 */
+.playstyle-shade {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(to top, rgba(255, 255, 255, 0.55) 0%, rgba(255, 255, 255, 0.22) 20%, transparent 34%);
 }
 
-.playstyle-option[data-playstyle='tower-defense'] {
-  background: rgba(14, 26, 18, 0.82);
+/* —— 右上角奖励贴纸徽章：奶油白底 + 主题浓色文字 —— */
+.playstyle-badge {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 2;
+  max-width: calc(100% - 28px);
+  padding: 5px 12px;
+  border: 2px solid #FFFFFF;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(8px);
+  color: #047857;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  font-size: 12px;
+  font-weight: 750;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
+.playstyle-option[data-playstyle="tower-defense"] .playstyle-badge { color: #B45309; }
+.playstyle-option[data-playstyle="runner"] .playstyle-badge { color: #0369A1; }
+.playstyle-option[data-playstyle="arena"] .playstyle-badge { color: #047857; }
 
-.playstyle-option[data-playstyle='tower-defense']:hover {
-  background: rgba(18, 36, 23, 0.92);
-}
-
-.playstyle-topline {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.playstyle-index,
-.playstyle-kicker {
-  color: var(--playstyle-accent);
-  font-size: 10px;
-  font-weight: 800;
-  font-variant-numeric: tabular-nums;
-}
-
-.playstyle-kicker {
-  color: rgba(244, 238, 230, 0.46);
-  font-weight: 700;
-}
-
-.playstyle-title-row {
-  display: flex;
-  align-items: center;
-  gap: 13px;
-  margin-top: 38px;
-}
-
-.playstyle-icon {
-  flex: none;
-  color: var(--playstyle-accent);
-}
-
-.playstyle-title-row h3 {
-  margin: 0;
-  font-size: 25px;
-}
-
-.playstyle-option > p {
-  max-width: 390px;
-  margin-top: 14px;
-  color: var(--text-muted);
-  font-size: 13px;
-  line-height: 1.7;
-}
-
-.playstyle-detail {
-  margin-top: 18px;
-  color: rgba(244, 238, 230, 0.42);
-  font-size: 10px;
-}
-
-.playstyle-enter {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-top: auto;
-  padding-top: 24px;
-  color: var(--playstyle-accent);
+/* —— 主战场左上角暖橙贴纸角标：饱和渐变 + 白字描边阴影保证对比 —— */
+.playstyle-feature-tag {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  z-index: 2;
+  padding: 6px 13px;
+  border: 2px solid #FFFFFF;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #F97316, #FB923C);
+  color: #FFFFFF;
+  box-shadow: 0 4px 12px rgba(249, 115, 22, 0.4);
   font-size: 12px;
   font-weight: 800;
+  letter-spacing: 0.02em;
+  text-shadow: 0 1px 2px rgba(154, 52, 18, 0.65);
 }
 
-.playstyle-enter svg,
+/* —— 底部信息舱（紧凑版）：单行短句 + 收紧内距，只占卡片 28%~32% —— */
+.playstyle-body {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  min-width: 0;
+  width: calc(100% - 20px);
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  margin: 10px;
+  margin-top: auto;
+  padding: 14px 18px 14px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 6px 18px rgba(15, 118, 110, 0.1);
+}
+
+.playstyle-body h3 {
+  font-size: clamp(22px, 2.1vw, 26px);
+  line-height: 1.25;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: #064E3B;
+}
+
+.playstyle-body > p {
+  margin-bottom: 6px;
+  color: #374151;
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* —— 糖果色立体果冻按钮：主题渐变 + 底部厚度阴影 + 内高光 + Q 弹按压 —— */
+.playstyle-enter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 40px;
+  width: 100%;
+  margin-top: 4px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 999px;
+  color: #FFFFFF;
+  font-size: 14px;
+  font-weight: 800;
+  font-style: normal;
+  text-shadow: 0 1px 2px rgba(0, 60, 40, 0.5), 0 0 4px rgba(0, 60, 40, 0.3);
+  background: linear-gradient(135deg, #22C55E 0%, #10B981 100%);
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.35), 0 5px 0 #047857, 0 10px 18px rgba(16, 185, 129, 0.32);
+  transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease;
+}
+.playstyle-option[data-playstyle="runner"] .playstyle-enter {
+  background: linear-gradient(135deg, #38BDF8 0%, #0EA5E9 100%);
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.35), 0 5px 0 #075985, 0 10px 18px rgba(14, 165, 233, 0.32);
+}
+.playstyle-option[data-playstyle="tower-defense"] .playstyle-enter {
+  background: linear-gradient(135deg, #FBBF24 0%, #F59E0B 100%);
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.3), 0 4px 0 #D97706, 0 8px 16px rgba(245, 158, 11, 0.28);
+}
+
+/* —— Hover 微动效：整卡上浮 + 插画缓放 + 果冻按钮弹起（幅度加大到儿童可感知） —— */
+.playstyle-option:is(:hover, :focus-visible) {
+  transform: translateY(-10px);
+  box-shadow: 0 26px 48px rgba(15, 118, 110, 0.24), 0 10px 20px rgba(0, 0, 0, 0.07);
+}
+.playstyle-option:is(:hover, :focus-visible) .playstyle-art { transform: scale(1.08); }
+.playstyle-option:is(:hover, :focus-visible) .playstyle-enter {
+  transform: translateY(-3px) scale(1.03);
+  filter: brightness(1.12);
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.35), 0 8px 0 #047857, 0 16px 28px rgba(16, 185, 129, 0.42);
+}
+.playstyle-option:is(:hover, :focus-visible)[data-playstyle="runner"] .playstyle-enter {
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.35), 0 8px 0 #075985, 0 16px 28px rgba(14, 165, 233, 0.42);
+}
+.playstyle-option:is(:hover, :focus-visible)[data-playstyle="tower-defense"] .playstyle-enter {
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.3), 0 7px 0 #D97706, 0 14px 26px rgba(245, 158, 11, 0.4);
+}
+.playstyle-option:active .playstyle-art { transform: scale(1.03); }
+.playstyle-option:active .playstyle-enter { transform: translateY(3px) scale(0.99); filter: none; box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.25), 0 2px 0 #047857, 0 4px 10px rgba(16, 185, 129, 0.22); }
+.playstyle-option:active[data-playstyle="runner"] .playstyle-enter { box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.25), 0 2px 0 #075985, 0 4px 10px rgba(14, 165, 233, 0.22); }
+.playstyle-option:active[data-playstyle="tower-defense"] .playstyle-enter { box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.2), 0 1px 0 #D97706, 0 3px 8px rgba(245, 158, 11, 0.2); }
+
+.playstyle-enter svg { flex: none; transition: transform 0.2s ease; }
+.playstyle-option:is(:hover, :focus-visible) .playstyle-enter svg { transform: translateX(3px); }
+
 .mode-enter svg,
 .runner-card-action svg {
   flex: none;
   transition: transform 0.14s ease;
 }
 
-.playstyle-option:hover .playstyle-enter svg,
 .mode-option:not(.locked):hover .mode-enter svg,
 .runner-mode-card:hover .runner-card-action svg {
   transform: translateX(3px);
 }
 
-.subtype-view { padding-top: 42px; }
+.subtype-view { padding-top: 24px; }
 
-.mode-grid {
+/* 主题横幅：晶莹白框毛玻璃卡片，左文右图渐隐 */
+.subtype-heading {
+  position: relative;
+  isolation: isolate;
+  max-width: none;
+  overflow: hidden;
+  min-height: 178px;
+  padding: 24px 26px;
+  border: 3px solid #FFFFFF;
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.86);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 12px 30px rgba(16, 185, 129, 0.1);
+}
+
+.subtype-heading .title-row { justify-content: flex-start; flex-wrap: wrap; margin-top: 14px; }
+.subtype-heading .title-row h2 { font-size: clamp(24px, 3vw, 37px); font-weight: 800; color: #064E3B; }
+.subtype-heading > span { color: #059669; font-weight: 550; }
+.subtype-heading .quick-continue { margin-left: 0; }
+.subtype-cover {
+  position: absolute;
+  z-index: -1;
+  inset: 0 0 0 auto;
+  width: 48%;
+  height: 100%;
+  object-fit: cover;
+  object-position: 55% 46%;
+  filter: brightness(1.04) saturate(1.06);
+  mask-image: linear-gradient(90deg, transparent 3%, black 49%);
+}
+
+@media (max-width: 840px) {
+  .subtype-cover { width: 44%; mask-image: linear-gradient(90deg, transparent 6%, #0008 58%); }
+  .subtype-heading { padding: 18px; }
+}
+
+@media (max-width: 540px) {
+  .subtype-cover { width: 54%; mask-image: linear-gradient(90deg, transparent 8%, #0004 62%); }
+  .subtype-heading .quick-continue { width: fit-content; }
+}
+
+/* —— 模式卡（晴空果冻版）：白框大圆角 + 主题色顶部微光 —— */
+.mode-grid,
+.runner-mode-grid {
   display: grid;
-  grid-template-columns: repeat(var(--mode-count), minmax(0, 1fr));
-  gap: 12px;
-  margin-top: 34px;
+  grid-template-columns: repeat(var(--mode-count, 3), minmax(0, 1fr));
+  gap: 18px;
+  margin-top: 18px;
 }
 
-.mode-grid.single {
-  grid-template-columns: minmax(0, 520px);
-}
+.mode-grid.single { grid-template-columns: minmax(0, 520px); }
 
-.mode-option {
+.mode-option,
+.runner-mode-card {
+  position: relative;
   display: flex;
-  flex-direction: column;
   min-width: 0;
-  min-height: 292px;
+  min-height: 320px;
+  flex-direction: column;
   padding: 22px;
+  border: 3px solid #FFFFFF;
+  border-radius: 24px;
+  color: #064E3B;
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(8px);
   text-align: left;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: inherit;
-  background: var(--surface);
-  transition: border-color 0.16s ease, background 0.16s ease, transform 0.14s ease, box-shadow 0.2s ease;
+  box-shadow: 0 10px 26px rgba(15, 118, 110, 0.1), 0 4px 10px rgba(0, 0, 0, 0.03), inset 0 6px 18px color-mix(in srgb, var(--mode-accent, #22C55E) 7%, transparent);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.25s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.mode-option:not(.locked):hover {
-  border-color: rgba(215, 166, 87, 0.55);
-  background: var(--surface-hover);
-  transform: translateY(-4px);
-  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.45);
+/* 模式卡适度拉伸：吃掉移除路线图后的部分空间，但控制中部空旷 */
+.mode-option { height: clamp(320px, calc(100vh - 520px), 420px); }
+
+.mode-option:hover,
+.runner-mode-card:hover {
+  transform: translateY(-7px) scale(1.01);
+  border-color: color-mix(in srgb, var(--mode-accent, #22C55E) 45%, #FFFFFF);
+  box-shadow: 0 20px 40px rgba(15, 118, 110, 0.18), 0 8px 16px rgba(0, 0, 0, 0.05), inset 0 6px 18px color-mix(in srgb, var(--mode-accent, #22C55E) 14%, transparent);
 }
 
-.mode-option:not(.locked):active { transform: translateY(-1px) scale(0.99); }
+.mode-option.featured,
+.runner-mode-card.featured {
+  box-shadow: 0 10px 26px rgba(16, 185, 129, 0.16), 0 4px 10px rgba(0, 0, 0, 0.03), inset 0 6px 18px rgba(34, 197, 94, 0.1);
+}
 
-/* 锁卡悬停：边框透出模式色，暗示「点一下有信息」 */
+/* 锁定卡：柔和半透明磨砂底 + 主题色描边强化蓝/紫识别 */
+.mode-option.locked {
+  background: color-mix(in srgb, var(--mode-accent) 5%, rgba(255, 255, 255, 0.78));
+  border-color: color-mix(in srgb, var(--mode-accent) 26%, #FFFFFF);
+}
 .mode-option.locked:hover {
-  border-color: color-mix(in srgb, var(--mode-accent) 48%, var(--border));
-  background: rgba(20, 18, 14, 0.85);
+  transform: translateY(-7px) scale(1.01);
+  border-color: color-mix(in srgb, var(--mode-accent) 45%, #FFFFFF);
+  box-shadow: 0 20px 40px rgba(15, 118, 110, 0.16), 0 8px 16px rgba(0, 0, 0, 0.05), inset 0 6px 18px color-mix(in srgb, var(--mode-accent) 12%, transparent);
 }
 
-/* 当前推荐卡：呼吸金光 + 角标 */
-.mode-option.featured { border-color: rgba(236, 196, 119, 0.6); }
-.mode-option.featured { animation: cardBreathe 2.4s ease-in-out infinite; }
-@keyframes cardBreathe {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(236, 196, 119, 0); }
-  50% { box-shadow: 0 0 24px 2px rgba(236, 196, 119, 0.25); }
-}
-
-.mode-feature-badge {
-  position: absolute;
-  top: -10px;
-  left: 16px;
-  padding: 3px 9px;
-  border-radius: 4px;
-  color: #24180a;
-  background: linear-gradient(135deg, #ecc477, #d7a657);
-  font-size: 9px;
-  font-weight: 800;
-  box-shadow: 0 4px 14px rgba(215, 166, 87, 0.4);
-}
-
-/* 锁卡被点击时「摇头」 */
-.mode-option.shaking { animation: cardShake 0.55s ease; }
-@keyframes cardShake {
-  0%, 100% { transform: translateX(0); }
-  15% { transform: translateX(-8px); }
-  30% { transform: translateX(7px); }
-  45% { transform: translateX(-5px); }
-  60% { transform: translateX(4px); }
-  75% { transform: translateX(-2px); }
-}
-
-/* 锁卡右上角小锁角标 */
-.mode-corner-lock {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  width: 24px;
-  height: 24px;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--faint);
-}
-
-.mode-corner-lock svg { width: 13px; height:13px; }
-
-.mode-option:hover {
-  border-color: rgba(215, 166, 87, 0.5);
-  background: var(--surface-hover);
-}
-
-.mode-option:active { transform: scale(0.99); }
 .mode-option:focus-visible,
 .playstyle-option:focus-visible,
 .runner-mode-card:focus-visible,
@@ -1356,368 +1591,210 @@ watch(
 .account-link:focus-visible,
 .profile-link:focus-visible,
 .back-link:focus-visible,
+.quick-continue:focus-visible,
+.section-kicker:focus-visible,
 .difficulty-options button:focus-visible,
-.config-actions button:focus-visible { outline: 2px solid var(--accent-bright); outline-offset: 3px; }
+.config-actions button:focus-visible { outline: 2px solid var(--adventure-focus); outline-offset: 3px; }
 
-.mode-index {
-  color: var(--mode-accent, #b98747);
+/* 右上角贴纸徽章：已解锁=亮绿挑战贴纸 / 锁定=金色小锁头贴纸 */
+.mode-feature-badge,
+.runner-recommend-tag {
+  padding: 5px 11px;
+  border: 2px solid #FFFFFF;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #22C55E, #10B981);
+  color: #FFFFFF;
   font-size: 11px;
   font-weight: 800;
-  font-variant-numeric: tabular-nums;
+  box-shadow: 0 4px 10px rgba(16, 185, 129, 0.3);
+}
+
+.mode-feature-badge,
+.mode-corner-lock {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+}
+
+.mode-corner-lock {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 2px solid #FFFFFF;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #FBBF24, #F59E0B);
+  color: #FFFFFF;
+  box-shadow: 0 4px 10px rgba(245, 158, 11, 0.35);
+}
+.mode-corner-lock svg { width: 14px; height: 14px; }
+
+.mode-option.shaking { animation: cardShake 0.23s ease; }
+@keyframes cardShake {
+  0%, 100% { transform: translateX(0); }
+  30% { transform: translateX(-3px); }
+  65% { transform: translateX(3px); }
 }
 
 .mode-title-row {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-top: 24px;
+  margin-top: 7px;
 }
 
-.mode-title-row h3 {
+.mode-title-row h3, .runner-mode-card h3 {
   margin: 0;
-  font-size: 20px;
-  letter-spacing: 0;
+  font-size: 23px;
+  font-weight: 800;
+  color: #064E3B;
 }
-
-.mode-icon {
-  width: 24px;
-  height: 24px;
-  flex: none;
-  color: var(--mode-accent, var(--accent-bright));
-  filter: drop-shadow(0 2px 6px rgba(236, 196, 119, 0.22));
-}
-
-.mode-option p {
-  min-height: 44px;
+.mode-icon, .runner-mode-icon { flex: none; color: var(--mode-accent, #10B981); }
+.mode-option p, .runner-card-desc {
   margin-top: 9px;
-  color: var(--text-muted);
-  font-size: 12px;
+  color: #374151;
+  font-size: 13px;
   line-height: 1.65;
 }
+.mode-option p { min-height: 42px; }
 
-/* 模式标签：描述下方，锁卡用模式色（color-mix 派生） */
-.mode-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-  margin-top: 14px;
-}
-
+/* 彩色小标签胶囊：主题色浅底 + 描边 */
+.mode-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
 .mode-chips i {
+  padding: 4px 9px;
+  border-radius: 999px;
+  color: var(--mode-accent);
+  background: color-mix(in srgb, var(--mode-accent) 12%, #FFFFFF);
+  border: 1px solid color-mix(in srgb, var(--mode-accent) 26%, transparent);
+  font-size: 11px;
+  font-weight: 650;
   font-style: normal;
-  font-size: 9.5px;
-  padding: 3px 8px;
-  border-radius: 20px;
-  color: rgba(244, 238, 230, 0.78);
-  border: 1px solid rgba(215, 166, 87, 0.22);
-  background: var(--accent-soft);
 }
 
-.mode-option.locked .mode-chips i {
-  color: rgba(244, 238, 230, 0.72);
-  border-color: color-mix(in srgb, var(--mode-accent) 32%, transparent);
-  background: color-mix(in srgb, var(--mode-accent) 12%, transparent);
-}
-
-/* 空成绩：鼓励文案代替冷冰冰的「—」 */
-.empty-dd {
-  color: var(--text-faint) !important;
-  font-size: 11px !important;
-  font-weight: 700 !important;
-}
-
-/* 锁卡条件 toast（横幅，不遮挡卡片） */
-.lock-toast {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 12px;
-  padding: 11px 16px;
-  border-radius: 7px;
-  border: 1px solid rgba(215, 166, 87, 0.5);
-  background: rgba(215, 166, 87, 0.1);
-  color: var(--accent-bright);
-  font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.lock-toast-icon { width: 18px; height: 18px; flex: none; }
-.toast-enter-active { animation: toastIn 0.3s ease; }
-.toast-leave-active { animation: toastIn 0.25s ease reverse; }
-@keyframes toastIn {
-  from { opacity: 0; transform: translateY(-8px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
+/* 数据面板：浅主题色圆角底框，游戏面板感 */
 .mode-option dl {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 14px;
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
-  margin-top: 28px;
-  padding-top: 14px;
-  border-top: 1px solid rgba(238, 214, 180, 0.1);
+  background: color-mix(in srgb, var(--mode-accent, #22C55E) 7%, #FFFFFF);
+  border: 1px solid color-mix(in srgb, var(--mode-accent, #22C55E) 18%, transparent);
 }
+.mode-option dt { color: #3B5A4E; font-size: 12px; font-weight: 650; }
+.mode-option dt small { margin-left: 4px; font-size: 10px; color: #5B7A6E; }
+.mode-option dd { margin-top: 4px; color: #047857; font-size: 15px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.mode-option .empty-dd { font-size: 11px; font-weight: 550; }
 
-.mode-option dt {
-  color: var(--text-faint);
-  font-size: 9px;
-}
-
-.mode-option dd {
-  margin-top: 4px;
-  color: var(--accent-bright);
-  font-size: 12px;
-  font-weight: 800;
-  font-variant-numeric: tabular-nums;
-}
-
-.mode-option dt small {
-  margin-left: 4px;
-  color: rgba(244, 238, 230, 0.3);
-  font-size: 8px;
-  font-weight: 600;
-  letter-spacing: 0;
-}
-
-.mode-option.locked {
-  cursor: pointer;
-  opacity: 0.9;
-  filter: saturate(0.65);
-  background: rgba(18, 16, 13, 0.7);
-}
-
+/* 锁定提示条：清晰可爱的圆角提示 */
 .mode-locked-note {
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-height: 46px;
-  margin-top: 28px;
-  padding-top: 14px;
-  border-top: 1px solid rgba(238, 214, 180, 0.1);
-  color: var(--text-muted);
-  font-size: 11px;
-  line-height: 1.45;
-}
-
-.mode-lock-icon {
-  width: 18px;
-  height: 18px;
-  flex: none;
-  color: rgba(244, 238, 230, 0.45);
-}
-
-.mode-enter {
-  display: flex;
-  justify-content: space-between;
-  margin-top: auto;
-  padding-top: 22px;
-  color: var(--accent-bright);
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.mode-option:not(.locked):hover .mode-enter {
-  text-decoration: underline;
-  text-underline-offset: 4px;
-  text-decoration-color: rgba(236, 196, 119, 0.55);
-}
-
-/* 解锁面板：三节点步骤条 + 三段进度格 */
-.unlock-panel {
-  margin-top: 15px;
-  padding: 17px 18px 14px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: rgba(215, 166, 87, 0.045);
-}
-
-.unlock-stepper { display: flex; align-items: flex-start; }
-
-.unlock-step {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  flex: none;
-  width: 120px;
-}
-
-.unlock-dot {
-  width: 34px;
-  height: 34px;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  border: 1px solid var(--line);
-  background: #17140f;
-  color: var(--faint);
-}
-
-.unlock-step b { font-size: 12px; }
-.unlock-step i { font-style: normal; font-size: 9px; color: var(--faint); text-align: center; line-height: 1.3; }
-
-.unlock-step.done .unlock-dot {
-  border-color: var(--green);
-  color: var(--green);
-  background: rgba(127, 209, 138, 0.1);
-}
-
-.unlock-step.current .unlock-dot {
-  border-color: var(--accent-bright);
-  color: var(--accent-bright);
-  background: rgba(215, 166, 87, 0.14);
-  animation: dotPulse 2s infinite;
-}
-.unlock-step.current b { color: var(--accent-bright); }
-.unlock-step.current i { color: var(--accent); }
-
-@keyframes dotPulse {
-  0% { box-shadow: 0 0 0 0 rgba(236, 196, 119, 0.45); }
-  70% { box-shadow: 0 0 0 11px rgba(236, 196, 119, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(236, 196, 119, 0); }
-}
-
-.unlock-link {
-  flex: 1;
-  position: relative;
-  height: 2px;
-  margin: 16px 6px 0;
-  background: rgba(238, 214, 180, 0.14);
-}
-
-.unlock-link span {
-  position: absolute;
-  top: -9px;
-  left: 50%;
-  transform: translateX(-50%);
-  padding: 0 7px;
-  background: #15120e;
-  color: var(--faint);
-  font-size: 8.5px;
-}
-
-.unlock-link.filled { background: linear-gradient(90deg, var(--green), #6fb87a); }
-.unlock-link.filled span { color: var(--green); }
-
-.unlock-footer {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-top: 15px;
-  color: var(--text-muted);
-  font-size: 11px;
-  flex-wrap: wrap;
-}
-
-.unlock-footer b { flex: none; color: var(--accent-bright); font-size: 11px; }
-.unlock-footer i { font-style: normal; }
-
-.unlock-segs { display: flex; gap: 5px; width: 120px; flex: none; }
-.unlock-segs i { flex: 1; height: 7px; border-radius: 3px; background: rgba(238, 214, 180, 0.12); }
-.unlock-segs i.fill { background: linear-gradient(90deg, #b98747, #ecc477); }
-
-.runner-mode-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-  margin-top: 34px;
-}
-
-.runner-mode-card {
-  display: flex;
-  min-width: 0;
-  min-height: 292px;
-  flex-direction: column;
-  padding: 22px;
-  border: 1px solid rgba(121, 213, 230, 0.18);
-  border-radius: 6px;
-  color: inherit;
-  background: rgba(14, 24, 29, 0.74);
-  text-align: left;
-  transition: border-color 0.14s ease, background 0.14s ease, transform 0.08s ease;
-}
-
-.runner-mode-card:hover {
-  border-color: rgba(121, 213, 230, 0.62);
-  background: rgba(18, 33, 39, 0.9);
-}
-
-.runner-mode-card:active { transform: scale(0.99); }
-
-.runner-mode-card.featured {
-  border-color: rgba(215, 166, 87, 0.38);
-  background: rgba(27, 28, 25, 0.84);
-}
-
-.runner-mode-card.featured:hover {
-  border-color: rgba(236, 196, 119, 0.68);
-  background: rgba(34, 33, 27, 0.92);
-}
-
-.runner-card-top {
-  display: flex;
-  align-items: center;
-  min-height: 24px;
   gap: 9px;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px dashed color-mix(in srgb, var(--mode-accent) 40%, transparent);
+  background: color-mix(in srgb, var(--mode-accent) 6%, #FFFFFF);
+  color: #374151;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.55;
 }
+.mode-lock-icon { width: 16px; height: 16px; flex: none; color: #D97706; }
 
-.runner-card-index {
-  margin-right: auto;
-  color: #79d5e6;
-  font-size: 10px;
+/* 糖果大按钮：已解锁=主题色立体果冻 / 锁定=浅色磨砂胶囊 */
+.mode-enter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  margin-top: auto;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 999px;
+  color: #FFFFFF;
+  font-size: 14px;
   font-weight: 800;
-  font-variant-numeric: tabular-nums;
+  font-style: normal;
+  text-shadow: 0 1px 2px rgba(0, 60, 40, 0.5);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--mode-accent) 88%, #fff 12%), var(--mode-accent));
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.35), 0 5px 0 color-mix(in srgb, var(--mode-accent) 55%, #064E3B), 0 10px 18px color-mix(in srgb, var(--mode-accent) 35%, transparent);
+  transition: transform 0.16s ease, box-shadow 0.16s ease, filter 0.16s ease;
+}
+.mode-option:not(.locked):is(:hover, :focus-visible) .mode-enter {
+  transform: translateY(-2px) scale(1.02);
+  filter: brightness(1.08);
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.35), 0 7px 0 color-mix(in srgb, var(--mode-accent) 55%, #064E3B), 0 14px 24px color-mix(in srgb, var(--mode-accent) 42%, transparent);
+}
+.mode-option:not(.locked):active .mode-enter { transform: translateY(3px) scale(0.99); filter: none; box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.25), 0 2px 0 color-mix(in srgb, var(--mode-accent) 55%, #064E3B), 0 4px 10px color-mix(in srgb, var(--mode-accent) 25%, transparent); }
+
+.mode-option.locked .mode-enter {
+  color: color-mix(in srgb, var(--mode-accent) 62%, #064E3B);
+  background: color-mix(in srgb, var(--mode-accent) 14%, #FFFFFF);
+  border: 1px solid color-mix(in srgb, var(--mode-accent) 38%, transparent);
+  text-shadow: none;
+  box-shadow: 0 4px 10px rgba(15, 118, 110, 0.08);
+}
+.mode-option.locked:is(:hover, :focus-visible) .mode-enter {
+  background: color-mix(in srgb, var(--mode-accent) 22%, #FFFFFF);
+  border-color: color-mix(in srgb, var(--mode-accent) 55%, transparent);
 }
 
-.runner-mode-icon { color: #79d5e6; }
-.runner-mode-card.featured .runner-mode-icon,
-.runner-mode-card.featured .runner-card-index { color: var(--accent-bright); }
+.runner-card-top { display: flex; align-items: center; justify-content: space-between; gap: 9px; }
+.runner-mode-card h3 { margin-top: 12px; }
+.runner-card-kicker { margin-top: 5px; color: #0369A1; font-size: 11px; font-weight: 650; }
+.runner-card-desc { margin-bottom: 10px; }
 
-.runner-recommend-tag {
-  font-size: 10px;
-  font-weight: 800;
-  color: var(--accent-bright);
-  border: 1px solid rgba(236, 196, 119, 0.32);
-  padding: 2px 6px;
-  border-radius: 3px;
-}
-
-.runner-mode-card h3 {
-  margin: 25px 0 0;
-  color: var(--text);
-  font-size: 20px;
-}
-
-.runner-card-kicker {
-  margin: 7px 0 0;
-  color: rgba(244, 238, 230, 0.5);
-  font-size: 10px;
-  font-weight: 600;
-}
-
-.runner-card-desc {
-  margin: 13px 0 0;
-  font-size: 12px;
-  line-height: 1.65;
-  color: var(--text-muted);
-  flex: 1;
-}
-
+/* 突围卡行动条同步糖果按钮 */
 .runner-card-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  margin-top: auto;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 999px;
+  color: #FFFFFF;
+  font-size: 14px;
+  font-weight: 800;
+  font-style: normal;
+  text-shadow: 0 1px 2px rgba(0, 60, 40, 0.5);
+  background: linear-gradient(135deg, #38BDF8, #0EA5E9);
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.35), 0 5px 0 #075985, 0 10px 18px rgba(14, 165, 233, 0.3);
+  transition: transform 0.16s ease, box-shadow 0.16s ease, filter 0.16s ease;
+}
+.runner-mode-card:is(:hover, :focus-visible) .runner-card-action {
+  transform: translateY(-2px) scale(1.02);
+  filter: brightness(1.08);
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.35), 0 7px 0 #075985, 0 14px 24px rgba(14, 165, 233, 0.38);
+}
+.runner-mode-card:active .runner-card-action { transform: translateY(3px) scale(0.99); filter: none; box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.25), 0 2px 0 #075985, 0 4px 10px rgba(14, 165, 233, 0.22); }
+
+/* 锁卡点击 toast：暖金提示条 */
+.lock-toast {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-top: 20px;
-  padding-top: 15px;
-  border-top: 1px solid rgba(121, 213, 230, 0.13);
-  color: #8bdded;
-  font-size: 12px;
-  font-weight: 800;
+  gap: 9px;
+  margin-top: 12px;
+  padding: 11px 16px;
+  border: 2px solid #FDE68A;
+  border-radius: 14px;
+  background: #FEF3C7;
+  color: #92400E;
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+  box-shadow: 0 8px 20px rgba(245, 158, 11, 0.15);
 }
+.lock-toast-icon { width: 17px; height: 17px; flex: none; }
+.toast-enter-active, .toast-leave-active { transition: opacity 0.16s ease; }
+.toast-enter-from, .toast-leave-to { opacity: 0; }
 
-.runner-mode-card.featured .runner-card-action { color: var(--accent-bright); }
 
 @media (max-width: 680px) {
   .runner-mode-grid {
@@ -1731,7 +1808,7 @@ watch(
   flex-direction: column;
   flex: 1;
   min-height: 0;
-  padding-top: 18px;
+  padding-top: 12px;
 }
 
 .config-content {
@@ -1743,7 +1820,7 @@ watch(
   padding-right: 12px;
   padding-bottom: 2px;
   scrollbar-width: thin;
-  scrollbar-color: #494735 transparent;
+  scrollbar-color: rgba(110, 231, 183, 0.55) transparent;
 }
 
 .config-kicker {
@@ -1752,195 +1829,61 @@ watch(
   gap: 10px;
 }
 
-.config-kicker p { margin: 0; color: #b19b75; font-size: 11px; }
-.config-kicker > span { color: #5f5b50; font-size: 13px; }
-.config-kicker h2 { margin: 0; font-size: 21px; }
+.config-kicker p { margin: 0; color: #059669; font-size: 11px; font-weight: 700; }
+.config-kicker > span { color: #4B6B5E; font-size: 13px; }
+.config-kicker h2 { margin: 0; font-size: 21px; color: #064E3B; font-weight: 800; }
 
+/* 返回：圆润白色立体小圆钮（内高光 + 明显厚度） */
 .back-link {
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
+  width: 38px;
+  height: 38px;
   flex: none;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  color: rgba(244, 238, 230, 0.74);
-  background: transparent;
+  border: 2px solid #FFFFFF;
+  border-radius: 50%;
+  color: #064E3B;
+  background: linear-gradient(180deg, #FFFFFF, #F0FDF4);
   font-size: 16px;
-  transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease, transform 0.08s ease;
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.9), 0 4px 0 #86EFAC, 0 8px 16px rgba(16, 185, 129, 0.2);
+  transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease, transform 0.14s ease, box-shadow 0.14s ease;
 }
 
 .back-link:hover {
-  border-color: rgba(215, 166, 87, 0.45);
-  color: var(--accent-bright);
-  background: rgba(215, 166, 87, 0.07);
+  color: #047857;
+  background: #D1FAE5;
+  transform: translateY(-1px);
 }
 
-.back-link:active { transform: scale(0.96); }
+.back-link:active { transform: translateY(2px); box-shadow: 0 2px 0 rgba(16, 185, 129, 0.18), 0 3px 8px rgba(16, 185, 129, 0.12); }
 
+/* 本局配置条：通透白色磨砂圆角条 */
 .config-intro {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 24px;
-  padding-bottom: 14px;
-  border-bottom: 1px solid rgba(238, 214, 180, 0.11);
+  padding: 14px 18px;
+  border: 2px solid #FFFFFF;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 8px 22px rgba(16, 185, 129, 0.08);
 }
 
 .config-heading { display: flex; align-items: flex-start; gap: 14px; min-width: 0; flex: 1; }
 .config-heading .back-link { margin-top: 2px; }
 .config-mode-copy { min-width: 0; }
-.config-mode-details { margin-top: 6px; color: #959184; font-size: 10px; line-height: 1.7; }
+.config-mode-details { margin-top: 6px; color: var(--text-muted); font-size: 10px; line-height: 1.7; }
 .config-mode-details summary { cursor: pointer; }
-.config-mode-details summary::marker { color: #aa9167; font-size: 9px; }
+.config-mode-details summary::marker { color: var(--adventure-gold); font-size: 9px; }
 .config-mode-details summary:focus-visible { outline: 2px solid var(--accent-bright); outline-offset: 3px; }
-.config-mode-details p { max-width: 460px; margin: 8px 0 0; color: #aaa493; font-size: 11px; }
-
-.config-record {
-  display: grid;
-  grid-template-columns: 112px minmax(0, 1fr);
-  grid-template-rows: auto auto;
-  width: 380px;
-  flex: none;
-  align-items: end;
-  column-gap: 20px;
-  padding-left: 22px;
-  border-left: 1px solid var(--border);
-}
-
-.config-record > span {
-  grid-column: 1;
-  color: var(--text-faint);
-  font-size: 10px;
-}
-
-.config-record > strong {
-  grid-column: 1;
-  margin-top: 5px;
-  color: var(--accent-bright);
-  font-size: 19px;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
-}
-
-.config-record dl {
-  grid-column: 2;
-  grid-row: 1 / 3;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-  margin: 0;
-}
-
-.config-record dt {
-  color: var(--text-faint);
-  font-size: 10px;
-}
-
-.config-record dd {
-  margin-top: 3px;
-  color: rgba(244, 238, 230, 0.78);
-  font-size: 11px;
-  font-weight: 800;
-  font-variant-numeric: tabular-nums;
-}
+.config-mode-details p { max-width: 460px; margin: 8px 0 0; color: var(--text-muted); font-size: 11px; }
 
 .config-flow {
   display: grid;
-  gap: 24px;
-  margin-top: 14px;
-}
-
-.public-board {
-  margin-top: 22px;
-  padding: 14px 0 3px;
-  border-top: 1px solid rgba(238, 214, 180, 0.11);
-}
-
-.public-board.empty { padding: 11px 0; }
-
-.public-board .step-heading {
-  margin-bottom: 10px;
-}
-
-.public-board-list {
-  display: grid;
-  gap: 5px;
-}
-
-.public-board-row {
-  display: grid;
-  grid-template-columns: 46px 112px minmax(0, 1fr) 58px;
-  align-items: center;
-  min-height: 34px;
-  gap: 11px;
-  padding: 0 10px;
-  border: 1px solid rgba(238, 214, 180, 0.09);
-  border-radius: 5px;
-  color: rgba(244, 238, 230, 0.64);
-  background: rgba(255, 255, 255, 0.018);
-  font-size: 11px;
-}
-
-.public-board-row.current {
-  border-color: rgba(236, 196, 119, 0.42);
-  background: rgba(215, 166, 87, 0.08);
-}
-
-.public-board-row span {
-  color: rgba(236, 196, 119, 0.72);
-  font-weight: 800;
-  font-variant-numeric: tabular-nums;
-}
-
-.public-board-row b {
-  color: var(--accent-bright);
-  text-align: right;
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-
-.public-board-row i {
-  overflow: hidden;
-  font-style: normal;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.public-board-row em {
-  color: rgba(244, 238, 230, 0.42);
-  font-style: normal;
-  text-align: right;
-}
-
-/* 空态折叠成一行：标题 + 一句话，不再占大块高度 */
-.public-board-empty {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-  margin: 0;
-  font-size: 11px;
-  line-height: 1.6;
-}
-
-.public-board-empty b {
-  flex: none;
-  color: rgba(255, 250, 243, 0.9);
-  font-size: 12px;
-}
-
-.public-board-empty span { color: rgba(244, 238, 230, 0.42); }
-
-.public-board-hint {
-  margin-top: 9px;
-  color: rgba(244, 238, 230, 0.48);
-  font-size: 11px;
-  line-height: 1.6;
-}
-
-.public-board-hint code {
-  color: rgba(236, 196, 119, 0.88);
-  font-family: inherit;
+  gap: 16px;
+  margin-top: 12px;
 }
 
 .config-step {
@@ -1956,27 +1899,27 @@ watch(
 }
 
 .step-heading b {
-  color: rgba(255, 250, 243, 0.96);
+  color: #064E3B;
   font-size: 13px;
 }
 
 .step-heading span {
   overflow: hidden;
-  color: rgba(244, 238, 230, 0.48);
+  color: #4B6B5E;
   font-size: 10px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* 难度糖果分段胶囊：选中翡翠绿立体突出，未选白底磨砂 */
 .difficulty-options {
   display: grid;
   grid-template-columns: repeat(var(--difficulty-count), minmax(0, 1fr));
-  gap: 3px;
+  gap: 10px;
   width: 100%;
-  padding: 3px;
-  border: 1px solid rgba(238, 214, 180, 0.12);
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.018);
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 
 .difficulty-options button {
@@ -1985,53 +1928,58 @@ watch(
   align-items: center;
   gap: 11px;
   min-width: 0;
-  color: rgba(244, 238, 230, 0.76);
-  text-align: left;
-  transition: border-color 0.14s ease, background 0.14s ease, color 0.14s ease, transform 0.08s ease;
-}
-
-.difficulty-options button {
   min-height: 48px;
-  padding: 8px 13px;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
+  padding: 7px 16px;
+  border: 2px solid #FFFFFF;
+  border-radius: 999px;
+  color: #064E3B;
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(8px);
+  text-align: left;
+  box-shadow: 0 4px 10px rgba(15, 118, 110, 0.08);
+  transition: border-color 0.14s ease, background 0.14s ease, color 0.14s ease, transform 0.14s ease, box-shadow 0.14s ease, filter 0.14s ease;
 }
 
 .difficulty-options button:hover {
-  color: #fffaf2;
-  background: var(--surface-hover);
+  background: #ECFDF5;
+  border-color: #A7F3D0;
+  transform: translateY(-1px);
 }
 
-/* 锁定难度：灰卡 + 小锁图标，可见但不可选 */
+/* 锁定难度：白底磨砂 + 小锁图标，可见但不可选 */
 .difficulty-options button.locked {
-  opacity: 0.48;
+  color: #8AA69B;
+  background: rgba(255, 255, 255, 0.55);
+  border-color: rgba(255, 255, 255, 0.8);
   cursor: not-allowed;
+  box-shadow: none;
 }
 
 .difficulty-options button.locked:hover {
-  color: rgba(244, 238, 230, 0.66);
-  background: transparent;
+  transform: none;
+  border-color: rgba(255, 255, 255, 0.8);
+  background: rgba(255, 255, 255, 0.55);
 }
 
 .diff-lock-icon {
   width: 15px;
   height: 15px;
   flex: none;
-  color: rgba(244, 238, 230, 0.42);
+  color: #C29A5E;
 }
 
-.difficulty-options button:active,
+.difficulty-options button:active { transform: translateY(2px); }
 .config-actions button:active { transform: scale(0.98); }
 
 .difficulty-options button.selected {
-  color: #fff9ef;
-  background: var(--accent-soft);
+  color: #FFFFFF;
+  background: linear-gradient(135deg, #22C55E, #10B981);
+  border-color: #FFFFFF;
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.3), 0 5px 0 #059669, 0 10px 18px rgba(16, 185, 129, 0.3);
 }
 
-.difficulty-options button.selected {
-  box-shadow: inset 0 0 0 1px rgba(236, 196, 119, 0.48);
-}
+.difficulty-options button.selected:hover { filter: brightness(1.05); transform: translateY(-1px); }
+.difficulty-options button.selected .option-copy i { color: #D1FAE5; }
 
 .option-copy {
   min-width: 0;
@@ -2054,14 +2002,14 @@ watch(
 .option-copy i {
   overflow: hidden;
   margin-top: 4px;
-  color: rgba(244, 238, 230, 0.54);
+  color: var(--text-muted);
   font-size: 10px;
   font-style: normal;
   line-height: 1.4;
 }
 
 button.selected .option-copy i {
-  color: rgba(255, 244, 228, 0.74);
+  color: var(--text-muted);
 }
 
 .choice-indicator {
@@ -2071,7 +2019,7 @@ button.selected .option-copy i {
   height: 18px;
   flex: none;
   border-radius: 50%;
-  color: #24180a;
+  color: #fff;
   background: var(--accent-bright);
   font-size: 10px;
   font-weight: 900;
@@ -2085,7 +2033,7 @@ button.selected .option-copy i {
   transform: scale(1);
 }
 
-/* The action area is outside the content scroller, so it cannot cover choices. */
+/* 底部操作栏：白色磨砂条 + 翡翠绿糖果大按钮 */
 .config-actions {
   position: relative;
   flex: none;
@@ -2094,12 +2042,13 @@ button.selected .option-copy i {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  margin-top: 18px;
-  padding: 10px 12px 10px 18px;
-  border: 1px solid rgba(238, 214, 180, 0.2);
-  border-radius: 8px;
-  background: #15140f;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2);
+  margin-top: 12px;
+  padding: 10px 12px 10px 20px;
+  border: 2px solid #FFFFFF;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 10px 26px rgba(16, 185, 129, 0.1);
 }
 
 .config-summary {
@@ -2111,32 +2060,44 @@ button.selected .option-copy i {
   font-size: 12px;
 }
 
-.config-summary b { color: var(--accent-bright); }
-.config-summary span { color: var(--text-muted); }
-.config-summary i { color: var(--text-faint); font-style: normal; }
+.config-summary b { color: #047857; }
+.config-summary span { color: #4B6B5E; }
+.config-summary i { color: #8AA69B; font-style: normal; }
 
 .config-actions button {
   min-height: 48px;
   padding: 0 27px;
-  border-radius: 5px;
-  font-size: 13px;
+  border-radius: 999px;
+  font-size: 14px;
   font-weight: 800;
-  transition: color 0.14s ease, background 0.14s ease, border-color 0.14s ease, transform 0.08s ease;
+  transition: color 0.14s ease, background 0.14s ease, border-color 0.14s ease, transform 0.14s ease, box-shadow 0.14s ease, filter 0.14s ease;
 }
 
 .primary-action {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 48px;
-  padding: 0 28px;
-  border: 1px solid #efca82;
-  color: #21170b;
-  background: var(--accent);
-  font-size: 13px;
+  min-height: 50px;
+  padding: 0 30px;
+  border: 2px solid rgba(255, 255, 255, 0.6);
+  color: #fff;
+  background: linear-gradient(135deg, #22C55E, #10B981);
+  font-size: 14px;
+  text-shadow: 0 1px 2px rgba(0, 60, 40, 0.5);
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.35), 0 4px 0 #059669, 0 10px 22px rgba(16, 185, 129, 0.35);
 }
 
-.primary-action:hover { background: #e3b566; }
+.primary-action:hover { filter: brightness(1.06); transform: translateY(-2px); box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.35), 0 6px 0 #059669, 0 14px 26px rgba(16, 185, 129, 0.42); }
+.primary-action:active { transform: translateY(3px); box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.25), 0 1px 0 #059669, 0 4px 10px rgba(16, 185, 129, 0.25); }
+
+@media (max-width: 960px) {
+  .start-shell { width: calc(100% - 48px); }
+  .start-header { gap: 18px; }
+  .playstyle-grid { grid-template-columns: 1fr 1fr; gap: 14px; }
+  .playstyle-option { height: clamp(380px, 46vw, 460px); }
+  /* 主战场独占一整行，保持核心模式的主次层级 */
+  .playstyle-option.hero { grid-column: 1 / -1; height: clamp(300px, 34vw, 380px); }
+}
 
 @media (max-width: 760px) {
   .start-shell { width: min(100% - 24px, 620px); padding-top: 14px; }
@@ -2151,37 +2112,24 @@ button.selected .option-copy i {
   .mode-view { padding-top: 34px; }
   .config-view { padding-top: 20px; }
   .config-content { display: flex; flex-direction: column; }
-  .playstyle-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 25px; }
-  .playstyle-option { min-height: 244px; padding: 23px; }
-  .playstyle-title-row { margin-top: 28px; }
+  .playstyle-grid { grid-template-columns: 1fr; margin-top: 20px; }
+  /* 移动端改为「插画在上 / 信息舱在下」堆叠：史莱姆角色完整可见，不被舱体遮挡 */
+  .playstyle-option,
+  .playstyle-option.hero { height: auto; min-height: 0; grid-column: auto; }
+  .playstyle-art { position: static; inset: auto; width: 100%; height: 175px; }
+  .playstyle-shade { display: none; }
+  .playstyle-body { width: 100%; margin: 0; margin-top: 0; border-radius: 0; box-shadow: none; }
   .mode-grid,
   .mode-grid.single { grid-template-columns: 1fr; margin-top: 25px; }
-  .mode-option { min-height: 218px; }
+  .mode-option { min-height: 240px; }
   .runner-mode-grid { margin-top: 25px; }
-  .runner-mode-card { min-height: 218px; }
-  .unlock-panel { padding: 14px 13px; overflow-x: auto; }
-  .unlock-step { width: 86px; }
-  .unlock-segs { width: 84px; }
+  .runner-mode-card { min-height: 240px; }
   .quick-continue { margin-left: 0; width: 100%; justify-content: center; }
   .title-row { flex-wrap: wrap; }
   .config-intro { display: contents; }
   .config-heading { order: 0; gap: 11px; }
   .config-heading h2 { font-size: 20px; }
   .config-kicker { gap: 8px; }
-  .config-record {
-    order: 3;
-    grid-template-columns: 112px minmax(0, 1fr);
-    width: 100%;
-    margin-top: 18px;
-    padding: 14px 0 0;
-    column-gap: 14px;
-    border-top: 1px solid var(--border);
-    border-left: 0;
-  }
-  .config-record dl { gap: 8px; }
-  .public-board { order: 4; }
-  .public-board-empty { flex-wrap: wrap; gap: 4px 12px; }
-  .public-board-row { grid-template-columns: 38px 94px minmax(0, 1fr) 48px; gap: 8px; }
   .config-flow { order: 1; gap: 20px; margin-top: 20px; }
   .config-step { padding: 0; }
   .difficulty-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -2198,28 +2146,48 @@ button.selected .option-copy i {
 }
 
 @media (max-width: 540px) {
+  .account-notice { align-items: flex-start; padding: 13px; gap: 12px; }
   .start-header {
     align-items: stretch;
     flex-direction: column;
     gap: 12px;
   }
-  .header-actions { width: 100%; }
+  .header-actions { display: grid; width: 100%; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+  .header-actions .account-link { grid-column: span 2; margin-left: 0; max-width: 60%; }
+  .header-actions .about-link { min-width: 0; justify-content: center; padding: 0 6px; }
   .account-link,
   .profile-link { min-width: 0; flex: 1; justify-content: center; }
   .account-link b,
   .profile-link b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .market-link { flex: none; }
+  .header-actions:has(.market-link) .account-link { grid-column: auto; }
+  .playstyle-art { height: 150px; }
+  .playstyle-body { padding: 13px 14px 12px; }
+  .playstyle-body h3 { font-size: 21px; }
+  .playstyle-body > p { margin-bottom: 7px; font-size: 14px; }
+  .playstyle-enter { font-size: 13px; min-height: 38px; }
+  .playstyle-badge { top: 10px; right: 10px; padding: 4px 9px; font-size: 11px; }
+  .playstyle-feature-tag { top: 10px; left: 10px; padding: 4px 9px; font-size: 11px; }
+  .resume-banner { flex-wrap: wrap; padding: 13px 14px; }
+  .resume-slime { order: 1; }
+  .resume-copy { order: 2; flex-basis: calc(100% - 60px); }
+  .resume-actions { order: 3; width: 100%; margin-left: 0; }
+  .resume-primary { flex: 1; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .playstyle-option,
+  .playstyle-art,
+  .playstyle-enter,
+  .resume-primary,
   .mode-option,
   .runner-mode-card,
   .difficulty-options button,
   .config-actions button { transition: none; }
-  .goo-bubble,
-  .goo-blob,
-  .slime-buddy { animation: none; }
-  .goo-bubble { opacity: 0.35; }
+  .playstyle-option:is(:hover, :focus-visible) { transform: none; }
+  .playstyle-option:is(:hover, :focus-visible) .playstyle-art { transform: none; }
+  .resume-primary::after,
+  .resume-status-tag i,
+  .hub-night .account-link.online span { animation: none; }
+  .mode-option.shaking { animation: none; }
 }
 </style>

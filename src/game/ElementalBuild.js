@@ -40,8 +40,8 @@ const routeSkill = (id, name, route, maxLevel, desc, stats, apply, extra = {}) =
 
 export const ELEMENTAL_ROUTE_SKILLS = [
   routeSkill('ele_single_focus', '极化核心', 'single', 8,
-    '只强化当前主元素；等级越高，主元素法术的范围与伤害越稳定。',
-    lv => `主元素伤害 +${Math.min(64, lv * 8)}% · 范围 +${Math.min(32, lv * 4)}%`,
+    '只强化当前主元素；等级越高，主元素法术伤害越高，终极爆发范围越大。',
+    lv => `主元素伤害 +${Math.min(64, lv * 8)}% · 终极范围 +${lv * 8}px`,
     (game, level) => { game.weaponSystem.spellCombat.routeSingleLevel = level }),
   routeSkill('ele_single_overload', '元素过载', 'single', 6,
     '主元素连续施法后积累过载，达到阈值释放一次不递归的范围爆发。',
@@ -49,15 +49,15 @@ export const ELEMENTAL_ROUTE_SKILLS = [
     (game, level) => { game.weaponSystem.spellCombat.routeSingleOverloadLevel = level }),
   routeSkill('ele_fusion_resonance', '共鸣回路', 'fusion', 8,
     '提高当前元素对的反应强度，并缩短同一目标的反应间隔。',
-    lv => `融合反应伤害 +${Math.min(72, lv * 9)}% · 间隔 −${Math.min(0.7, lv * .08).toFixed(2)} 秒`,
+    lv => `融合反应伤害 +${Math.min(72, lv * 9)}% · 间隔 −${(Math.min(8, lv) * .08).toFixed(2)} 秒`,
     (game, level) => { game.weaponSystem.spellCombat.routeFusionLevel = level }),
   routeSkill('ele_fusion_amplify', '反应增幅', 'fusion', 6,
     '融合反应命中后留下短暂余波；余波只结算一次伤害，不递归触发反应。',
-    lv => `余波范围 ${60 + lv * 8}px · 伤害 ${35 + lv * 8}%`,
+    lv => `余波范围 ${48 + lv * 8}px · 伤害 ${25 + lv * 5}%`,
     (game, level) => { game.weaponSystem.spellCombat.routeFusionEchoLevel = level }),
   routeSkill('ele_cycle_tempo', '轮转节拍', 'cycle', 8,
     '缩短轮转间隔，并让轮转中的每种元素获得小幅伤害补偿。',
-    lv => `轮转间隔 −${Math.min(36, lv * 4)}% · 轮转伤害 +${Math.min(40, lv * 5)}%`,
+    lv => `轮转间隔 −${Math.min(32, lv * 4)}% · 轮转伤害 +${Math.min(64, lv * 8)}%`,
     (game, level) => { game.weaponSystem.spellCombat.routeCycleLevel = level }),
   routeSkill('ele_cycle_echo', '万象回响', 'cycle', 6,
     '完成一轮元素轮转后释放一次共鸣脉冲，目标数与范围受控。',
@@ -159,7 +159,7 @@ export function elementalSkillAvailable(game, skill) {
     const elements = state?.elements || new Set()
     if (skill.element && !elements.has(skill.element)) return false
     if (skill.element && state?.route && !state.activeElements.includes(skill.element)) return false
-    if (['ele_resonance', 'ele_overload'].includes(skill.id) && (state?.route && state.route !== 'fusion' || !state.fusion)) return false
+    if (skill.id === 'ele_overload' && (state?.route && state.route !== 'fusion' || !state.fusion)) return false
     if (skill.requires?.length && !skill.requires.every(id => (game.skillLevels?.[id] || 0) > 0)) return false
     return true
   }
@@ -177,16 +177,14 @@ export function elementalSkillOptions(game, elementSkills, commonSkills, count =
   const state = game.weaponSystem?.spellCombat
   const levels = game.skillLevels || {}
   const pool = [
-    ...elementSkills.filter(skill => !['ele_resonance', 'ele_overload'].includes(skill.id)),
+    ...elementSkills.filter(skill => skill.id !== 'ele_overload'),
     ...discoveryCards(game),
     ...ordinarySpellCoreSkills(game),
     ...commonSkills.map(skill => ({ ...skill, kind: 'common' })),
   ].filter(skill => elementalSkillAvailable(game, skill))
   if (state?.fusion && (!state?.route || state.route === 'fusion')) {
-    for (const id of ['ele_resonance', 'ele_overload']) {
-      const skill = elementSkills.find(entry => entry.id === id)
-      if (skill && elementalSkillAvailable(game, skill)) pool.push(skill)
-    }
+    const skill = elementSkills.find(entry => entry.id === 'ele_overload')
+    if (skill && elementalSkillAvailable(game, skill)) pool.push(skill)
   }
   if (state?.route) pool.push(...ELEMENTAL_ROUTE_SKILLS.filter(skill => elementalSkillAvailable(game, skill)))
   const weight = skill => (skill.weight || 1) * Math.min(ELEMENTAL_BUILD_RULES.maxWeightBoost,

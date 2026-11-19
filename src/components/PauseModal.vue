@@ -9,7 +9,8 @@ import { nextTick, ref } from 'vue'
  *  - 「重新开始」emit('restart')：复用整局重置流程。
  *  - 「返回主界面」先在面板内确认，再 emit('quit') 放弃本局。
  */
-const emit = defineEmits(['resume', 'restart', 'quit'])
+const emit = defineEmits(['resume', 'restart', 'quit', 'save-quit'])
+defineProps({ checkpointLabel: { type: String, default: '' } })
 const confirmingQuit = ref(false)
 const confirmButton = ref(null)
 
@@ -43,10 +44,12 @@ function onEscape() {
           <button class="menu-button secondary" @click="emit('restart')">
             <span aria-hidden="true">↻</span> 重新开始
           </button>
+          <button v-if="checkpointLabel" class="menu-button secondary" @click="emit('save-quit')">保留续玩并返回</button>
           <button class="menu-button quit" @click="askQuit">
-            <span aria-hidden="true">↩</span> 返回主界面
+            <span aria-hidden="true">↩</span> 放弃本局并返回
           </button>
         </div>
+        <p v-if="checkpointLabel" class="pause-hint">续玩位置：{{ checkpointLabel }}</p>
         <div class="pause-hint">按 Esc 也可以继续</div>
       </template>
 
@@ -74,7 +77,7 @@ function onEscape() {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.45);
+  background: var(--adventure-scrim);
   backdrop-filter: blur(2px);
 }
 
@@ -83,20 +86,20 @@ function onEscape() {
   text-align: center;
   padding: 30px 34px 26px;
   border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: rgba(14, 22, 17, 0.97);
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.52);
+  border: 1px solid var(--adventure-line);
+  background: var(--adventure-paper);
+  box-shadow: var(--adventure-shadow);
 }
 
 .pause-panel.confirming {
-  border-color: rgba(255, 135, 122, 0.25);
+  border-color: #d7ada4;
 }
 
 .pause-title {
   font-size: 26px;
   font-weight: 800;
   letter-spacing: 0;
-  color: #eaffdd;
+  color: var(--adventure-ink);
   margin: 0 0 24px;
 }
 
@@ -133,19 +136,19 @@ function onEscape() {
 }
 
 .menu-button.primary {
-  color: #0c120d;
-  border: 1px solid rgba(255, 255, 255, 0.25);
-  background: #83dc54;
+  color: #fff;
+  border: 1px solid var(--adventure-green);
+  background: var(--adventure-green);
 }
 
 .menu-button.secondary {
-  color: rgba(255, 255, 255, 0.85);
-  background: rgba(255, 255, 255, 0.06);
-  border-color: rgba(255, 255, 255, 0.2);
+  color: var(--adventure-ink);
+  background: var(--adventure-leaf);
+  border-color: var(--adventure-line);
 }
 
 .menu-button.quit {
-  color: rgba(255, 181, 170, 0.88);
+  color: var(--adventure-danger);
   background: transparent;
   border-color: transparent;
 }
@@ -157,16 +160,16 @@ function onEscape() {
 }
 
 .menu-button.primary:hover {
-  background: #94e667;
+  background: var(--adventure-green-hover);
 }
 
 .menu-button.secondary:hover {
-  border-color: rgba(255, 255, 255, 0.4);
-  background: rgba(255, 255, 255, 0.12);
+  border-color: #a4b5a6;
+  background: #dce9de;
 }
 
 .menu-button.quit:hover {
-  color: #ffc2b8;
+  color: var(--adventure-danger);
   background: rgba(203, 81, 68, 0.1);
 }
 
@@ -191,7 +194,7 @@ function onEscape() {
   margin: 0 auto 14px;
   border: 1px solid rgba(255, 135, 122, 0.5);
   border-radius: 50%;
-  color: #ff9f92;
+  color: var(--adventure-danger);
   font-size: 22px;
   font-weight: 800;
 }
@@ -203,7 +206,7 @@ function onEscape() {
 
 .confirm-copy {
   margin: 0 0 22px;
-  color: rgba(255, 255, 255, 0.62);
+  color: var(--adventure-muted);
   font-size: 13px;
   line-height: 1.7;
 }
@@ -215,7 +218,7 @@ function onEscape() {
 .pause-hint {
   margin-top: 18px;
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.45);
+  color: var(--adventure-muted);
 }
 
 @media (max-width: 520px) {

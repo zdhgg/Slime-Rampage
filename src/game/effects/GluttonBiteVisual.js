@@ -3,10 +3,22 @@ const clamp01 = value => Math.max(0, Math.min(1, value))
 const ease = value => 1 - (1 - value) ** 3
 
 /**
- * 身体与口器读取同一攻击时钟；只返回形变，不改移动、碰撞或冲刺朝向。
- * 阶段：aim（转头预告）→ windup（张嘴蓄力）→ strike（咬合）→ flash（收势）。
+ * 身体与口器读取同一攻击时钟；只返回形变，不改移动、碰撞或朝向。
+ * 阶段：aim（转头预告）→ windup（张嘴蓄力）→ strike（咬合）→ flash（收势）；
+ *       深渊吸噬（vortex）：inhale（原地膨胀张口引流）。
  */
-export function bitePose(swing, flash) {
+export function bitePose(swing, flash, vortex = null) {
+  if (vortex) {
+    const p = clamp01(vortex.elapsed / Math.max(0.0001, vortex.windup || 0.18))
+    const swell = ease(p) * 0.24
+    return {
+      angle: vortex.angle || 0, heavy: true, mouth: 0.42 + p * 0.58, recovering: false,
+      aiming: false, windupProgress: p, strikeProgress: 0,
+      sx: 1 + swell,
+      sy: 1 + swell,
+      offset: -0.22 * ease(p),
+    }
+  }
   const attack = swing || flash
   if (!attack) return null
   const heavy = !!attack.heavy
@@ -15,7 +27,6 @@ export function bitePose(swing, flash) {
   if (swing?.phase === 'aim') {
     aiming = true
     const p = clamp01(1 - swing.remaining / Math.max(0.0001, swing.aimDuration || 0.0001))
-    // 转头时只轻轻下沉，真正的蓄力留给 windup，避免把「看方向」误读成「已出手」。
     compression = ease(p) * (heavy ? 0.15 : 0.08)
     mouth = p * (heavy ? 0.86 : 0.58)
     windupProgress = p * 0.3
@@ -44,9 +55,9 @@ export function bitePose(swing, flash) {
 }
 
 /** 把口器根部投影到「攻击方向为 +X」的局部坐标，保证上下左右与斜向都贴住脸。 */
-function mouthRoot(player, attack, pose) {
+function mouthRoot(player, angle, pose) {
   const r = player.radius
-  const cos = Math.cos(attack.angle), sin = Math.sin(attack.angle)
+  const cos = Math.cos(angle), sin = Math.sin(angle)
   const faceX = r * -0.06 * pose.sx
   const faceY = r * 0.19 * pose.sy
   return {
@@ -56,8 +67,51 @@ function mouthRoot(player, attack, pose) {
   }
 }
 
-/** 方向与真实扇形共用同一个 angle/reach/arc；命中结算也读这份状态。 */
-export function renderBiteMotion(ctx, player, swing, flash) {
+/** 方向与真实扇形共用同一个 angle/reach/arc；深渊吸噬实时绘制向心引力环与吸流轨迹。 */
+export function renderBiteMotion(ctx, player, swing, flash, vortex = null) {
+  if (vortex) {
+    const p = clamp01(vortex.elapsed / Math.max(0.0001, vortex.windup || 0.18))
+    const pullR = vortex.pullRadius || player.radius + 190
+    const biteR = vortex.biteRadius || player.radius + 92
+    ctx.save()
+    ctx.translate(player.x, player.y)
+    // 外圈向内收缩的引力漩涡环
+    const ringR = pullR * (1 - p * 0.58)
+    ctx.globalAlpha = 0.28 + p * 0.25
+    ctx.strokeStyle = '#c5ee7f'
+    ctx.lineWidth = 2.2
+    ctx.setLineDash([12, 8])
+    ctx.lineDashOffset = -p * 60
+    ctx.beginPath()
+    ctx.arc(0, 0, ringR, 0, TAU)
+    ctx.stroke()
+    ctx.setLineDash([])
+    // 内圈重咬杀伤域虚线框
+    ctx.globalAlpha = 0.18 + p * 0.22
+    ctx.fillStyle = 'rgba(182, 232, 102, 0.10)'
+    ctx.beginPath()
+    ctx.arc(0, 0, biteR, 0, TAU)
+    ctx.fill()
+    ctx.strokeStyle = '#ffe596'
+    ctx.lineWidth = 1.6
+    ctx.stroke()
+    // 向内牵引流线
+    const streams = 8
+    ctx.globalAlpha = 0.48
+    ctx.strokeStyle = '#e7f9aa'
+    ctx.lineWidth = 1.8
+    for (let i = 0; i < streams; i++) {
+      const a = (i / streams) * TAU + p * 1.6
+      const outer = pullR * (0.94 - p * 0.45)
+      const inner = Math.max(player.radius * 1.1, outer - pullR * 0.26)
+      ctx.beginPath()
+      ctx.moveTo(Math.cos(a) * outer, Math.sin(a) * outer)
+      ctx.lineTo(Math.cos(a + 0.18) * inner, Math.sin(a + 0.18) * inner)
+      ctx.stroke()
+    }
+    ctx.restore()
+    return
+  }
   const attack = swing || flash
   if (!attack) return
   const aiming = swing?.phase === 'aim'
@@ -73,13 +127,13 @@ export function renderBiteMotion(ctx, player, swing, flash) {
   const reach = attack.reach
   const half = attack.arc / 2
   const r = player.radius
-  const root = mouthRoot(player, attack, pose)
+  const root = mouthRoot(player, attack.angle, pose)
 
   ctx.save()
   ctx.translate(swing ? player.x : flash.x, swing ? player.y : flash.y)
   ctx.rotate(attack.angle)
 
-  // —— 1. 方向预告：轻量、低透明度、不遮挡敌人攻击预警 ——
+  // —— 1. 方向预告 ——
   if (aiming) {
     ctx.globalAlpha = 0.13 + aimProgress * 0.08
     ctx.strokeStyle = heavy ? '#f2dc95' : '#cfee9f'
@@ -91,7 +145,6 @@ export function renderBiteMotion(ctx, player, swing, flash) {
     ctx.stroke()
     ctx.setLineDash([])
   } else if (preparing) {
-    // 扇形底色只交代真实判定边界：没有描边圆环、没有向外扩散的波纹。
     ctx.fillStyle = heavy ? '#f0d487' : '#c6eb8d'
     ctx.globalAlpha = (heavy ? 0.045 : 0.03) + prepareProgress * (heavy ? 0.035 : 0.025)
     ctx.beginPath()
@@ -99,14 +152,12 @@ export function renderBiteMotion(ctx, player, swing, flash) {
     ctx.arc(0, 0, reach + 1, -half, half)
     ctx.closePath()
     ctx.fill()
-    // 内侧的「合拢阴影」随蓄力收窄，读起来像口器正在夹住这一块区域。
     ctx.globalAlpha = (heavy ? 0.06 : 0.045) + prepareProgress * 0.035
     ctx.beginPath()
     ctx.moveTo(0, 0)
     ctx.arc(0, 0, reach * 0.7, -half * 0.74, half * 0.74)
     ctx.closePath()
     ctx.fill()
-    // 两侧短边提示始终使用实际角度、射程，包含大型敌人擦边接触的位置。
     ctx.strokeStyle = heavy ? '#f5dfa4' : '#d6efb0'
     ctx.lineWidth = 1.1
     ctx.globalAlpha = (0.16 + prepareProgress * 0.1) * fade
@@ -122,7 +173,6 @@ export function renderBiteMotion(ctx, player, swing, flash) {
     ctx.lineTo(reach * 0.86, 0)
     ctx.stroke()
   } else if (striking && heavy) {
-    // 重咬的短促前冲拖影；只沿真实咬合方向，不制造额外伤害范围。
     ctx.globalAlpha = (1 - strikeProgress) * 0.16
     ctx.strokeStyle = '#dcf3ad'
     ctx.lineWidth = 2
@@ -134,7 +184,7 @@ export function renderBiteMotion(ctx, player, swing, flash) {
     }
   }
 
-  // —— 2. 口器：上下颌沿攻击方向张开/闭合，根部贴住脸部 ——
+  // —— 2. 口器：上下颌沿攻击方向张开/闭合 ——
   const extension = striking ? strikeProgress : recovering ? clamp01(1 - (1 - fade) * 3.2) : 0
   const length = aiming ? r * (1.1 + aimProgress * 0.32)
     : preparing ? r * (heavy ? 1.35 + prepareProgress * 0.8 : 1.3 + prepareProgress * 0.55)
@@ -146,7 +196,6 @@ export function renderBiteMotion(ctx, player, swing, flash) {
   const thick = r * (heavy ? 0.32 : 0.24)
   const alpha = Math.min(1, fade * 1.6)
 
-  // 口腔：张开时露出深色喉部，闭合时自然消失。
   if (gape > r * 0.05) {
     ctx.globalAlpha = 0.88 * alpha
     ctx.fillStyle = '#2a0a10'
@@ -159,7 +208,6 @@ export function renderBiteMotion(ctx, player, swing, flash) {
       root.x, root.y + root.half * 0.65)
     ctx.closePath()
     ctx.fill()
-    // 喉部与舌面只作为一点点生命感，不抢牙齿和咬合轮廓。
     ctx.globalAlpha = 0.7 * alpha
     ctx.fillStyle = '#6b1c22'
     ctx.beginPath()
@@ -174,7 +222,6 @@ export function renderBiteMotion(ctx, player, swing, flash) {
     ctx.fill()
   }
 
-  // 上下颌分别绘制：外缘厚、内缘薄，闭合时像软体口器夹紧而不是刀光。
   for (let side = -1; side <= 1; side += 2) {
     const rootOuter = root.y + side * root.half
     const rootInner = root.y + side * root.half * 0.35
@@ -194,13 +241,11 @@ export function renderBiteMotion(ctx, player, swing, flash) {
     ctx.strokeStyle = heavy ? '#ffe9ae' : '#ffd6c2'
     ctx.lineWidth = heavy ? 2.8 : 2.2
     ctx.stroke()
-    // 圆润的唇尖：避免长颌被读成针管或机械钳。
     ctx.globalAlpha = 0.96 * alpha
     ctx.beginPath()
     ctx.arc(length, root.y + side * gape, thick * 0.32, 0, TAU)
     ctx.fill()
 
-    // 牙齿沿内缘排列，始终朝口腔中心生长。
     if (gape > r * 0.1) {
       ctx.fillStyle = '#f6ffdd'
       ctx.globalAlpha = alpha
@@ -220,14 +265,12 @@ export function renderBiteMotion(ctx, player, swing, flash) {
     }
   }
 
-  // 根部封口，避免口器与身体之间露出缝隙（尤其上下与斜向）。
   ctx.globalAlpha = 0.95 * alpha
   ctx.fillStyle = '#7a2420'
   ctx.beginPath()
   ctx.ellipse(root.x, root.y, r * 0.14, root.half * 0.9, 0, 0, TAU)
   ctx.fill()
 
-  // 重咬在蓄力末段增加一圈很淡的内缘高光，强调力量层级而非扩大范围。
   if (heavy && (preparing || striking)) {
     const pulse = preparing ? prepareProgress : 1 - strikeProgress
     ctx.globalAlpha = pulse * 0.32 * alpha
@@ -245,7 +288,7 @@ export function renderBiteMotion(ctx, player, swing, flash) {
   ctx.restore()
 }
 
-/** 咬中反馈：上下两排分离的齿痕 + 碎屑；不绘制通用爆炸星形或白色圆盘。 */
+/** 咬中反馈：上下两排分离的齿痕 + 碎屑 */
 function renderImpact(ctx, hit) {
   const fade = clamp01(hit.life / hit.maxLife)
   const age = 1 - fade
@@ -255,14 +298,12 @@ function renderImpact(ctx, hit) {
   ctx.translate(hit.x, hit.y)
   ctx.rotate(hit.angle)
 
-  // 接触点暗部，让齿痕从敌人身上「咬出来」。
   ctx.globalAlpha = 0.2 * fade
   ctx.fillStyle = '#1f3518'
   ctx.beginPath()
   ctx.ellipse(0, 0, size * 0.5, size * 0.34, 0, 0, TAU)
   ctx.fill()
 
-  // 上下两排短弧齿痕，中间留出敌人的轮廓，不拼成完整圆环。
   ctx.globalAlpha = 0.9 * fade
   ctx.strokeStyle = heavy ? '#fff0bd' : '#f6ffdf'
   ctx.lineWidth = heavy ? 2.4 : 1.8
@@ -274,7 +315,6 @@ function renderImpact(ctx, hit) {
   ctx.arc(0, size * 0.62, size * 0.42, 1.2 * Math.PI, 1.8 * Math.PI)
   ctx.stroke()
 
-  // 齿尖小刻痕：上下各三枚，短而碎。
   ctx.fillStyle = '#fff6d9'
   ctx.globalAlpha = 0.85 * fade
   for (let side = -1; side <= 1; side += 2) {
@@ -290,7 +330,6 @@ function renderImpact(ctx, hit) {
     }
   }
 
-  // 碎屑：数量有限，重咬略多；吞噬目标用更亮的绿色。
   const crumbs = heavy ? 6 : 4
   ctx.fillStyle = hit.devoured ? '#dcfa92' : '#9bd66b'
   for (let i = 0; i < crumbs; i++) {
@@ -304,7 +343,6 @@ function renderImpact(ctx, hit) {
   }
 
   if (heavy) {
-    // 首领/重咬的短裂纹，向外但很快消失。
     ctx.globalAlpha = (1 - age) * 0.4
     ctx.strokeStyle = '#e6f7b4'
     ctx.lineWidth = 1.5
@@ -325,7 +363,6 @@ function renderImpact(ctx, hit) {
 function renderAcidBurst(ctx, burst) {
   const fade = clamp01(burst.life / burst.maxLife)
   const spread = 1 - fade
-  // 低透明度底色表示真实圆形判定，一闪即淡出。
   ctx.globalAlpha = 0.055 * fade
   ctx.fillStyle = '#a6e865'
   ctx.beginPath()
@@ -353,20 +390,109 @@ function renderAcidBurst(ctx, burst) {
   }
 }
 
+/** 地面腐蚀光环（近战 360° 威慑半径）：极克制透明度，不压过敌方攻击红线。 */
+export function renderCorrodeAura(ctx, combat) {
+  const p = combat.player
+  const radius = combat.auraRadius()
+  if (!(radius > 0)) return
+  const t = p.elapsed || 0
+  const isMire = combat.route === 'mire'
+  const pulse = 0.5 + 0.5 * Math.sin(t * 4.5)
+  ctx.save()
+  ctx.translate(p.x, p.y)
+  const grad = ctx.createRadialGradient(0, 0, p.radius * 0.7, 0, 0, radius)
+  grad.addColorStop(0, isMire ? 'rgba(181, 214, 111, 0.16)' : 'rgba(145, 224, 102, 0.11)')
+  grad.addColorStop(0.78, isMire ? 'rgba(130, 194, 72, 0.11)' : 'rgba(115, 198, 84, 0.07)')
+  grad.addColorStop(1, 'rgba(115, 198, 84, 0)')
+  ctx.fillStyle = grad
+  ctx.beginPath()
+  ctx.arc(0, 0, radius, 0, TAU)
+  ctx.fill()
+
+  ctx.globalAlpha = (isMire ? 0.34 : 0.22) + pulse * 0.08
+  ctx.strokeStyle = isMire ? '#c5eb7c' : '#9ee276'
+  ctx.lineWidth = isMire ? 1.8 : 1.3
+  ctx.setLineDash([7, 7])
+  ctx.lineDashOffset = -t * 24
+  ctx.beginPath()
+  ctx.arc(0, 0, radius, 0, TAU)
+  ctx.stroke()
+  ctx.setLineDash([])
+
+  for (const fx of combat.auraPulses || []) {
+    const k = clamp01(fx.life / fx.maxLife)
+    ctx.globalAlpha = k * 0.28
+    ctx.strokeStyle = isMire ? '#dff8a6' : '#c0ee9b'
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    ctx.arc(0, 0, radius * (0.45 + (1 - k) * 0.55), 0, TAU)
+    ctx.stroke()
+  }
+  ctx.restore()
+}
+
 export function renderBiteFeedback(ctx, combat) {
   const p = combat.player
   ctx.save()
 
-  // 护甲：断续的软壳弧，而不是完整明亮的圆环。
-  if (p.gluttonGuard > 0 && p.gluttonGuardTimer > 0) {
-    const radius = p.radius + 3 + combat.guardPulse * 9
-    ctx.strokeStyle = '#d1efa0'
-    ctx.lineWidth = 2
-    ctx.globalAlpha = Math.min(0.5, p.gluttonGuardTimer * 2)
-    for (let i = 0; i < 3; i++) {
-      const start = -Math.PI / 2 + i * TAU / 3 + 0.22
+  // 深渊吸噬：残余向心引力波
+  for (const vx of combat.vortices || []) {
+    const k = clamp01(vx.life / vx.maxLife)
+    const progress = 1 - k
+    ctx.globalAlpha = k * 0.38
+    ctx.strokeStyle = combat.route === 'jaw' ? '#f28a59' : '#c6f18e'
+    ctx.lineWidth = 2.2
+    ctx.beginPath()
+    ctx.arc(vx.x, vx.y, vx.pullRadius * (1 - progress * 0.55), 0, TAU)
+    ctx.stroke()
+  }
+
+  // 闭颚/地震践踏冲击波
+  for (const slam of combat.slams || []) {
+    const k = clamp01(slam.life / slam.maxLife)
+    const r = slam.radius * (0.35 + (1 - k) * 0.65)
+    ctx.globalAlpha = k * 0.52
+    ctx.strokeStyle = slam.color || '#f4c87a'
+    ctx.lineWidth = 3 * k + 1
+    ctx.beginPath()
+    ctx.arc(slam.x, slam.y, r, 0, TAU)
+    ctx.stroke()
+  }
+
+  // 酸刺反震扩散波
+  for (const sp of combat.spikes || []) {
+    const k = clamp01(sp.life / sp.maxLife)
+    const progress = 1 - k
+    const count = sp.count || 10
+    ctx.strokeStyle = sp.color || '#f1c76b'
+    ctx.lineWidth = sp.surge ? 2.4 : 1.7
+    ctx.globalAlpha = k * 0.85
+    for (let i = 0; i < count; i++) {
+      const a = (i / count) * TAU + (sp.offset || 0)
+      const r0 = sp.radius * (0.28 + progress * 0.45)
+      const r1 = sp.radius * (0.58 + progress * 0.42)
       ctx.beginPath()
-      ctx.arc(p.x, p.y, radius, start, start + TAU / 3 - 0.44)
+      ctx.moveTo(sp.x + Math.cos(a) * r0, sp.y + Math.sin(a) * r0)
+      ctx.lineTo(sp.x + Math.cos(a) * r1, sp.y + Math.sin(a) * r1)
+      ctx.stroke()
+    }
+  }
+
+  // 多层胃铠：按当前层数分段绘制可数软壳弧，有几层就有几段弧。
+  if (p.gluttonGuard > 0 && p.gluttonGuardTimer > 0) {
+    const layers = Math.max(1, Math.min(8, Math.round(p.gluttonGuard)))
+    const cap = Math.max(layers, combat.guardMax || 2)
+    const radius = p.radius + 4 + combat.guardPulse * 8
+    const step = TAU / cap
+    const gap = Math.min(0.24, step * 0.28)
+    ctx.strokeStyle = combat.route === 'shell' ? '#f3cf7b' : '#d1efa0'
+    ctx.lineWidth = 2.6
+    ctx.lineCap = 'round'
+    ctx.globalAlpha = Math.min(0.82, 0.35 + p.gluttonGuardTimer * 0.35)
+    for (let i = 0; i < layers; i++) {
+      const start = -Math.PI / 2 + i * step + gap / 2
+      ctx.beginPath()
+      ctx.arc(p.x, p.y, radius, start, start + step - gap)
       ctx.stroke()
     }
   }
@@ -374,7 +500,7 @@ export function renderBiteFeedback(ctx, combat) {
   for (const burst of combat.acidBursts) renderAcidBurst(ctx, burst)
   for (const hit of combat.impacts) renderImpact(ctx, hit)
 
-  // 吞噬时目标血肉被吸入口器；方向读取本次真实咬击方向。
+  // 吞噬时目标血肉被吸入口器
   for (const morsel of combat.morsels) {
     const progress = 1 - clamp01(morsel.life / morsel.maxLife)
     const mouthX = p.x + Math.cos(morsel.angle) * p.radius * 0.75

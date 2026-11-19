@@ -63,35 +63,31 @@ console.log('引力场：吞线猎物被拖向口部、未入线不受影响 ✓
 }
 console.log('吞噬惯性：捕食/咬杀置时、衍生不触发、位移真实提升 ✓')
 
-// ---------- 暴食 · 重咬突进 ----------
+// ---------- 暴食 · 深渊吸噬反向聚怪重咬（区别于暗影冲刺） ----------
 {
   const g = createArena('glutton')
   try {
-    const target = spawn(g, { x: 80, y: 0, hp: 200 })
-    g.player.gluttonCharge = 1
+    const ranged = spawn(g, { x: 165, y: 0, hp: 200, type: 'archer' })
+    const flanker = spawn(g, { x: 0, y: -155, hp: 200, type: 'mage' })
     const c = g.weaponSystem.gluttonCombat
-    const x0 = g.player.x
-    assert.ok(c.bite(target, true), '重咬应能起手')
+    const x0 = g.player.x, y0 = g.player.y
+    assert.ok(c.useVortex(), '冷却就绪时无需资源也能释放深渊吸噬')
     settleSwing(c)
-    const moved = g.player.x - x0
-    assert.ok(moved > 20 && moved <= 38, `重碾 0 级前扑约 36px（实测 ${moved.toFixed(1)}）`)
-    // 重碾 3 级：扑距 60 但受目标身位截停。
+    assert.equal(g.player.x, x0, '深渊吸噬不产生刺客式位移')
+    assert.equal(g.player.y, y0, '深渊吸噬原地发力聚怪')
+    assert.ok(distance(ranged, g.player) < 120, `弓手应被拽入咬合区（实测 ${distance(ranged, g.player).toFixed(1)}）`)
+    assert.ok(ranged.hp < 200 && flanker.hp < 200, '多方位被吸入敌人皆受到重咬打击')
+    // 重碾 3 级：引力与重咬范围同步成长
     const g2 = createArena('glutton')
     try {
-      const t2 = spawn(g2, { x: 110, y: 0, hp: 200 })
+      const basePull = c.pullRadius()
       g2.player.gluttonHeavyLevel = 3
-      g2.player.gluttonCharge = 1
-      const c2 = g2.weaponSystem.gluttonCombat, x1 = g2.player.x
-      assert.ok(c2.bite(t2, true))
-      settleSwing(c2)
-      const moved2 = g2.player.x - x1
-      assert.ok(moved2 > 36, `重碾 3 级扑距应超过基础值（${moved2.toFixed(1)}）`)
-      const gap = distance(g2.player, t2) - g2.player.radius - t2.radius
-      assert.ok(gap >= 0, '突进停在目标身位前，不压进碰撞体')
+      const c2 = g2.weaponSystem.gluttonCombat
+      assert.ok(c2.pullRadius() > basePull + 40, '重碾 3 级扩大深渊吸噬引力半径')
     } finally { dispose(g2) }
   } finally { dispose(g) }
 }
-console.log('重咬突进：出手帧前扑、随重碾成长、不越过目标身位 ✓')
+console.log('深渊吸噬：原地聚怪、拉近远程、不与暗影冲刺重样 ✓')
 
 // ---------- 暴食 · 咬合震慑（饕甲进阶卡） ----------
 {
@@ -161,6 +157,11 @@ console.log('刺杀残影 + 刃隙微步：击杀留替身、起手小步进 ✓
     assert.ok(shadowSkillAvailable(g, card), '猎杀路线下应进入构筑池')
     g.applySkill(card); g.applySkill(card)
     assert.equal(g.weaponSystem.shadowCombat.huntRefundLevel, 2)
+    // 返还预算由实际影袭施放建立；冷却数值本身不会创建预算。
+    const combat = g.weaponSystem.shadowCombat
+    assert.equal(combat.useAssault(), true)
+    for (let i = 0; combat.assault && i < 120; i++) combat.updateMovement(DT)
+    assert.equal(combat.assault, null)
     g.player.strainSkillCd = 3
     const mage = spawn(g, { x: 55, y: 0, hp: 0.5, type: 'mage' })
     g.weaponSystem.shadowCombat.stab(mage)

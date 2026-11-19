@@ -271,6 +271,18 @@ export class SoundManager {
     this._tone({ freq: 600, endFreq: 1400, dur: 0.25, type: 'sawtooth', vol: 0.025, delay: 0.02 })
   }
 
+  /** 章节时限里程碑警告：高音双短音（剩余 60s / 30s 各响一次） */
+  deadlineAlert() {
+    this._tone({ freq: 740, dur: 0.08, type: 'square', vol: 0.045 })
+    this._tone({ freq: 587, dur: 0.13, type: 'square', vol: 0.05, delay: 0.11 })
+  }
+
+  /** 章节时限末段逐秒滴答：音高随剩余秒数爬升，最后一秒拉长收尾 */
+  countdownTick(secondsLeft = 5) {
+    const sec = Math.max(1, Math.round(secondsLeft))
+    this._tone({ freq: 600 + (10 - Math.min(10, sec)) * 42, dur: sec <= 1 ? 0.3 : 0.055, type: 'square', vol: 0.042 })
+  }
+
   /** 波次切换：双音号角 */
   wave() {
     this._tone({ freq: 220, dur: 0.12, type: 'sawtooth', vol: 0.04 })

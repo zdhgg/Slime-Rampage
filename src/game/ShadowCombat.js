@@ -17,6 +17,8 @@ export const SHADOW_ASSAULT_WIDTH = 12
 export const SHADOW_ASSAULT_DAMAGE = 1.6
 export const SHADOW_ASSAULT_SPLASH = 0.8
 export const SHADOW_DASH_REFUND = 0.5
+/** 每次影袭施放周期的冷却返还总预算（占最大冷却比例），防止远程密集波 F 无空窗。 */
+const SHADOW_REFUND_BUDGET = 0.6
 /** 刃隙微步（近战补偿·机制层）：刺击起手向目标小步进，停在目标边缘前，不扩大判定面。 */
 export const SHADOW_BLADE_STEP = 26
 /** 刺杀残影（近战补偿·机制层）：本体击杀在击杀点留下短命替身，供本体脱身。 */
@@ -44,6 +46,7 @@ export class ShadowCombat {
     this.bladeArcLevel = build?.bladeArcLevel || 0; this.bladeEchoLevel = build?.bladeEchoLevel || 0
     this.huntTarget = null; this.huntMarkTimer = 0
     this.huntFollowupReady = false; this.huntFollowupTimer = 0
+    this.refundLeft = 0
     this.time = 0; this.domains = []; this.echoQueue = []
     this.cleaveCooldown = 0
     this.echoes ??= []; this.impacts ??= []; this.cleaves ??= []
@@ -133,8 +136,9 @@ export class ShadowCombat {
     const angle = this.direction(), end = this.destination(angle)
     if (Math.hypot(end.x - this.player.x, end.y - this.player.y) < 4) return false
     this.swing = null; this.flash = null
-    this.assault = { angle, end, phase: 'windup', elapsed: 0, hitTargets: new Set(), cloneIds: new Set(this.clones.items.map(c => c.id)), primaryUsed: false, refunded: false }
+    this.assault = { angle, end, phase: 'windup', elapsed: 0, hitTargets: new Set(), cloneIds: new Set(this.clones.items.map(c => c.id)), primaryUsed: false, refunded: false, landed: 0, kills: 0 }
     if (followup) { this.huntFollowupReady = false; this.huntFollowupTimer = 0; this.assault.isFollowup = true }
+    else this.refundLeft = SHADOW_REFUND_BUDGET * (this.player.strainSkillMax || 5)
     this.player.facing = angle
     const originClone = this.clones.leaveAtOrigin()
     if (originClone) this.assault.cloneIds.delete(originClone.id)
@@ -175,13 +179,19 @@ export class ShadowCombat {
         a.primaryUsed = true
         if (primary) { this.markHuntTarget(e); this.clones.command(e, a.cloneIds) }
         const result = this.hit(e, primary ? SHADOW_ASSAULT_DAMAGE : SHADOW_ASSAULT_SPLASH, { guaranteed: primary, angle: a.angle, action: a })
+        if (result.landed) a.landed++
+        if (result.killed) a.kills++
         if (result.killed && !a.refunded && !a.isFollowup && this.available) {
           a.refunded = true
-          const refund = this.route === 'hunt'
+          const raw = this.route === 'hunt'
             ? Math.min(1.8, SHADOW_DASH_REFUND + Math.min(6, this.huntReapLevel) * .16 + Math.max(0, this.huntReapLevel - 6) * .08)
             : SHADOW_DASH_REFUND
-          p.strainSkillCd = Math.max(0, p.strainSkillCd - refund)
-          this.weapon.enemyManager.addText(p.x, p.y - 42, `影袭收割 · 影袭 −${refund.toFixed(2)}秒`, null, '#f18d9e', 13)
+          const refund = Math.min(raw, this.refundLeft)
+          if (refund > 0) {
+            this.refundLeft -= refund
+            p.strainSkillCd = Math.max(0, p.strainSkillCd - refund)
+            this.weapon.enemyManager.addText(p.x, p.y - 42, `影袭收割 · 影袭 −${refund.toFixed(2)}秒`, null, '#f18d9e', 13)
+          }
         }
       }
       moved += step
@@ -193,6 +203,7 @@ export class ShadowCombat {
     this.echoes.push({ x: p.x, y: p.y, angle: a.angle, life: 0.18 })
     if (this.echoes.length > 9) this.echoes.shift()
     if (a.elapsed >= SHADOW_ASSAULT_TIME - 1e-8) {
+      this.game.combatFeedback?.impact({ hits: a.landed, kills: a.kills, angle: a.angle })
       this.weapon.game.mapFeatures?.attackBarricades(p.x, p.y, this.reach)
       this.assault = null
       if (!a.isFollowup && this.game?.bossTomes?.rank('assassin_voidstep') === 3) this.game.bossTomes.until.shadowCrit = this.game?.bossTomes.time + 3
@@ -242,9 +253,12 @@ export class ShadowCombat {
       if (!secondary) {
         this.leaveEcho(enemy)
         if (shadowRangedEnemy(enemy) && this.huntRefundLevel > 0) {
-          const refund = shadowHuntRangedRefundAt(this.huntRefundLevel)
-          p.strainSkillCd = Math.max(0, p.strainSkillCd - refund)
-          ws.enemyManager.addText(p.x, p.y - 42, `猎手直觉 · 影袭 −${refund.toFixed(2)}秒`, null, '#84d6e8', 13)
+          const refund = Math.min(shadowHuntRangedRefundAt(this.huntRefundLevel), this.refundLeft)
+          if (refund > 0) {
+            this.refundLeft -= refund
+            p.strainSkillCd = Math.max(0, p.strainSkillCd - refund)
+            ws.enemyManager.addText(p.x, p.y - 42, `猎手直觉 · 影袭 −${refund.toFixed(2)}秒`, null, '#84d6e8', 13)
+          }
         }
       }
     }

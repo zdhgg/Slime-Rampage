@@ -44,7 +44,7 @@ async function load() {
   <div class="account-overlay" @pointerdown.self="emit('close')">
     <section ref="dialog" class="account-dialog" role="dialog" aria-modal="true" aria-labelledby="leaderboard-title">
       <header>
-        <div><span class="eyebrow">LEADERBOARD</span><h2 id="leaderboard-title">排行榜</h2><p>每个账号展示一条最佳成绩，所有玩家均可查看。</p></div>
+        <div><h2 id="leaderboard-title">排行榜</h2><p>每个账号展示一条最佳成绩，所有玩家均可查看。</p></div>
         <button class="close" aria-label="关闭排行榜" @click="emit('close')">×</button>
       </header>
       <div class="tabs" aria-label="排行榜玩法">
@@ -62,9 +62,9 @@ async function load() {
       <div v-else-if="error" class="empty error" role="alert">{{ error }} <button @click="load">重试</button></div>
       <div v-else-if="!board?.entries?.length" class="empty">这里还没有成绩，完成一局即可参与排名。</div>
       <div v-else class="table-scroll">
-        <table><thead><tr><th>排名</th><th>玩家</th><th>得分</th><th>{{ gameplay === 'tower-defense' ? mode === 'campaign' ? '关卡' : '波次' : '击破' }}</th><th>结果</th></tr></thead>
+        <table class="leaderboard-table"><thead><tr><th>排名</th><th>玩家</th><th>得分</th><th>{{ gameplay === 'tower-defense' ? mode === 'campaign' ? '关卡' : '波次' : '击破' }}</th><th>结果</th></tr></thead>
           <tbody><tr v-for="entry in board.entries" :key="entry.runId" :class="{ current: entry.current }">
-            <td>#{{ entry.rank }}</td><td>{{ entry.username }}{{ entry.current ? ' · 我' : '' }}</td>
+            <td>#{{ entry.rank }}</td><td class="player-name">{{ entry.username }}{{ entry.current ? ' · 我' : '' }}</td>
             <td><strong>{{ entry.score.toLocaleString() }}</strong></td>
             <td>{{ gameplay === 'tower-defense' ? mode === 'campaign' ? `第 ${entry.stage} 关` : `${entry.wave} 波` : entry.kills }}</td>
             <td>{{ entry.result === 'victory' ? '通关' : entry.result === 'extracted' ? '撤离' : '结束' }}</td>
@@ -74,3 +74,11 @@ async function load() {
     </section>
   </div>
 </template>
+
+<style scoped>
+.player-name { white-space: normal; overflow-wrap: anywhere; }
+
+@media (max-width: 480px) {
+  .leaderboard-table :is(th, td) { padding-inline: 6px; }
+}
+</style>

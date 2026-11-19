@@ -280,12 +280,12 @@ const baseCritChance = engine.weaponSystem.critChance
 assert.equal(engine.roleSpec, null, 'origin：不绑定技能树')
 assert.equal(engine.canDevour, false, 'origin：不享受吞噬独占')
 
-// 暴食：唯一能吞噬的角色，生命 +1 换开火间隔 ×1.5（近身换命）
+// 暴食：唯一能吞噬的角色，生命 +2、腐蚀光环与反伤胃铠贴身接战
 engine.applyStartingStrain('glutton')
 engine.reset()
 assert.equal(engine.roleSpec, 'gluttony')
 assert.equal(engine.canDevour, true, '暴食是唯一可吞噬的角色')
-assert.equal(engine.player.maxHp, baseHp + 1)
+assert.equal(engine.player.maxHp, baseHp + 2)
 // 期望倍率直接取血统配置（唯一来源），避免测试再单独硬编码一份而随调参漂移
 assert.ok(
   Math.abs(engine.weaponSystem.fireInterval - baseFireInterval * STRAINS.glutton.fireIntervalMul) < 1e-9

@@ -26,13 +26,13 @@ assert.equal(moveCardIndex(1, 3, -1), 0)
 assert.equal(moveCardIndex(0, 0, 1), 0) // 空卡组安全
 ok('←/→ 循环切换（右端回绕首张、左端回绕末张，空卡组安全）')
 
-// ── 3. 数字键直选：1~n 有效、越界与非法键不处理 ──
+// ── 3. 数字键切换：1~n 有效、越界与非法键不处理 ──
 assert.equal(digitToIndex('Digit1', 3), 0)
 assert.equal(digitToIndex('Digit3', 3), 2)
 assert.equal(digitToIndex('Digit4', 3), -1) // 超出卡数
 assert.equal(digitToIndex('Digit0', 3), -1)
 assert.equal(digitToIndex('KeyA', 3), -1)
-ok('数字键 1~n 直选对应卡，越界/非法键不响应')
+ok('数字键 1~n 对应卡片下标，越界/非法键不响应')
 
 // ── 3.5 选项源归一化：getter 函数必须被调用，不能 unref 原样返回 ──
 // 回归断言：unref(函数) 返回函数本身（.length = 形参数 = 0），
@@ -54,14 +54,15 @@ ok('基因进化与里程碑面板共用 useCardFocus，mouseenter 写回同一 
 
 // ── 5. 可发现快捷键：卡面数字角标 + 底部提示条，无隐藏键 ──
 assert.match(sfc, /<kbd class="key-hint" aria-hidden="true">\{\{ idx \+ 1 \}\}<\/kbd>/)
-assert.match(sfc, /← → 切换 · Enter \/ 空格 确认 · 数字键直选/)
+assert.equal((sfc.match(/← → 或数字键切换 · Enter 确认/g) || []).length, 2)
 ok('数字键角标与操作提示条已标注在界面上（无隐藏键）')
 
-// ── 6. 选中态与 hover 样式区分：金环 + 呼吸动画独立于流派色描边 ──
-assert.match(sfc, /\.skill-card\.is-selected,[\s\S]*?outline: 3px solid #ffd166/)
-assert.match(sfc, /@keyframes selectedRingPulse/)
+// ── 6. 键盘选中态有独立样式（糖果卡牌金框发光），鼠标悬停仍有反馈 ──
+const selectedRule = sfc.match(/\.skill-card\.is-selected\s*\{([^}]+)\}/)?.[1] || ''
+assert.match(selectedRule, /border-color: #F59E0B/)
+assert.match(selectedRule, /0 0 28px rgba\(251, 191, 36/)
 assert.match(sfc, /\.skill-card:hover/)
-ok('选中态（金色外环 + 呼吸光晕）与 hover（上浮 + 流派色描边）样式分离')
+ok('键盘选中金框发光与鼠标悬停样式分离')
 
 // ── 7. 无冲突：面板期间引擎暂停、InputManager 挂起放行按键给 UI ──
 const input = readFileSync(new URL('./src/game/InputManager.js', import.meta.url), 'utf8')
@@ -72,10 +73,12 @@ const app = readFileSync(new URL('./src/App.vue', import.meta.url), 'utf8')
 assert.match(app, /if \(isModalOpen\.value\) return/) // 选卡期间 Esc 保持原样不触发暂停切换
 ok('选卡期间引擎暂停 + 输入挂起，方向键/空格不与移动或技能冲突，Esc 行为不变')
 
-// ── 8. 确认键防连发：Enter/空格忽略 e.repeat，不会一次长按选两次 ──
+// ── 8. 确认键限制：Enter 确认，空格阻止原生点击，数字键只切换 ──
 const focus = readFileSync(new URL('./src/components/useCardFocus.js', import.meta.url), 'utf8')
-assert.match(focus, /case 'Enter':[\s\S]*?if \(e\.repeat\) return[\s\S]*?confirm\(card\)/)
+assert.match(focus, /case 'Enter':\s*case 'NumpadEnter': \{\s*e\.preventDefault\(\)\s*if \(e\.repeat\) return[\s\S]*?confirm\(card\)/)
+assert.match(focus, /case 'Space':\s*\/\/[^\n]*\s*e\.preventDefault\(\)\s*return/)
+assert.equal((focus.match(/\bconfirm\(/g) || []).length, 1)
 assert.match(focus, /window\.removeEventListener\('keydown', onKeydown\)/)
-ok('Enter/空格确认忽略长按重复，弹窗卸载时解除监听')
+ok('仅 Enter 确认且忽略长按，空格拦截原生点击，弹窗卸载时解除监听')
 
 console.log(`\nverify-levelup-keyboard：全部 ${n} 组断言通过 ✅`)

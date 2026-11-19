@@ -8,6 +8,7 @@ import {
   pushScore,
   sanitizeRun,
   sanitizeSave,
+  isSaveData,
 } from '../src/game/SaveManager.js'
 import {
   DIFFICULTY_IDS,
@@ -20,6 +21,8 @@ import {
   scoreToPoints,
 } from '../src/game/RunRules.js'
 import { withTransaction } from './database.mjs'
+import { BACKUP_MAX_BYTES } from '../src/game/SaveProtocol.js'
+import { accountState, archiveAccount, assertAccountVersion, rotateSaveEpoch, saveConflict } from './save-state.mjs'
 import { getLeaderboard } from './leaderboard.mjs'
 import { accountGameData, mergeLegacyCampaign, writeAccountGameData } from './account-store.mjs'
 import { finishGameplayRun } from './gameplay-runs.mjs'
@@ -36,6 +39,13 @@ import {
   profileRowById,
   writeProfileData,
 } from './profile-store.mjs'
+import {
+  ACCOUNT_BACKUP_KIND,
+  BACKUP_FORMAT,
+  buildServerBackup,
+  restoreAccountBackup,
+  restoreServerBackup,
+} from './server-backup.mjs'
 import {
   SESSION_COOKIE,
   createSessionToken,
@@ -153,8 +163,14 @@ function registrationEnabled(db, forcedValue) {
   return db.prepare("SELECT value FROM server_settings WHERE key = 'registration_enabled'").get()?.value !== '0'
 }
 
-export function createGameApp({ db, distDir = null, registration = null }) {
+export function createGameApp({ db, distDir = null, registration = null, beforeDestructiveWrite = async () => {} }) {
   const app = express()
+  let restoring = false
+  // 管理员 = users.role='admin'（首个注册账号），或环境变量 SLIME_ADMIN 指定的账号名（找回通道）。
+  const envAdmin = String(process.env.SLIME_ADMIN || '').trim().toLowerCase()
+  const isAdmin = (row) =>
+    !!row && (row.role === 'admin' || (!!envAdmin && String(row.username).toLowerCase() === envAdmin))
+  const payloadOf = (row) => ({ ...accountPayload(row), admin: isAdmin(row) })
   app.disable('x-powered-by')
   app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff')
@@ -163,9 +179,17 @@ export function createGameApp({ db, distDir = null, registration = null }) {
     res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
     next()
   })
-  app.use(express.json({ limit: '64kb' }))
+  const jsonParser = express.json({ limit: '64kb' })
+  const backupParser = express.json({ limit: BACKUP_MAX_BYTES })
+  // 备份导入的 JSON 体积可能超过通用 64kb（整服恢复含行动流水），单独放宽。
+  const LARGE_BODY = /^\/api\/admin\/(restore|accounts\/\d+\/import)$/
+  app.use((req, res, next) => (LARGE_BODY.test(req.path) ? backupParser : jsonParser)(req, res, next))
   app.use('/api', (_req, res, next) => {
     res.setHeader('Cache-Control', 'no-store')
+    next()
+  })
+  app.use('/api', (req, _res, next) => {
+    if (restoring && req.method !== 'GET') return next(new HttpError(503, 'restore_in_progress', '服务器正在恢复存档，请稍后重试'))
     next()
   })
 
@@ -200,7 +224,7 @@ export function createGameApp({ db, distDir = null, registration = null }) {
       res.json({ account: null })
       return
     }
-    res.json({ account: accountPayload(req.account), catalog: profileCatalog(db, req.account.id), accountData: accountGameData(db, req.account.id) })
+    res.json({ account: payloadOf(req.account), catalog: profileCatalog(db, req.account.id), accountData: accountGameData(db, req.account.id) })
   })
 
   app.post('/api/auth/register', authLimit, route(async (req, res) => {
@@ -214,10 +238,12 @@ export function createGameApp({ db, distDir = null, registration = null }) {
     try {
       userId = withTransaction(db, () => {
         const now = new Date().toISOString()
+        // 没有管理员时首个注册账号自动成为管理员
+        const role = db.prepare("SELECT 1 FROM users WHERE role = 'admin' LIMIT 1").get() ? 'player' : 'admin'
         const result = db.prepare(`
-          INSERT INTO users(username, display_name, password_hash, password_salt, created_at, last_login_at)
-          VALUES (?, ?, ?, ?, ?, ?)
-        `).run(valid.username, valid.displayName, password.hash, password.salt, now, now)
+          INSERT INTO users(username, display_name, password_hash, password_salt, created_at, last_login_at, role)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).run(valid.username, valid.displayName, password.hash, password.salt, now, now, role)
         const id = Number(result.lastInsertRowid)
         initializeAccount(db, id)
         return id
@@ -231,7 +257,7 @@ export function createGameApp({ db, distDir = null, registration = null }) {
     const account = db.prepare('SELECT * FROM users WHERE id = ?').get(userId)
     const token = createSession(db, userId)
     setSessionCookie(req, res, token)
-    res.status(201).json({ account: accountPayload(account), catalog: profileCatalog(db, userId), accountData: accountGameData(db, userId) })
+    res.status(201).json({ account: payloadOf(account), catalog: profileCatalog(db, userId), accountData: accountGameData(db, userId) })
   }))
 
   app.post('/api/auth/login', authLimit, route(async (req, res) => {
@@ -245,7 +271,7 @@ export function createGameApp({ db, distDir = null, registration = null }) {
     db.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(new Date().toISOString(), account.id)
     const token = createSession(db, account.id)
     setSessionCookie(req, res, token)
-    res.json({ account: accountPayload(account), catalog: profileCatalog(db, account.id), accountData: accountGameData(db, account.id) })
+    res.json({ account: payloadOf(account), catalog: profileCatalog(db, account.id), accountData: accountGameData(db, account.id) })
   }))
 
   app.post('/api/auth/logout', (req, res) => {
@@ -264,12 +290,29 @@ export function createGameApp({ db, distDir = null, registration = null }) {
       next(new HttpError(401, 'authentication_required', '请先登录账号'))
       return
     }
+    if (req.get('X-Save-Epoch') && ['/account/tutorial', '/account/import-campaign', '/runs/start'].includes(req.path)) {
+      if (req.get('X-Save-Epoch') !== accountState(db, req.account.id).save_epoch) return next(saveConflict('账号已恢复过存档，请刷新账号进度后重试'))
+    }
     next()
   })
 
   app.get('/api/profile', (req, res) => {
     res.json({ catalog: profileCatalog(db, req.account.id) })
   })
+
+  app.use('/api', (req, _res, next) => {
+    if (req.method !== 'GET' && /^\/(profile(?:s)?(?:\/|$))/.test(req.path) && req.get('X-Save-Epoch')) {
+      try { assertAccountVersion(db, req.account.id, { saveEpoch: req.get('X-Save-Epoch'), accountRevision: req.get('X-Save-Revision') }) }
+      catch (error) { return next(error) }
+    }
+    next()
+  })
+
+  const sendBackup = (res, value) => {
+    const json = JSON.stringify(value)
+    if (Buffer.byteLength(json) > BACKUP_MAX_BYTES) throw new HttpError(413, 'backup_too_large', '备份超过 64MB，请使用服务器数据库备份工具导出和恢复')
+    res.type('json').send(json)
+  }
 
   app.get('/api/account/records', (req, res) => {
     const gameplay = req.query.gameplay || 'all'
@@ -294,6 +337,106 @@ export function createGameApp({ db, distDir = null, registration = null }) {
     res.json({ entries, page, totalPages, total, overallTotal, summary, accountData: accountGameData(db, req.account.id) })
   })
 
+  // ── 管理员接口：账号管理与数据备份恢复，普通玩家一律 403 ──
+  app.use('/api/admin', (req, _res, next) => {
+    if (!isAdmin(req.account)) return next(new HttpError(403, 'admin_required', '只有管理员可以执行这个操作'))
+    next()
+  })
+
+  const adminTarget = (req) => {
+    const target = db.prepare('SELECT * FROM users WHERE id = ?').get(Number(req.params.id))
+    if (!target) throw new HttpError(404, 'account_not_found', '没有找到这个账号')
+    return target
+  }
+
+  app.get('/api/admin/accounts', (req, res) => {
+    const rows = db.prepare(`
+      SELECT u.id, u.username, u.display_name, u.role, u.disabled, u.created_at, u.last_login_at,
+        (SELECT COUNT(*) FROM profiles p WHERE p.user_id = u.id) AS slot_count,
+        (SELECT COUNT(*) FROM runs r WHERE r.user_id = u.id) AS run_count,
+        (SELECT json_extract(d.data_json, '$.campaign.unlockedStage') FROM account_game_data d WHERE d.user_id = u.id) AS campaign_stage
+      FROM users u ORDER BY u.id
+    `).all()
+        res.json({
+      accounts: rows.map((row) => ({
+        id: Number(row.id),
+        username: row.username,
+        displayName: row.display_name,
+        admin: isAdmin(row),
+        disabled: !!row.disabled,
+        createdAt: row.created_at,
+        lastLoginAt: row.last_login_at,
+        slotCount: Number(row.slot_count),
+        runCount: Number(row.run_count),
+        campaignStage: Number(row.campaign_stage) || 1,
+        saveEpoch: accountState(db, row.id).save_epoch,
+        accountRevision: Number(accountState(db, row.id).revision),
+      })),
+    })
+  })
+
+  app.post('/api/admin/accounts/:id/disable', (req, res, next) => {
+    try {
+      const target = adminTarget(req)
+      if (target.id === req.account.id) throw new HttpError(400, 'cannot_disable_self', '不能停用自己的账号')
+      withTransaction(db, () => {
+        db.prepare('UPDATE users SET disabled = 1 WHERE id = ?').run(target.id)
+        db.prepare('DELETE FROM sessions WHERE user_id = ?').run(target.id)
+      })
+      res.json({ ok: true })
+    } catch (error) { next(error) }
+  })
+
+  app.post('/api/admin/accounts/:id/enable', (req, res, next) => {
+    try {
+      const target = adminTarget(req)
+      db.prepare('UPDATE users SET disabled = 0 WHERE id = ?').run(target.id)
+      res.json({ ok: true })
+    } catch (error) { next(error) }
+  })
+
+  app.get('/api/admin/accounts/:id/export', (req, res, next) => {
+    try {
+      const target = adminTarget(req)
+      sendBackup(res, {
+        kind: ACCOUNT_BACKUP_KIND,
+        format: BACKUP_FORMAT,
+        exportedAt: new Date().toISOString(),
+        account: payloadOf(target),
+        catalog: profileCatalog(db, target.id),
+        accountData: accountGameData(db, target.id),
+      })
+    } catch (error) { next(error) }
+  })
+
+  // 恢复整体覆盖成长进度；行动流水与公共榜由服务端生成，不随备份写入。
+  app.post('/api/admin/accounts/:id/import', route(async (req, res) => {
+    try {
+      const target = adminTarget(req)
+      assertAccountVersion(db, target.id, req.body?.expected)
+      restoring = true
+      await beforeDestructiveWrite()
+      assertAccountVersion(db, target.id, req.body?.expected)
+      res.json(restoreAccountBackup(db, target.id, req.body))
+    } finally { restoring = false }
+  }))
+
+  app.get('/api/admin/backup', (req, res) => {
+    sendBackup(res, buildServerBackup(db))
+  })
+
+  // 整服恢复会清空现有账号与会话；恢复完成后所有玩家需重新登录。
+  app.post('/api/admin/restore', route(async (req, res) => {
+    try {
+      const serverId = db.prepare("SELECT value FROM server_settings WHERE key = 'server_id'").get()?.value
+      if (req.get('X-Server-Id') && req.get('X-Server-Id') !== serverId) throw saveConflict('服务器已经恢复过数据，请重新登录后重试')
+      restoring = true
+      await beforeDestructiveWrite()
+      const restored = restoreServerBackup(db, req.body)
+      res.json({ ok: true, restored })
+    } finally { restoring = false }
+  }))
+
   app.post('/api/account/import-campaign', (req, res, next) => {
     try {
       const accountData = withTransaction(db, () => mergeLegacyCampaign(db, req.account.id, req.body?.campaign))
@@ -307,9 +450,9 @@ export function createGameApp({ db, distDir = null, registration = null }) {
         const data = accountGameData(db, req.account.id)
         data.campaign.tutorialCompleted = true
         writeAccountGameData(db, req.account.id, data)
-        return data
+        return accountGameData(db, req.account.id)
       })
-      res.json({ accountData })
+      res.json({ accountData, catalog: profileCatalog(db, req.account.id) })
     } catch (error) { next(error) }
   })
 
@@ -336,27 +479,31 @@ export function createGameApp({ db, distDir = null, registration = null }) {
     }
   })
 
-  app.delete('/api/profiles/:id', (req, res, next) => {
+  app.delete('/api/profiles/:id', route(async (req, res) => {
     try {
       const index = parseSlotId(req.params.id)
-      const deleted = withTransaction(db, () => deleteProfileSlot(db, req.account.id, index))
+      const deleted = withTransaction(db, () => {
+        archiveAccount(db, req.account.id, 'before-delete')
+        return deleteProfileSlot(db, req.account.id, index)
+      })
       if (!deleted) throw new HttpError(409, 'profile_required', '至少需要保留一个档案')
       res.json({ catalog: profileCatalog(db, req.account.id) })
     } catch (error) {
-      next(error)
+      throw error
     }
-  })
+  }))
 
   app.post('/api/profile/import', (req, res, next) => {
     try {
       const source = req.body?.slot?.data
-      if (!source || typeof source !== 'object') throw new HttpError(400, 'invalid_profile', '本地档案格式无效')
+      if (!isSaveData(source)) throw new HttpError(400, 'invalid_profile', '本地档案格式无效或版本不受支持')
       const row = activeProfileRow(db, req.account.id)
       const accountData = withTransaction(db, () => {
+        archiveAccount(db, req.account.id, 'before-import')
         writeProfileData(db, row, sanitizeSave(source))
-        return req.body?.campaign
-          ? mergeLegacyCampaign(db, req.account.id, req.body.campaign)
-          : accountGameData(db, req.account.id)
+        if (req.body?.campaign) mergeLegacyCampaign(db, req.account.id, req.body.campaign)
+        rotateSaveEpoch(db, req.account.id)
+        return accountGameData(db, req.account.id)
       })
       res.json({ catalog: profileCatalog(db, req.account.id), accountData })
     } catch (error) {
@@ -367,7 +514,7 @@ export function createGameApp({ db, distDir = null, registration = null }) {
   app.patch('/api/profile/preferences', (req, res, next) => {
     try {
       const row = activeProfileRow(db, req.account.id)
-      const data = parseProfileData(row)
+      const data = parseProfileData(row, db)
       data.preferences = normalizeRunSelection(req.body?.preferences)
       withTransaction(db, () => writeProfileData(db, row, data))
       res.json({ catalog: profileCatalog(db, req.account.id) })
@@ -379,7 +526,7 @@ export function createGameApp({ db, distDir = null, registration = null }) {
   app.post('/api/profile/genes/:geneId/purchase', (req, res, next) => {
     try {
       const row = activeProfileRow(db, req.account.id)
-      const data = parseProfileData(row)
+      const data = parseProfileData(row, db)
       const gene = getGene(req.params.geneId)
       if (!gene) throw new HttpError(404, 'gene_not_found', '没有找到这个基因')
       const state = getGenePurchaseState(gene, data.genes, data.drops)
@@ -401,7 +548,7 @@ export function createGameApp({ db, distDir = null, registration = null }) {
       }
       const selection = gameplay === 'arena' ? normalizeRunSelection(req.body) : req.body
       const profile = activeProfileRow(db, req.account.id)
-      const data = parseProfileData(profile)
+      const data = parseProfileData(profile, db)
       if (gameplay === 'arena' && (!isModeUnlocked(data.progression, selection.mode) || !isDifficultyUnlocked(data.progression, selection.difficulty))) {
         throw new HttpError(403, 'run_locked', '当前档案尚未解锁这套规则')
       }
@@ -415,10 +562,10 @@ export function createGameApp({ db, distDir = null, registration = null }) {
         expiresAt: now + RUN_TTL_MS,
       }
       db.prepare(`
-        INSERT INTO run_tickets(id, user_id, profile_id, mode, difficulty, issued_at, expires_at, gameplay, stage_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(ticket.id, req.account.id, profile.id, selection.mode, selection.difficulty, now, ticket.expiresAt, gameplay, stageId)
-      res.status(201).json({ ticket })
+        INSERT INTO run_tickets(id, user_id, profile_id, mode, difficulty, issued_at, expires_at, gameplay, stage_id, save_epoch)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(ticket.id, req.account.id, profile.id, selection.mode, selection.difficulty, now, ticket.expiresAt, gameplay, stageId, accountState(db, req.account.id).save_epoch)
+      res.status(201).json({ ticket, catalog: profileCatalog(db, req.account.id) })
     } catch (error) {
       next(error)
     }
@@ -432,6 +579,9 @@ export function createGameApp({ db, distDir = null, registration = null }) {
           req.account.id
         )
         if (!ticket) throw new HttpError(404, 'run_not_found', '没有找到这局行动记录')
+        if (ticket.save_epoch !== accountState(db, req.account.id).save_epoch) {
+          throw new HttpError(409, 'save_restored', '此行动属于恢复前的存档，已保留结算，请确认后放弃或联系管理员')
+        }
         if (ticket.completed_at) {
           const completed = db.prepare('SELECT result_json FROM runs WHERE ticket_id = ?').get(ticket.id)
           return JSON.parse(completed.result_json)
@@ -443,7 +593,7 @@ export function createGameApp({ db, distDir = null, registration = null }) {
         const run = sanitizeSubmission(req.body?.run, ticket)
         const profile = profileRowById(db, req.account.id, ticket.profile_id)
         if (!profile) throw new HttpError(404, 'profile_not_found', '本局对应的档案已不存在')
-        const data = parseProfileData(profile)
+        const data = parseProfileData(profile, db)
         const selection = { mode: ticket.mode, difficulty: ticket.difficulty }
         const previousScore = getRunRecord(data, selection).best.score || 0
         const scoreResult = pushScore(data, selection, run)
@@ -490,6 +640,19 @@ export function createGameApp({ db, distDir = null, registration = null }) {
     }
   })
 
+  app.post('/api/runs/:ticketId/resume', (req, res, next) => {
+    try {
+      const ticket = db.prepare('SELECT * FROM run_tickets WHERE id = ? AND user_id = ?').get(req.params.ticketId, req.account.id)
+      if (!ticket) throw new HttpError(404, 'run_not_found', '原行动不存在，无法继续')
+      if (ticket.save_epoch !== accountState(db, req.account.id).save_epoch) throw new HttpError(409, 'save_restored', '账号已恢复过存档，无法继续旧行动')
+      if (ticket.completed_at) throw new HttpError(409, 'run_completed', '这局行动已经结算')
+      if (ticket.expires_at < Date.now()) throw new HttpError(410, 'run_expired', '续玩期限已过')
+      res.json({ ticket: { id: ticket.id, expiresAt: ticket.expires_at, gameplay: ticket.gameplay,
+        mode: ticket.mode, difficulty: ticket.difficulty, stageId: ticket.stage_id },
+        catalog: profileCatalog(db, req.account.id), accountData: accountGameData(db, req.account.id) })
+    } catch (error) { next(error) }
+  })
+
   app.get('/api/leaderboard', (req, res, next) => {
     try {
       if (!validBoardSelection(req.query)) {
@@ -505,14 +668,15 @@ export function createGameApp({ db, distDir = null, registration = null }) {
 
   app.use('/api', (_req, _res, next) => next(new HttpError(404, 'api_not_found', '接口不存在')))
 
-  if (distDir && existsSync(join(distDir, 'index.html'))) {
+  if (distDir) {
+    const index = join(distDir, 'index.html')
     app.use(express.static(distDir, { index: false, maxAge: '1h' }))
     app.use((req, res, next) => {
-      if (req.method !== 'GET') {
+      if (req.method !== 'GET' || !existsSync(index)) {
         next()
         return
       }
-      res.sendFile(join(distDir, 'index.html'))
+      res.sendFile(index)
     })
   }
 

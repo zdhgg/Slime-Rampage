@@ -70,7 +70,7 @@ const emit = defineEmits(['resolve'])
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.65);
+  background: var(--adventure-scrim);
   backdrop-filter: blur(3px);
 }
 
@@ -80,14 +80,14 @@ const emit = defineEmits(['resolve'])
   padding: 34px 44px;
   border-radius: 20px;
   border: 1px solid rgba(255, 209, 102, 0.35);
-  background: linear-gradient(170deg, rgba(30, 46, 34, 0.96), rgba(14, 22, 16, 0.96));
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  background: var(--adventure-paper);
+  box-shadow: var(--adventure-shadow);
 }
 
 .fusion-kicker {
   font-size: 13px;
   letter-spacing: 2px;
-  color: rgba(255, 255, 255, 0.65);
+  color: var(--adventure-muted);
   margin-bottom: 8px;
 }
 
@@ -95,25 +95,25 @@ const emit = defineEmits(['resolve'])
   font-size: 24px;
   font-weight: 800;
   letter-spacing: 3px;
-  color: #ffd166;
+  color: var(--adventure-gold);
   text-shadow: 0 2px 12px rgba(255, 209, 102, 0.4);
   margin-bottom: 12px;
 }
 
 .fusion-result {
   font-size: 16px;
-  color: rgba(255, 255, 255, 0.85);
+  color: var(--adventure-muted);
   margin-bottom: 12px;
 }
 
 .fusion-result b {
-  color: #d2ff8a;
+  color: var(--adventure-green);
 }
 
 .fusion-warn {
   font-size: 12.5px;
   line-height: 1.6;
-  color: #ff9d8a;
+  color: var(--adventure-danger);
   margin-bottom: 10px;
 }
 
@@ -121,7 +121,7 @@ const emit = defineEmits(['resolve'])
   font-size: 13px;
   padding: 6px 14px;
   border-radius: 999px;
-  color: #ffd166;
+  color: var(--adventure-gold);
   background: rgba(255, 209, 102, 0.1);
   border: 1px solid rgba(255, 209, 102, 0.3);
   display: inline-block;
@@ -132,7 +132,7 @@ const emit = defineEmits(['resolve'])
 .fusion-combos {
   font-size: 13px;
   line-height: 2;
-  color: rgba(255, 255, 255, 0.75);
+  color: var(--adventure-muted);
   margin-bottom: 18px;
 }
 
@@ -142,7 +142,7 @@ const emit = defineEmits(['resolve'])
   padding: 2px 10px;
   border-radius: 999px;
   font-weight: 600;
-  color: #d2ff8a;
+  color: var(--adventure-green);
   background: rgba(138, 232, 74, 0.1);
   border: 1px solid rgba(138, 232, 74, 0.3);
 }
@@ -160,8 +160,8 @@ const emit = defineEmits(['resolve'])
   font-size: 15px;
   font-weight: 700;
   letter-spacing: 1px;
-  color: #0c120d;
-  background: linear-gradient(90deg, #a8f06a, #4fae4a);
+  color: #fff;
+  background: var(--adventure-green);
   cursor: pointer;
   transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
@@ -176,20 +176,20 @@ const emit = defineEmits(['resolve'])
   border: 1px solid rgba(255, 255, 255, 0.25);
   border-radius: 999px;
   font-size: 14px;
-  color: rgba(255, 255, 255, 0.8);
-  background: rgba(255, 255, 255, 0.06);
+  color: var(--adventure-muted);
+  background: var(--adventure-leaf);
   cursor: pointer;
   transition: border-color 0.15s ease, background 0.15s ease;
 }
 
 .fusion-spit:hover {
   border-color: rgba(255, 255, 255, 0.55);
-  background: rgba(255, 255, 255, 0.1);
+  background: #dce9de;
 }
 
 .fusion-hint {
   margin-top: 14px;
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.45);
+  color: var(--adventure-muted);
 }
 </style>

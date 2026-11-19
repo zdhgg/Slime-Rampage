@@ -358,7 +358,7 @@ function createManager(mode = 'timed', difficulty = 'normal', stage = 1) {
   ok('二阶段连击：普通 2 段 / 高难 3 段，中段无破绽、收尾窗口随段数延长')
 }
 
-// 17. 血量阈值事件：75% 召唤护卫、25% 困兽之斗，且各自只触发一次。
+// 17. 血量阈值事件：75% / 25% 各只触发一次，且三种首领加在不同的维度（不同用一张模板）。
 {
   const { manager, game } = createManager('timed', 'normal', 1)
   const boss = new Boss({ x: 500, y: 500, wave: 5, type: 'boss-knight' })
@@ -376,21 +376,39 @@ function createManager(mode = 'timed', difficulty = 'normal', stage = 1) {
   assert.equal(boss._reinforced, false, '0 伤害不应触发阈值事件')
 
   boss.hit(1)
-  assert.equal(boss._reinforced, true, '跌破 75% 触发召唤护卫')
-  assert.equal(summons, 2)
+  assert.equal(boss._reinforced, true, '跌破 75% 触发 75% 事件')
+  // 骑士王加的是地形：不叫护卫，把落点裂地升成双段（距离轴）
+  assert.equal(summons, 0, '骑士王 75% 不召护卫')
+  assert.equal(boss._ruptureTier, 2, '骑士王 75% 裂地升为双段')
   const summonsAfter = summons
+  const tierAfter = boss._ruptureTier
   boss.hit(1)
   assert.equal(summons, summonsAfter, '75% 事件只触发一次')
+  assert.equal(boss._ruptureTier, tierAfter, '双段不会重复叠加')
 
   const speedBefore = boss.speed
   boss.hp = boss.maxHp * 0.24
   boss.hit(1)
   assert.equal(boss._lastStand, true, '跌破 25% 触发困兽之斗')
   assert.ok(boss.speed > speedBefore, '困兽之斗提升移速')
+  assert.equal(boss._ruptureOff, true, '骑士王 25% 不再留地')
   const speedAfter = boss.speed
   boss.hit(1)
   assert.equal(boss.speed, speedAfter, '25% 事件只触发一次')
-  ok('血量阈值事件：75% 增援 / 25% 困兽之斗，各只触发一次且零伤害不误触发')
+
+  // 大法师在同一个阈值上加的是护盾层：3 名护卫＝承伤 ×0.4，25% 后停止召唤
+  const mage = new Boss({ x: 600, y: 500, wave: 10, type: 'boss-mage' })
+  mage.attach(game)
+  manager._enemies.push(mage)
+  mage.hp = mage.maxHp * 0.74
+  mage.hit(1)
+  assert.equal(mage._guards.length, 3, '法师 75% 召 3 名护卫')
+  assert.ok(Math.abs(mage._guardMitigation() - 0.4) < 1e-9, '3 层护盾＝承伤 ×0.4')
+  mage.hp = mage.maxHp * 0.24
+  mage.hit(1)
+  assert.equal(mage.summonCd, Infinity, '法师 25% 停止召唤，护盾层只减不增')
+
+  ok('血量阈值事件：75% / 25% 各只触发一次、零伤害不误触发，且骑士王加地形 / 法师加护盾层')
 }
 
 console.log(`\n难度曲线专项通过：${n} 组断言 ✓`)

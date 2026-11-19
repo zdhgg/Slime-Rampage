@@ -27,7 +27,7 @@ const ELEMENTS = {
  *
  * 状态机：
  *  - idle：静止在地面，等待进入玩家 pickupRadius；
- *  - magnet：被磁力吸附，vx/vy 每帧向玩家方向加速（见 GemManager.update）。
+ *  - magnet：被磁力吸附，累积磁吸速率并朝玩家当前位置飞行（见 GemManager.update）。
  *
  * 外观区分：
  *  - type='exp'：菱形水晶（蓝色小/紫色中/红色大，按经验分级）；
@@ -43,8 +43,7 @@ export class Gem {
     this.coreChoices = Array.isArray(meta?.coreChoices) ? [...new Set(meta.coreChoices)].filter(id => ELEMENTS[id]).slice(0, 2) : null
     this.mastery = !!meta?.mastery // type='tome' 时区分普通王级秘籍与职业秘典
     this.state = 'idle' // 'idle' | 'magnet'
-    this.vx = 0 // 吸附速度（magnet 状态使用）
-    this.vy = 0
+    this.magnetSpeed = 0
     this.size = type === 'exp' ? gemSize(value) : type === 'tome' ? (this.mastery ? 10 : 9) : 7
     this.color = type === 'exp' ? gemColor(value) : type === 'tome' ? (this.mastery ? '#ff8bd1' : '#ffd166') : ELEMENTS[type].color
     this.icon = type === 'exp' || type === 'tome' ? null : ELEMENTS[type].icon

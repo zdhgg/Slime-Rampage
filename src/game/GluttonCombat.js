@@ -1,9 +1,19 @@
 import {
-  DEVOUR_SOURCE_GLUTTON, DEVOUR_SOURCE_NORMAL, GLUTTON_CHARGE_MAX, GLUTTON_FEAST_DURATION,
-  hasGluttonCharge, isGluttonLocked, onGluttonBossBasicHit, spendGluttonCharge,
+  DEVOUR_SOURCE_GLUTTON, DEVOUR_SOURCE_NORMAL, GLUTTON_FEAST_DURATION,
+  gluttonSkillHud, hasGluttonResource, onGluttonBossBasicHit,
 } from './GluttonResource.js'
-import { bitePose, renderBiteMotion, renderBiteFeedback } from './effects/GluttonBiteVisual.js'
-import { GLUTTON_ROUTES, GLUTTON_RULES, getGluttonEndlessDamageMultiplier, getGluttonHeavyDamageMultiplier, getGluttonHeavyReachMultiplier, gluttonCowDurationAt, gluttonCowPowerAt, gluttonProgressReady, gluttonRouteReady, gluttonRouteInvestment } from './GluttonBuild.js'
+import { bitePose, renderBiteFeedback, renderBiteMotion, renderCorrodeAura } from './effects/GluttonBiteVisual.js'
+import {
+  GLUTTON_ROUTES, GLUTTON_RULES,
+  getGluttonEndlessDamageMultiplier, getGluttonHeavyDamageMultiplier, getGluttonHeavyReachMultiplier,
+  gluttonAcidAuraBonusAt, gluttonAcidAuraDamageAt, gluttonAcidAuraVulnAt,
+  gluttonBreachDamageAt, gluttonBreachVulnAt,
+  gluttonCounterDamageAt, gluttonCounterRadiusAt,
+  gluttonCowDurationAt, gluttonCowPowerAt,
+  gluttonFrenzyArcDegAt, gluttonFrenzyHasteAt,
+  gluttonPounceResetCapRatioAt, gluttonPounceResetPerKillAt,
+  gluttonProgressReady, gluttonRouteInvestment, gluttonRouteReady,
+} from './GluttonBuild.js'
 import { traceShadowPath } from './ShadowGeometry.js'
 
 const TAU = Math.PI * 2
@@ -15,43 +25,69 @@ const turnToward = (from, to, maxStep) => {
   return Math.abs(delta) <= maxStep ? to : from + Math.sign(delta) * maxStep
 }
 const angleTo = (player, enemy) => Math.atan2(enemy.y - player.y, enemy.x - player.x)
+const alive = e => !!e?.active && !e.devouring && e.hp > 0
 
-export const GLUTTON_BITE_REACH = 48 // 从身体边缘起算，留出与接触伤害之间的走位空间。
-export const GLUTTON_HEAVY_REACH = 68
-export const GLUTTON_BITE_ARC = Math.PI * 11 / 18 // 110°：明确留出侧后方空隙。
-export const GLUTTON_HEAVY_ARC = Math.PI * 7 / 9
-/** 可读性前摇：张嘴蓄力要看得清，出手本身仍保持干脆。 */
-export const GLUTTON_BITE_WINDUP = 0.17
+export const GLUTTON_BITE_REACH = 52
+export const GLUTTON_BITE_ARC = Math.PI * 5 / 6 // 150° 宽幅扫咬
+export const GLUTTON_BITE_WINDUP = 0.14
 export const GLUTTON_BITE_STRIKE = 0.045
-export const GLUTTON_HEAVY_WINDUP = 0.25
-export const GLUTTON_HEAVY_STRIKE = 0.06
-export const GLUTTON_BITE_DAMAGE = 1.35
-export const GLUTTON_HEAVY_DAMAGE = 4
-export const GLUTTON_BOSS_HEAVY_DAMAGE = 6
-export const GLUTTON_GUARD_COOLDOWN = 2.5
-export const GLUTTON_HEAL_COOLDOWN = 4
-/**
- * 重咬突进（近战补偿·机制层）：重咬进入出手帧时向前扑一小段，吃腐蚀重碾等级，
- * 停在目标身位前——扑食的手感与贴脸的门槛一起解决，普攻咬击不带位移。
- */
-export const GLUTTON_HEAVY_LUNGE_BASE = 36
-export const GLUTTON_HEAVY_LUNGE_PER_LEVEL = 8
-export const GLUTTON_HEAVY_LUNGE_MAX = 64
+export const GLUTTON_BITE_DAMAGE = 1.25
 
-/** 前方候选范围：正前方左右各 100°。范围内优先选最近目标。 */
+export const GLUTTON_VORTEX_COOLDOWN = 6.0
+export const GLUTTON_VORTEX_WINDUP = 0.18
+export const GLUTTON_VORTEX_PULL_RADIUS = 190
+export const GLUTTON_VORTEX_BITE_RADIUS = 92
+export const GLUTTON_VORTEX_DAMAGE = 2.6
+export const GLUTTON_BOSS_VORTEX_DAMAGE = 3.8
+export const GLUTTON_VORTEX_PULL_SPEED = 480
+
+// 兼容导出别名（确保测试/UI 引用不断裂）
+export const GLUTTON_POUNCE_COOLDOWN = GLUTTON_VORTEX_COOLDOWN
+export const GLUTTON_POUNCE_WINDUP = GLUTTON_VORTEX_WINDUP
+export const GLUTTON_POUNCE_TIME = GLUTTON_VORTEX_WINDUP
+export const GLUTTON_POUNCE_DISTANCE = GLUTTON_VORTEX_PULL_RADIUS
+export const GLUTTON_POUNCE_SLAM_RADIUS = GLUTTON_VORTEX_BITE_RADIUS
+export const GLUTTON_POUNCE_DAMAGE = GLUTTON_VORTEX_DAMAGE
+export const GLUTTON_BOSS_POUNCE_DAMAGE = GLUTTON_BOSS_VORTEX_DAMAGE
+export const GLUTTON_HEAVY_REACH = GLUTTON_VORTEX_BITE_RADIUS
+export const GLUTTON_HEAVY_ARC = Math.PI
+export const GLUTTON_HEAVY_DAMAGE = GLUTTON_VORTEX_DAMAGE
+export const GLUTTON_BOSS_HEAVY_DAMAGE = GLUTTON_BOSS_VORTEX_DAMAGE
+export const GLUTTON_HEAVY_WINDUP = GLUTTON_VORTEX_WINDUP
+export const GLUTTON_HEAVY_STRIKE = GLUTTON_VORTEX_WINDUP
+export const GLUTTON_HEAVY_SNOWBALL_CAP = 1.55
+
+export const GLUTTON_AURA_BASE_RADIUS = 48
+export const GLUTTON_AURA_BASE_INTERVAL = 0.55
+export const GLUTTON_AURA_BASE_DAMAGE = 0.26
+
+export const GLUTTON_GUARD_BASE_MAX = 1
+export const GLUTTON_GUARD_COOLDOWN = 2.8
+export const GLUTTON_HEAL_COOLDOWN = 3.5
+
+export const GLUTTON_COUNTER_BASE_RADIUS = 84
+export const GLUTTON_COUNTER_BASE_DAMAGE = 0.65
+export const GLUTTON_COUNTER_BASE_COOLDOWN = 0.9
+
+export const GLUTTON_SATIETY_RADIUS = 130
+export const GLUTTON_SATIETY_DAMAGE = 1.45
+
+/** 兼容旧导出名 */
+export const GLUTTON_OVERFLOW = Object.freeze({ devours: 6, cooldown: 1.5, radius: GLUTTON_SATIETY_RADIUS, damage: GLUTTON_SATIETY_DAMAGE, targets: 14 })
+
 export const GLUTTON_FORWARD_HALF_ARC = Math.PI * 5 / 9
-/** 目标方向与当前口器朝向差超过 60° 时，先用转头阶段预告，再锁定咬击方向。 */
 export const GLUTTON_AIM_SNAP_LIMIT = Math.PI / 3
-/** 转头角速度（弧度/秒）：180° 约 0.22 秒，既看得见又不会拖慢连续攻击。 */
 export const GLUTTON_AIM_TURN_RATE = 14
-/** 目标粘性：同层级目标不比当前目标近 22% 以上时保持不变，避免左右反复横跳。 */
 export const GLUTTON_TARGET_STICKY = 1.22
-/** 转头阶段的最长时长，避免目标高速绕圈时无限等待。 */
-export const GLUTTON_AIM_MAX_TIME = 0.3
+export const GLUTTON_AIM_MAX_TIME = 0.25
 
 /** 圆形目标与扇形相交；范围、预览和结算共享同一份几何判定。 */
 export function inBiteSector(player, enemy, angle, reach, arc) {
   if (!enemy?.active || enemy.devouring || !(enemy.hp > 0)) return false
+  if (arc >= TAU - 1e-6) {
+    const distance = Math.hypot(enemy.x - player.x, enemy.y - player.y)
+    return distance <= reach + (enemy.radius || 0)
+  }
   const dx = enemy.x - player.x
   const dy = enemy.y - player.y
   const distance = Math.hypot(dx, dy)
@@ -60,53 +96,69 @@ export function inBiteSector(player, enemy, angle, reach, arc) {
   if (distance <= radius) return true
   const delta = Math.abs(Math.atan2(Math.sin(Math.atan2(dy, dx) - angle), Math.cos(Math.atan2(dy, dx) - angle)))
   if (delta <= arc / 2) return true
-  // 角度在扇面外时，检查目标圆到边界线段的距离，避免同时擦过射程/角度却误中。
   const cosine = Math.cos(delta - arc / 2)
   const nearest = Math.max(0, Math.min(reach, distance * cosine))
   return distance * distance + nearest * nearest - 2 * distance * nearest * cosine <= radius * radius + 1e-8
 }
 
-/** 暴食的近战时序与表现。伤害、护盾、吞噬奖励仍经过原有实体结算。 */
+/** 暴食战斗系统：宽幅扫咬、体表腐蚀光环、节律胃铠与酸刺反震、深渊吸噬聚怪重咬、饱食酸浪。 */
 export class GluttonCombat {
   constructor(weapon) {
     this.weapon = weapon
     this.reset()
   }
 
-  reset() {
+  clearTransient() {
     this.swing = null
     this.flash = null
+    this.vortex = null
     this.impacts = []
     this.morsels = []
     this.acidBursts = []
+    this.vortices = []
+    this.slams = []
+    this.spikes = []
+    this.auraPulses = []
     this.guardPulse = 0
     this.acidPending = false
     this.acidSource = DEVOUR_SOURCE_NORMAL
     this.acidCooldown = 0
-    // 口器朝向跨攻击保留：转头阶段从这里开始旋转，而不是瞬间重置。
+    this.satietyPending = false
     this.aimAngle = this.weapon?.player?.facing ?? -Math.PI / 2
     this.aimTarget = null
+    this.mires = []
+    this.auraTimer = 0.25
+    this.overflowGuardCooldown = 0
+  }
+
+  reset() {
+    this.clearTransient()
     this.acidBurstSeq = 0
     this.route = null
     this.normalChoices = 0
-    this.mires = []
   }
 
   get game() { return this.weapon.game }
   get player() { return this.weapon.player }
-  /** 全套近战咬击（自动咬人替代普攻）：仅暴食血统。 */
   get enabled() { return this.weapon.game?.startingStrain === 'glutton' }
-  /** 重咬与吞噬结算表现的统一闸门：只有真正的暴食血统。 */
   get biteUnlocked() { return this.enabled }
   get routeInfo() { return GLUTTON_ROUTES[this.route] || null }
   get endlessDamageMultiplier() { return getGluttonEndlessDamageMultiplier(this.weapon.game?.skillLevels) }
+  get canPounceFollowup() { return false }
+  get guardMax() {
+    const p = this.player
+    return GLUTTON_GUARD_BASE_MAX + (p?.gluttonBulkGuardBonus || 0) + (this.route === 'shell' ? 1 : 0) + (p?.gluttonShellUltimate ? 1 : 0)
+  }
   refreshStats() {}
+
   chooseRoute(route) {
     if (!this.enabled || !GLUTTON_ROUTES[route] || !gluttonRouteReady(this.game) || !this.game.skillLevels?.[GLUTTON_ROUTES[route].seed]) return false
     this.route = route
-    this.weapon._weaponPulse = .7
+    this.weapon._weaponPulse = 0.7
+    if (route === 'jaw') this.grantGuard(true)
     return true
   }
+
   hud() {
     const route = this.routeInfo
     return {
@@ -118,26 +170,78 @@ export class GluttonCombat {
       note: route ? `${route.name}已锁定 · ${route.ultimateName}为互斥终极` : `前期随机探索 · 选卡满${GLUTTON_RULES.choicesBeforeRoute}次且第${GLUTTON_RULES.routeWave}波／远征第${GLUTTON_RULES.routeStage}章后确认路线`,
     }
   }
-  get pose() { return this.biteUnlocked && !this.player.dead ? bitePose(this.swing, this.flash) : null }
-  reach(heavy = false) {
-    return this.player.radius + (heavy ? GLUTTON_HEAVY_REACH * getGluttonHeavyReachMultiplier(this.player.gluttonHeavyLevel) : GLUTTON_BITE_REACH) * (this.player.isGluttonyLord ? 1.25 : 1) * (this.weapon.geneRangeMul || 1)
+
+  hudStatus() {
+    const base = gluttonSkillHud(this.player)
+    if (!base) return null
+    return { ...base, route: this.route }
   }
 
-  /** 朝向参考：玩家最近一次有效移动方向；静止时沿用最后朝向。 */
+  get pose() { return this.biteUnlocked && !this.player.dead ? bitePose(this.swing, this.flash, this.vortex) : null }
+
+  reach(heavy = false) {
+    const p = this.player
+    if (heavy) {
+      return p.radius + GLUTTON_VORTEX_BITE_RADIUS * getGluttonHeavyReachMultiplier(p.gluttonHeavyLevel) *
+        (p.isGluttonyLord ? 1.25 : 1) * (this.weapon.geneRangeMul || 1)
+    }
+    return p.radius + GLUTTON_BITE_REACH * (p.isGluttonyLord ? 1.2 : 1) * (this.weapon.geneRangeMul || 1)
+  }
+
+  pullRadius() {
+    const p = this.player
+    return p.radius + GLUTTON_VORTEX_PULL_RADIUS * getGluttonHeavyReachMultiplier(p.gluttonHeavyLevel) *
+      (p.isGluttonyLord ? 1.25 : 1) * (this.route === 'jaw' && p.gluttonJawUltimate ? 1.3 : 1) *
+      (this.weapon.geneRangeMul || 1)
+  }
+
+  biteArc() {
+    const p = this.player
+    const sweepRad = (p.gluttonBiteSweepLevel || 0) * (Math.PI / 10) // +18°/级
+    const frenzyRad = p.gluttonFrenzyTimer > 0 && p.gluttonFrenzyJawLevel > 0
+      ? gluttonFrenzyArcDegAt(p.gluttonFrenzyJawLevel) * Math.PI / 180
+      : 0
+    return Math.min(TAU, GLUTTON_BITE_ARC + sweepRad + frenzyRad)
+  }
+
+  biteHasteMultiplier() {
+    const p = this.player
+    const sweepHaste = 1 + (p.gluttonBiteSweepLevel || 0) * 0.06
+    const frenzyHaste = p.gluttonFrenzyTimer > 0 && p.gluttonFrenzyJawLevel > 0
+      ? 1 + gluttonFrenzyHasteAt(p.gluttonFrenzyJawLevel)
+      : 1
+    return sweepHaste * frenzyHaste
+  }
+
+  auraRadius() {
+    const p = this.player
+    const mawBonus = (p.gluttonMawAuraLevel || 0) * 10
+    const acidBonus = gluttonAcidAuraBonusAt(p.gluttonAcidAuraLevel)
+    const tomeBonus = this.game?.bossTomes?.gluttonRadianceRadiusBonus?.() || 0
+    return (p.radius + GLUTTON_AURA_BASE_RADIUS + mawBonus + acidBonus + tomeBonus) *
+      (this.route === 'mire' ? 1.15 : 1) * (p.isGluttonyLord ? 1.2 : 1) * (this.weapon.geneRangeMul || 1)
+  }
+
+  auraInterval() {
+    const acidLv = this.player.gluttonAcidAuraLevel || 0
+    return this.route === 'mire' ? Math.max(0.32, 0.45 - acidLv * 0.025) : GLUTTON_AURA_BASE_INTERVAL
+  }
+
+  auraDamage() {
+    const p = this.player
+    const base = this.weapon.damage * this.weapon.levelMul * this.weapon.devourDamageMul * this.endlessDamageMultiplier
+    const acidMul = gluttonAcidAuraDamageAt(p.gluttonAcidAuraLevel)
+    const routeMul = this.route === 'mire' ? 1.18 : 1
+    const lordMul = p.isGluttonyLord ? 1.2 : 1
+    const tomeMul = this.game?.bossTomes?.gluttonRadianceDamageMultiplier?.() || 1
+    return base * GLUTTON_AURA_BASE_DAMAGE * acidMul * routeMul * lordMul * tomeMul
+  }
+
   aimReference() {
     const facing = this.player.facing
     return Number.isFinite(facing) ? facing : -Math.PI / 2
   }
 
-  /**
-   * 前方优先的自动索敌。
-   *
-   * 规则保持简单：
-   *  - 正前方左右各 100° 内存在目标时，只在这些目标里选最近者；
-   *  - 前方没有目标才回落到最近目标，保证被追击时仍会自动防身；
-   *  - 同层级目标之间保留少量粘性，避免两只敌人交替成为「最近」时方向横跳。
-   * 不做复杂评分，也不改变任何移动或追击行为。
-   */
   nearest(heavy = false) {
     const reach = this.reach(heavy)
     const facing = this.aimReference()
@@ -147,7 +251,7 @@ export class GluttonCombat {
     let currentEdge = Infinity, currentFront = false, currentSeen = false
 
     for (const e of this.weapon.enemyManager.enemies) {
-      if (!e.active || e.devouring || !(e.hp > 0)) continue
+      if (!alive(e)) continue
       const dx = e.x - this.player.x
       const dy = e.y - this.player.y
       const radius = e.radius || 0
@@ -164,12 +268,9 @@ export class GluttonCombat {
     if (!preferred) { this.aimTarget = null; return null }
     if (currentSeen && current !== preferred) {
       const preferredFront = !!frontBest
-      // 前方有目标时，绝不为了更近的身后目标而回头。
       if (currentFront && !preferredFront) return current
-      // 前方目标出现时，从身后目标切回前方。
       if (!currentFront && preferredFront) { this.aimTarget = preferred; return preferred }
       const preferredEdge = preferred === frontBest ? frontEdge : anyEdge
-      // 同层级：除非新目标明显更近，否则保持当前目标。
       if (currentEdge <= preferredEdge * GLUTTON_TARGET_STICKY) return current
     }
     this.aimTarget = preferred
@@ -177,28 +278,21 @@ export class GluttonCombat {
   }
 
   bite(target = null, heavy = false) {
-    // 只有暴食血统会进入咬击；origin 不再拟态，普攻始终是飞弹。
     if (!this.enabled || this.player.dead || this.weapon.game.runFinished) return false
-    // 重咬可以替换尚未结算的普通前摇/转头；出手阶段不能被覆盖。
-    if (this.swing && (!heavy || this.swing.heavy || this.swing.phase === 'strike')) return false
-    const chosen = target || this.nearest(heavy)
+    if (heavy) return this.useVortex()
+    if (this.vortex || this.swing) return false
+    const chosen = target || this.nearest(false)
     if (!chosen) return false
     const desired = angleTo(this.player, chosen)
-    const reach = this.reach(heavy)
+    const reach = this.reach(false)
     if (!inBiteSector(this.player, chosen, desired, reach, Math.PI)) return false
-    if (heavy && (!hasGluttonCharge(this.player) || isGluttonLocked(this.player))) return false
-    // 前摇与出手占用既有攻击周期；高攻速优先压缩收势，仍保留可见张嘴。
     const pace = Math.min(1, Math.max(0.55, this.weapon.attackInterval / 0.4))
-    const windup = heavy ? GLUTTON_HEAVY_WINDUP * (this.game?.bossTomes?.heavyWindup() || 1) : GLUTTON_BITE_WINDUP * pace
-    const strike = heavy ? GLUTTON_HEAVY_STRIKE : GLUTTON_BITE_STRIKE * pace
+    const windup = GLUTTON_BITE_WINDUP * pace
+    const strike = GLUTTON_BITE_STRIKE * pace
     const gap = Math.abs(angleDelta(this.aimAngle, desired))
     const needsTurn = gap > GLUTTON_AIM_SNAP_LIMIT
     const aimDuration = needsTurn ? Math.min(GLUTTON_AIM_MAX_TIME, gap / GLUTTON_AIM_TURN_RATE + 0.02) : 0
-    // 不需要转头时，口器在起手瞬间已对准目标；同步缓存，重咬替换普攻时不会误判。
     if (!needsTurn) this.aimAngle = desired
-    // 猎食点在起手时扣除：转头/前摇都算已起手，目标随后离开仍按挥空处理。
-    if (heavy && !spendGluttonCharge(this.player)) return false
-    if (heavy && this.game?.bossTomes) this.game.bossTomes.fastBite = false
 
     this.flash = null
     this.aimTarget = chosen
@@ -206,31 +300,242 @@ export class GluttonCombat {
       target: chosen,
       angle: needsTurn ? this.aimAngle : desired,
       desiredAngle: desired,
-      reach, arc: heavy ? GLUTTON_HEAVY_ARC : GLUTTON_BITE_ARC,
+      reach, arc: this.biteArc(),
       remaining: needsTurn ? aimDuration : windup,
-      windup, strike, heavy,
+      windup, strike, heavy: false,
       phase: needsTurn ? 'aim' : 'windup',
       aimDuration,
-      recovery: heavy ? 0.22 : Math.min(0.16, this.weapon.attackInterval * 0.25),
+      recovery: Math.min(0.14, this.weapon.attackInterval * 0.22),
     }
     return true
   }
 
-  heavyBite() { return this.bite(this.nearest(true), true) }
+  /** 深渊吸噬（Space 主动）：向内强吸聚怪后原地 360° 重咬，立刻获得 1 层胃铠，无无敌位移。 */
+  useVortex() {
+    if (!this.enabled || this.player.dead || this.game.runFinished || this.vortex) return false
+    const p = this.player
+    const pullRadius = this.pullRadius()
+    const biteRadius = this.reach(true)
+    this.swing = null
+    this.flash = null
+    this.grantGuard(true)
+    this.aimAngle = this.aimReference()
+    this.vortex = {
+      phase: 'inhale',
+      elapsed: 0,
+      windup: GLUTTON_VORTEX_WINDUP * (this.game?.bossTomes?.heavyWindup?.() || 1),
+      pullRadius,
+      biteRadius,
+      angle: this.aimAngle,
+    }
+    this.vortices.push({ x: p.x, y: p.y, pullRadius, biteRadius, life: 0.26, maxLife: 0.26 })
+    if (this.vortices.length > 6) this.vortices.shift()
+    return true
+  }
+
+  usePounce() { return this.useVortex() }
+  heavyBite() { return this.useVortex() }
+
+  _pullVortexTargets(vortex, dt) {
+    const p = this.player
+    const pullSpeed = GLUTTON_VORTEX_PULL_SPEED * (this.weapon.geneRangeMul || 1)
+    for (const enemy of this.weapon.enemyManager.enemies) {
+      if (!alive(enemy) || enemy.isBoss || enemy.isEnraged) continue
+      const dx = p.x - enemy.x
+      const dy = p.y - enemy.y
+      const dist = Math.hypot(dx, dy)
+      const minStop = p.radius + (enemy.radius || 0) + 4
+      if (dist <= minStop || dist > vortex.pullRadius + (enemy.radius || 0)) continue
+      const angle = Math.atan2(dy, dx)
+      const step = Math.min(dist - minStop, pullSpeed * dt)
+      if (step <= 0) continue
+      const end = traceShadowPath(this.game, enemy, angle, step, enemy.radius)
+      enemy.x = end.x
+      enemy.y = end.y
+      enemy._devourPullT = 0.12
+    }
+  }
+
+  _settleVortexCrunch(vortex) {
+    if (this.player.dead || this.game.runFinished) return
+    const p = this.player
+    const biteRadius = vortex.biteRadius
+    const ignoreShield = this.route === 'jaw'
+    const dmgBase = this.weapon.damage * this.weapon.levelMul * Math.min(GLUTTON_HEAVY_SNOWBALL_CAP, this.weapon.devourDamageMul * this.endlessDamageMultiplier) *
+      getGluttonHeavyDamageMultiplier(p.gluttonHeavyLevel) * (1 + gluttonBreachDamageAt(p.gluttonBreachLevel)) *
+      (p.isGluttonyLord ? 1.2 : 1)
+
+    this.game.mapFeatures?.attackBarricades(p.x, p.y, biteRadius)
+    const targets = this.weapon.enemyManager.enemies.filter(e =>
+      alive(e) && Math.hypot(e.x - p.x, e.y - p.y) <= biteRadius + (e.radius || 0)
+    )
+    let landed = false
+    let bossHit = false
+    let hitCount = 0
+    const killsBefore = this.weapon.kills
+    const devoursBefore = this.weapon.devours
+
+    for (const e of targets) {
+      if (p.dead || this.game.runFinished) break
+      if (ignoreShield && e.shieldHits > 0) e.shieldHits = 0
+      const mult = e.isBoss ? GLUTTON_BOSS_VORTEX_DAMAGE : GLUTTON_VORTEX_DAMAGE
+      const damage = dmgBase * mult
+      const hit = this.hit(e, damage, { source: DEVOUR_SOURCE_GLUTTON, execute: !!p.isGluttonyLord, heavy: true, ignoreShield })
+      landed ||= hit
+      if (hit) {
+        hitCount++
+        this.impact(e, { angle: Math.atan2(e.y - p.y, e.x - p.x), heavy: true }, e.x, e.y)
+        if (p.gluttonBreachLevel > 0 && e.active && !e.devouring) {
+          e.gluttonBreachTime = Math.max(e.gluttonBreachTime || 0, 3.0)
+          e.gluttonBreachVuln = Math.max(e.gluttonBreachVuln || 0, gluttonBreachVulnAt(p.gluttonBreachLevel))
+        }
+        if (e.isBoss) {
+          bossHit = true
+          this.queueAcid(DEVOUR_SOURCE_GLUTTON)
+        } else if (e.active && !e.devouring) {
+          e.gluttonStagger = Math.max(e.gluttonStagger || 0, 0.4)
+          e.corrodeSlowTime = Math.max(e.corrodeSlowTime || 0, 1.0)
+          e.corrodeSlowAmount = Math.max(e.corrodeSlowAmount || 0, 0.35)
+        }
+      }
+    }
+
+    if (this.route === 'jaw' && (p.gluttonAftershockLevel > 0 || p.gluttonJawUltimate)) {
+      this.aftershock(vortex.angle, Math.max(1, p.gluttonAftershockLevel || 0),
+        this.weapon.damage * this.weapon.levelMul * this.weapon.devourDamageMul * this.endlessDamageMultiplier,
+        !!p.gluttonJawUltimate, true)
+    }
+    const totalKillsAndDevours = Math.max(0, Math.max(this.weapon.kills - killsBefore, this.weapon.devours - devoursBefore))
+    if (p.gluttonJawUltimate && totalKillsAndDevours >= 3) {
+      p.gluttonBerserkTimer = 3.0
+      this.weapon.enemyManager.addText(p.x, p.y - 52, '断岳狂怒!', null, '#f28a59', 15)
+    }
+    if (p.devourAcidBurst > 0) this.queueAcid(DEVOUR_SOURCE_GLUTTON)
+    if (this.route === 'mire' && p.gluttonMireLevel > 0) this.spawnMire(p.x, p.y)
+    if (p.gluttonFrenzyJawLevel > 0) p.gluttonFrenzyTimer = 3.0
+    if (this.game?.bossTomes) this.game.bossTomes.onPounceLanding?.(p, targets)
+
+    if (p.gluttonPounceResetLevel > 0 && totalKillsAndDevours > 0 && p.strainSkillCd > 0) {
+      const perKill = gluttonPounceResetPerKillAt(p.gluttonPounceResetLevel)
+      const cap = (p.strainSkillMax || GLUTTON_VORTEX_COOLDOWN) * gluttonPounceResetCapRatioAt(p.gluttonPounceResetLevel)
+      const refund = Math.min(cap, totalKillsAndDevours * perKill, p.strainSkillCd)
+      if (refund > 0) {
+        p.strainSkillCd = Math.max(0, p.strainSkillCd - refund)
+        this.weapon.enemyManager.addText(p.x, p.y - 44, `血宴连噬 −${refund.toFixed(1)}s`, null, '#f28a59', 13)
+      }
+    }
+
+    this.weapon.stats.heavyBites = (this.weapon.stats.heavyBites || 0) + 1
+    this.flash = { angle: vortex.angle, reach: biteRadius, arc: Math.PI, heavy: true, x: p.x, y: p.y, life: 0.2, maxLife: 0.2 }
+    this.slams.push({
+      x: p.x, y: p.y, radius: biteRadius,
+      color: this.route === 'jaw' ? '#f28a59' : this.route === 'mire' ? '#b5d66f' : '#e3bd73',
+      life: 0.26, maxLife: 0.26,
+    })
+    if (this.slams.length > 6) this.slams.shift()
+    this.weapon.game.sound.bite(true, landed)
+    if (landed) {
+      this.game.combatFeedback?.impact({ hits: hitCount, kills: totalKillsAndDevours, angle: vortex.angle })
+      this.weapon.game.shakeScreen(bossHit ? 5 : 3.5, bossHit ? 0.16 : 0.12)
+    }
+    this.weapon.cooldown = Math.min(this.weapon.cooldown, 0.12)
+  }
 
   grantGuard(force = false) {
     const p = this.player
     if (!this.biteUnlocked || p.dead || (!force && p.gluttonGuardCooldown > 0)) return
-    p.gluttonGuard = 1
-    p.gluttonGuardTimer = p.gluttonGuardDuration
-    p.gluttonGuardCooldown = GLUTTON_GUARD_COOLDOWN
+    const cap = this.guardMax
+    if (p.gluttonGuard >= cap) {
+      // 满层不再无限续满整管计时，确保长时间贴脸仍需节奏补甲或会自然褪层
+      this.guardPulse = 0.22
+      if (p.gluttonShellUltimate && this.overflowGuardCooldown <= 0) {
+        this.overflowGuardCooldown = 0.8
+        this.counterPulse({ blocked: true, ultimate: true })
+      }
+      return
+    }
+    if (p.gluttonGuard <= 0) {
+      p.gluttonGuard = 1
+      p.gluttonGuardTimer = p.gluttonGuardDuration
+    } else {
+      p.gluttonGuard = Math.min(cap, p.gluttonGuard + 1)
+      p.gluttonGuardTimer = Math.min(p.gluttonGuardDuration, Math.max(p.gluttonGuardTimer, p.gluttonGuardDuration * 0.45) + 1.1)
+    }
+    if (!force) p.gluttonGuardCooldown = GLUTTON_GUARD_COOLDOWN
     this.guardPulse = 0.24
   }
 
+  /** 胃铠挡伤或本体受击时触发 360° 酸刺反震与蓄甲爆刺。 */
+  onHurt({ blocked = false } = {}) {
+    if (!this.enabled || this.player.dead || this.game.runFinished) return
+    const p = this.player
+    if (p.gluttonThornsSurgeLevel > 0) {
+      p.gluttonThornsSurgeCount = (p.gluttonThornsSurgeCount || 0) + 1
+      if (p.gluttonThornsSurgeCount >= 3) {
+        p.gluttonThornsSurgeCount = 0
+        this.counterPulse({ blocked: true, surge: true })
+        this.grantGuard(true)
+      }
+    }
+    if (p.gluttonCounterCooldown > 0) return
+    const baseCd = GLUTTON_COUNTER_BASE_COOLDOWN * (this.route === 'shell' ? 0.75 : 1) * (p.gluttonShellUltimate ? 0.75 : 1)
+    p.gluttonCounterCooldown = baseCd
+    this.counterPulse({ blocked, ultimate: !!p.gluttonShellUltimate })
+    if (blocked && p.gluttonShellUltimate && p.strainSkillCd > 0) {
+      p.strainSkillCd = Math.max(0, p.strainSkillCd - 0.5)
+    }
+  }
+
   onGuardBlocked() {
-    if (this.route !== 'shell' || !(this.player.gluttonCounterLevel > 0) || this.player.gluttonCounterCooldown > 0) return
-    this.player.gluttonCounterCooldown = this.player.gluttonShellUltimate ? 0.7 : 1.1
-    this.counterPulse()
+    this.onHurt({ blocked: true })
+  }
+
+  counterPulse({ blocked = true, ultimate = false, surge = false } = {}) {
+    if (!this.enabled || this.player.dead || this.game.runFinished) return
+    const p = this.player
+    const level = p.gluttonCounterLevel || 0
+    const baseRadius = level > 0 ? gluttonCounterRadiusAt(level) : GLUTTON_COUNTER_BASE_RADIUS
+    const tomeRadius = this.game?.bossTomes?.gluttonThornsRadiusBonus?.() || 0
+    const radius = (p.radius + baseRadius + (this.route === 'shell' ? 20 : 0) + (surge ? 45 : 0) + tomeRadius) * (this.weapon.geneRangeMul || 1)
+    const baseMult = level > 0 ? gluttonCounterDamageAt(level) : GLUTTON_COUNTER_BASE_DAMAGE
+    const hpScale = 1 + p.maxHp * (level > 0 ? 0.045 : 0.02)
+    const bulkScale = 1 + (p.gluttonBulkLevel || 0) * 0.15
+    const surgeScale = surge ? [1.35, 1.75, 2.2][Math.min(2, (p.gluttonThornsSurgeLevel || 1) - 1)] : 1
+    const ultimateScale = ultimate && blocked ? 1.5 : 1
+    const tomeMul = this.game?.bossTomes?.gluttonThornsDamageMultiplier?.() || 1
+    const damage = this.weapon.damage * this.weapon.levelMul * this.weapon.devourDamageMul * this.endlessDamageMultiplier *
+      baseMult * hpScale * bulkScale * surgeScale * ultimateScale * (blocked ? 1 : 0.65) * tomeMul
+
+    let hits = 0
+    for (const enemy of [...this.weapon.enemyManager.enemies]) {
+      if (p.dead || this.game.runFinished) break
+      if (!alive(enemy) || Math.hypot(enemy.x - p.x, enemy.y - p.y) > radius + (enemy.radius || 0)) continue
+      const before = enemy.hp
+      enemy.hit(damage, { devourSource: DEVOUR_SOURCE_NORMAL, bossTomeContext: { gluttonCounter: true } })
+      if (enemy.hp < before) hits++
+      if (enemy.active && !enemy.devouring && !enemy.isBoss) {
+        const dx = enemy.x - p.x, dy = enemy.y - p.y, d = Math.hypot(dx, dy) || 1
+        enemy.x += dx / d * (surge ? 20 : 12)
+        enemy.y += dy / d * (surge ? 20 : 12)
+        if (p.gluttonCowLevel > 0) this.applyCow(enemy)
+        if (ultimate && blocked) enemy.elementStun = Math.max(enemy.elementStun || 0, 0.3)
+      }
+      if (!enemy.active) this.weapon._onKill(enemy)
+    }
+    if (hits > 0) this.game?.bossTomes?.onGluttonThornsHit?.()
+    this.spikes.push({
+      x: p.x, y: p.y, radius, count: surge ? 16 : 10, surge,
+      color: surge ? '#ffe082' : blocked ? '#e3bd73' : '#f29e6b',
+      offset: (p.elapsed || 0) * 2, life: 0.22, maxLife: 0.22,
+    })
+    if (this.spikes.length > 8) this.spikes.shift()
+    this.weapon._burstColor(p.x, p.y, surge ? '#ffe8a3' : '#f5d484', surge ? 12 : 7, false)
+  }
+
+  applyCow(enemy) {
+    if (!enemy || enemy.isBoss || enemy.isEnraged || !(this.player.gluttonCowLevel > 0)) return
+    enemy.gluttonCow = gluttonCowDurationAt(this.player.gluttonCowLevel)
+    enemy.gluttonCowMul = gluttonCowPowerAt(this.player.gluttonCowLevel)
   }
 
   onDevoured(enemy) {
@@ -242,42 +547,81 @@ export class GluttonCombat {
     if (this.route === 'mire' && this.player.gluttonMireLevel > 0) this.spawnMire(enemy.x, enemy.y)
   }
 
+  clearOverflow() {
+    this.satietyPending = false
+  }
+
+  queueSatietyBurst() {
+    if (!this.enabled || this.player.dead || this.game.runFinished) return
+    this.satietyPending = true
+  }
+
+  releaseSatietyBurst() {
+    this.satietyPending = false
+    if (!this.enabled || this.player.dead || this.game.runFinished) return
+    const p = this.player
+    const radius = GLUTTON_SATIETY_RADIUS * (p.isGluttonyLord ? 1.2 : 1) * (this.weapon.geneRangeMul || 1)
+    const damage = this.weapon.damage * this.weapon.levelMul * this.weapon.devourDamageMul * this.endlessDamageMultiplier * GLUTTON_SATIETY_DAMAGE
+    for (const e of [...this.weapon.enemyManager.enemies]) {
+      if (p.dead || this.game.runFinished) break
+      if (!alive(e) || Math.hypot(e.x - p.x, e.y - p.y) > radius + (e.radius || 0)) continue
+      const before = e.hp
+      e.hit(damage, { devourSource: DEVOUR_SOURCE_NORMAL })
+      this.weapon.stats.overflowDamage = (this.weapon.stats.overflowDamage || 0) + Math.max(0, before - Math.max(0, e.hp))
+      if (!e.isBoss && e.active && !e.devouring) e.slow = Math.max(e.slow || 0, 0.8)
+      if (!e.active) this.weapon._onKill(e)
+    }
+    p.gluttonSatietyBursts = (p.gluttonSatietyBursts || 0) + 1
+    this.weapon.stats.overflowWaves = (this.weapon.stats.overflowWaves || 0) + 1
+    p.gluttonFeastTimer = GLUTTON_FEAST_DURATION
+    if (p.hp < p.maxHp && p.gluttonHealCooldown <= 0) {
+      p.heal(1)
+      p.gluttonHealCooldown = GLUTTON_HEAL_COOLDOWN
+    } else {
+      this.grantGuard(true)
+    }
+    this.game?.bossTomes?.onGluttonSatietyBurst?.(p)
+    this.spawnAcidBurst(radius)
+    this.weapon._ring(p.x, p.y, '#b7e88b', radius)
+    this.weapon.enemyManager.addText(p.x, p.y - 54, '饱食酸浪', null, '#c6ee9e', 15)
+  }
+
   spawnMire(x, y) {
     const level = this.player.gluttonMireLevel || 0
-    this.mires.push({ x, y, r: 46 + Math.min(7, level) * 5, life: Math.min(3.2, 2.2 + level * .2), maxLife: Math.min(3.2, 2.2 + level * .2), tick: 0 })
+    if (level <= 0) return
+    const radius = 64 + Math.min(7, level) * 8
+    const duration = Math.min(4.0, 2.6 + level * 0.3)
+    this.mires.push({ x, y, r: radius, life: duration, maxLife: duration, tick: 0 })
     if (this.mires.length > 8) this.mires.shift()
   }
 
-  counterPulse() {
-    if (this.route !== 'shell' || !(this.player.gluttonCounterLevel > 0)) return
-    const level = this.player.gluttonCounterLevel
-    const radius = 92 + Math.min(6, level) * 8
-    const damage = this.weapon.damage * this.weapon.levelMul * this.endlessDamageMultiplier * (.4 + Math.min(5, level - 1) * .08)
-    for (const enemy of this.weapon.enemyManager.enemies) {
-      if (!enemy.active || enemy.devouring || Math.hypot(enemy.x - this.player.x, enemy.y - this.player.y) > radius + enemy.radius) continue
-      enemy.hit(damage, { preventDevour: true })
-      if (!enemy.active) this.weapon._onKill(enemy)
-    }
-    this.weapon._ring(this.player.x, this.player.y, '#e3bd73', radius)
-    this.weapon._burstColor(this.player.x, this.player.y, '#fff0b0', 8, false)
-  }
-
-  aftershock(angle, level, damage, ultimate = false) {
-    const radius = 120 + Math.min(5, level) * 12
-    const waves = ultimate ? 2 : 1
+  aftershock(angle, level, damage, ultimate = false, radial = false) {
+    const radius = 140 + Math.min(8, level) * 14
+    const waves = ultimate && radial ? 2 : 1
     for (let wave = 0; wave < waves; wave++) {
-      const waveDamage = damage * (0.3 + Math.min(5, level - 1) * .08) * (wave ? .65 : 1)
-      for (const enemy of this.weapon.enemyManager.enemies) {
-        if (!enemy.active || enemy.devouring) continue
+      const waveRadius = radius * (wave ? 1.25 : 1)
+      const waveDamage = damage * (0.45 + Math.min(8, level) * 0.13) * (wave ? 0.72 : 1)
+      for (const enemy of [...this.weapon.enemyManager.enemies]) {
+        if (this.player.dead || this.game.runFinished) break
+        if (!alive(enemy)) continue
         const dx = enemy.x - this.player.x, dy = enemy.y - this.player.y
-        if (Math.hypot(dx, dy) > radius + enemy.radius) continue
-        const delta = Math.abs(Math.atan2(Math.sin(Math.atan2(dy, dx) - angle), Math.cos(Math.atan2(dy, dx) - angle)))
-        if (delta > Math.PI * .3) continue
-        enemy.hit(waveDamage, { preventDevour: true })
+        if (Math.hypot(dx, dy) > waveRadius + (enemy.radius || 0)) continue
+        if (!radial) {
+          const delta = Math.abs(Math.atan2(Math.sin(Math.atan2(dy, dx) - angle), Math.cos(Math.atan2(dy, dx) - angle)))
+          if (delta > Math.PI * 0.42) continue
+        }
+        enemy.hit(waveDamage, { devourSource: DEVOUR_SOURCE_NORMAL })
+        if (ultimate && radial && wave === 1 && enemy.active && !enemy.devouring && !enemy.isBoss) {
+          enemy.elementStun = Math.max(enemy.elementStun || 0, 0.6)
+        }
         if (!enemy.active) this.weapon._onKill(enemy)
       }
+      if (radial) {
+        this.slams.push({ x: this.player.x, y: this.player.y, radius: waveRadius, color: '#f28a59', life: 0.24, maxLife: 0.24 })
+      } else {
+        this.weapon._ring(this.player.x + Math.cos(angle) * waveRadius * 0.45, this.player.y + Math.sin(angle) * waveRadius * 0.45, '#f28a59', waveRadius * 0.55)
+      }
     }
-    this.weapon._ring(this.player.x + Math.cos(angle) * radius * .45, this.player.y + Math.sin(angle) * radius * .45, '#f28a59', radius * .55)
   }
 
   impact(enemy, swing, x, y) {
@@ -292,7 +636,6 @@ export class GluttonCombat {
     if (this.impacts.length > 32) this.impacts.shift()
   }
 
-  /** 同一帧的多次吞噬合并为一次近身爆发，不递归吞噬、不生成远程弹幕。 */
   queueAcid(source = DEVOUR_SOURCE_NORMAL) {
     if (this.biteUnlocked && this.player.devourAcidBurst > 0) {
       if (!this.acidPending || source === DEVOUR_SOURCE_GLUTTON) this.acidSource = source
@@ -300,15 +643,10 @@ export class GluttonCombat {
     }
   }
 
-  /**
-   * 胃酸迸发表现：伤害仍是原有的圆形近身判定，这里只预生成喷溅团块。
-   * 团块中心和半径都限制在实际伤害半径内，避免视觉声称不存在的范围。
-   */
   spawnAcidBurst(radius) {
     const tier = this.player.devourAcidBurst || 0
     const count = Math.min(14, 8 + tier * 2)
     const seed = this.acidBurstSeq++
-    // 纯表现噪声：不消耗 Math.random，避免视觉变化干扰固定种子的战斗结算。
     const noise = (i, k) => {
       const value = Math.sin((i + 1) * 12.9898 + (k + 1) * 78.233 + seed * 37.719 + this.player.x * 0.013 + this.player.y * 0.017) * 43758.5453
       return value - Math.floor(value)
@@ -325,31 +663,28 @@ export class GluttonCombat {
       })
     }
     this.acidBursts.push({ x: this.player.x, y: this.player.y, radius, blobs, life: 0.42, maxLife: 0.42 })
-    if (this.acidBursts.length > 3) this.acidBursts.shift()
+    if (this.acidBursts.length > 4) this.acidBursts.shift()
   }
 
-  hit(enemy, damage, { source = DEVOUR_SOURCE_NORMAL, basic = false, execute = false } = {}) {
+  hit(enemy, damage, { source = DEVOUR_SOURCE_NORMAL, basic = false, execute = false, heavy = false, ignoreShield = false } = {}) {
     if (this.player.dead || this.weapon.game.runFinished) return false
     if (!enemy.active || enemy.devouring || enemy._settled) return false
     const before = enemy.hp
-    enemy.hit(damage, { devourOnHit: true, devourSource: source, devourExecute: execute, bossTomeContext: { heavy: source === DEVOUR_SOURCE_GLUTTON, biteBasic: basic } })
+    enemy.hit(damage, {
+      devourOnHit: true, devourSource: source, devourExecute: execute, ignoreShield,
+      bossTomeContext: { heavy: heavy || source === DEVOUR_SOURCE_GLUTTON, biteBasic: basic },
+    })
     const landed = enemy.hp < before
     if (landed && basic && enemy.isBoss && onGluttonBossBasicHit(this.player, enemy)) {
       this.weapon.enemyManager.addText(this.player.x, this.player.y - 46,
-        `🍽️ 猎食点 +1（${this.player.gluttonCharge}/${GLUTTON_CHARGE_MAX}）`, null, '#a6e77c', 15)
+        `🍽️ 饱食 +1（${Math.min(6, Math.round(this.player.gluttonSatiety || 0))}/6）`, null, '#a6e77c', 14)
     }
     if (landed && !enemy.devouring) {
       this.weapon.enemyManager.addText(enemy.x, enemy.y - 14, String(Math.round((before - enemy.hp) * 10) / 10), null, '#eaffc9', 15)
       if (!enemy.isBoss && !enemy.isEnraged && enemy.active) {
         enemy.gluttonStagger = Math.max(enemy.gluttonStagger || 0, 0.14)
-        // 咬合震慑（饕甲进阶卡）：本体咬中的普通敌人出手伤害短时打折。
-        if (this.player.gluttonCowLevel > 0) {
-          enemy.gluttonCow = gluttonCowDurationAt(this.player.gluttonCowLevel)
-          enemy.gluttonCowMul = gluttonCowPowerAt(this.player.gluttonCowLevel)
-        }
-        const dx = enemy.x - this.player.x
-        const dy = enemy.y - this.player.y
-        const d = Math.hypot(dx, dy) || 1
+        if (this.player.gluttonCowLevel > 0) this.applyCow(enemy)
+        const dx = enemy.x - this.player.x, dy = enemy.y - this.player.y, d = Math.hypot(dx, dy) || 1
         enemy.x += dx / d * 6
         enemy.y += dy / d * 6
       }
@@ -361,59 +696,117 @@ export class GluttonCombat {
     return landed
   }
 
-  /** 重咬前扑：沿锁定咬合方向小步突进，不越过目标身位；路障与世界边界照常约束。 */
-  lunge(swing) {
+  updateAura(dt) {
     const p = this.player
-    const target = swing.target
-    let distance = Math.min(GLUTTON_HEAVY_LUNGE_MAX,
-      GLUTTON_HEAVY_LUNGE_BASE + GLUTTON_HEAVY_LUNGE_PER_LEVEL * (p.gluttonHeavyLevel || 0))
-    if (target?.active && !target.devouring && target.hp > 0) {
-      const gap = Math.hypot(target.x - p.x, target.y - p.y) - (target.radius || 0) - p.radius
-      distance = Math.min(distance, Math.max(0, gap - 2))
+    this.auraTimer -= dt
+    if (this.auraTimer > 0) return
+    const radius = this.auraRadius()
+    const inAura = []
+    for (const enemy of this.weapon.enemyManager.enemies) {
+      if (!alive(enemy)) continue
+      if (Math.hypot(enemy.x - p.x, enemy.y - p.y) <= radius + (enemy.radius || 0)) inAura.push(enemy)
     }
-    if (distance <= 0) return
-    const end = traceShadowPath(this.game, p, swing.angle, distance)
-    p.x = end.x; p.y = end.y
+    if (!inAura.length) {
+      this.auraTimer = 0
+      return
+    }
+    this.auraTimer = this.auraInterval()
+    const dmg = this.auraDamage()
+    const slowAmt = Math.min(0.35, 0.15 + (p.gluttonAcidAuraLevel || 0) * 0.05)
+    const vulnAmt = this.route === 'mire' ? Math.min(0.32, 0.08 + gluttonAcidAuraVulnAt(p.gluttonAcidAuraLevel) - (p.gluttonAcidAuraLevel ? 0.04 : 0)) : 0
+    let autoDevours = 0
+
+    for (const enemy of inAura) {
+      if (p.dead || this.game.runFinished) break
+      if (!alive(enemy)) continue
+      if (p.isGluttonyLord && !enemy.isBoss && !enemy.isElite && autoDevours < 4 &&
+          hasGluttonResource(p) && enemy.hp <= enemy.maxHp * 0.18 && enemy._devourThresh?.() >= 0) {
+        if (enemy.type !== 'golem' && enemy.type !== 'wraith') {
+          this.weapon.enemyManager._startDevour(enemy, { source: DEVOUR_SOURCE_NORMAL })
+          autoDevours++
+          continue
+        }
+      }
+      enemy.hit(dmg, { devourSource: DEVOUR_SOURCE_NORMAL, bossTomeContext: { gluttonAura: true } })
+      if (enemy.active && !enemy.devouring) {
+        if (!enemy.isBoss) {
+          enemy.corrodeSlowTime = Math.max(enemy.corrodeSlowTime || 0, 0.65)
+          enemy.corrodeSlowAmount = Math.max(enemy.corrodeSlowAmount || 0, slowAmt)
+          if (p.gluttonCowLevel > 0) this.applyCow(enemy)
+        }
+        if (vulnAmt > 0) {
+          enemy.gluttonCorrodeTime = Math.max(enemy.gluttonCorrodeTime || 0, 0.75)
+          enemy.gluttonCorrodeVuln = Math.max(enemy.gluttonCorrodeVuln || 0, vulnAmt)
+        }
+      }
+      if (!enemy.active) this.weapon._onKill(enemy)
+    }
+    this.auraPulses.push({ life: 0.28, maxLife: 0.28 })
+    if (this.auraPulses.length > 3) this.auraPulses.shift()
   }
 
   update(dt) {
-    if (!this.biteUnlocked || this.player.dead || this.weapon.game.runFinished) { this.reset(); return }
+    if (!this.biteUnlocked || this.player.dead || this.weapon.game.runFinished) { this.clearTransient(); return }
+    const p = this.player
+    this.overflowGuardCooldown = Math.max(0, this.overflowGuardCooldown - dt)
     if (this.flash) {
       this.flash.life -= dt
       if (this.flash.life <= 0) this.flash = null
     }
     this.guardPulse = Math.max(0, this.guardPulse - dt)
-    for (const list of [this.impacts, this.morsels, this.acidBursts, this.mires]) {
+    for (const list of [this.impacts, this.morsels, this.acidBursts, this.mires, this.vortices, this.slams, this.spikes, this.auraPulses]) {
       for (let i = list.length - 1; i >= 0; i--) {
         list[i].life -= dt
         if (list[i].life <= 0) list.splice(i, 1)
       }
     }
+
+    // 体表腐蚀光环（360° 贴身威慑）
+    this.updateAura(dt)
+
+    // 深渊吸噬：引力漩涡持续引流聚怪，结束后闭颚重咬
+    if (this.vortex) {
+      const stepDt = Math.min(dt, Math.max(0, this.vortex.windup - this.vortex.elapsed))
+      if (stepDt > 0) this._pullVortexTargets(this.vortex, stepDt)
+      this.vortex.elapsed += dt
+      if (this.vortex.elapsed >= this.vortex.windup) {
+        const settled = this.vortex
+        this.vortex = null
+        this._settleVortexCrunch(settled)
+      }
+    }
+
+    // 腐沼：周期酸蚀伤害并拉拢白旗猎物
     for (const mire of this.mires) {
       mire.tick -= dt
       if (mire.tick > 0) continue
-      mire.tick = .45
-      const damage = this.weapon.damage * this.weapon.levelMul * this.weapon.devourDamageMul * this.endlessDamageMultiplier * (.22 + Math.min(5, this.player.gluttonMireLevel - 1) * .035)
-      for (const enemy of this.weapon.enemyManager.enemies) {
-        if (!enemy.active || enemy.devouring || Math.hypot(enemy.x - mire.x, enemy.y - mire.y) > mire.r + enemy.radius) continue
-        enemy.hit(damage, { preventDevour: true })
-        if (!enemy.isBoss) enemy.slow = Math.max(enemy.slow || 0, .35)
+      mire.tick = 0.4
+      const damage = this.weapon.damage * this.weapon.levelMul * this.weapon.devourDamageMul * this.endlessDamageMultiplier * (0.28 + Math.min(6, (p.gluttonMireLevel || 1) - 1) * 0.045)
+      for (const enemy of [...this.weapon.enemyManager.enemies]) {
+        if (p.dead || this.game.runFinished) break
+        if (!alive(enemy) || Math.hypot(enemy.x - mire.x, enemy.y - mire.y) > mire.r + (enemy.radius || 0)) continue
+        enemy.hit(damage, { devourSource: DEVOUR_SOURCE_NORMAL })
+        if (!enemy.isBoss && enemy.active && !enemy.devouring) {
+          enemy.slow = Math.max(enemy.slow || 0, 0.45)
+          if (enemy.devourable) {
+            const dx = p.x - enemy.x, dy = p.y - enemy.y, d = Math.hypot(dx, dy) || 1
+            enemy.x += dx / d * 18
+            enemy.y += dy / d * 18
+          }
+        }
         if (!enemy.active) this.weapon._onKill(enemy)
       }
     }
+
     this.acidCooldown = Math.max(0, this.acidCooldown - dt)
-    if (this.swing) {
+    if (this.swing && !this.vortex) {
       if (this.swing.phase === 'aim') {
-        // 转头阶段只追随目标方向，不锁定命中；目标在这段时间内移动仍可被重新对准。
         const target = this.swing.target
-        if (target && target.active && !target.devouring && target.hp > 0) {
-          this.swing.desiredAngle = angleTo(this.player, target)
-        }
+        if (alive(target)) this.swing.desiredAngle = angleTo(p, target)
         this.swing.angle = turnToward(this.swing.angle, this.swing.desiredAngle, GLUTTON_AIM_TURN_RATE * dt)
         this.aimAngle = this.swing.angle
         this.swing.remaining -= dt
         if (Math.abs(angleDelta(this.swing.angle, this.swing.desiredAngle)) <= 0.03 || this.swing.remaining <= 0) {
-          // 进入前摇即锁定方向：之后目标绕背仍会挥空，保留现有躲避规则。
           this.swing.angle = this.swing.desiredAngle
           this.aimAngle = this.swing.angle
           this.swing.phase = 'windup'
@@ -424,80 +817,67 @@ export class GluttonCombat {
         if (this.swing.phase === 'windup' && this.swing.remaining <= 0) {
           this.swing.phase = 'strike'
           this.swing.remaining += this.swing.strike
-          // 重咬出手帧前扑：前摇读招阶段不位移，扑食动作才带身位。
-          if (this.swing.heavy) this.lunge(this.swing)
         }
         if (this.swing.remaining <= 0) {
           const swing = this.swing
           this.swing = null
-          // 命中残像留在真实咬合位置，移动后不会把特效拖到新的敌人身上。
-          this.flash = { ...swing, x: this.player.x, y: this.player.y, life: swing.recovery, maxLife: swing.recovery }
+          this.flash = { ...swing, x: p.x, y: p.y, life: swing.recovery, maxLife: swing.recovery }
           this.aimAngle = swing.angle
-          const source = swing.heavy ? DEVOUR_SOURCE_GLUTTON : DEVOUR_SOURCE_NORMAL
-          // 在结算前固定目标，吞噬/首领阶段变化产生的新敌人不会被同一次攻击扫到。
-          const targets = this.weapon.enemyManager.enemies.filter(e => inBiteSector(this.player, e, swing.angle, swing.reach, swing.arc))
-          this.weapon.game.mapFeatures?.attackBarricades(this.player.x, this.player.y, swing.reach)
+          const targets = this.weapon.enemyManager.enemies.filter(e => inBiteSector(p, e, swing.angle, swing.reach, swing.arc))
+          this.weapon.game.mapFeatures?.attackBarricades(p.x, p.y, swing.reach)
           let landed = false
-          let bossHit = false
+          const sweepMul = 1 + (p.gluttonBiteSweepLevel || 0) * 0.12
+          const berserkMul = p.gluttonBerserkTimer > 0 ? 1.35 : 1
           for (const e of targets) {
-            if (this.player.dead || this.weapon.game.runFinished) break
-            const multiplier = swing.heavy ? (e.isBoss ? GLUTTON_BOSS_HEAVY_DAMAGE : GLUTTON_HEAVY_DAMAGE) : GLUTTON_BITE_DAMAGE
-            const crit = !swing.heavy && Math.random() < this.weapon.critChance ? this.weapon.critMul : 1
-            const damage = this.weapon.damage * this.weapon.levelMul * this.weapon.devourDamageMul * this.endlessDamageMultiplier * multiplier * (swing.heavy ? getGluttonHeavyDamageMultiplier(this.player.gluttonHeavyLevel) : 1) * crit * (this.player.isGluttonyLord ? 1.25 : 1)
+            if (p.dead || this.weapon.game.runFinished) break
+            const crit = Math.random() < this.weapon.critChance ? this.weapon.critMul : 1
+            const snowball = this.weapon.devourDamageMul * this.endlessDamageMultiplier
+            const damage = this.weapon.damage * this.weapon.levelMul * snowball * GLUTTON_BITE_DAMAGE * sweepMul * berserkMul * crit * (p.isGluttonyLord ? 1.2 : 1)
             const x = e.x, y = e.y
-            const hit = this.hit(e, damage, { source, basic: !swing.heavy, execute: swing.heavy && this.player.isGluttonyLord })
+            const hit = this.hit(e, damage, { source: DEVOUR_SOURCE_NORMAL, basic: true })
             landed ||= hit
             if (hit) this.impact(e, swing, x, y)
-            if (hit && e.isBoss && swing.heavy) {
-              bossHit = true
-              this.grantGuard()
-              this.queueAcid(source)
-            }
           }
-          if (landed && swing.heavy && this.route === 'jaw' && this.player.gluttonAftershockLevel > 0) {
-            this.aftershock(swing.angle, this.player.gluttonAftershockLevel, this.weapon.damage * this.weapon.levelMul * this.weapon.devourDamageMul * this.endlessDamageMultiplier, this.player.gluttonJawUltimate)
+          if (landed && this.route === 'jaw' && p.gluttonAftershockLevel > 0) {
+            this.aftershock(swing.angle, p.gluttonAftershockLevel, this.weapon.damage * this.weapon.levelMul * this.weapon.devourDamageMul * this.endlessDamageMultiplier * 0.55, false, false)
           }
-          if (landed && swing.heavy && this.player.gluttonShellUltimate) this.grantGuard()
-          this.weapon.game.sound.bite(swing.heavy, landed)
-          if (landed && swing.heavy) {
-            // 首领命中的咬合反馈略强，但保持适度，不打断玩家走位。
-            if (bossHit) this.weapon.game.shakeScreen(4, 0.15)
-            else this.weapon.game.shakeScreen(3, 0.12)
-          }
+          this.weapon.game.sound.bite(false, landed)
         }
       }
     }
-    if (this.player.dead || this.weapon.game.runFinished) { this.reset(); return }
+    if (p.dead || this.weapon.game.runFinished) { this.clearTransient(); return }
     if (this.acidPending && this.acidCooldown <= 0) {
       this.acidPending = false
-      this.acidCooldown = 0.4
-      const radius = 90 + this.player.devourAcidBurst * 10
-      const damage = this.weapon.damage * this.weapon.levelMul * this.weapon.devourDamageMul * this.endlessDamageMultiplier * (0.65 + this.player.devourAcidBurst * 0.35)
+      this.acidCooldown = 0.35
+      const tier = p.devourAcidBurst || 0
+      const radius = (105 + tier * 12) * (this.weapon.geneRangeMul || 1)
+      const damage = this.weapon.damage * this.weapon.levelMul * this.weapon.devourDamageMul * this.endlessDamageMultiplier * (0.9 + tier * 0.35)
       for (const e of [...this.weapon.enemyManager.enemies]) {
-        if (this.player.dead || this.weapon.game.runFinished) break
-        if (!e.active || e.devouring || Math.hypot(e.x - this.player.x, e.y - this.player.y) > radius + e.radius) continue
+        if (p.dead || this.weapon.game.runFinished) break
+        if (!alive(e) || Math.hypot(e.x - p.x, e.y - p.y) > radius + (e.radius || 0)) continue
         e.hit(damage, { devourSource: this.acidSource })
-        if (!e.isBoss) e.slow = Math.max(e.slow || 0, 0.7)
+        if (!e.isBoss && e.active && !e.devouring) e.slow = Math.max(e.slow || 0, 0.8)
         if (!e.active) this.weapon._onKill(e)
       }
-      // 不再使用通用扩散圆环；由不规则酸团表达喷溅，伤害范围仍是上面的圆形判定。
       this.spawnAcidBurst(radius)
     }
+    if (this.satietyPending && !p.dead && !this.game.runFinished) this.releaseSatietyBurst()
   }
 
   render(ctx) {
     if (!this.biteUnlocked || this.player.dead) return
+    renderCorrodeAura(ctx, this)
     for (const mire of this.mires) {
       ctx.save()
-      ctx.globalAlpha = Math.max(0, mire.life / mire.maxLife) * .45
+      ctx.globalAlpha = Math.max(0, mire.life / mire.maxLife) * 0.45
       ctx.fillStyle = '#b5d66f'
       ctx.beginPath(); ctx.arc(mire.x, mire.y, mire.r, 0, TAU); ctx.fill()
-      ctx.globalAlpha = Math.max(0, mire.life / mire.maxLife) * .75
+      ctx.globalAlpha = Math.max(0, mire.life / mire.maxLife) * 0.75
       ctx.strokeStyle = '#dff6a1'; ctx.lineWidth = 2
-      ctx.beginPath(); ctx.arc(mire.x, mire.y, mire.r * .82, 0, TAU); ctx.stroke()
+      ctx.beginPath(); ctx.arc(mire.x, mire.y, mire.r * 0.82, 0, TAU); ctx.stroke()
       ctx.restore()
     }
-    renderBiteMotion(ctx, this.player, this.swing, this.flash)
+    renderBiteMotion(ctx, this.player, this.swing, this.flash, this.vortex)
     renderBiteFeedback(ctx, this)
   }
 }

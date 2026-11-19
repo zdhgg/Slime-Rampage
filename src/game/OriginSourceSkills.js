@@ -343,8 +343,8 @@ export function originSourceCastMods(game, snapshot = null) {
     }
   } else if (route === 'resonance') {
     // 共振核心+超载爆发的回路增伤作用于源质技能（合计封顶 30%）；
-    // 单次伤害整体 ×0.9 换更高超载频率。
-    damage *= 0.9 * (1 + Math.min(0.3, growth.circuitDamage * circuits))
+    // 单次伤害整体 ×0.9 在封顶后结算，换更高超载频率的代价始终成立。
+    damage *= 1 + Math.min(0.3, growth.circuitDamage * circuits)
     if (circuits >= ORIGIN_RULES.resonanceMaxCircuits) {
       echo = true
       consumeCircuits = true
@@ -353,7 +353,7 @@ export function originSourceCastMods(game, snapshot = null) {
 
   return {
     route,
-    damage: Math.min(ORIGIN_OVERLOAD_BUDGET.damageCap, damage),
+    damage: Math.min(ORIGIN_OVERLOAD_BUDGET.damageCap, damage) * (route === 'resonance' ? 0.9 : 1),
     area: Math.min(ORIGIN_OVERLOAD_BUDGET.areaCap, area),
     echo,
     stacks,
@@ -362,6 +362,17 @@ export function originSourceCastMods(game, snapshot = null) {
     consumeStacks,
     consumeCircuits,
   }
+}
+
+/** 棱镜边际收益：满层/满回路下伤害与范围乘区均已封顶时，超载棱镜不再进入卡池。 */
+export function originPrismMarginal(game) {
+  const growth = getOriginGrowth(game)
+  const snapshot = { stacks: growth.maxStacks || 0, circuits: ORIGIN_RULES.resonanceMaxCircuits }
+  const levels = game?.skillLevels || {}
+  const lv = Math.max(0, Math.floor(Number(levels.origin_overload) || 0))
+  const at = level => originSourceCastMods({ ...game, skillLevels: { ...levels, origin_overload: level } }, snapshot)
+  const before = at(lv), after = at(lv + 1)
+  return after.damage > before.damage + 1e-9 || after.area > before.area + 1e-9
 }
 
 /** 卡面数值串：当前等级 → 下一级（满级只展示当前）。 */

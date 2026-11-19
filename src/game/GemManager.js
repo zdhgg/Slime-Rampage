@@ -4,7 +4,6 @@ import { getElement } from './ElementSystem.js'
 
 const MAGNET_ACC = 2400 // 吸附加速度（px/s²）：离玩家越远加速越久，形成「越近越快」的磁吸手感
 const MAGNET_MAX_SPEED = 950 // 吸附速度上限（px/s），防止超远处宝石瞬移
-const MAX_SP2 = MAGNET_MAX_SPEED * MAGNET_MAX_SPEED
 
 const MERGE_CELL = 24 // 宝石合并网格单元（≥ 合并半径 16px）
 const MERGE_R2 = 16 * 16 // 合并判定距离平方：同位置（<16px）宝石并入一颗
@@ -23,13 +22,10 @@ const isElementCore = (g) => g.type !== 'exp' && g.type !== 'tome'
  * 宝石管理器：掉落入池 → 磁力吸附 → 拾取结算
  *
  * 磁力吸附算法（update）：
-   *  - idle → magnet：经验/秘籍使用 pickupRadius，元素核心使用较短的
-   *    CORE_MAGNET_RADIUS，靠近后自动吸附；
- *    （平方比较免开方）；
- *  - magnet 移动：每帧把速度向量向「指向玩家的单位向量」方向叠加
- *    MAGNET_ACC × dt（加速度模型），并夹在速度上限内——宝石不是被
- *    Lerp 瞬移，而是真的「加速飞向」玩家；
- *  - 拾取：与玩家距离平方 < 玩家半径² → gainExp 结算 + O(1) 交换删除。
+ *  - idle → magnet：经验/秘籍使用 pickupRadius，元素核心使用较短的
+ *    CORE_MAGNET_RADIUS，靠近后自动吸附（平方比较免开方）。
+ *  - magnet 移动：每帧加速至速度上限，并朝玩家当前位置飞行。
+ *  - 拾取：进入玩家半径后结算，已拾取的宝石用 O(1) 交换删除。
  *
  * 性能优化（长局大量掉落）：
  *  - ① 分帧检测：静止宝石每帧只检测 1/3（帧号轮转），吸附延迟最多
@@ -95,8 +91,7 @@ export class GemManager extends Entity {
       }
     } else {
       g.state = 'idle'
-      g.vx = 0
-      g.vy = 0
+      g.magnetSpeed = 0
       g.x += (Math.random() * 2 - 1) * 80
       g.y += (Math.random() * 2 - 1) * 80
       g.rejectedUntil = this.game.elapsed + 3
@@ -312,7 +307,7 @@ export class GemManager extends Entity {
       ? Math.hypot(this.game.worldWidth || 4000, this.game.worldHeight || 4000)
       : this.player.pickupRadius
     const pickupR2 = pickupR * pickupR
-    const absorbR2 = this.player.radius * this.player.radius
+    const absorbRadius = this.player.radius
     this._pickupSoundCd = Math.max(0, (this._pickupSoundCd || 0) - dt)
 
     this._updateCoreLifetimes(dt)
@@ -352,10 +347,21 @@ export class GemManager extends Entity {
       if (g.state !== 'magnet') continue
       const dx = px - g.x
       const dy = py - g.y
-      const d2 = dx * dx + dy * dy
+      const distance = Math.sqrt(dx * dx + dy * dy)
+      let remainingDistance = distance
 
-      // 拾取判定：距离极近（< 玩家半径）→ 结算并销毁
-      if (d2 < absorbR2) {
+      if (distance >= absorbRadius) {
+        // 只累积速率，每帧重新朝向玩家，避免横向惯性导致绕圈。
+        g.magnetSpeed = Math.min(MAGNET_MAX_SPEED, g.magnetSpeed + MAGNET_ACC * dt)
+        const step = Math.min(distance, g.magnetSpeed * dt)
+        const fraction = step / distance
+        g.x += dx * fraction
+        g.y += dy * fraction
+        remainingDistance -= step
+      }
+
+      // 这一帧进入拾取半径就结算，避免跨过玩家后漏捡。
+      if (remainingDistance < absorbRadius) {
         if (g.type === 'exp') {
           // 经验宝石：结算经验（复用阶段四的升级判定）
           const leveled = this.player.gainExp(g.value)
@@ -422,19 +428,6 @@ export class GemManager extends Entity {
           continue
         }
       }
-
-      // 加速度模型：速度向玩家方向累积，带上限
-      const d = Math.sqrt(d2) || 1
-      g.vx += (dx / d) * MAGNET_ACC * dt
-      g.vy += (dy / d) * MAGNET_ACC * dt
-      const sp2 = g.vx * g.vx + g.vy * g.vy
-      if (sp2 > MAX_SP2) {
-        const k = MAGNET_MAX_SPEED / Math.sqrt(sp2)
-        g.vx *= k
-        g.vy *= k
-      }
-      g.x += g.vx * dt
-      g.y += g.vy * dt
     }
   }
 

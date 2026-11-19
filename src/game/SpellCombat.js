@@ -43,13 +43,13 @@ export class SpellCombat {
   get baseDamage() { return this.weapon.damage * this.weapon.levelMul * this.weapon.devourDamageMul }
   get power() {
     const single = this.buildMode === 'single' ? 1 + Math.min(8, this.routeSingleLevel) * .08 : 1
-    const cycle = this.buildMode === 'cycle' ? 1 + Math.min(8, this.routeCycleLevel) * .05 : 1
+    const cycle = this.buildMode === 'cycle' ? 1 + Math.min(8, this.routeCycleLevel) * .08 : 1
     const routeGene = this.buildMode === 'fusion' ? 1 : (this.weapon.spellGeneRoutePowerMul || 1)
-    return this.baseDamage * (1 + .18 * this.level('ele_affinity') + .08 * this.rank('power')) * single * cycle * (this.weapon.spellGenePowerMul || 1) * routeGene * (this.game.primarySpec === 'elemental' ? 1.2 : 1)
+    return this.baseDamage * (1 + .08 * this.rank('power')) * single * cycle * (this.weapon.spellGenePowerMul || 1) * routeGene * (this.game.primarySpec === 'elemental' ? 1.2 : 1)
   }
   get reactionPower() {
     const route = this.buildMode === 'fusion' ? 1 + Math.min(8, this.routeFusionLevel) * .09 : 1
-    return this.power * route * (1 + this.level('ele_resonance') * .2 + this.rank('reaction') * .25 + this.rank('reactionPower') * .1) * (this.weapon.geneReactionDmgMul || 1) * (this.weapon.spellGeneReactionMul || 1) * (this.game.primarySpec === 'elemental' ? 1.35 : 1)
+    return this.power * route * (1 + this.rank('reaction') * .25 + this.rank('reactionPower') * .1) * (this.weapon.geneReactionDmgMul || 1) * (this.weapon.spellGeneReactionMul || 1) * (this.game.primarySpec === 'elemental' ? 1.35 : 1)
   }
   get activePower() { return (this.game?.bossTomes?.activeSpellMultiplier || 1) * this.power * (1 + .2 * this.level('ele_overload') + .25 * this.rank('active') + .1 * this.rank('activePower')) }
   get activeCooldown() { return Math.max(5.5, 10 * (1 - .05 * this.level('ele_overload') - .04 * this.rank('active')) * (this.game?.bossTomes?.spellCooldownMultiplier || 1)) }
@@ -159,7 +159,7 @@ export class SpellCombat {
       normalChoices: this.normalChoices, routeInvestment: this.route ? Object.keys(this.upgrades).filter(id => ELEMENTAL_ROUTE_SKILL_BY_ID[id]?.route === this.route).reduce((n, id) => n + this.rank(id), 0) : 0,
       cores: this.cores, activeRank: this.rank('active'), activeName: this.activeName }
   }
-  interval(id) { return Math.max(.5, SPELL_ELEMENTS[id].interval * this.weapon.attackInterval * (1 - this.level('spell_haste') * .08)) }
+  interval(id) { return Math.max(.5, SPELL_ELEMENTS[id].interval * this.weapon.attackInterval) }
   schoolPower(id) { return spellSchoolPower(this.level(`spell_${id}_power`)) }
   enhancements(id) {
     return [this.schoolPower(id) > 1 ? `威力+${Math.round((this.schoolPower(id) - 1) * 100)}%` : '', this.behaviorEnhancements(id)].filter(Boolean).join(' · ')
@@ -304,10 +304,17 @@ export class SpellCombat {
   }
   area(center, radius, damage, element, flags = {}) {
     this.game.mapFeatures?.attackBarricades?.(center.x, center.y, radius)
+    let hits = 0, kills = 0
     for (const e of [...this.game.enemyManager.enemies]) {
-      if (alive(e) && distance2(center, e) <= (radius + e.radius) ** 2 && shadowLineClear(this.game, center, e)) this.damage(e, damage, element, flags)
+      if (alive(e) && distance2(center, e) <= (radius + e.radius) ** 2 && shadowLineClear(this.game, center, e)) {
+        const before = e.hp
+        this.damage(e, damage, element, flags)
+        if (e.hp < before) hits++
+        if (!e.active || e.devouring) kills++
+      }
       if (!this.available) break
     }
+    return { hits, kills }
   }
   fieldAt(point) { return this.fields.find(f => f.life > 0 && distance2(point, f) <= f.radius ** 2) }
   field(center, { active = false, icy = false, storm = false, rain = false, tomePower = 1 } = {}) {
@@ -421,7 +428,9 @@ export class SpellCombat {
   fusionBurst(point, radius, power, element) {
     if (!this.available || !this.fusion) return
     this.fx(point.x, point.y, radius, this.fusion.color, 'fusion', .45, { colors: this.fusion.combo.map(id => SPELL_ELEMENTS[id].color) })
-    this.area(point, radius, power, element, { reaction: true, statuses: false })
+    const result = this.area(point, radius, power, element, { reaction: true, statuses: false })
+    this.game.combatFeedback?.impact({ ...result, minimum: 5,
+      angle: Math.atan2(point.y - this.player.y, point.x - this.player.x) })
   }
   fireImpact(point, shot) {
     const rank = this.rank('shape_fire'), radius = (48 + this.weapon.genePierces * 8) * this.rangeScale * (1 + this.level('spell_fire_size') * .2)

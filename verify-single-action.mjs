@@ -2,6 +2,7 @@ import { learnTome } from './test-support/arena-fixture.mjs'
 import assert from 'node:assert/strict'
 import { createArena, spawn, spawnBoss, learn, dispose, pressSpace } from './test-support/arena-fixture.mjs'
 import { BOSS_SKILL_DATABASE } from './src/game/SkillPool.js'
+import { GLUTTON_VORTEX_COOLDOWN, GLUTTON_VORTEX_BITE_RADIUS } from './src/game/GluttonCombat.js'
 import { originRouteOptions } from './src/game/OriginBuild.js'
 import { applyGenes } from './src/game/GenePool.js'
 import { RunnerDirector } from './src/game/gameplay/runner/RunnerDirector.js'
@@ -16,7 +17,7 @@ const key = (g, code, repeat = false) => g.input._onKeyDown({ code, repeat, prev
 
 for (const strain of ['origin', 'glutton', 'ricochet', 'elemental', 'shadow', 'summoner']) {
   check(strain, `${strain}: 空格唯一触发，长按/暂停/失焦/冷却不补发`, g => {
-    spawn(g); g.player.gluttonCharge = strain === 'glutton' ? 2 : -1
+    spawn(g)
     let casts = 0
     const skill = g.strainSkill, original = skill.use
     skill.use = () => { casts++; return true }
@@ -28,10 +29,8 @@ for (const strain of ['origin', 'glutton', 'ricochet', 'elemental', 'shadow', 's
       g.input.suspended = true; key(g, 'Space'); g.input.suspended = false
       g._updateStrainSkill(0); assert.equal(casts, 1)
       key(g, 'Space'); g.input._onBlur(); g._updateStrainSkill(0); assert.equal(casts, 1)
-      if (strain !== 'glutton') {
-        g.player.strainSkillCd = 1; key(g, 'Space'); g._updateStrainSkill(0)
-        g._updateStrainSkill(2); assert.equal(casts, 1)
-      }
+      g.player.strainSkillCd = 1; key(g, 'Space'); g._updateStrainSkill(0)
+      g._updateStrainSkill(2); assert.equal(casts, 1)
       g.input._onKeyDown({ code: 'Space', target: { closest: () => ({}) }, preventDefault() { throw Error('button swallowed') } })
       assert.equal(g.input.consumeFever(), false)
     } finally { skill.use = original }
@@ -93,15 +92,17 @@ check('elemental', '元素冲击只控制范围内普通敌人，减速实效与
   assert.equal(boss.x, bossX); assert.equal(boss.primeSlow, 0)
   e._tickStatus(1.6); assert.equal(e.primeSlow, 0)
 })
-check('glutton', '重碾三级范围、护甲成长、资源边界及重置', g => {
+check('glutton', '重碾三级范围、收敛后胃铠上限、空放深渊吸噬与冷却重置', g => {
   const c = g.weaponSystem.gluttonCombat
   learn(g, 'glut_ram', 3)
-  near(c.reach(true), g.player.radius + 68 * 1.3)
-  assert.equal(g.player.gluttonGuardDuration, 1.6)
-  learn(g, 'glut_bulk', 3); near(g.player.gluttonGuardDuration, 2.8)
-  spawn(g); pressSpace(g); assert.equal(c.swing, null)
-  g.player.gluttonCharge = 1; pressSpace(g); assert.equal(g.player.gluttonCharge, 0)
-  g.reset(); assert.equal(g.player.gluttonHeavyLevel, 0)
+  near(c.reach(true), g.player.radius + GLUTTON_VORTEX_BITE_RADIUS * 1.3)
+  assert.equal(g.player.gluttonGuardDuration, 2.2)
+  learn(g, 'glut_bulk', 3); near(g.player.gluttonGuardDuration, 3.4)
+  assert.equal(c.guardMax, 3)
+  pressSpace(g); assert.ok(c.vortex); assert.equal(g.player.gluttonGuard, 1)
+  near(g.player.strainSkillCd, GLUTTON_VORTEX_COOLDOWN)
+  pressSpace(g); assert.equal(g.player.gluttonGuard, 1)
+  g.reset(); assert.equal(g.player.gluttonHeavyLevel, 0); assert.equal(c.vortex, null); assert.equal(g.player.gluttonGuard, 0)
 })
 check('shadow', '三级虚空步储存短时普攻必暴，不被下一次影袭消耗', g => {
   learnTome(g, 'boss_assassin_voidstep', 3)

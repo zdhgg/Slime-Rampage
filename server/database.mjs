@@ -14,7 +14,7 @@ export function withTransaction(db, operation) {
   }
 }
 
-export function openDatabase(filename) {
+export function openDatabase(filename, { migrate: shouldMigrate = true } = {}) {
   mkdirSync(dirname(filename), { recursive: true })
   const db = new DatabaseSync(filename, { timeout: 5000 })
   db.exec(`
@@ -26,11 +26,11 @@ export function openDatabase(filename) {
       applied_at TEXT NOT NULL
     );
   `)
-  migrate(db)
+  if (shouldMigrate) migrateDatabase(db)
   return db
 }
 
-function migrate(db) {
+export function migrateDatabase(db) {
   const applied = new Set(
     db.prepare('SELECT version FROM schema_migrations').all().map((row) => Number(row.version))
   )
@@ -125,6 +125,34 @@ function migrate(db) {
           user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
           data_json TEXT NOT NULL
         );
+      `,
+    },
+    {
+      version: 3,
+      sql: `
+        ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'player';
+        UPDATE users SET role = 'admin' WHERE id = (SELECT MIN(id) FROM users);
+      `,
+    },
+    {
+      version: 4,
+      sql: `
+        ALTER TABLE account_state ADD COLUMN save_epoch TEXT NOT NULL DEFAULT '';
+        ALTER TABLE account_state ADD COLUMN revision INTEGER NOT NULL DEFAULT 1;
+        ALTER TABLE account_state ADD COLUMN saved_at TEXT NOT NULL DEFAULT '';
+        UPDATE account_state SET save_epoch = lower(hex(randomblob(16)));
+        ALTER TABLE run_tickets ADD COLUMN save_epoch TEXT NOT NULL DEFAULT '';
+        UPDATE run_tickets SET save_epoch = (SELECT save_epoch FROM account_state WHERE user_id = run_tickets.user_id);
+        CREATE TABLE save_history (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          profile_id INTEGER,
+          kind TEXT NOT NULL,
+          payload TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+        CREATE INDEX save_history_profile_idx ON save_history(user_id, profile_id, id DESC);
+        INSERT OR IGNORE INTO server_settings(key, value) VALUES ('server_id', lower(hex(randomblob(16))));
       `,
     },
   ]

@@ -1,6 +1,6 @@
 import { setCritSource } from './CritSources.js'
 
-export const SHADOW_BASE_EVASION = 0.15
+export const SHADOW_BASE_EVASION = 0.18
 export const SHADOW_MAX_EVASION = 0.4
 export const SHADOW_CLONE_CHANCES = [0.6, 0.7, 0.8, 0.9]
 // Baseline + authored ranks through the hardest/endless ceilings. Later ranks

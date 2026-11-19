@@ -2,7 +2,7 @@
 /* Current slime portrait — the family cast drawn live on canvas.
  * Same painter Player.render uses (src/game/slime-art/slime-painter.js +
  * slime-cast.js); portraits use idle breathing and can show a supplied element. */
-import { onMounted, onBeforeUnmount, ref } from 'vue'
+import { onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import '../game/slime-art/slime-painter.js'
 import { drawSlimeFamily, slimePose } from '../game/slime-art/slime-cast.js'
 
@@ -14,6 +14,8 @@ const props = defineProps({
 
 const cv = ref(null)
 let raf = 0
+let observer
+const motion = window.matchMedia('(prefers-reduced-motion: reduce)')
 const DPR = Math.min(window.devicePixelRatio || 1, 2)
 
 function paint(t) {
@@ -43,8 +45,31 @@ function loop(ms) {
   paint(ms / 1000)
   raf = requestAnimationFrame(loop)
 }
-onMounted(() => { raf = requestAnimationFrame(loop) })
-onBeforeUnmount(() => cancelAnimationFrame(raf))
+
+function updateMotion() {
+  cancelAnimationFrame(raf)
+  observer.disconnect()
+  if (motion.matches) {
+    paint(0)
+    observer.observe(cv.value)
+  } else {
+    raf = requestAnimationFrame(loop)
+  }
+}
+
+onMounted(() => {
+  observer = new ResizeObserver(() => paint(0))
+  updateMotion()
+  motion.addEventListener('change', updateMotion)
+})
+watch(() => [props.strain, props.element, props.compact], () => {
+  if (motion.matches) paint(0)
+})
+onBeforeUnmount(() => {
+  cancelAnimationFrame(raf)
+  observer?.disconnect()
+  motion.removeEventListener('change', updateMotion)
+})
 </script>
 
 <template>

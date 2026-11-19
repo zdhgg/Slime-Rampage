@@ -35,11 +35,12 @@ function elementName(id) {
   </details>
 </template>
 <style scoped>
-.origin-loadout { position: absolute; bottom: 14px; left: 14px; z-index: 40; width: min(330px, calc(100% - 28px)); box-sizing: border-box; max-height: 42%; overflow: auto; padding: 12px 16px; border: 1px solid #466658; border-radius: 12px; background: #101e19; color: #e2f6e9; box-shadow: 0 8px 28px #0008; }
+/* z-index 低于升级遮罩(10)：选卡时随战场一起被毛玻璃压暗，不抢三选一焦点 */
+.origin-loadout { position: absolute; bottom: 14px; left: 14px; z-index: 8; width: min(330px, calc(100% - 28px)); box-sizing: border-box; max-height: 42%; overflow: auto; padding: 12px 16px; border: 1px solid var(--adventure-line); border-radius: 12px; background: var(--adventure-paper); color: var(--adventure-ink); box-shadow: var(--adventure-shadow); }
 summary { cursor: pointer; font-weight: 700; }
-p { color: #a8beb0; font-size: 12px; line-height: 1.5; }
-p.inject-line { color: #d4edaa; }
+p { color: var(--adventure-muted); font-size: 12px; line-height: 1.5; }
+p.inject-line { color: var(--adventure-green); }
 label { display: flex; align-items: center; gap: 8px; padding: 7px 0; font-size: 13px; }
-select { flex: 1; min-width: 0; padding: 6px; color: #e2f6e9; background: #20382d; border: 1px solid #547262; border-radius: 5px; }
-small { margin-left: auto; color: #a8beb0; }
+select { flex: 1; min-width: 0; padding: 6px; color: var(--adventure-ink); background: var(--adventure-leaf); border: 1px solid #aabbb0; border-radius: 5px; }
+small { margin-left: auto; color: var(--adventure-muted); }
 </style>

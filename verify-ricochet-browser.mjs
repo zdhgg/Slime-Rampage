@@ -45,21 +45,26 @@ try {
   await shot('01-character')
   await page.locator('.config-actions .primary-action').click()
   await page.locator('.deploy-btn').click()
+  await page.locator('.briefing-overlay').waitFor({ state: 'hidden' })
   await page.locator('.hud-ricochet').waitFor()
   await page.waitForFunction(() => document.querySelector('#app')?.__vue_app__?._instance?.setupState?.engine)
-  await game(() => {
+  const leveled = await game(() => {
     window.playtestGame = document.querySelector('#app').__vue_app__._instance.setupState.engine
     const g = playtestGame
     g.stop(); g.running = true; g._pauseLock = 0; g.input.suspended = false
     g.enemyManager._enemies = []; g.enemyManager._spawnTimer = Infinity
     g._activateExpeditionStage()
     g.start = () => { g.running = true; g.input.suspended = false }
-    g.player.gainExp(g.player.maxExp - g.player.exp)
+    return g.player.gainExp(g.player.maxExp - g.player.exp)
   })
+  assert.equal(leveled, true, '应触发弹射史莱姆升级选卡')
   await page.locator('.skill-card').first().waitFor()
   await shot('02-random-exploration')
   await page.keyboard.press('1')
+  assert.equal(await game(() => playtestGame.weaponSystem.ricochetCombat.normalChoices), 0)
+  await page.keyboard.press('Enter')
   assert.equal(await game(() => playtestGame.weaponSystem.ricochetCombat.normalChoices), 1)
+  await page.locator('.levelup-overlay').waitFor({ state: 'hidden' })
   await game(async () => {
     const g = playtestGame
     g.weaponSystem.ricochetCombat.route = 'split'
@@ -71,12 +76,12 @@ try {
     })
     g.onLevelUp(choices)
   })
-  assert.deepEqual(await page.locator('.ricochet-skill-icon').evaluateAll(nodes => nodes.map(node => node.dataset.iconId)), ['rico_density', 'rico_hunt', 'rico_bloom'])
+  assert.deepEqual(await page.locator('.skill-card .ricochet-skill-icon').evaluateAll(nodes => nodes.map(node => node.dataset.iconId)), ['rico_density', 'rico_hunt', 'rico_bloom'])
   assert.equal(await page.locator('.skill-card').evaluateAll(nodes => new Set(nodes.map(node => node.style.getPropertyValue('--rico-color'))).size), 1, 'same-route cards share one family color')
   await shot('02b-split-skill-icons')
   await page.setViewportSize({ width: 390, height: 844 })
   assert.ok(await game(() => document.documentElement.scrollWidth <= innerWidth + 1))
-  const iconBounds = await page.locator('.ricochet-skill-icon').first().boundingBox()
+  const iconBounds = await page.locator('.skill-card .ricochet-skill-icon').first().boundingBox()
   const cardBounds = await page.locator('.skill-card').first().boundingBox()
   assert.ok(iconBounds.x >= cardBounds.x && iconBounds.x + iconBounds.width <= cardBounds.x + cardBounds.width, 'mobile route icon stays within card')
   await shot('02c-split-skill-icons-mobile')
@@ -95,6 +100,7 @@ try {
   assert.equal(await page.locator('.route-card').count(), 3)
   assert.equal(await page.locator('.route-card:disabled').count(), 1)
   await page.keyboard.press('2')
+  await page.keyboard.press('Enter')
   assert.equal(await page.locator('.route-review').count(), 0, '缺少入口时键盘同样不可选择')
   await shot('03-route-desktop')
   await page.setViewportSize({ width: 390, height: 844 })
@@ -106,10 +112,15 @@ try {
   assert.ok((await page.locator('.route-card').nth(2).boundingBox()).y >= 0, '触屏可滚动到最后一条路线')
   await page.setViewportSize({ width: 1440, height: 960 })
   await page.keyboard.press('3')
+  await page.keyboard.press('Enter')
   await page.locator('.route-review').waitFor()
   assert.equal(await game(() => playtestGame.weaponSystem.ricochetCombat.route), null, '第一次选择仅预览')
   await shot('05-confirmation')
+  await page.locator('.review-actions .confirm').focus()
+  await page.keyboard.press('Space')
+  assert.equal(await page.locator('.route-review').count(), 1, '空格不会确认已聚焦的路线按钮')
   await page.keyboard.press('2')
+  await page.keyboard.press('Enter')
   await page.locator('.route-grid').waitFor()
   await page.locator('.route-card').first().click()
   await page.getByRole('button', { name: /返回重选/ }).click()
@@ -123,7 +134,8 @@ try {
   // All foundations and route advances are filled; the eligible ultimate is still a real random draw.
   await game(() => {
     const g = playtestGame
-    for (const id of ['split', 'bounce', 'multishot', 'haste', 'velocity', 'compression', 'recharge', 'vitality', 'extension', 'amplify']) g.skillLevels[`rico_${id}`] = 2
+    for (const id of ['split', 'bounce', 'multishot', 'haste', 'velocity', 'compression', 'recharge', 'vitality']) g.skillLevels[`rico_${id}`] = 2
+    g.skillLevels.rico_bounce = 3; g.skillLevels.rico_extension = 3; g.skillLevels.rico_amplify = 3
     g.skillLevels.rico_echo = 1; g.skillLevels.rico_split_bounce = 1
     g.player.level = 14; g.enemyManager.wave = 10; g.expeditionStage = 5
     // Keep this UI verification deterministic while production draws stay random.

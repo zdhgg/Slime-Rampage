@@ -5,8 +5,9 @@ import { GAMEPLAY_NAMES, ACCOUNT_MODES } from '../game/AccountRules.js'
 import { MODES, DIFFICULTIES } from '../game/RunRules.js'
 import { useDialogFocus } from './useDialogFocus.js'
 import './account-panels.css'
-const props = defineProps({ accountData: Object, pending: { type: Array, default: () => [] }, syncing: Boolean })
-const emit = defineEmits(['close', 'retry', 'data', 'discard'])
+const props = defineProps({ accountData: Object, pending: { type: Array, default: () => [] }, syncing: Boolean, damagedCount: Number })
+const emit = defineEmits(['close', 'retry', 'data', 'discard', 'export', 'import'])
+const importPicker = ref(null)
 const dialog = ref(null)
 useDialogFocus(dialog, () => emit('close'))
 const page = ref(1)
@@ -35,11 +36,20 @@ async function load() {
 function modeLabel(entry) {
   return entry.gameplay === 'arena' ? `${MODES[entry.mode]?.name} · ${DIFFICULTIES[entry.difficulty]?.name}` : ACCOUNT_MODES[entry.gameplay]?.[entry.mode]
 }
+async function importFile(event) {
+  const file = event.target.files?.[0]
+  event.target.value = ''
+  if (!file) return
+  try {
+    if (file.size > 4 * 1024 * 1024) throw new Error('待同步文件过大')
+    emit('import', JSON.parse(await file.text()))
+  } catch { error.value = '无法读取待同步文件，请选择有效的 JSON 文件' }
+}
 </script>
 <template>
   <div class="account-overlay" @pointerdown.self="emit('close')">
     <section ref="dialog" class="account-dialog" role="dialog" aria-modal="true" aria-labelledby="records-title">
-      <header><div><span class="eyebrow">MY RECORDS</span><h2 id="records-title">我的游戏记录</h2><p>主战场、突围与塔防的成绩和进度，随账号保存。</p></div><button class="close" aria-label="关闭游戏记录" @click="emit('close')">×</button></header>
+      <header><div><h2 id="records-title">我的游戏记录</h2><p>主战场、突围与塔防的成绩和进度，随账号保存。</p></div><button class="close" aria-label="关闭游戏记录" @click="emit('close')">×</button></header>
       <div class="gameplay-summaries" aria-label="三个玩法的成绩概览">
         <section v-for="(name, id) in GAMEPLAY_NAMES" :key="id" class="gameplay-summary" :aria-label="`${name}成绩概览`">
           <div class="summary-heading"><h3>{{ name }}</h3><span>{{ history ? `${history.summary?.[id]?.plays || 0} 局` : '—' }}</span></div>
@@ -57,10 +67,15 @@ function modeLabel(entry) {
       <div v-if="pending.length" class="pending-list" role="status">
         <strong>{{ pending.length }} 条记录等待同步</strong>
         <div v-for="job in pending" :key="job.ticketId"><p>{{ GAMEPLAY_NAMES[job.gameplay] }} · {{ job.error || '正在保存' }}</p>
+          <p v-if="job.expiresAt">补交截止 {{ new Date(job.expiresAt).toLocaleString('zh-CN') }}<span v-if="job.attempts"> · 已尝试 {{ job.attempts }} 次</span><span v-if="job.nextRetryAt && !job.failed"> · 下次重试 {{ new Date(job.nextRetryAt).toLocaleTimeString('zh-CN') }}</span></p>
           <template v-if="job.failed"><button v-if="discardId !== job.ticketId" :disabled="syncing" @click="discardId = job.ticketId">放弃此结算</button><template v-else><span>此局将无法恢复。</span><button :disabled="syncing" @click="emit('discard', job.ticketId); discardId = ''">确认放弃</button><button @click="discardId = ''">保留</button></template></template>
         </div>
         <button :disabled="syncing" @click="emit('retry')">{{ syncing ? '正在同步…' : '重试同步' }}</button>
+        <button @click="emit('export')">导出待同步记录</button>
       </div>
+      <p v-if="damagedCount" role="alert">有 {{ damagedCount }} 条本机记录无法读取，原始数据已保留，其他记录可以正常同步。</p>
+      <button :disabled="syncing" @click="importPicker?.click()">导入待同步记录</button>
+      <input ref="importPicker" type="file" accept=".json,application/json" hidden @change="importFile" />
       <div class="board-meta"><span>行动历史 · {{ history?.overallTotal ?? '—' }} 局已同步</span><button :disabled="loading" @click="load">刷新</button></div>
       <div class="tabs record-filters" aria-label="筛选行动历史">
         <button v-for="(name, id) in filters" :key="id" :aria-pressed="gameplay === id" @click="selectGameplay(id)">{{ name }}<span class="filter-count">{{ history ? id === 'all' ? history.overallTotal : history.summary?.[id]?.plays || 0 : '—' }}</span></button>

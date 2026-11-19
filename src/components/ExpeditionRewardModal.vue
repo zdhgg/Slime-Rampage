@@ -60,29 +60,455 @@ function trap(event) {
           <strong class="card-stats">{{ card.stats }}</strong><span class="card-action">{{ card.level ? `Lv.${card.level} → Lv.${card.level + 1}` : '获得 Lv.1' }}<span>选择 →</span></span>
         </button>
       </div>
-      <p class="reward-footer">{{ ordinary ? '本次选择不增加玩家等级' : supply ? '整备完成后进入下一章' : '最高 Lv.3 · 每次随机三选一 · 不占用普通升级次数' }}<span v-if="!ordinary">方向键切换 · Enter 确认 · 数字键直选</span></p>
+      <p class="reward-footer">{{ ordinary ? '本次选择不增加玩家等级' : supply ? '整备完成后进入下一章' : '最高 Lv.3 · 每次随机三选一 · 不占用普通升级次数' }}<span v-if="!ordinary">方向键或数字键切换 · Enter 确认</span></p>
     </section>
   </div>
 </template>
 <style scoped>
-.reward-overlay { position: absolute; inset: 0; z-index: 140; display: grid; place-items: center; padding: 24px; background: rgb(4 9 7 / .82); backdrop-filter: blur(4px); }
-.reward-panel { box-sizing: border-box; width: min(940px, 100%); max-height: calc(100dvh - 48px); overflow-y: auto; padding: 30px; border: 1px solid #39483d; border-radius: 12px; color: #edf4e8; background: #101813; box-shadow: 0 20px 70px rgb(0 0 0 / .35); outline: none; }
-.reward-heading { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 24px; }.reward-kicker { margin: 0 0 9px; color: #d6bd7d; font-size: 12px; font-weight: 600; }h2 { margin: 0; font-size: 27px; letter-spacing: -.5px; }
-.reward-source { margin: 10px 0 0; color: #a2afa3; font-size: 13px; line-height: 1.6; }.reward-steps { display: flex; flex-shrink: 0; gap: 20px; margin: 0; padding: 0; list-style: none; font-size: 12px; color: #768477; }.reward-steps .current { color: #d4e9a8; }
-.reward-summary { display: flex; flex-wrap: wrap; gap: 12px; margin: 0 0 22px; padding: 13px 15px; border-left: 2px solid #b7d88a; color: #d4e6c4; background: #1a271c; font-size: 13px; line-height: 1.6; }.reward-summary span { color: #94a68c; }
-.reward-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }.reward-options button { --tome-color: #b9d99c; display: flex; flex-direction: column; align-items: flex-start; min-width: 0; padding: 20px; border: 1px solid #3b473f; border-radius: 8px; color: #edf4e8; background: #1a231d; font: inherit; text-align: left; cursor: pointer; transition: border-color 140ms, background 140ms; }
-.reward-options button:hover, .reward-options button.selected { border-color: var(--tome-color); background: #202c24; }.reward-options button:focus-visible { outline: 2px solid #d4e9a8; outline-offset: 3px; }.reward-options button:active { background: #29382b; }.reward-options button:disabled { cursor: default; color: #9ca69c; border-color: #333c35; background: #171e19; }.reward-options button:disabled .card-stats, .reward-options button:disabled .card-action { color: #9ca69c; }
-.card-top { display: flex; justify-content: space-between; align-items: center; width: 100%; margin-bottom: 15px; }.card-kind { color: var(--tome-color); font-size: 11px; }kbd { color: #a4afa4; background: #101813; padding: 3px 6px; border: 1px solid #445046; border-radius: 3px; font: inherit; font-size: 10px; }h3 { margin: 5px 0 10px; font-size: 19px; }.reward-options p { margin: 0 0 18px; color: #afbbaf; font-size: 12px; line-height: 1.8; }
-.tome-ranks { display: flex; gap: 5px; margin-bottom: 15px; }.tome-ranks i { width: 22px; height: 4px; border-radius: 1px; background: #485049; }.tome-ranks .owned { background: var(--tome-color); }.tome-ranks .next { background: #e1cf91; }.card-stats { margin-top: auto; color: #d6e6b9; font-size: 12px; line-height: 1.9; font-weight: 500; }.card-action { display: flex; justify-content: space-between; box-sizing: border-box; width: 100%; margin-top: 18px; padding-top: 14px; border-top: 1px solid #3a473c; color: #c5d1bd; font-size: 11px; }
-.supply-icon { font-size: 27px; color: #b7d88a; }.blood .supply-icon { color: #ed9e92; }.supply-options button { min-height: 220px; }
-/* 源质记忆卡：沿用秘典排版，用左侧同色竖条 + 来源/触发说明做出独立身份 */
-.tome-options button.is-memory { border-color: color-mix(in srgb, var(--tome-color) 62%, #3b473f); background: linear-gradient(180deg, color-mix(in srgb, var(--tome-color) 10%, #1a231d), #1a231d 62%); box-shadow: inset 3px 0 0 var(--tome-color); }
-.tome-options button.is-memory .card-kind { color: var(--tome-color); font-weight: 700; letter-spacing: 0.6px; }
-.reward-options p.card-source { margin: 0 0 8px; color: color-mix(in srgb, var(--tome-color) 70%, #afbbaf); font-size: 11px; letter-spacing: 0.4px; }
-.reward-options p.card-trigger { margin: 0 0 14px; padding: 6px 9px; border-left: 2px solid color-mix(in srgb, var(--tome-color) 55%, transparent); color: #cfe0cf; font-size: 11px; line-height: 1.6; background: rgb(255 255 255 / .03); }
-.reward-footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 9px; margin: 22px 0 0; color: #8e9e8f; font-size: 11px; line-height: 1.6; }.reward-footer span { color: #98a699; }
-@media (max-width: 650px) {
-  .reward-overlay { padding: 12px; }.reward-panel { padding: 20px 16px; max-height: calc(100dvh - 24px); }.reward-heading { align-items: flex-start; flex-direction: column; gap: 14px; margin-bottom: 20px; }h2 { font-size: 23px; }.reward-steps { gap: 24px; }.reward-options { grid-template-columns: 1fr; gap: 10px; }.reward-options button { padding: 16px; }.card-top { margin-bottom: 8px; }
-  .tome-options button { display: grid; grid-template-columns: 58px 1fr; column-gap: 13px; }.tome-options .card-top, .tome-options .card-stats, .tome-options .card-action { grid-column: 1 / -1; }.tome-options :deep(.skill-glyph) { grid-row: 2 / 4; align-self: start; margin: 4px 0; }.tome-options h3 { font-size: 17px; }.tome-options p { margin-bottom: 10px; }.tome-ranks { grid-column: 2; margin-bottom: 12px; }.supply-options button { min-height: 170px; }.reward-footer span { display: none; }
+.reward-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 140;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(8, 17, 13, 0.72);
+  backdrop-filter: blur(11px);
+}
+
+.reward-panel {
+  box-sizing: border-box;
+  width: min(980px, 100%);
+  max-height: calc(100dvh - 48px);
+  overflow-y: auto;
+  padding: 28px 30px 24px;
+  border: 1px solid rgba(232, 198, 122, 0.38);
+  border-radius: 18px;
+  color: var(--art-text, #f3ead5);
+  background:
+    radial-gradient(ellipse at 50% 0%, rgba(215, 184, 110, 0.14), transparent 58%),
+    rgba(16, 26, 21, 0.93);
+  backdrop-filter: blur(16px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 244, 206, 0.14),
+    0 28px 72px rgba(0, 0, 0, 0.6);
+  outline: none;
+}
+
+.reward-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 22px;
+}
+
+.reward-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 10px;
+  padding: 3px 12px;
+  border-radius: 999px;
+  background: rgba(215, 184, 110, 0.12);
+  border: 1px solid rgba(215, 184, 110, 0.34);
+  color: #f2d27a;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+}
+
+.reward-kicker::before {
+  content: '✦';
+  font-size: 10px;
+  opacity: 0.9;
+}
+
+h2 {
+  margin: 0;
+  color: #f7df94;
+  font-size: 28px;
+  font-weight: 850;
+  letter-spacing: 0.3px;
+  text-shadow: 0 2px 14px rgba(215, 184, 110, 0.24), 0 2px 6px rgba(0, 0, 0, 0.45);
+}
+
+.reward-source {
+  margin: 8px 0 0;
+  color: #c2d0bf;
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+
+.reward-steps {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 0 0;
+  padding: 4px 6px;
+  list-style: none;
+  border-radius: 999px;
+  background: rgba(10, 18, 14, 0.72);
+  border: 1px solid rgba(225, 211, 170, 0.22);
+}
+
+.reward-steps li {
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--art-muted, #a9b6a4);
+}
+
+.reward-steps .current {
+  color: #0e1914;
+  background: linear-gradient(135deg, #f7df94, #d7b86e);
+  box-shadow: 0 2px 10px rgba(215, 184, 110, 0.3);
+}
+
+.reward-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 20px;
+  padding: 11px 15px;
+  border: 1px solid rgba(140, 255, 200, 0.22);
+  border-left: 3px solid #7ee8b2;
+  border-radius: 0 10px 10px 0;
+  color: var(--art-text, #f3ead5);
+  background: rgba(23, 40, 32, 0.85);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.reward-summary span {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(126, 232, 178, 0.14);
+  color: #8eecc0;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.reward-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.reward-options button {
+  --tome-color: #d7b86e;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+  padding: 18px 18px 16px;
+  border: 1.5px solid color-mix(in srgb, var(--tome-color) 32%, rgba(225, 211, 170, 0.22));
+  border-radius: 14px;
+  color: var(--art-text, #f3ead5);
+  background:
+    radial-gradient(circle at 50% 18%, color-mix(in srgb, var(--tome-color) 16%, transparent) 0%, transparent 58%),
+    linear-gradient(180deg, rgba(28, 42, 35, 0.96) 0%, rgba(15, 25, 20, 0.99) 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 246, 214, 0.08), 0 12px 28px rgba(0, 0, 0, 0.38);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275), border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.reward-options button::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3.5px;
+  border-radius: 14px 14px 0 0;
+  background: linear-gradient(90deg, transparent 8%, color-mix(in srgb, var(--tome-color) 62%, #f7df94 38%) 50%, transparent 92%);
+  opacity: 0.78;
+  pointer-events: none;
+}
+
+.reward-options button:hover:not(:disabled),
+.reward-options button.selected:not(:disabled) {
+  transform: translateY(-5px);
+  border-color: color-mix(in srgb, var(--tome-color) 55%, #f7df94 45%);
+  background:
+    radial-gradient(circle at 50% 18%, color-mix(in srgb, var(--tome-color) 24%, transparent) 0%, transparent 60%),
+    linear-gradient(180deg, color-mix(in srgb, var(--tome-color) 9%, #1f3028) 0%, rgba(17, 28, 22, 0.99) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 244, 206, 0.14),
+    0 0 26px color-mix(in srgb, var(--tome-color) 26%, rgba(247, 223, 148, 0.16)),
+    0 18px 36px rgba(0, 0, 0, 0.48);
+}
+
+.reward-options button:focus-visible {
+  outline: 2px solid var(--art-focus, #a9e8a0);
+  outline-offset: 2px;
+}
+
+.reward-options button:active:not(:disabled) {
+  transform: translateY(-2px);
+}
+
+.reward-options button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+  filter: saturate(0.35);
+}
+
+.card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  margin-bottom: 14px;
+}
+
+.card-kind {
+  padding: 3px 10px;
+  border-radius: 999px;
+  color: color-mix(in srgb, var(--tome-color) 72%, #f7df94 28%);
+  background: color-mix(in srgb, var(--tome-color) 14%, rgba(10, 18, 14, 0.85));
+  border: 1px solid color-mix(in srgb, var(--tome-color) 36%, transparent);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+}
+
+kbd {
+  min-width: 22px;
+  padding: 2px 7px;
+  border: 1px solid rgba(225, 211, 170, 0.24);
+  border-radius: 6px;
+  color: var(--art-muted, #a9b6a4);
+  background: rgba(11, 19, 15, 0.82);
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 800;
+  text-align: center;
+}
+
+.reward-options button.selected:not(:disabled) kbd {
+  color: #0e1914;
+  background: linear-gradient(135deg, #f7df94, #d7b86e);
+  border-color: #f7df94;
+  box-shadow: 0 0 10px rgba(247, 223, 148, 0.45);
+}
+
+.tome-options :deep(.skill-glyph) {
+  --skill-icon-color: var(--tome-color) !important;
+  align-self: center;
+  margin: 2px 0 12px;
+  border-color: color-mix(in srgb, var(--tome-color) 48%, #f7df94 52%);
+  box-shadow:
+    inset 0 -6px 12px color-mix(in srgb, var(--tome-color) 42%, rgba(0, 0, 0, 0.35)),
+    0 0 22px color-mix(in srgb, var(--tome-color) 38%, transparent);
+}
+
+.tome-options h3 {
+  width: 100%;
+  text-align: center;
+}
+
+h3 {
+  margin: 2px 0 8px;
+  font-size: 19px;
+  font-weight: 800;
+  color: color-mix(in srgb, var(--tome-color) 70%, #f9f3e3);
+  text-shadow: 0 1px 10px color-mix(in srgb, var(--tome-color) 24%, transparent);
+}
+
+.reward-options p {
+  margin: 0 0 14px;
+  color: #c8d4c4;
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+
+.tome-ranks {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+  margin-bottom: 14px;
+}
+
+.tome-ranks i {
+  flex: 1;
+  height: 5px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.tome-ranks .owned {
+  background: var(--tome-color);
+  border-color: color-mix(in srgb, var(--tome-color) 70%, #ffffff 30%);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--tome-color) 55%, transparent);
+}
+
+.tome-ranks .next {
+  background: linear-gradient(90deg, #f7df94, #d7b86e);
+  border-color: rgba(255, 244, 206, 0.65);
+  box-shadow: 0 0 10px rgba(247, 223, 148, 0.45);
+}
+
+.card-stats {
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: auto;
+  padding: 9px 11px;
+  border-radius: 10px;
+  color: var(--art-text, #f3ead5);
+  background: color-mix(in srgb, var(--tome-color) 11%, rgba(10, 18, 14, 0.74));
+  border: 1px solid color-mix(in srgb, var(--tome-color) 30%, transparent);
+  box-shadow: inset 3px 0 0 var(--tome-color);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.6;
+}
+
+.card-action {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(225, 211, 170, 0.14);
+  color: #c8d4c4;
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+.tome-options .card-action span {
+  padding: 4px 11px;
+  border-radius: 999px;
+  color: #f7df94;
+  background: rgba(215, 184, 110, 0.14);
+  border: 1px solid rgba(215, 184, 110, 0.34);
+  transition: background 0.16s ease, color 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+}
+
+.tome-options button.selected:not(:disabled) .card-action span,
+.tome-options button:hover:not(:disabled) .card-action span {
+  color: #0e1914;
+  background: linear-gradient(135deg, #f7df94, #d7b86e);
+  border-color: #f7df94;
+  box-shadow: 0 3px 12px rgba(215, 184, 110, 0.35);
+}
+
+/* 章间整备（休整 / 研习 / 血统沸腾） */
+.supply-options button {
+  min-height: 230px;
+}
+
+.supply-options button.rest { --tome-color: #7ee8b2; }
+.supply-options button.tome { --tome-color: #6cc8f5; }
+.supply-options button.blood { --tome-color: #f07b6e; }
+
+.supply-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--tome-color) 16%, rgba(10, 18, 14, 0.8));
+  border: 1px solid color-mix(in srgb, var(--tome-color) 40%, transparent);
+  color: var(--tome-color);
+  font-size: 21px;
+  box-shadow: 0 0 14px color-mix(in srgb, var(--tome-color) 22%, transparent);
+}
+
+.supply-options button:not(:disabled) .card-action {
+  color: color-mix(in srgb, var(--tome-color) 75%, #f7df94 25%);
+}
+
+/* 源质记忆卡（原生黏液吸收首领源质）：更醒目的生态光条与身份徽章 */
+.tome-options button.is-memory {
+  border-color: color-mix(in srgb, var(--tome-color) 62%, #f7df94 38%);
+  background:
+    radial-gradient(circle at 50% 18%, color-mix(in srgb, var(--tome-color) 22%, transparent) 0%, transparent 60%),
+    linear-gradient(180deg, color-mix(in srgb, var(--tome-color) 11%, #1c2c24) 0%, rgba(15, 25, 20, 0.99) 100%);
+  box-shadow:
+    inset 3px 0 0 var(--tome-color),
+    inset 0 1px 0 rgba(255, 246, 214, 0.14),
+    0 12px 30px rgba(0, 0, 0, 0.42);
+}
+
+.tome-options button.is-memory .card-kind {
+  color: #0e1914;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--tome-color) 75%, #ffffff 25%), var(--tome-color));
+  border-color: rgba(255, 255, 255, 0.65);
+  font-weight: 800;
+  letter-spacing: 0.5px;
+}
+
+.reward-options p.card-source {
+  width: 100%;
+  margin: 0 0 8px;
+  text-align: center;
+  color: #e6cb88;
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.4px;
+}
+
+.reward-options p.card-trigger {
+  box-sizing: border-box;
+  width: 100%;
+  margin: 0 0 14px;
+  padding: 7px 10px;
+  border-left: 2.5px solid var(--tome-color);
+  border-radius: 0 8px 8px 0;
+  color: #d5e2d0;
+  font-size: 11px;
+  line-height: 1.55;
+  background: color-mix(in srgb, var(--tome-color) 10%, rgba(10, 18, 14, 0.72));
+}
+
+.reward-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin: 20px 0 0;
+  color: var(--art-muted, #a9b6a4);
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+.reward-footer span {
+  padding: 4px 12px;
+  border-radius: 999px;
+  color: #c8d4c4;
+  background: rgba(10, 18, 14, 0.66);
+  border: 1px solid rgba(225, 211, 170, 0.18);
+}
+
+@media (max-width: 720px) {
+  .reward-overlay { padding: 12px; }
+  .reward-panel { padding: 18px 14px 16px; max-height: calc(100dvh - 24px); }
+  .reward-heading { align-items: flex-start; flex-direction: column; gap: 12px; margin-bottom: 16px; }
+  h2 { font-size: 22px; }
+  .reward-options { grid-template-columns: 1fr; gap: 12px; }
+  .reward-options button { padding: 16px; }
+  .reward-options button:hover:not(:disabled),
+  .reward-options button.selected:not(:disabled) { transform: none; }
+  .card-top { margin-bottom: 10px; }
+  .tome-options button { display: grid; grid-template-columns: 58px minmax(0, 1fr); column-gap: 13px; }
+  .tome-options .card-top, .tome-options .card-stats, .tome-options .card-action { grid-column: 1 / -1; }
+  .tome-options h3, .tome-options p, .tome-options .tome-ranks { grid-column: 2; }
+  .tome-options :deep(.skill-glyph) { grid-column: 1; grid-row: 2 / 5; align-self: start; margin: 4px 0; }
+  .tome-options h3 { text-align: left; font-size: 17px; }
+  .tome-options p.card-source { text-align: left; }
+  .tome-options p { margin-bottom: 10px; }
+  .tome-ranks { grid-column: 2; margin-bottom: 12px; }
+  .supply-options button { min-height: 168px; }
+  .reward-footer span { display: none; }
 }
 </style>

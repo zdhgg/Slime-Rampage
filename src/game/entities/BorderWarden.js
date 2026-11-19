@@ -177,6 +177,10 @@ export class BorderWarden extends ExpeditionBoss {
     if (distance > 105) {
       const step = Math.min(distance - 105, this._engageSpeed * this._slowScale() * dt)
       this.x += dx / distance * step; this.y += dy / distance * step
+      if (this.duelArena?.active && !this.duelArena.dissolve) {
+        const pos = this.duelArena.clampPosition(this.x, this.y, this.radius, 16)
+        this.x = pos.x; this.y = pos.y
+      }
       this._moving = true; this._walkT += dt * 5
     }
   }
@@ -225,6 +229,9 @@ export class BorderWarden extends ExpeditionBoss {
     for (const [origin, direction, max] of [[c.x, co, this.game.worldWidth], [c.y, si, this.game.worldHeight]]) {
       if (direction > .0001) c.length = Math.min(c.length, Math.max(0, (max - r - origin) / direction))
       if (direction < -.0001) c.length = Math.min(c.length, Math.max(0, (r - origin) / direction))
+    }
+    if (this.duelArena?.active && !this.duelArena.dissolve) {
+      c.length = this.duelArena.clipRayLength(c.x, c.y, c.angle, c.length, r, 18)
     }
   }
 

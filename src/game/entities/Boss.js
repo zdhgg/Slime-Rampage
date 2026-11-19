@@ -2,6 +2,7 @@ import { Enemy } from './Enemy.js'
 import { AssetManager } from '../AssetManager.js'
 import { drawEnemyArt, drawEnemyShadow, enemyArtFeet, enemyArtTop, hasEnemyArt } from '../EnemyArtRenderer.js'
 import { BOSS_CAST, bossArtId } from '../enemy-art/boss-cast.js'
+import { bossSpecialGeometry, knightDash, archerTribunal, archerFan } from './bossGeometry.js'
 
 const TAU = Math.PI * 2
 
@@ -15,6 +16,8 @@ const BOSS_CFG = {
     damage: 3,
     special: '王者冲锋',
     phaseName: '血誓狂袭',
+    // 登场名片：一行说清「他考什么、两档各加什么」，让 boss 名从标签变成预告
+    briefing: '距离轴｜75% 双段裂地 · 25% 纯冲锋',
   },
   'boss-mage': {
     name: '大法师 梅林',
@@ -25,6 +28,7 @@ const BOSS_CFG = {
     damage: 2,
     special: '奥术环爆',
     phaseName: '奥术失控',
+    briefing: '目标轴｜75% 三护卫护盾 · 25% 停止召唤',
   },
   'boss-archer': {
     name: '弓王 罗宾',
@@ -33,8 +37,9 @@ const BOSS_CFG = {
     range: 260,
     attackInterval: 2.2,
     damage: 2,
-    special: '王庭箭雨',
+    special: '王庭三判',
     phaseName: '猎杀领域',
+    briefing: '时间轴｜三判预判落点 · 25% 四判',
   },
   'boss-final': {
     name: '终审勇者 阿尔凯恩',
@@ -45,6 +50,7 @@ const BOSS_CFG = {
     damage: 3,
     special: '三圣裁决',
     phaseName: '终焉轮转',
+    briefing: '三职轮转｜三问定赏罚 · 答对给 2s 破绽',
   },
   'boss-expedition': {
     name: '讨伐统帅 雷欧尼斯',
@@ -55,10 +61,16 @@ const BOSS_CFG = {
     damage: 3,
     special: '王庭战阵',
     phaseName: '统帅决意',
+    briefing: '远征总分｜机制随关卡叠加',
   },
 }
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value))
+
+// 终局三问：预警 1.8s（比常规强招长，给够走位时间）、答对 2s 破绽、答错 2 点伤害
+const QUIZ_TELEGRAPH = 1.8
+const QUIZ_BREAK = 2
+const QUIZ_PENALTY = 2
 
 /**
  * 王级勇者：普通职业循环 + 可预判强招 + 半血第二阶段 + 强招后破绽。
@@ -87,6 +99,7 @@ export class Boss extends Enemy {
     this.type = type
     this.isBoss = true
     this.name = cfg.name
+    this.briefing = cfg.briefing || ''
     this.speed = cfg.speed * speedMultiplier
     this.radius = cfg.radius
     this.range = cfg.range
@@ -121,6 +134,23 @@ export class Boss extends Enemy {
     this.dashDistance = 650 * 0.42
     this.vulnerableTimer = 0
     this.stateLabel = '追猎'
+
+    // —— 强招几何快照（telegraph 时冻结，execute 时读取；绘制同源） ——
+    this._specialGeometry = null
+    // —— 冲锋落点裂地：0.9s 的低速地面，逼玩家在近身与距离之间做取舍 ——
+    this._rupture = null
+    this._ruptureTier = 1 // 75% 之后升为双段
+    this._ruptureOff = false // 25% 之后不再留地（纯冲锋节奏）
+    // —— 法师的护卫层（目标轴）：每名存活护卫给本体 −20% 承伤，最多 3 层 ——
+    this._guards = []
+    // —— 弓王三判：按玩家速度外推的落点阶梯 ——
+    this._tribunal = null
+    this._volleyHit = false
+    this._volleyFx = null
+    // —— 终局三问（仅限时/无尽终局的终审勇者）：每打满三轮强招插一问 ——
+    this._specialCount = 0
+    this._quizIndex = 0
+    this._quiz = null
 
     // —— 连击（二阶段质变）：强招连续释放，段数随难度档位提升 ——
     this._chainStep = 0
@@ -160,7 +190,7 @@ export class Boss extends Enemy {
     if (stage === 'telegraph') progress = 1 - this.specialTimer / this.specialDuration
     else if (stage === 'dash' || stage === 'step') {
       progress = this._cast ? (this._cast.travel || 0) / this._cast.length
-        : 1 - this.specialTimer / (0.42 + (this.dashChain || 0) * 0.06)
+        : 1 - this.specialTimer / (this._specialGeometry?.lane?.duration || (0.42 + (this.dashChain || 0) * 0.06))
     } else if (stage === 'recover') progress = 1 - this.specialTimer / this._recoveryDuration
     else if (stage === 'chain') progress = 1 - this.specialTimer / (this._sequence ? .32 : this._chainDelay)
     return Object.freeze({
@@ -187,6 +217,12 @@ export class Boss extends Enemy {
     this.dashHit = false
     this.dashChain = 0
     this._specialAttackEvent = null
+    this._specialGeometry = null
+    this._tribunal = null
+    this._volleyHit = false
+    this._volleyFx = null
+    this._quiz = null
+    this._clearRupture()
     this._chainStep = 0
     this._chainTotal = 1
     this._moving = false
@@ -215,7 +251,9 @@ export class Boss extends Enemy {
       phase: this.phase,
       phaseName: this.phase === 2 ? cfg.phaseName : '王级交锋',
       state: this.stateLabel,
-      special: this.isCompositeBoss ? `${cfg.special} · ${attack.name}` : attack.name,
+      special: this.specialPattern === 'final-quiz'
+        ? `${cfg.special} · ${this._quiz?.label || '审判'}`
+        : this.isCompositeBoss ? `${cfg.special} · ${attack.name}` : attack.name,
       castProgress: attack.stage === 'telegraph' ? attack.progress : 0,
       vulnerable: this.active && this.hp > 0 && this.vulnerableTimer > 0,
     }
@@ -229,11 +267,44 @@ export class Boss extends Enemy {
     const formationMul = damage > 0
       ? this.game?.enemyManager?.getBossDamageTakenMultiplier?.(this) || 1
       : 1
+    const guardMul = damage > 0 ? this._guardMitigation() : 1
     const amplified = (this.vulnerableTimer > 0 && damage > 0
       ? damage * this.vulnerableMultiplier
-      : damage) * formationMul
+      : damage) * formationMul * guardMul
     super.hit(amplified, effects)
     if (damage > 0) this._checkThresholdEvents()
+  }
+
+  /**
+   * 目标轴（大法师）：每名存活护卫给他 −20% 承伤（最多 3 层）。
+   * 于是「先拆还是先打」第一次成为真选择：不拆打不动，拆了环爆就改锁回你身上。
+   */
+  _guardMitigation() {
+    if (this.type !== 'boss-mage' || this._guards.length === 0) return 1
+    this._guards = this._guards.filter((guard) => guard && guard.active)
+    if (this._guards.length === 0) return 1
+    return 1 - 0.2 * Math.min(3, this._guards.length)
+  }
+
+  /** 距玩家最近的存活护卫（环爆的导流锚点） */
+  _nearestGuardTo(target) {
+    if (this.type !== 'boss-mage' || this._guards.length === 0) return null
+    this._guards = this._guards.filter((guard) => guard && guard.active)
+    if (this._guards.length === 0) return null
+    let best = null
+    let bestD = Infinity
+    for (const guard of this._guards) {
+      const d = (guard.x - target.x) ** 2 + (guard.y - target.y) ** 2
+      if (d < bestD) { bestD = d; best = guard }
+    }
+    return best
+  }
+
+  /** 记录自己召来的护卫（只算本体召的，不把普通小兵算进护盾层） */
+  _trackGuard(enemy) {
+    if (!enemy || this.type !== 'boss-mage') return enemy
+    this._guards.push(enemy)
+    return enemy
   }
 
   /**
@@ -260,8 +331,7 @@ export class Boss extends Enemy {
 
   /**
    * 决斗圈狂暴（25% 一次性永久）：体型 +8%、攻速 ×0.75、强招冷却 ×0.7、
-   * 连段 +1（困难/地狱再 +1）、破绽窗口收窄但增伤加深、决斗圈再收 15%。
-   * 伤害 +1 但不额外召唤小怪——压迫感来自节奏与空间，而非数量。
+   * 连段 +1（困难/地狱再 +1）、破绽窗口收窄但增伤加深；半径平滑收缩不再突然折半瞬缩。
    */
   _onDuelRage() {
     const difficulty = this.game.runProfile?.id || 'normal'
@@ -269,36 +339,61 @@ export class Boss extends Enemy {
     this.attackInterval *= 0.75
     this.damage += 1
     this._duelChainBonus = difficulty === 'hard' || difficulty === 'hell' ? 2 : 1
-    this.duelArena?.shrink(difficulty === 'hell' ? 0.78 : 0.85)
     this.duelArena?.flash()
     this.game.enemyManager.addText(this.x, this.y - this.radius - 52, '狂血狂暴', null, '#ff5040', 17)
     this.game.sound.bossRoar()
     this.game.shakeScreen(6, 0.3)
   }
 
-  /** 75%：首领召来护卫，逼迫玩家在输出与清场之间取舍 */
+  /**
+   * 75%：三种首领在这里第一次分道扬镳。
+   *  - 骑士王：不叫护卫，把落点裂地升成「双段」，加的是地形而不是人头（距离轴）
+   *  - 大法师：召 3 名护卫，直接喂给「目标轴」的护盾层（先拆还是先打）
+   *  - 弓王与其他：维持两名护卫，不抢已有的节奏轴
+   */
   _onReinforce() {
     const manager = this.game.enemyManager
-    const count = 2
+    if (this.type === 'boss-knight' && !this.isExpeditionBoss) {
+      this._ruptureTier = 2
+      manager.addText(this.x, this.y - this.radius - 34, '地裂·双段', '冲锋落点将留下两道裂口', '#ff9c6e', 14)
+      this.game.sound.enemyShoot()
+      this.game.shakeScreen(3, 0.18)
+      return
+    }
+    const count = this.type === 'boss-mage' ? 3 : 2
     for (let i = 0; i < count; i++) {
       const angle = (i / count) * TAU + Math.random() * 0.6
-      manager.spawnAt(
+      this._trackGuard(manager.spawnAt(
         clamp(this.x + Math.cos(angle) * 90, 24, this.game.worldWidth - 24),
         clamp(this.y + Math.sin(angle) * 90, 24, this.game.worldHeight - 24),
         'knight'
-      )
+      ))
     }
     manager.addText(this.x, this.y - this.radius - 34, '召唤护卫', null, '#ffd166', 14)
     this.game.sound.enemyShoot()
     this.game.shakeScreen(3, 0.18)
   }
 
-  /** 25%：困兽之斗——攻速与移速再上一档，并立即缩短强招冷却 */
+  /**
+   * 25%：困兽之斗——攻速与移速再上一档，并立即缩短强招冷却。
+   * 三种首领在这里第二次分道扬镳，让「最后 25%」不再是同一张模板：
+   *  - 骑士王：不再留地，节奏变成纯冲锋（抢时间打掉他）
+   *  - 大法师：停止召唤，护盾层只减不增（先拆的选择在这里兑现）
+   */
   _onLastStand() {
     this.speed *= 1.12
     this.attackInterval *= 0.88
     this.specialCd = Math.min(this.specialCd, 1.6)
-    this.game.enemyManager.addText(this.x, this.y - this.radius - 34, '困兽之斗', null, '#ff7466', 15)
+    if (this.type === 'boss-knight' && !this.isExpeditionBoss) {
+      this._ruptureOff = true
+      this._clearRupture()
+      this.game.enemyManager.addText(this.x, this.y - this.radius - 34, '困兽之斗 · 不再留地', '纯冲锋节奏', '#ff7466', 15)
+    } else if (this.type === 'boss-mage') {
+      this.summonCd = Infinity
+      this.game.enemyManager.addText(this.x, this.y - this.radius - 34, '困兽之斗 · 停止召唤', '护盾层只减不增', '#ff7466', 15)
+    } else {
+      this.game.enemyManager.addText(this.x, this.y - this.radius - 34, '困兽之斗', null, '#ff7466', 15)
+    }
     this.game.sound.bossRoar()
     this.game.shakeScreen(4, 0.22)
   }
@@ -352,6 +447,11 @@ export class Boss extends Enemy {
     }
 
     this._updateStandardAttack(dt * squadTempo)
+    if (this.duelArena?.active && !this.duelArena.dissolve) {
+      const pos = this.duelArena.clampPosition(this.x, this.y, this.radius, 16)
+      this.x = pos.x
+      this.y = pos.y
+    }
     if (this._moving) this._walkT += dt * 5
   }
 
@@ -393,6 +493,31 @@ export class Boss extends Enemy {
         : 1
     }
     const p = this.game.player
+    // 终局三问：三段轮转之后插一问，奖励是「答对了才有的破绽」，而不是白送
+    if (this._chainStep === 0) this._specialCount += 1
+    const quizTurn = this.isFinalBoss
+      && !this.isExpeditionBoss
+      && this._chainStep === 0
+      && this._specialCount > 0
+      && this._specialCount % 4 === 0
+    if (quizTurn) {
+      this.specialPattern = 'final-quiz'
+      this._chainTotal = 1
+      this._quiz = this._buildQuiz()
+      this._specialGeometry = Object.freeze({ pattern: 'final-quiz', phase: this.phase, chain: 0, telegraph: QUIZ_TELEGRAPH })
+      this.specialDuration = QUIZ_TELEGRAPH
+      this.specialTimer = QUIZ_TELEGRAPH
+      this.lockedAngle = Math.atan2(p.y - this.y, p.x - this.x)
+      this.targetX = p.x
+      this.targetY = p.y
+      this.specialState = 'telegraph'
+      this._tribunal = null
+      this.stateLabel = `终局审判 · ${this._quiz.label}`
+      this.game.enemyManager?.addText?.(this.x, this.y - this.radius - 26,
+        `第 ${this._quiz.round}/3 问 · ${this._quiz.label}`, this._quiz.hint, '#e8c477', 14)
+      this.game.sound.enemyShoot()
+      return
+    }
     if (this.isCompositeBoss) {
       const patterns = ['boss-knight', 'boss-mage', 'boss-archer']
       this.specialPattern = patterns[this._patternIndex++ % patterns.length]
@@ -400,28 +525,144 @@ export class Boss extends Enemy {
       this.specialPattern = this.type
     }
     this.specialState = 'telegraph'
-    // 难度只增强招式内容与冷却，不缩短预警时间。
-    this.specialDuration = this.specialPattern === 'boss-mage' ? 0.95 : this.specialPattern === 'boss-archer' ? 0.78 : 0.72
-    // 连击第 2 段起预警时间递增（给玩家反应余量），第 3 段最长
-    if (this._chainStep > 0) this.specialDuration += this._chainStep * 0.22
+    // 难度只增强招式内容与冷却，不缩短预警时间；几何统一由 bossSpecialGeometry 给出，
+    // 绘制与命中读同一份快照（含连段抬升的道宽/道远/弹数/扇角）。
+    this.dashLaneRadius = this.radius + p.radius + 12
+    this._specialGeometry = bossSpecialGeometry({
+      pattern: this.specialPattern,
+      phase: this.phase,
+      chain: this._chainStep,
+      patternBonus: this.patternBonus,
+      laneRadius: this.dashLaneRadius,
+    })
+    this.specialDuration = this._specialGeometry.telegraph
     this.specialTimer = this.specialDuration
     this.lockedAngle = Math.atan2(p.y - this.y, p.x - this.x)
     this.targetX = p.x
     this.targetY = p.y
-    this.dashLaneRadius = this.radius + p.radius + 12
-    this.dashDistance = (this.phase === 2 ? 760 : 650) * 0.42
+    this.dashDistance = this._specialGeometry.lane ? this._specialGeometry.lane.distance : 0
+    if (this.dashDistance > 0 && this.duelArena?.active && !this.duelArena.dissolve) {
+      this.dashDistance = this.duelArena.clipRayLength(this.x, this.y, this.lockedAngle, this.dashDistance, this.radius, 18)
+    }
+    // —— 目标轴：环爆圆心改锁「离你最近的存活护卫」，没有护卫才落回你的脚边 ——
+    if (this.specialPattern === 'boss-mage') {
+      const guard = this._nearestGuardTo(p)
+      if (guard) {
+        this.targetX = guard.x
+        this.targetY = guard.y
+      }
+    }
+    // —— 时间轴：三判按此刻的速度外推落点，预警开始即冻结（不追着你滑动） ——
+    if (this.specialPattern === 'boss-archer') {
+      const lead = this._specialGeometry.judgement.leads
+      const leads = this._lastStand ? [...lead, lead[lead.length - 1] + 0.8] : lead
+      this._tribunal = archerTribunal(p.x, p.y, p.vx || 0, p.vy || 0, {
+        leads,
+        radius: this._specialGeometry.judgement.radius,
+      })
+      // 落点夹在场内：预判跑出场外时那一发直接打在墙外，不该变成"墙外也中"
+      for (const pt of this._tribunal.points) {
+        pt.x = clamp(pt.x, 24, this.game.worldWidth - 24)
+        pt.y = clamp(pt.y, 24, this.game.worldHeight - 24)
+      }
+      this._volleyHit = false
+    } else {
+      this._tribunal = null
+    }
     this._moving = false
     const chainLabel = this._chainTotal > 1 ? `（连击 ${this._chainStep + 1}/${this._chainTotal}）` : ''
     this.stateLabel = `蓄力 · ${this.attackMove.name}${chainLabel}`
     this.game.sound.enemyShoot()
   }
 
+  /**
+   * 终局三问的题面：三道题对应「站在哪」的三种读法——
+   * 环（里或外）→ 象限（唯一没被封的那格）→ 棋盘（第几道同心带）。
+   * 题面在预警时冻结（q.x/q.y 是他出题时的位置），不追着玩家改答案。
+   */
+  _buildQuiz() {
+    const round = (this._quizIndex % 3) + 1
+    const kindIdx = this._quizIndex % 3
+    this._quizIndex += 1
+    const base = { round, x: this.x, y: this.y, born: this.game.elapsed }
+    if (kindIdx === 0) {
+      return {
+        ...base,
+        kind: 'annulus',
+        label: '净化之环',
+        hint: '站进环心，或干脆跑出环外',
+        coreRadius: 150,
+        hazardRadius: 330,
+      }
+    }
+    if (kindIdx === 1) {
+      return {
+        ...base,
+        kind: 'quadrant',
+        label: '封印四象限',
+        hint: '只有一格没被封住',
+        safeQuadrant: Math.floor(Math.random() * 4),
+        radius: 360,
+      }
+    }
+    return {
+      ...base,
+      kind: 'chess',
+      label: '王庭棋盘',
+      hint: '站到亮着的那一道带',
+      bands: [120, 240, 360],
+      safeBand: 1,
+    }
+  }
+
+  /** 判题：玩家当前位置是否落在安全区（与绘制共用同一份题面数据） */
+  _quizCorrect(px, py) {
+    const q = this._quiz
+    if (!q) return false
+    const dx = px - q.x
+    const dy = py - q.y
+    const dist = Math.hypot(dx, dy)
+    if (q.kind === 'annulus') return dist <= q.coreRadius || dist > q.hazardRadius
+    if (q.kind === 'quadrant') {
+      const angle = Math.atan2(dy, dx)
+      const idx = Math.floor((((angle + Math.PI) % TAU) / (Math.PI / 2)))
+      return idx === q.safeQuadrant
+    }
+    return dist >= q.bands[q.safeBand - 1] && dist < q.bands[q.safeBand]
+  }
+
   _executeSpecial() {
-    // 连击逐段强化：同一场战斗里动作模式随段数变化，而不是简单重复
+    // 连击逐段强化：同一场战斗里动作模式随段数变化，而不是简单重复。
+    // 所有几何取自 _startSpecial 冻结的快照，绘制与结算不会各算一遍。
     const chain = this._chainStep
+    const geo = this._specialGeometry
+    if (this.specialPattern === 'final-quiz') {
+      const p = this.game.player
+      const ok = this._quizCorrect(p.x, p.y)
+      this.specialState = 'recover'
+      if (ok) {
+        // 答对才给破绽：2s、承伤 ×1.8（决斗圈狂暴期 ×2.5 仍按原规则叠）
+        this.specialTimer = QUIZ_BREAK
+        this._recoveryDuration = QUIZ_BREAK
+        this.vulnerableTimer = QUIZ_BREAK
+        this.game.enemyManager?.addText?.(this.x, this.y - this.radius - 26, '答对', `破绽 ${QUIZ_BREAK}s · 承伤 ×1.8`, '#ffe3a2', 15)
+        this.game.sound.bossRoar?.()
+      } else {
+        // 答错只扣血，不给破绽（不能靠乱答换输出窗口）
+        this.specialTimer = 1
+        this.vulnerableTimer = 0
+        p.hit(QUIZ_PENALTY, this._specialAttackEvent ||= { enemyAttack: true })
+        this.game.enemyManager?.addText?.(this.x, this.y - this.radius - 26, '答错', '无破绽', '#ff7466', 15)
+      }
+      this._quiz = null
+      this.game.shakeScreen(3, 0.18)
+      return
+    }
     if (this.specialPattern === 'boss-knight') {
       this.specialState = 'dash'
-      this.specialTimer = 0.42 + chain * 0.06
+      const dashSpeed = (this.phase === 2 ? 760 : 650) + chain * 90
+      const baseDur = geo?.lane?.duration ?? knightDash(this.phase, chain).duration
+      this.specialTimer = this.dashDistance > 0 ? Math.min(baseDur, this.dashDistance / dashSpeed) : 0.05
       this.dashHit = false
       this.dashChain = chain // 供 _updateKnightDash 读取（段数越高冲得越远越快）
       this.stateLabel = chain > 0 ? `${this.attackMove.name} · 第 ${chain + 1} 段` : this.attackMove.name
@@ -430,15 +671,17 @@ export class Boss extends Enemy {
 
     if (this.specialPattern === 'boss-mage') {
       const p = this.game.player
-      if ((p.x - this.targetX) ** 2 + (p.y - this.targetY) ** 2 <= 102 * 102) p.hit(2, this._specialAttackEvent ||= { enemyAttack: true })
-      const count = (this.phase === 2 ? 16 : 12) + this.patternBonus * 2 + chain * 4
-      for (let i = 0; i < count; i++) {
+      const burst = geo?.burst ?? { radius: 102, count: 12, bulletSpeed: 285 }
+      if ((p.x - this.targetX) ** 2 + (p.y - this.targetY) ** 2 <= burst.radius * burst.radius) {
+        p.hit(2, this._specialAttackEvent ||= { enemyAttack: true })
+      }
+      for (let i = 0; i < burst.count; i++) {
         this.game.enemyManager.spawnBullet(
           this.targetX,
           this.targetY,
-          (i / count) * TAU,
+          (i / burst.count) * TAU,
           'mage',
-          { speed: (this.phase === 2 ? 315 : 285) + chain * 20, radius: 8, isBoss: true, damage: 2 }
+          { speed: burst.bulletSpeed, radius: 8, isBoss: true, damage: 2 }
         )
       }
       this.game.shakeScreen(4, 0.2)
@@ -446,21 +689,25 @@ export class Boss extends Enemy {
       return
     }
 
-    // 弹缝可钻性：0.22rad 间隔在 300px 交战距离上 ≈66px 间隙（> 玩家+弹径 64px），
-    // 远距离横向走位可以钻缝，贴脸则躲不开——拉扯站位有收益。
-    // 连击段数提高弹幕密度（间隔收窄），但仍保留可钻的缝。
-    const count = (this.phase === 2 ? 8 : 6) + this.patternBonus + chain * 2
-    const step = Math.max(0.16, 0.22 - chain * 0.02)
-    for (let i = 0; i < count; i++) {
-      const off = (i - (count - 1) / 2) * step
-      this.game.enemyManager.spawnBullet(
-        this.x,
-        this.y,
-        this.lockedAngle + off,
-        'archer',
-        { speed: 470, radius: 6, isBoss: true, damage: 2 }
-      )
+    // 王庭三判：三个预判落点同时开火。站桩三点叠在脚下、直线跑撞上第二点，
+    // 只有改变方向才三点全空——「别按他以为的路线跑」就是弓王的答案。
+    // 一次施放最多结算一次，避免站桩时被三点各打一次。
+    const trib = this._tribunal
+    const p = this.game.player
+    if (trib && !this._volleyHit) {
+      for (const pt of trib.points) {
+        if ((p.x - pt.x) ** 2 + (p.y - pt.y) ** 2 <= trib.radius * trib.radius) {
+          p.hit(2, this._specialAttackEvent ||= { enemyAttack: true })
+          this._volleyHit = true
+          break
+        }
+      }
     }
+    // 落箭闪光：事后读法——告诉玩家「他刚才以为你会在这里」
+    this._volleyFx = trib
+      ? trib.points.map((pt) => ({ x: pt.x, y: pt.y, radius: trib.radius, born: this.game.elapsed, until: this.game.elapsed + 0.32, duration: 0.32 }))
+      : null
+    this.game.shakeScreen(3, 0.16)
     this._beginRecovery(0.95)
   }
 
@@ -471,9 +718,15 @@ export class Boss extends Enemy {
     this.y += Math.sin(this.lockedAngle) * speed * dt
     this.x = clamp(this.x, this.radius, this.game.worldWidth - this.radius)
     this.y = clamp(this.y, this.radius, this.game.worldHeight - this.radius)
+    if (this.duelArena?.active && !this.duelArena.dissolve) {
+      const pos = this.duelArena.clampPosition(this.x, this.y, this.radius, 16)
+      this.x = pos.x
+      this.y = pos.y
+    }
     this.specialTimer -= dt
     const p = this.game.player
-    const hitRadius = this.radius + p.radius + 12
+    // 道宽取预警快照，狂暴期体型变化不会让「已画好的道」和「正在算的命中」错位
+    const hitRadius = this._specialGeometry?.lane?.halfWidth ?? (this.radius + p.radius + 12)
     if (!this.dashHit && (p.x - this.x) ** 2 + (p.y - this.y) ** 2 <= hitRadius * hitRadius) {
       // 冲锋命中 4 点（原 3）：BOSS 威胁补强后，撞中一次的代价配得上 0.72s 的预警
       p.hit(4 + Math.floor(this.patternBonus / 2) + chain + (this._duelRage ? 1 : 0), this._specialAttackEvent ||= { enemyAttack: true })
@@ -481,8 +734,92 @@ export class Boss extends Enemy {
     }
     if (this.specialTimer <= 0) {
       this.game.shakeScreen(4, 0.18)
+      this._spawnRupture() // 落点裂地：把「他停下的地方」变成接下来 0.9s 的劣地
       this._duelPincer() // 决斗夹击：冲锋落地瞬间的无预警扇形击退波（仅决斗圈骑士王）
       this._beginRecovery(1.2)
+    }
+  }
+
+  /**
+   * 落点裂地（P0 · 骑士王的距离轴）：冲锋落地的地面裂开 0.9 秒，
+   * 站在裂口上移动速度 ×0.7。零伤害——它不要求玩家「躲」，而是给
+   * 「贴脸收尾」标价：想在下一次连段前回到近身位，路是变慢的。
+   * 与法师（要拉远）、弓手（要持续移动）形成三种不同的站位代价。
+   */
+  _spawnRupture() {
+    if (this.type !== 'boss-knight' || this.isExpeditionBoss) return
+    if (this._ruptureOff) return // 25% 之后：不再留地，节奏变成纯冲锋
+    const radius = 86
+    const slow = 0.7
+    const life = 0.9
+    const tier = Math.max(1, this._ruptureTier)
+    // 双段：沿冲锋方向前后各裂一道（间距 168 ≈ 两块半径 86 相切），
+    // 把「他停下的地方」拼成一条 340px 的劣地带，而不是两个孤立的圆。
+    for (let i = 0; i < tier; i++) {
+      const back = i * 168
+      const seg = {
+        x: clamp(this.x - Math.cos(this.lockedAngle) * back, 24, this.game.worldWidth - 24),
+        y: clamp(this.y - Math.sin(this.lockedAngle) * back, 24, this.game.worldHeight - 24),
+        radius,
+        slow,
+        born: this.game.elapsed,
+        until: this.game.elapsed + life,
+        duration: life,
+      }
+      // 回指不可枚举：它只是「谁造的这块地」的存活查询柄，不属于战斗状态，
+      // 不应被状态快照（structuredClone）顺着摸回 game/canvas。
+      Object.defineProperty(seg, 'source', { value: this, enumerable: false, configurable: true })
+      if (i === 0) this._clearRupture()
+      this._rupture = seg
+      this.game.enemyManager?.addBossField?.(seg)
+    }
+    // 首段才飘字：连段 2~3 段连续落地时不刷屏，但第一次一定把规则说清楚
+    if (this.dashChain === 0) {
+      this.game.enemyManager?.addText?.(this.x, this.y - this.radius - 26,
+        tier > 1 ? '地裂·双段' : '地裂', '移速 ×0.7 · 0.9s', '#ff9c6e', 13)
+    }
+    this.game.sound.enemyShoot()
+    this.game.shakeScreen(3, 0.16)
+  }
+
+  /** 裂地提前收场（死亡/打断/切阶段）：地面立刻恢复正常，不留隐形减速 */
+  _clearRupture() {
+    // 双段会有多块地，一次全清（_rupture 只记最后一块，管理器持有全部）
+    this.game?.enemyManager?.clearBossFields?.(this)
+    this._rupture = null
+  }
+
+  /** 裂地读法：一圈焦土 + 内圈裂缝，颜色随剩余寿命衰减（越淡越快结束） */
+  _renderRupture(ctx) {
+    const fields = this.game.enemyManager?._bossFields
+    if (!fields || fields.length === 0) return
+    const t = this.game.elapsed
+    for (const seg of fields) {
+      if (seg.source !== this) continue
+      if (t >= seg.until) continue // 到期由管理器回收，渲染只读、不改状态
+      const k = Math.max(0, (seg.until - t) / seg.duration)
+      ctx.save()
+      ctx.beginPath()
+      ctx.arc(seg.x, seg.y, seg.radius, 0, TAU)
+      ctx.fillStyle = `rgba(255, 96, 58, ${0.10 * k})`
+      ctx.fill()
+      ctx.strokeStyle = `rgba(255, 150, 96, ${0.55 * k})`
+      ctx.lineWidth = 2.5
+      ctx.stroke()
+      // 八条向内延伸的裂缝
+      ctx.strokeStyle = `rgba(255, 120, 70, ${0.45 * k})`
+      ctx.lineWidth = 1.6
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * TAU + (this._artSeed || 0)
+        const r0 = seg.radius * 0.34
+        const r1 = seg.radius * 0.94
+        ctx.beginPath()
+        ctx.moveTo(seg.x + Math.cos(a) * r0, seg.y + Math.sin(a) * r0)
+        ctx.lineTo(seg.x + Math.cos(a + 0.12) * ((r0 + r1) * 0.5), seg.y + Math.sin(a + 0.12) * ((r0 + r1) * 0.5))
+        ctx.lineTo(seg.x + Math.cos(a) * r1, seg.y + Math.sin(a) * r1)
+        ctx.stroke()
+      }
+      ctx.restore()
     }
   }
 
@@ -604,8 +941,11 @@ export class Boss extends Enemy {
           ? (this.phase === 2 ? 5 : 3)
           : (this.phase === 2 ? 7 : 5)
         const step = this.type === 'boss-mage' ? 0.15 : 0.22
-        for (let i = 0; i < count; i++) {
-          const off = (i - (count - 1) / 2) * step
+        const fan = this.type === 'boss-mage' ? null : archerFan(this.phase, 0, this.patternBonus)
+        const shots = fan ? fan.count : count
+        const gap = fan ? fan.step : step
+        for (let i = 0; i < shots; i++) {
+          const off = (i - (shots - 1) / 2) * gap
           this.game.enemyManager.spawnBullet(this.x, this.y, this.facing + off, this.type === 'boss-mage' ? 'mage' : 'archer', { isBoss: true, damage: 2 })
         }
         this.game.sound.enemyShoot()
@@ -620,7 +960,7 @@ export class Boss extends Enemy {
         const count = this.phase === 2 ? 3 : 2
         for (let i = 0; i < count; i++) {
           const angle = Math.random() * TAU
-          this.game.enemyManager.spawnAt(this.x + Math.cos(angle) * 60, this.y + Math.sin(angle) * 60, 'knight')
+          this._trackGuard(this.game.enemyManager.spawnAt(this.x + Math.cos(angle) * 60, this.y + Math.sin(angle) * 60, 'knight'))
         }
       }
     } else {
@@ -636,7 +976,72 @@ export class Boss extends Enemy {
     ctx.strokeStyle = 'rgba(255, 116, 102, 0.9)'
     ctx.lineWidth = 2
 
-    if (this.specialPattern === 'boss-knight') {
+    if (this.specialPattern === 'final-quiz') {
+      // 题面：安全区用冷色（站这里），危险区用红色（别站），与判题读同一份 q
+      const q = this._quiz
+      if (!q) { ctx.restore(); return }
+      const safeFill = `rgba(120, 200, 255, ${0.10 + 0.14 * progress})`
+      const safeLine = 'rgba(150, 215, 255, 0.95)'
+      const dangerFill = `rgba(224, 68, 68, ${0.12 + 0.18 * progress})`
+      const dangerLine = 'rgba(255, 116, 102, 0.9)'
+      if (q.kind === 'annulus') {
+        ctx.beginPath()
+        ctx.arc(q.x, q.y, q.coreRadius, 0, TAU)
+        ctx.fillStyle = safeFill
+        ctx.fill()
+        ctx.strokeStyle = safeLine
+        ctx.lineWidth = 2
+        ctx.stroke()
+        ctx.beginPath()
+        ctx.arc(q.x, q.y, q.hazardRadius, 0, TAU)
+        ctx.arc(q.x, q.y, q.coreRadius, 0, TAU, true)
+        ctx.fillStyle = dangerFill
+        ctx.fill()
+        ctx.strokeStyle = dangerLine
+        ctx.lineWidth = 1.6
+        ctx.stroke()
+      } else if (q.kind === 'quadrant') {
+        for (let i = 0; i < 4; i++) {
+          const a0 = -Math.PI + i * Math.PI / 2
+          ctx.beginPath()
+          ctx.moveTo(q.x, q.y)
+          ctx.arc(q.x, q.y, q.radius, a0, a0 + Math.PI / 2)
+          ctx.closePath()
+          ctx.fillStyle = i === q.safeQuadrant ? safeFill : dangerFill
+          ctx.fill()
+          ctx.strokeStyle = i === q.safeQuadrant ? safeLine : dangerLine
+          ctx.lineWidth = 1.6
+          ctx.stroke()
+        }
+      } else {
+        // 三道具名同心环带：第 0 道是实心圆，其余用「外圆 + 内圆反向」挖成环，
+        // 否则后一道会整块盖住前一道（画出来只剩最外圈一种颜色）
+        const bands = q.bands
+        for (let i = 0; i < 3; i++) {
+          ctx.beginPath()
+          ctx.arc(q.x, q.y, bands[i], 0, TAU)
+          if (i > 0) ctx.arc(q.x, q.y, bands[i - 1], 0, TAU, true)
+          ctx.fillStyle = i === q.safeBand - 1 ? safeFill : dangerFill
+          ctx.fill()
+          ctx.strokeStyle = i === q.safeBand - 1 ? safeLine : dangerLine
+          ctx.lineWidth = 1.6
+          ctx.stroke()
+        }
+        ctx.setLineDash([8, 6])
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)'
+        ctx.lineWidth = 1
+        ctx.beginPath()
+        ctx.arc(q.x, q.y, bands[2] + 22, 0, TAU)
+        ctx.stroke()
+        ctx.setLineDash([])
+      }
+      // 中心读条：题目本身也有倒计时
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)'
+      ctx.lineWidth = 3
+      ctx.beginPath()
+      ctx.arc(q.x, q.y, 40, -Math.PI / 2, -Math.PI / 2 + TAU * progress)
+      ctx.stroke()
+    } else if (this.specialPattern === 'boss-knight') {
       ctx.translate(this.x, this.y)
       ctx.rotate(this.lockedAngle)
       ctx.fillRect(0, -this.dashLaneRadius, this.dashDistance, this.dashLaneRadius * 2)
@@ -661,23 +1066,44 @@ export class Boss extends Enemy {
       ctx.lineTo(this.targetX, this.targetY + 16)
       ctx.stroke()
     } else {
-      const radius = 390
-      const count = (this.phase === 2 ? 11 : 9) + this.patternBonus
-      const spread = ((count - 1) / 2) * 0.12 + 0.06
+      // 三判：把「他以为你会跑到的三个位置」画成三圈落点，并用虚线串成路线。
+      // 预警开始就冻结，所以这是一条可以绕开的假路线，不是追踪弹。
+      const trib = this._tribunal
+      if (!trib) { ctx.restore(); return }
+      // 轨迹虚线：先画线，避免压住圆
+      ctx.save()
+      ctx.setLineDash([6, 5])
+      ctx.strokeStyle = 'rgba(255, 150, 120, 0.45)'
+      ctx.lineWidth = 1.4
       ctx.beginPath()
-      ctx.moveTo(this.x, this.y)
-      ctx.arc(this.x, this.y, radius, this.lockedAngle - spread, this.lockedAngle + spread)
-      ctx.closePath()
-      ctx.fill()
+      trib.points.forEach((pt, i) => {
+        if (i === 0) ctx.moveTo(pt.x, pt.y)
+        else ctx.lineTo(pt.x, pt.y)
+      })
       ctx.stroke()
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.72)'
-      ctx.beginPath()
-      ctx.moveTo(this.x, this.y)
-      ctx.lineTo(
-        this.x + Math.cos(this.lockedAngle) * radius * progress,
-        this.y + Math.sin(this.lockedAngle) * radius * progress
-      )
-      ctx.stroke()
+      ctx.restore()
+      for (let i = 0; i < trib.points.length; i++) {
+        const pt = trib.points[i]
+        ctx.beginPath()
+        ctx.arc(pt.x, pt.y, trib.radius, 0, TAU)
+        ctx.fillStyle = `rgba(224, 68, 68, ${0.09 + 0.16 * progress})`
+        ctx.fill()
+        ctx.strokeStyle = 'rgba(255, 116, 102, 0.88)'
+        ctx.lineWidth = 1.8
+        ctx.stroke()
+        // 收缩的内圈＝倒计时
+        ctx.lineWidth = 3
+        ctx.beginPath()
+        ctx.arc(pt.x, pt.y, trib.radius - 7, -Math.PI / 2, -Math.PI / 2 + TAU * progress)
+        ctx.stroke()
+        ctx.lineWidth = 1
+        ctx.beginPath()
+        ctx.moveTo(pt.x - 8, pt.y)
+        ctx.lineTo(pt.x + 8, pt.y)
+        ctx.moveTo(pt.x, pt.y - 8)
+        ctx.lineTo(pt.x, pt.y + 8)
+        ctx.stroke()
+      }
     }
     ctx.restore()
   }
@@ -735,6 +1161,7 @@ export class Boss extends Enemy {
     const cast = hasArt ? BOSS_CAST[artId] : null
     const top = hasArt ? enemyArtTop(artId, r) : r
     this._renderTelegraph(ctx)
+    this._renderRupture(ctx)
 
     // 决斗夹击落地闪光：无预警招式的事后读法——短促扇形让玩家记住「冲锋停 = 夹击来」
     if (this._pincerFx && t < this._pincerFx.until) {
@@ -908,5 +1335,41 @@ export class Boss extends Enemy {
     ctx.fillRect(barX - 1, barY - 1, barWidth + 2, barHeight + 2)
     ctx.fillStyle = ratio > 0.5 ? '#6fce4a' : ratio > 0.25 ? '#f0b83c' : '#e04444'
     ctx.fillRect(barX, barY, barWidth * ratio, barHeight)
+
+    // 护盾层读数（目标轴）：三格＝本体 −60% 承伤，拆一格掉 20%
+    if (this.type === 'boss-mage' && this._guards.length > 0) {
+      const alive = Math.min(3, this._guards.filter((g) => g && g.active).length)
+      if (alive > 0) {
+        for (let i = 0; i < 3; i++) {
+          const px = barX + 8 + i * 18
+          const py = barY - 12
+          ctx.beginPath()
+          ctx.moveTo(px, py - 5)
+          ctx.lineTo(px + 6, py)
+          ctx.lineTo(px, py + 5)
+          ctx.lineTo(px - 6, py)
+          ctx.closePath()
+          ctx.fillStyle = i < alive ? 'rgba(177, 140, 255, 0.85)' : 'rgba(255, 255, 255, 0.10)'
+          ctx.fill()
+          ctx.strokeStyle = i < alive ? 'rgba(210, 185, 255, 0.9)' : 'rgba(255, 255, 255, 0.18)'
+          ctx.lineWidth = 1
+          ctx.stroke()
+        }
+      }
+    }
+
+    // 三判落箭闪光：一圈扩散的红环，事后仍能看出「他以为你会在这里」
+    if (this._volleyFx) {
+      const t = this.game.elapsed
+      for (const fx of this._volleyFx) {
+        if (t >= fx.until) continue
+        const k = 1 - (fx.until - t) / fx.duration
+        ctx.strokeStyle = `rgba(255, 150, 110, ${0.8 * (1 - k)})`
+        ctx.lineWidth = 3 * (1 - k) + 1
+        ctx.beginPath()
+        ctx.arc(fx.x, fx.y, fx.radius * (0.75 + k * 0.75), 0, TAU)
+        ctx.stroke()
+      }
+    }
   }
 }

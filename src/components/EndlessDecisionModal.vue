@@ -118,7 +118,7 @@ const bountyTarget = (choice) => {
   display: grid;
   place-items: center;
   padding: 18px;
-  background: rgba(4, 6, 7, 0.8);
+  background: var(--adventure-scrim);
 }
 
 .decision-panel {
@@ -128,8 +128,8 @@ const bountyTarget = (choice) => {
   padding: 26px;
   border: 1px solid rgba(199, 84, 72, 0.55);
   border-radius: 8px;
-  color: #f1eee5;
-  background: #121416;
+  color: var(--adventure-ink);
+  background: var(--adventure-paper);
   box-shadow: 0 20px 54px rgba(0, 0, 0, 0.62);
 }
 
@@ -148,7 +148,7 @@ const bountyTarget = (choice) => {
 
 .decision-kicker {
   margin-bottom: 7px;
-  color: #be9a68;
+  color: var(--adventure-gold);
   font-size: 11px;
   font-weight: 800;
   text-transform: uppercase;
@@ -156,7 +156,7 @@ const bountyTarget = (choice) => {
 
 .decision-header h2 {
   margin: 0;
-  color: #fff8e9;
+  color: var(--adventure-ink);
   font-size: 25px;
   line-height: 1.2;
   letter-spacing: 0;
@@ -164,28 +164,28 @@ const bountyTarget = (choice) => {
 
 .decision-header p {
   margin: 9px 0 0;
-  color: rgba(241, 238, 229, 0.62);
+  color: var(--adventure-muted);
   font-size: 13px;
   line-height: 1.5;
 }
 
 .multiplier-line {
   margin: 20px 0 12px;
-  color: rgba(241, 238, 229, 0.58);
+  color: var(--adventure-muted);
   font-size: 12px;
   text-align: center;
 }
 
 .contract-line {
   margin: 20px 0 12px;
-  color: rgba(241, 238, 229, 0.54);
+  color: var(--adventure-muted);
   font-size: 12px;
   text-align: center;
 }
 
 .multiplier-line b,
 .calamity-reward b {
-  color: #e8c477;
+  color: var(--adventure-gold);
   font-variant-numeric: tabular-nums;
 }
 
@@ -202,28 +202,28 @@ const bountyTarget = (choice) => {
   border-radius: 7px;
   color: inherit;
   text-align: left;
-  background: #191c1f;
+  background: var(--adventure-leaf);
   cursor: pointer;
   transition: border-color 0.14s ease, background 0.14s ease, transform 0.12s ease;
 }
 
 .calamity-option:hover {
   border-color: rgba(220, 109, 93, 0.76);
-  background: #211b1b;
+  background: #f7eee9;
 }
 
 .bounty-option:hover {
   border-color: rgba(190, 154, 104, 0.78);
-  background: #211e19;
+  background: #f6f2e7;
 }
 
 .bounty-option .calamity-topline i {
   border-color: rgba(190, 154, 104, 0.56);
-  color: #e8c477;
+  color: var(--adventure-gold);
 }
 
 .bounty-option .calamity-effect {
-  color: #e8c477;
+  color: var(--adventure-gold);
 }
 
 .calamity-option:active,
@@ -233,7 +233,7 @@ const bountyTarget = (choice) => {
 
 .calamity-option:focus-visible,
 .checkpoint-actions button:focus-visible {
-  outline: 2px solid #e8c477;
+  outline: 2px solid var(--adventure-gold);
   outline-offset: 3px;
 }
 
@@ -251,14 +251,14 @@ const bountyTarget = (choice) => {
   place-items: center;
   border: 1px solid rgba(220, 109, 93, 0.52);
   border-radius: 5px;
-  color: #ef998c;
+  color: var(--adventure-danger);
   font-size: 11px;
   font-style: normal;
   font-weight: 900;
 }
 
 .calamity-topline em {
-  color: rgba(241, 238, 229, 0.46);
+  color: var(--adventure-muted);
   font-size: 11px;
   font-style: normal;
 }
@@ -266,7 +266,7 @@ const bountyTarget = (choice) => {
 .calamity-option > strong {
   display: block;
   margin-bottom: 8px;
-  color: #fff8e9;
+  color: var(--adventure-ink);
   font-size: 17px;
   letter-spacing: 0;
 }
@@ -279,7 +279,7 @@ const bountyTarget = (choice) => {
 
 .calamity-effect {
   min-height: 38px;
-  color: #ef998c;
+  color: var(--adventure-danger);
   font-size: 13px;
   font-weight: 800;
   line-height: 1.45;
@@ -288,7 +288,7 @@ const bountyTarget = (choice) => {
 .calamity-brief {
   min-height: 46px;
   margin-top: 7px;
-  color: rgba(241, 238, 229, 0.52);
+  color: var(--adventure-muted);
   font-size: 12px;
   line-height: 1.5;
 }
@@ -297,7 +297,7 @@ const bountyTarget = (choice) => {
   margin-top: 10px;
   padding-top: 10px;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
-  color: rgba(241, 238, 229, 0.68);
+  color: var(--adventure-muted);
   font-size: 12px;
 }
 
@@ -321,22 +321,22 @@ const bountyTarget = (choice) => {
 .checkpoint-ledger span {
   display: block;
   margin-bottom: 6px;
-  color: rgba(241, 238, 229, 0.48);
+  color: var(--adventure-muted);
   font-size: 11px;
 }
 
 .checkpoint-ledger b {
-  color: #e8c477;
+  color: var(--adventure-gold);
   font-size: 24px;
   font-variant-numeric: tabular-nums;
 }
 
 .checkpoint-ledger .safe-value b {
-  color: #9dddaf;
+  color: var(--adventure-green);
 }
 
 .checkpoint-ledger .risk-value b {
-  color: #ef998c;
+  color: var(--adventure-danger);
 }
 
 .depth-line {
@@ -344,12 +344,12 @@ const bountyTarget = (choice) => {
   justify-content: center;
   gap: 18px;
   padding: 14px 0 16px;
-  color: rgba(241, 238, 229, 0.5);
+  color: var(--adventure-muted);
   font-size: 12px;
 }
 
 .depth-line strong {
-  color: #e8c477;
+  color: var(--adventure-gold);
 }
 
 .checkpoint-actions {
@@ -384,30 +384,30 @@ const bountyTarget = (choice) => {
 
 .extract-btn {
   border: 1px solid rgba(101, 170, 126, 0.65);
-  color: #b9ebc7;
-  background: #18211b;
+  color: var(--adventure-green);
+  background: var(--adventure-leaf);
 }
 
 .extract-btn small {
-  color: rgba(185, 235, 199, 0.58);
+  color: var(--adventure-muted);
 }
 
 .extract-btn:hover {
-  background: #1c2b21;
+  background: #dae8db;
 }
 
 .continue-btn {
   border: 1px solid rgba(199, 84, 72, 0.65);
-  color: #f2a094;
-  background: #251918;
+  color: var(--adventure-danger);
+  background: #f9eee9;
 }
 
 .continue-btn small {
-  color: rgba(242, 160, 148, 0.6);
+  color: var(--adventure-muted);
 }
 
 .continue-btn:hover {
-  background: #311c1a;
+  background: #f2e1d9;
 }
 
 @media (max-width: 700px) {

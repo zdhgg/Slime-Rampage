@@ -3,6 +3,6 @@
   "private": true,
   "description": "门户管理系统结构契约：游戏账号服务入口，依赖复用仓库根 node_modules，数据默认写入根目录 data/",
   "scripts": {
-    "start": "node index.mjs"
+    "start": "node index.mjs --portal"
   }
 }

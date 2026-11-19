@@ -1,7 +1,7 @@
 import express from 'express'
 import { request } from 'node:http'
 import { spawn } from 'node:child_process'
-import { readdirSync, statSync, existsSync, realpathSync } from 'node:fs'
+import { readdirSync, statSync, existsSync, realpathSync, mkdirSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -62,7 +62,17 @@ const server = app.listen(port, '0.0.0.0', () => console.log(`游戏入口 http:
 server.on('error', error => { console.error(error); process.exit(1) })
 if (needsBuild) {
   console.log('正在构建游戏资源…')
-  buildProcess = spawn(process.execPath, [join(root, 'node_modules/vite/bin/vite.js'), 'build'], { cwd: root, stdio: 'inherit', windowsHide: true })
+  const env = { ...process.env }
+  if (process.platform === 'win32') {
+    // esbuild 在系统临时目录可能无法移除大型转译文件。
+    const buildTemp = join(root, 'node_modules', '.cache', 'slime-build')
+    mkdirSync(buildTemp, { recursive: true })
+    env.TEMP = buildTemp
+    env.TMP = buildTemp
+  }
+  buildProcess = spawn(process.execPath, [join(root, 'node_modules/vite/bin/vite.js'), 'build'], {
+    cwd: root, env, stdio: 'inherit', windowsHide: true,
+  })
   buildProcess.on('error', error => { console.error(error); state = { ready: false, failed: true } })
   buildProcess.on('exit', code => {
     state = { ready: code === 0 && existsSync(index), failed: code !== 0 || !existsSync(index) }

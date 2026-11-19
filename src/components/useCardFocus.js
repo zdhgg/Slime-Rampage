@@ -10,7 +10,7 @@
  *    偶数张时取偏左中位（4 卡取第 2 张），所有弹窗口径一致。
  *  - ←/→（及 ↑/↓）循环切换：卡组只有 3~5 张，循环比到边界停住更顺手，
  *    玩家连按右移不会"卡住"，与血统选择 StrainSelect 的循环行为一致。
- *  - Enter / 空格 确认当前选中；数字键 1~9 直选对应卡（卡面有角标提示，非隐藏键）。
+ *  - Enter 确认当前卡片，数字键 1~9 切换到对应卡片。
  *  - 鼠标 mouseenter 同步写回 selectedIndex —— 鼠标与键盘共用同一份状态，
  *    不会出现"鼠标悬停一套、键盘选中一套"打架。
  */
@@ -69,15 +69,16 @@ export function useCardFocus(optionsSource, confirm, enabledSource = true) {
         selectedIndex.value = moveCardIndex(selectedIndex.value, count, -1)
         e.preventDefault()
         return
+      case 'Space':
+        // 拦截按钮获得焦点后的原生空格点击。
+        e.preventDefault()
+        return
       case 'Enter':
-      case 'NumpadEnter':
-      case 'Space': {
+      case 'NumpadEnter': {
+        e.preventDefault()
         if (e.repeat) return
         const card = selectedCard.value
-        if (card) {
-          e.preventDefault()
-          confirm(card)
-        }
+        if (card) confirm(card)
         return
       }
       default: {
@@ -86,14 +87,13 @@ export function useCardFocus(optionsSource, confirm, enabledSource = true) {
         if (index >= 0) {
           e.preventDefault()
           selectedIndex.value = index
-          confirm(options.value[index])
         }
       }
     }
   }
 
   onMounted(() => {
-    // 弹窗打开时移除残留焦点（如 HUD 技能栏），防止其 keydown.prevent 吞掉 Enter/Space
+    // 清除 HUD 等控件的残留焦点，让选卡弹窗接管键盘。
     if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
       document.activeElement.blur()
     }

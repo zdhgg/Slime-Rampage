@@ -42,7 +42,7 @@ function grantSwarmUltimate(g) {
 const book = id => BOSS_SKILL_DATABASE.assassin.find(s => s.id === id)
 
 check('开局属性与四项分身成长独立', g => {
-  near(g.player.evasionChance, 0.15)
+  near(g.player.evasionChance, 0.18)
   const c = g.weaponSystem.shadowCombat.clones
   near(c.chance, 0.6); near(c.power, 0.4); assert.equal(c.cap, 2); assert.equal(c.duration, 4)
   learn(g, 'ass_echo'); near(c.chance, 0.7); near(c.power, 0.4)
@@ -50,8 +50,8 @@ check('开局属性与四项分身成长独立', g => {
   learn(g, 'ass_execute'); near(c.power, 0.55); assert.equal(c.duration, 4)
   learn(g, 'ass_decoy'); near(c.duration, 5.5); assert.equal(c.cap, 2)
   learn(g, 'ass_legion', 2); assert.equal(c.cap, 4)
-  learn(g, 'ass_stride', 3); near(g.player.evasionChance, 0.3)
-  learnTome(g, 'boss_shadow_cloak', 3); near(g.player.evasionChance, 0.3); near(g.bossTomes.onEvade(), 0.4)
+  learn(g, 'ass_stride', 3); near(g.player.evasionChance, 0.33)
+  learnTome(g, 'boss_shadow_cloak', 3); near(g.player.evasionChance, 0.33); near(g.bossTomes.onEvade(), 0.4)
   g.player.shadowEvasionBonus = 1; near(g.player.evasionChance, 0.4)
 })
 check('被动闪避边界、一次攻击去重、短暂虚化与无受击奖励', g => {
@@ -63,7 +63,7 @@ check('被动闪避边界、一次攻击去重、短暂虚化与无受击奖励'
   random(() => { throw Error('grace must not roll') }, () => p.hit(2, { enemyAttack: true }))
   near(p.evasionFlash, 0.2)
   p.update(0.21)
-  random(0.15, () => assert.equal(p.hit(1, { enemyAttack: true }), true))
+  random(0.18, () => assert.equal(p.hit(1, { enemyAttack: true }), true))
   assert.equal(p.hp, hp - 1); assert.equal(p.adrenalineTimer, 3)
   assert.equal(p.evasionCount, 1)
 })
@@ -272,7 +272,7 @@ check('随机频率符合配置：10,000 次有效攻击/召唤事件', g => {
       if (c.onCritical(e, {})) summons++
     }
   })
-  assert.ok(dodges > 1350 && dodges < 1650, String(dodges))
+  assert.ok(dodges > 1650 && dodges < 1950, String(dodges))
   assert.ok(summons > 5750 && summons < 6250, String(summons))
 })
 check('远程优先选可见分身，近战和 Boss 保持本体目标', g => {

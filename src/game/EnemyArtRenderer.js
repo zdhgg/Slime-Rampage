@@ -14,14 +14,18 @@
  * ========================================================================= */
 import { ENEMY_CAST, enemyFramePose } from './enemy-art/enemy-cast.js'
 import { BOSS_CAST, bossFramePose } from './enemy-art/boss-cast.js'
+import { ENEMY_EXTENDED_CAST, extendedEnemyFramePose } from './enemy-art/enemy-extended-cast.js'
 import { K, setScale } from './slime-art/slime-painter.js'
 
 const TAU = Math.PI * 2
 const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now())
 
-/** Ordinary enemies and Arena bosses share one pipeline; the registries stay separate. */
-const castOf = type => ENEMY_CAST[type] || BOSS_CAST[type]
-const framePoseOf = (type, key) => ENEMY_CAST[type] ? enemyFramePose(type, key) : bossFramePose(type, key)
+/** Ordinary enemies, extended tiers/vanguard and Arena bosses share one pipeline; registries stay separate. */
+const castOf = type => ENEMY_CAST[type] || BOSS_CAST[type] || ENEMY_EXTENDED_CAST[type]
+const framePoseOf = (type, key) =>
+  ENEMY_CAST[type] ? enemyFramePose(type, key)
+    : BOSS_CAST[type] ? bossFramePose(type, key)
+      : extendedEnemyFramePose(type, key)
 
 export const hasEnemyArt = type => !!castOf(type)
 /** Unique casts (bosses) skip tint, size jitter, variants and the elite rim — callers sizing shadows or feet outside `drawEnemyArt` must mirror it. */

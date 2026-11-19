@@ -262,7 +262,11 @@ check('本体飞弹削弱45%，五级觉醒只强化伙伴', (g,p) => {
   p.strike(pet,{target:victim}); assert.ok(Math.abs(enhanced/(1000-victim.hp)-1.3)<1e-8)
   learn(g,'pet_dew_partner'); learn(g,'pet_spore_partner')
   assert.equal(p.items.length,4)
+  p.items[1].hp=p.items[1].maxHp
   assert.ok(Math.abs(p.attackDamage(pet)/(g.weaponSystem.damage*g.weaponSystem.levelMul*1.4*p.damageScale)-1.3)<1e-8)
+  p.items[3].hp=0
+  assert.ok(Math.abs(p.attackDamage(pet)/(g.weaponSystem.damage*g.weaponSystem.levelMul*1.4*p.damageScale)-1)<1e-8, '全员存活才生效：3/4 存活不加成')
+  p.items[3].hp=p.items[3].maxHp
   for(const ally of p.items.slice(1)) ally.hp=0
   assert.ok(Math.abs(p.attackDamage(pet)/(g.weaponSystem.damage*g.weaponSystem.levelMul*1.4*p.damageScale)-1)<1e-8)
 })

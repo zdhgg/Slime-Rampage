@@ -12,7 +12,7 @@
  *  - HUD 覆盖层 pointer-events: none，不拦截任何键盘/鼠标输入
  *    （升级面板 z-index 更高且需要点击，单独开启 pointer events）。
  */
-import { computed, onMounted, onUnmounted, ref, shallowRef } from 'vue'
+import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import GameCanvas from './components/GameCanvas.vue'
 import HudOverlay from './components/HudOverlay.vue'
 import RunnerHudOverlay from './components/RunnerHudOverlay.vue'
@@ -33,15 +33,21 @@ import ExpeditionRewardModal from './components/ExpeditionRewardModal.vue'
 import EndlessDecisionModal from './components/EndlessDecisionModal.vue'
 import RunIntroOverlay from './components/RunIntroOverlay.vue'
 import AccountModal from './components/AccountModal.vue'
+import AdminModal from './components/AdminModal.vue'
+import DataStorageModal from './components/DataStorageModal.vue'
 import LeaderboardModal from './components/LeaderboardModal.vue'
 import PlayerRecordsModal from './components/PlayerRecordsModal.vue'
+import SaveConfirmModal from './components/SaveConfirmModal.vue'
 import { createSettlementQueue } from './services/SettlementQueue.js'
+import { createRunCheckpointStore } from './services/RunCheckpointStore.js'
+import { captureExpeditionCheckpoint, captureTowerCheckpoint, restoreExpeditionCheckpoint, restoreTowerCheckpoint } from './game/RunCheckpoint.js'
 import { createCampaignSave } from './game/AccountRules.js'
 import {
   defaultSave,
   getActiveSave,
   getActiveSaveSlot,
   getRunRecord,
+  getLocalSaveStatus,
   loadSaveCatalog,
   pushScore,
   saveSaveCatalog,
@@ -49,7 +55,7 @@ import {
 import { normalizeRunSelection, scoreToPoints } from './game/RunRules.js'
 import { createDefaultStats } from './game/GameEngine.js'
 import { getRunIntro } from './game/RunIntro.js'
-import { accountApi } from './services/AccountClient.js'
+import { accountApi, setAccountVersion } from './services/AccountClient.js'
 import { loadCampaignSave, loadLegacyCampaign, setAccountCampaign } from './game/gameplay/tower-defense/TowerDefenseSave.js'
 
 const engine = shallowRef(null) // 仅作为挂载句柄：浅响应，避免 Vue 深代理整个引擎对象树
@@ -80,46 +86,104 @@ let boardTimer = 0
 let sessionRequestId = 0
 const showLeaderboard = ref(false)
 const showPlayerRecords = ref(false)
+const showAdmin = ref(false)
+const showDataStorage = ref(false)
+watch(() => account.value?.id, () => {
+  showAdmin.value = false
+  showDataStorage.value = false
+})
 const accountData = ref({ campaign: createCampaignSave(), records: {} })
 const settlementQueue = createSettlementQueue()
 const pendingSettlements = ref([])
 const syncing = ref(false)
 const queueDurable = ref(true)
 const runContext = ref(null)
+const checkpointStore = createRunCheckpointStore()
+const continuation = shallowRef(null)
+const checkpointWarning = ref('')
+const localSaveNotice = ref(getLocalSaveStatus().message)
+const damagedSettlements = ref(0)
+const saveConfirmation = shallowRef(null)
+let lastCatalogSequence = 0
+let lastCheckpointAt = 0
+function confirmProgressChange(message) {
+  return new Promise(resolve => { saveConfirmation.value = { message, resolve } })
+}
+function resolveSaveConfirmation(accepted) {
+  const pending = saveConfirmation.value
+  saveConfirmation.value = null
+  pending?.resolve(accepted)
+}
+
+function persistRunCheckpoint(snapshot) {
+  if (!snapshot || !runContext.value) return
+  const stored = checkpointStore.save(runContext.value, snapshot)
+  if (stored) { continuation.value = stored; checkpointWarning.value = '' }
+  else checkpointWarning.value = '当前阶段无法保存到本机，请保持页面打开。'
+}
+
+function exportPendingSettlements() {
+  const payload = settlementQueue.export(account.value?.id)
+  const url = URL.createObjectURL(new Blob([JSON.stringify(payload)], { type: 'application/json' }))
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = `slime-pending-${new Date().toISOString().slice(0, 10)}.json`
+  anchor.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+function importPendingSettlements(payload) {
+  try {
+    settlementQueue.import(payload, account.value?.id)
+    updateQueueState()
+    flushSettlements(true)
+  } catch (error) { showToast(error.message, 'danger', 5000) }
+}
 setAccountCampaign(createCampaignSave())
 
 function updateQueueState() {
   pendingSettlements.value = [...settlementQueue.list(account.value?.id)]
   syncing.value = settlementQueue.running
   queueDurable.value = settlementQueue.durable
+  damagedSettlements.value = settlementQueue.damagedCount
 }
 
 function applyAccountData(data) {
   if (!data) return
+  if (data.accountId && data.accountId !== account.value?.id) return
+  if (data.saveEpoch && saveCatalog.value.saveEpoch && data.saveEpoch !== saveCatalog.value.saveEpoch) return
+  if (data.saveEpoch === accountData.value.saveEpoch && data.accountRevision && accountData.value.accountRevision > data.accountRevision) return
   accountData.value = data
   setAccountCampaign(data.campaign, queueTutorialCompletion)
 }
 
 function queueTutorialCompletion() {
   if (!account.value) return
-  settlementQueue.add({ accountId: account.value.id, ticketId: `tutorial-${account.value.id}`,
+  settlementQueue.add({ accountId: account.value.id, ticketId: `tutorial-${account.value.id}-${saveCatalog.value.saveEpoch}`,
+    saveEpoch: saveCatalog.value.saveEpoch, serverId: saveCatalog.value.serverId,
     gameplay: 'tower-defense', kind: 'tutorial', run: {} })
   updateQueueState()
   flushSettlements()
 }
 
-async function flushSettlements(retryFailed = false) {
+async function flushSettlements(retryFailed = false, force = false) {
   const accountId = account.value?.id
   if (!accountId) return
   await settlementQueue.flush(accountId,
-    job => job.kind === 'tutorial' ? accountApi.completeTutorial() : accountApi.finishRun(job.ticketId, job.run),
+    job => {
+      if (job.saveEpoch && (job.saveEpoch !== saveCatalog.value.saveEpoch || job.serverId !== saveCatalog.value.serverId)) {
+        throw Object.assign(new Error('此记录属于恢复前的进度，已保留，请确认后放弃或联系管理员'), { status: 409 })
+      }
+      return job.kind === 'tutorial' ? accountApi.completeTutorial() : accountApi.finishRun(job.ticketId, job.run)
+    },
     (job, payload) => {
       if (job.kind === 'tutorial') {
-        accountData.value.campaign.tutorialCompleted = true
+        applyCatalog(payload.catalog, payload.requestSequence)
+        applyAccountData(payload.accountData)
         return
       }
+      applyCatalog(payload.catalog, payload.requestSequence)
       applyAccountData(payload.accountData)
-      applyCatalog(payload.catalog, true)
       if (gameOverInfo.value?.ticketId === job.ticketId) {
         const result = payload.result
         gameOverInfo.value = { ...gameOverInfo.value, ...result, best: result.best,
@@ -133,7 +197,7 @@ async function flushSettlements(retryFailed = false) {
         gameplayHud.value = { ...gameplayHud.value, accountSync: 'synced' }
       }
       loadPublicLeaderboard(selectedRun.value)
-    }, { retryFailed, isCurrent: () => account.value?.id === accountId, onChange: updateQueueState })
+    }, { retryFailed, force, isCurrent: () => account.value?.id === accountId, onChange: updateQueueState })
   const pending = settlementQueue.list(accountId)
   if (pending.some(job => job.status === 401) && account.value?.id === accountId) {
     showPlayerRecords.value = false
@@ -141,6 +205,8 @@ async function flushSettlements(retryFailed = false) {
     accountMessage.value = '登录已过期，请重新登录后同步游戏记录'
     showAccount.value = true
     account.value = null
+    setAccountVersion(null)
+    continuation.value = null
     updateQueueState()
   }
   if (gameOverInfo.value?.ticketId && pending.some(job => job.ticketId === gameOverInfo.value.ticketId)) {
@@ -160,7 +226,7 @@ async function beginAccountRun(selection) {
   const accountId = account.value.id
   deployingRun.value = true
   try {
-    await flushSettlements()
+    await flushSettlements(false, true)
     if (account.value?.id !== accountId) return false
     if (settlementQueue.list(account.value?.id).length || settlementQueue.running) {
       showToast('请先同步上一局记录，再开始新的行动', 'danger', 4200)
@@ -168,13 +234,22 @@ async function beginAccountRun(selection) {
       showPlayerRecords.value = true
       return false
     }
+    const previous = continuation.value
+    if (previous && !(await confirmProgressChange(`开启新行动将替换「${previous.snapshot.label}」的续玩存档。上一局不会结算。`))) return false
+    if (account.value?.id !== accountId) return false
     const payload = await accountApi.startRun(selection)
     if (account.value?.id !== accountId) return false
-    runContext.value = { ...selection, accountId: account.value.id, ticketId: payload.ticket.id }
+    applyCatalog(payload.catalog, payload.requestSequence)
+    if (previous) checkpointStore.clear(previous.ticketId)
+    continuation.value = null
+    runContext.value = { ...selection, accountId: account.value.id, ticketId: payload.ticket.id,
+      expiresAt: payload.ticket.expiresAt, saveEpoch: saveCatalog.value.saveEpoch, serverId: saveCatalog.value.serverId }
     return true
   } catch (error) {
     if (error.status === 401) {
       account.value = null
+      setAccountVersion(null)
+      continuation.value = null
       showAccount.value = true
       accountMessage.value = '登录已过期，请重新登录后继续'
     }
@@ -185,8 +260,12 @@ async function beginAccountRun(selection) {
 
 function queueRunResult(info, gameplay) {
   const context = runContext.value
-  if (!context || context.accountId !== account.value?.id) return null
-  settlementQueue.add({ accountId: context.accountId, ticketId: context.ticketId, gameplay, run: info })
+  if (!context) return null
+  settlementQueue.add({ ...context, gameplay, run: info })
+  if (context.accountId !== account.value?.id) showToast('本局结算已暂存，请登录原账号后同步。', 'danger', 6000)
+  // The settlement is staged before removing the resumable checkpoint.
+  checkpointStore.clear(context.ticketId)
+  continuation.value = null
   runContext.value = null
   updateQueueState()
   return context.ticketId
@@ -199,6 +278,7 @@ function onOpenLeaderboard() {
 function onOpenPlayerRecords() {
   if (!requireAccount()) return
   showAccount.value = false
+  showDataStorage.value = false
   showPlayerRecords.value = true
 }
 
@@ -237,6 +317,8 @@ const cooldown = ref({
   skillMax: 0,
   // 资源型 F（暴食猎食点）：非 null 时 HUD 用它替换冷却条渲染
   charge: null,
+  // 远征章节时限剩余秒数（10Hz 推送，末段大屏逐秒倒数的数据源）
+  stageRemaining: null,
 })
 const gameOverInfo = ref(null) // 游戏结束统计（null = 游戏中）
 const isNewRecord = ref(false) // 本局是否刷新了最高纪录
@@ -273,18 +355,31 @@ function cloneSave(source) {
 function applyActiveSave() {
   save.value = getActiveSave(saveCatalog.value)
   selectedRun.value = normalizeRunSelection(save.value.preferences)
-  engine.value?.setGenes(save.value.genes)
+  if (!started.value) engine.value?.setGenes(save.value.genes)
 }
 
-function applyCatalog(catalog) {
+function applyCatalog(catalog, requestSequence = 0) {
   if (!catalog) return
+  if (catalog.accountId && catalog.accountId !== account.value?.id) return
+  if (catalog.saveEpoch !== saveCatalog.value.saveEpoch && requestSequence && requestSequence < lastCatalogSequence) return
+  if (catalog.serverId && catalog.accountId === saveCatalog.value.accountId && catalog.saveEpoch === saveCatalog.value.saveEpoch
+    && catalog.accountRevision < saveCatalog.value.accountRevision) return
+  lastCatalogSequence = Math.max(lastCatalogSequence, Number(requestSequence) || 0)
+  const changed = catalog.accountRevision !== saveCatalog.value.accountRevision || catalog.saveEpoch !== saveCatalog.value.saveEpoch
   saveCatalog.value = catalog
+  setAccountVersion(catalog)
+  continuation.value = checkpointStore.select(account.value?.id, catalog)
+  checkpointWarning.value = checkpointStore.status.message || ''
+  if (changed && account.value) {
+    try { localStorage.setItem('slime-account-changed', JSON.stringify({ accountId: account.value.id,
+      saveEpoch: catalog.saveEpoch, revision: catalog.accountRevision, serverId: catalog.serverId })) } catch { /* Notifications are optional. */ }
+  }
   applyActiveSave()
 }
 
 function applyAccountPayload(payload) {
   if (payload?.account) account.value = payload.account
-  if (payload?.catalog) applyCatalog(payload.catalog, true)
+  if (payload?.catalog) applyCatalog(payload.catalog, payload.requestSequence)
   if (payload?.accountData) applyAccountData(payload.accountData)
   updateQueueState()
 }
@@ -308,6 +403,7 @@ async function settleGameOver(info) {
 
 function onEngineReady(eng) {
   engine.value = eng
+  eng.onCheckpoint = persistRunCheckpoint
   eng.setGenes(save.value.genes) // 开局应用黑市基因
   eng.sound.setMuted(muted.value) // 应用持久化的静音设置
   // 引擎快照直接整树赋值：形状由 createDefaultStats 与 _pushStats 共同保证，
@@ -323,6 +419,10 @@ function onEngineReady(eng) {
     if (snapshot?.state === 'finished' && gameplayHud.value?.ticketId) snapshot = { ...snapshot, ticketId: gameplayHud.value.ticketId, accountSync: gameplayHud.value.accountSync }
     if (snapshot?.mode === 'runner' || snapshot?.mode === 'tower-defense') {
       gameplayHud.value = snapshot
+    }
+    if (started.value && activeGameplay.value === 'tower-defense' && Date.now() - lastCheckpointAt > 1000) {
+      lastCheckpointAt = Date.now()
+      persistRunCheckpoint(captureTowerCheckpoint(eng))
     }
   }
   eng.onGameplayFinished = (result) => {
@@ -360,11 +460,16 @@ function onEngineReady(eng) {
   // Boss 登场回调：HUD 红色警告
   eng.onBossSpawn = (boss) => {
     toastKind.value = 'danger'
-    elementToast.value = `⚠️ ${boss.name} 出现了！`
+    // 战前名片：把「出现了」升级成压力轴预告（75% / 25% 各加什么），
+    // 没有名片的首领（远征等）仍走原文案
+    const brief = boss.briefing || ''
+    elementToast.value = brief
+      ? `⚠️ ${boss.name}｜${brief}`
+      : `⚠️ ${boss.name} 出现了！`
     clearTimeout(toastTimer)
     toastTimer = setTimeout(() => {
       elementToast.value = ''
-    }, 3000)
+    }, brief ? 4200 : 3000)
   }
   eng.onBossGroupSpawn = (group) => {
     toastKind.value = 'danger'
@@ -408,9 +513,17 @@ function onEngineReady(eng) {
       event.kind === 'calamity' || event.kind === 'bounty-complete' ||
       event.kind === 'formation-break'
       ? 'success'
+      : event.kind === 'deadline-start'
+      ? 'info'
       : 'danger'
     elementToast.value = event.kind === 'warning'
       ? '终局勇者正在集结 · 30 秒后降临'
+      : event.kind === 'deadline-start'
+      ? `限时任务 · ${event.seconds} 秒内${event.brief || '完成章节目标'}`
+      : event.kind === 'deadline-warning'
+      ? `章节目标剩余 ${event.seconds} 秒 · 超时即失败`
+      : event.kind === 'deadline-final'
+      ? `最后 ${event.seconds} 秒！`
       : event.kind === 'finale'
       ? `${event.boss} 降临 · 击败他才能通关`
       : event.kind === 'zone'
@@ -431,7 +544,7 @@ function onEngineReady(eng) {
     clearTimeout(toastTimer)
     toastTimer = setTimeout(() => {
       elementToast.value = ''
-    }, event.kind === 'finale' || event.kind === 'expedition-guardian' ? 4200 : 3200)
+    }, event.kind === 'deadline-final' ? 1600 : event.kind === 'finale' || event.kind === 'expedition-guardian' ? 4200 : 3200)
   }
   eng.onExpeditionReward = (payload) => {
     expeditionReward.value = payload
@@ -494,6 +607,8 @@ async function refreshAccountSession({ promptIfSignedOut = false } = {}) {
     if (payload.account) applyAccountPayload(payload)
     else {
       account.value = null
+      setAccountVersion(null)
+      continuation.value = null
       saveCatalog.value = emptyCatalog()
       applyAccountData({ campaign: createCampaignSave(), records: {} })
       updateQueueState()
@@ -507,6 +622,8 @@ async function refreshAccountSession({ promptIfSignedOut = false } = {}) {
     accountMessage.value = error.message || '暂时无法连接游戏服务'
     serviceStatus.value = { checked: true, online: false, registrationEnabled: false }
     account.value = null
+    setAccountVersion(null)
+    continuation.value = null
     applyAccountData({ campaign: createCampaignSave(), records: {} })
     updateQueueState()
     publicLeaderboard.value = null
@@ -521,6 +638,8 @@ function onOpenAccount() {
   showPlayerRecords.value = false
   showLeaderboard.value = false
   showSaveSlots.value = false
+  showAdmin.value = false
+  showDataStorage.value = false
   accountMessage.value = ''
   showAccount.value = true
   refreshAccountSession()
@@ -560,7 +679,9 @@ async function onLogout() {
   try {
     await accountApi.logout()
     account.value = null
-      runContext.value = null
+    setAccountVersion(null)
+    continuation.value = null
+    runContext.value = null
     saveCatalog.value = emptyCatalog()
     applyActiveSave()
     applyAccountData({ campaign: createCampaignSave(), records: {} })
@@ -578,7 +699,7 @@ async function onImportLocalSlot() {
   accountMessage.value = ''
   try {
     const payload = await accountApi.importSlot(localSlot, loadLegacyCampaign())
-    applyCatalog(payload.catalog, true)
+    applyCatalog(payload.catalog, payload.requestSequence)
     applyAccountData(payload.accountData)
     showToast('旧档案已迁移到当前账号，旧成绩不会进入公共榜', 'success')
   } catch (error) {
@@ -588,12 +709,80 @@ async function onImportLocalSlot() {
   }
 }
 
+async function onResumeSavedRun() {
+  const saved = continuation.value
+  if (!saved || !engine.value || !requireAccount() || deployingRun.value) return
+  const accountId = account.value.id
+  deployingRun.value = true
+  try {
+    await flushSettlements(false, true)
+    if (settlementQueue.list(accountId).length) throw new Error('请先处理待同步记录，再继续行动')
+    const payload = await accountApi.resumeRun(saved.ticketId)
+    if (account.value?.id !== accountId) return
+    if (payload.ticket.gameplay !== saved.snapshot.gameplay || payload.catalog.saveEpoch !== saved.saveEpoch
+      || payload.catalog.serverId !== saved.serverId
+      || saved.snapshot.gameplay === 'arena' && (payload.ticket.mode !== saved.snapshot.selection?.mode || payload.ticket.difficulty !== saved.snapshot.selection?.difficulty)
+      || saved.snapshot.gameplay === 'tower-defense' && (payload.ticket.stageId !== saved.snapshot.stage || (payload.ticket.mode === 'endless') !== saved.snapshot.endless)) throw new Error('续玩存档与原行动不一致')
+    applyAccountPayload(payload)
+    runContext.value = { ...saved, snapshot: undefined, savedAt: undefined }
+    gameOverInfo.value = null; gameplayResult.value = null; gameplayHud.value = null
+    levelUpOptions.value = null; spellCoreReward.value = null; fusionConfirm.value = null
+    expeditionReward.value = null; endlessDecision.value = null; pendingRun.value = null
+    paused.value = false; showTowerDefenseMap.value = false
+    activeGameplay.value = saved.snapshot.gameplay
+    if (saved.snapshot.gameplay === 'arena') {
+      selectedRun.value = normalizeRunSelection(saved.snapshot.selection)
+      restoreExpeditionCheckpoint(engine.value, saved.snapshot)
+    }
+    else restoreTowerCheckpoint(engine.value, saved.snapshot)
+    engine.value.start()
+    started.value = true
+    showToast(`已恢复到${saved.snapshot.label}`, 'success')
+  } catch (error) {
+    engine.value?.stop()
+    runContext.value = null
+    showToast(error.message, 'danger', 5000)
+  } finally { deployingRun.value = false }
+}
+
+async function onDiscardSavedRun() {
+  const saved = continuation.value
+  if (!saved || !(await confirmProgressChange(`放弃「${saved.snapshot.label}」后将无法续玩，这局不会获得结算奖励。`))) return
+  checkpointStore.clear(saved.ticketId)
+  continuation.value = null
+}
+
+function onOpenAdmin() {
+  if (!account.value?.admin) return
+  snd()?.uiClick()
+  showAccount.value = false
+  showDataStorage.value = false
+  showAdmin.value = true
+}
+
+function onOpenDataStorage() {
+  if (!requireAccount()) return
+  snd()?.uiClick()
+  accountMessage.value = ''
+  showAccount.value = false
+  showAdmin.value = false
+  showPlayerRecords.value = false
+  showSaveSlots.value = false
+  showDataStorage.value = true
+}
+
+async function onServerRestored() {
+  showDataStorage.value = false
+  showToast('服务器数据已恢复，请重新登录', 'success')
+  await refreshAccountSession({ promptIfSignedOut: true })
+}
+
 async function syncRunPreferences(normalized) {
   save.value.preferences = { ...normalized }
   if (!requireAccount()) return false
   try {
     const payload = await accountApi.updatePreferences(normalized)
-    applyCatalog(payload.catalog, true)
+    applyCatalog(payload.catalog, payload.requestSequence)
     return true
   } catch (error) {
     const message = accountErrorMessage(error)
@@ -608,7 +797,7 @@ async function runCatalogAction(action, successMessage) {
   accountMessage.value = ''
   try {
     const payload = await action()
-    applyCatalog(payload.catalog, true)
+    applyCatalog(payload.catalog, payload.requestSequence)
     showSaveSlots.value = false
     snd()?.uiSelect()
     if (successMessage) showToast(successMessage, 'success')
@@ -655,6 +844,7 @@ async function onDeployRun() {
   engine.value.reset()
   engine.value.start()
   started.value = true
+  persistRunCheckpoint(captureExpeditionCheckpoint(engine.value))
   pendingRun.value = null
   deployingRun.value = false
 }
@@ -717,6 +907,7 @@ async function onStartTowerDefenseStage(stageId = 1) {
   engine.value.gameplay.loadStage(stageId)
   engine.value.start()
   started.value = true
+  persistRunCheckpoint(captureTowerCheckpoint(engine.value))
   showTowerDefenseMap.value = false
 }
 
@@ -775,6 +966,7 @@ async function onStartTowerDefenseEndless() {
   engine.value.gameplay.startEndlessMode(baseStage)
   engine.value.start()
   started.value = true
+  persistRunCheckpoint(captureTowerCheckpoint(engine.value))
   showTowerDefenseMap.value = false
 }
 
@@ -805,6 +997,7 @@ function onCloseMarket() {
 function onOpenSaveSlots() {
   if (!requireAccount()) return
   snd()?.uiClick()
+  showDataStorage.value = false
   showSaveSlots.value = true
 }
 
@@ -826,7 +1019,7 @@ async function onBuyGene(geneId) {
   if (!requireAccount()) return
   try {
     const payload = await accountApi.buyGene(geneId)
-    applyCatalog(payload.catalog, true)
+    applyCatalog(payload.catalog, payload.requestSequence)
     snd()?.buy()
   } catch (error) {
     snd()?.buyFail()
@@ -941,10 +1134,19 @@ function onChangeRules() {
   evolution.value = null
   elementToast.value = ''
   started.value = false
+  if (account.value) refreshAccountSession()
+}
+
+async function onSaveAndExit() {
+  const saved = continuation.value
+  if (!saved || saved.ticketId !== runContext.value?.ticketId) return
+  if (await confirmProgressChange(`将保留「${saved.snapshot.label}」。下次继续会回到该位置，此后的战斗进度不会保留。`)) onChangeRules()
 }
 
 /** 暂停菜单放弃本局：不触发结算，直接清理局内界面并返回模式选择。 */
 function onAbandonRun() {
+  if (runContext.value) checkpointStore.clear(runContext.value.ticketId)
+  continuation.value = null
   onChangeRules()
 }
 
@@ -959,7 +1161,8 @@ const isModalOpen = computed(
       fusionConfirm.value ||
       expeditionReward.value ||
       endlessDecision.value ||
-      pendingRun.value
+      pendingRun.value ||
+      saveConfirmation.value
     )
 )
 
@@ -1002,25 +1205,42 @@ function onKeydown(e) {
 }
 
 function onNetworkRestored() {
-  if (account.value) flushSettlements()
+  if (account.value) flushSettlements(false, true)
   else if (!started.value) refreshAccountSession()
+}
+
+function onStorageChanged(event) {
+  if (event.key?.startsWith('slime-account-settlement:')) updateQueueState()
+  if (event.key?.startsWith('slime-rampage-checkpoint:') && account.value) {
+    continuation.value = checkpointStore.select(account.value.id, saveCatalog.value)
+  }
+  if (event.key !== 'slime-account-changed' || !account.value) return
+  try {
+    const change = JSON.parse(event.newValue)
+    if (change.accountId !== account.value.id || (change.revision <= saveCatalog.value.accountRevision && change.saveEpoch === saveCatalog.value.saveEpoch)) return
+    if (!started.value) refreshAccountSession()
+    else showToast('账号进度已在另一页面更新，返回菜单后将刷新。', 'info')
+  } catch { /* Ignore malformed notifications. */ }
 }
 
 onMounted(() => {
   window.addEventListener('keydown', onKeydown)
   window.addEventListener('online', onNetworkRestored)
+  window.addEventListener('storage', onStorageChanged)
   refreshAccountSession({ promptIfSignedOut: true })
   startBoardPolling()
 })
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeydown)
   window.removeEventListener('online', onNetworkRestored)
+  window.removeEventListener('storage', onStorageChanged)
+  resolveSaveConfirmation(false)
   stopBoardPolling()
 })
 </script>
 
 <template>
-  <div class="app-root">
+  <div class="app-root adventure-theme">
     <GameCanvas @ready="onEngineReady" />
 
     <!-- HUD 覆盖层：stats/cooldown 快照驱动的纯展示组件（前端 P2 拆分） -->
@@ -1121,9 +1341,11 @@ onUnmounted(() => {
     <Transition name="modal-fade">
       <PauseModal
         v-if="paused"
+        :checkpoint-label="continuation?.ticketId === runContext?.ticketId ? continuation?.snapshot?.label || '' : ''"
         @resume="onResume"
         @restart="onRestartCurrent"
         @quit="onAbandonRun"
+        @save-quit="onSaveAndExit"
       />
     </Transition>
 
@@ -1186,12 +1408,17 @@ onUnmounted(() => {
       :service-status="serviceStatus"
       :public-leaderboard="publicLeaderboard"
       :account-data="accountData"
+      :continuation="continuation"
+      :resume-busy="deployingRun"
+      @resume="onResumeSavedRun"
+      @discard-resume="onDiscardSavedRun"
       @prepare="onPrepareRun"
       @runner="onStartRunner"
       @tower-defense="onStartTowerDefense"
       @market="onOpenMarket"
       @profiles="onOpenSaveSlots"
       @account="onOpenAccount"
+      @storage="onOpenDataStorage"
       @leaderboard="loadPublicLeaderboard"
       @open-leaderboard="onOpenLeaderboard"
       @records="onOpenPlayerRecords"
@@ -1235,37 +1462,102 @@ onUnmounted(() => {
         :account="account"
         :status="serviceStatus"
         :active-slot="activeSaveSlot"
-        :local-slot="activeLocalSaveSlot"
         :busy="accountBusy || syncing || deployingRun"
         :message="accountMessage"
+        :saved-at="saveCatalog.savedAt"
+        :pending-count="pendingSettlements.length"
+        :queue-durable="queueDurable"
+        :recovery-notice="[...(saveCatalog.recoveryNotices || []), accountData.recoveryNotice].filter(Boolean).join(' ')"
         @close="showAccount = false"
         @login="onLogin"
         @register="onRegister"
         @logout="onLogout"
-        @import-local="onImportLocalSlot"
+        @admin="onOpenAdmin"
+        @storage="onOpenDataStorage"
         @profiles="showAccount = false; onOpenSaveSlots()"
         @records="onOpenPlayerRecords"
         @retry="refreshAccountSession"
       />
     </Transition>
+    <Transition name="modal-fade">
+      <AdminModal
+        v-if="showAdmin && account?.admin"
+        :account="account"
+        @close="showAdmin = false"
+        @toast="showToast"
+      />
+    </Transition>
+    <Transition name="modal-fade">
+      <DataStorageModal
+        v-if="showDataStorage && account"
+        :account="account"
+        :status="serviceStatus"
+        :active-slot="activeSaveSlot"
+        :local-slot="activeLocalSaveSlot"
+        :continuation="continuation"
+        :saved-at="saveCatalog.savedAt"
+        :pending-count="pendingSettlements.length"
+        :queue-durable="queueDurable"
+        :syncing="syncing"
+        :busy="accountBusy || deployingRun"
+        :message="accountMessage"
+        :local-save-notice="localSaveNotice"
+        :recovery-notice="[...(saveCatalog.recoveryNotices || []), accountData.recoveryNotice].filter(Boolean).join(' ')"
+        @close="showDataStorage = false"
+        @profiles="onOpenSaveSlots"
+        @records="onOpenPlayerRecords"
+        @import-local="onImportLocalSlot"
+        @toast="showToast"
+        @refresh="refreshAccountSession"
+        @server-restored="onServerRestored"
+      />
+    </Transition>
     <LeaderboardModal v-if="showLeaderboard" @close="showLeaderboard = false" />
-    <PlayerRecordsModal v-if="showPlayerRecords" :account-data="accountData" :pending="pendingSettlements" :syncing="syncing"
-      @close="showPlayerRecords = false" @retry="flushSettlements(true)" @data="applyAccountData" @discard="discardSettlement" />
+    <PlayerRecordsModal v-if="showPlayerRecords" :account-data="accountData" :pending="pendingSettlements" :syncing="syncing" :damaged-count="damagedSettlements"
+      @close="showPlayerRecords = false" @retry="flushSettlements(true)" @data="applyAccountData" @discard="discardSettlement" @export="exportPendingSettlements" @import="importPendingSettlements" />
+    <SaveConfirmModal v-if="saveConfirmation" :message="saveConfirmation.message" @resolve="resolveSaveConfirmation" />
     <div v-if="pendingSettlements.length" class="account-sync-bar" role="status">
       <span>{{ syncing ? '正在保存游戏记录…' : `${pendingSettlements.length} 条记录等待同步` }}{{ !queueDurable ? ' · 浏览器无法暂存，请保持此页面打开' : '' }}</span>
       <button :disabled="syncing" @click="flushSettlements(true)">重试</button>
       <button @click="onOpenPlayerRecords">查看</button>
+      <button @click="exportPendingSettlements">导出</button>
     </div>
+    <div v-else-if="checkpointWarning" class="account-sync-bar" role="status">{{ checkpointWarning }}</div>
     <div v-if="elementToast && !started" class="menu-toast" :class="toastKind" role="status">{{ elementToast }}</div>
   </div>
 </template>
 
 <style scoped>
-.account-sync-bar { position: fixed; z-index: 49; left: 50%; bottom: 18px; transform: translateX(-50%); max-width: calc(100vw - 24px); display: flex; align-items: center; gap: 12px; padding: 12px 16px; border: 1px solid #70603d; border-radius: 6px; background: #201d14; color: #e2c890; font: 13px/1.5 'Microsoft YaHei', sans-serif; }
-.account-sync-bar button { background: transparent; border: 0; color: #f5e2b7; cursor: pointer; white-space: nowrap; }
-.account-sync-bar button:disabled { opacity: .4; }
-.menu-toast { position: fixed; z-index: 65; bottom: 78px; left: 50%; transform: translateX(-50%); max-width: calc(100vw - 40px); padding: 12px 18px; background: #1c281d; border: 1px solid #69846b; border-radius: 6px; color: #dfebdc; font: 13px/1.5 'Microsoft YaHei', sans-serif; }
-.menu-toast.danger { background: #2c1d17; border-color: #9c6e50; }
+.account-sync-bar, .menu-toast {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: calc(100vw - 24px);
+  border: 1px solid var(--adventure-line);
+  border-radius: 8px;
+  box-shadow: var(--adventure-shadow);
+  font: 13px/1.5 'Microsoft YaHei', sans-serif;
+  overflow-wrap: anywhere;
+}
+.account-sync-bar {
+  z-index: 49;
+  bottom: 18px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 8px 12px;
+  border-color: var(--adventure-warning-line);
+  background: var(--adventure-warning-paper);
+  color: var(--adventure-gold);
+}
+.account-sync-bar button { min-height: 32px; padding: 4px 8px; border: 0; border-radius: 5px; background: transparent; color: inherit; font: inherit; font-weight: 650; cursor: pointer; }
+.account-sync-bar button:hover:not(:disabled) { background: #eadcc2; }
+.account-sync-bar button:focus-visible { outline: 2px solid var(--adventure-focus); }
+.account-sync-bar button:disabled { opacity: .65; cursor: not-allowed; }
+.menu-toast { z-index: 65; bottom: 78px; padding: 10px 16px; background: var(--adventure-leaf); color: var(--adventure-green); pointer-events: none; }
+.menu-toast.danger { background: var(--adventure-danger-paper); border-color: var(--adventure-danger-line); color: var(--adventure-danger); }
 
 .app-root {
   position: relative;
@@ -1289,5 +1581,10 @@ onUnmounted(() => {
 
 .modal-fade-leave-to {
   opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal-fade-enter-active,
+  .modal-fade-leave-active { transition: none; }
 }
 </style>

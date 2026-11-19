@@ -147,7 +147,21 @@ let reinforcements = 0
 escortEncounter.manager.spawn = () => { reinforcements++ }
 escortEncounter.manager._spawnTimer = 0
 escortEncounter.manager.update(0.25)
-assert.equal(reinforcements, 0)
-ok('章节首领加入现有战场：保留残兵与弹幕，同时冻结后续普通增援')
+assert.equal(reinforcements, 1)
+assert.equal(escortEncounter.manager._waveTimer, 0, '首领战冻结波次推进计时')
+ok('章节首领加入现有战场：保留残兵与弹幕，同时维持可控近战增援')
+
+const finaleSpawns = createEncounterGame(4)
+finaleSpawns.manager.beginExpeditionStageBoss(getExpeditionBoss(hellStages[4].bossId))
+finaleSpawns.manager._spawnTimer = 0
+const softCap = Math.ceil(finaleSpawns.manager._populationTarget() * 1.2)
+for (let i = 0; i < softCap + 8; i++) {
+  finaleSpawns.manager._spawnTimer = 0
+  finaleSpawns.manager.update(0.1)
+}
+const spawnedAdds = finaleSpawns.manager.enemies.filter((e) => !e.isBoss)
+assert.equal(finaleSpawns.manager.enemies.length, softCap, '首领战维持与常规波次一致的场上上限，不再降档暂缓')
+assert.ok(spawnedAdds.some((e) => ['mage', 'priest', 'archer', 'bulwark', 'alchemist', 'bannerman'].includes(e.type)), '首领战保留完整混合兵种池（含远程/辅助与进阶兵种）')
+ok('章节首领战增援保持常规割草密度与全兵种混编')
 
 console.log(`\n远征首领专项通过：${n} 组断言 ✓`)

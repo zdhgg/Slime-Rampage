@@ -86,8 +86,8 @@ export class RunnerRenderer {
       this.width / 2, this.height / 2, Math.max(this.width, this.height) * 0.72
     )
     vignette.addColorStop(0, 'rgba(3, 8, 14, 0)')
-    vignette.addColorStop(0.7, 'rgba(3, 8, 14, 0.08)')
-    vignette.addColorStop(1, 'rgba(3, 8, 14, 0.42)')
+    vignette.addColorStop(0.7, 'rgba(32, 52, 62, 0.05)')
+    vignette.addColorStop(1, 'rgba(32, 52, 62, 0.23)')
     this._vignette = vignette
   }
 
@@ -165,7 +165,7 @@ export class RunnerRenderer {
       this._scenePaintKey = key
       this._skyGradient = ctx.createLinearGradient(0, 0, 0, this.height)
       this._skyGradient.addColorStop(0, profile.sky)
-      this._skyGradient.addColorStop(1, '#0b121b')
+      this._skyGradient.addColorStop(1, profile.horizon)
       this._roadGradient = ctx.createLinearGradient(0, this.horizonY, 0, this.height)
       this._roadGradient.addColorStop(0, profile.landmark)
       this._roadGradient.addColorStop(1, profile.road)
@@ -265,7 +265,7 @@ export class RunnerRenderer {
     for (const side of [-1, 1]) {
       const bank = 12
       // Outer concrete/steel fascia continues below the deck, visibly supporting it.
-      ctx.fillStyle = '#0c1729'
+      ctx.fillStyle = profile.landmark
       ctx.beginPath()
       for (const lower of [false, true]) for (let n = 0; n <= 24; n++) {
         const t = lower ? 1 - n / 24 : n / 24
@@ -276,7 +276,7 @@ export class RunnerRenderer {
         else ctx.lineTo(x, sy)
       }
       ctx.closePath(); ctx.fill()
-      ctx.fillStyle = '#25354a'
+      ctx.fillStyle = profile.prop
       ctx.beginPath()
       for (const outer of [false, true]) for (let n = 0; n <= 24; n++) {
         const t = outer ? 1 - n / 24 : n / 24
@@ -341,8 +341,8 @@ export class RunnerRenderer {
         ctx.fillStyle = profile.lamp; ctx.fillRect(0.07, -0.41, 0.05, 0.05)
       } else {
         ctx.fillRect(-0.04, -0.95, 0.08, 1.08)
-        ctx.fillStyle = '#19293e'; ctx.fillRect(-0.24, -0.97, 0.48, 0.34)
-        ctx.fillStyle = profile.sign + '95'; ctx.fillRect(-0.17, -0.9, 0.34, 0.035)
+        ctx.fillStyle = profile.sign; ctx.fillRect(-0.24, -0.97, 0.48, 0.34)
+        ctx.fillStyle = profile.lamp; ctx.fillRect(-0.17, -0.9, 0.34, 0.035)
         ctx.fillRect(-0.17, -0.8, 0.2, 0.025)
       }
       ctx.restore()
@@ -362,12 +362,12 @@ export class RunnerRenderer {
     // 2. Object-local threat markers and the player's location ring.
     this._drawInWorldTelemetry(ctx)
 
-    // 3. Glowing neon outer guardrails with enhanced aura & edge posts
+    // 3. Highlight the stone guardrail, glint more strongly during fever.
     const railPulse = 0.35 + (this.gameplay.isFeverActive ? 0.25 : 0)
     ctx.save()
     ctx.strokeStyle = profile.accent
     ctx.shadowColor = profile.accent
-    ctx.shadowBlur = this.gameplay.isFeverActive ? 14 : 7
+    ctx.shadowBlur = this.gameplay.isFeverActive ? 9 : 0
     ctx.globalAlpha = clamp(railPulse, 0.15, 0.7)
     ctx.lineWidth = this.gameplay.isFeverActive ? 3.5 : 2.2
     this._roadOutline(ctx)
@@ -385,7 +385,7 @@ export class RunnerRenderer {
         if (b <= 0.02) continue
         const x0 = this.laneBoundaryX(boundary, a)
         const x1 = this.laneBoundaryX(boundary, b)
-        ctx.strokeStyle = `rgba(167, 210, 235, ${(0.12 + b * 0.38).toFixed(3)})`
+        ctx.strokeStyle = `rgba(246, 244, 220, ${(0.24 + b * 0.43).toFixed(3)})`
         ctx.lineWidth = 1.2 + b * 4.5
         ctx.beginPath()
         ctx.moveTo(x0, this.depthToY(a))
@@ -400,7 +400,7 @@ export class RunnerRenderer {
     const scroll = this.gameplay.scrollDistance || 0
     const cx = this.width / 2
     ctx.save()
-    ctx.globalAlpha = opacity * 0.18
+    ctx.globalAlpha = opacity * (profile.material === 'paving' ? 0.32 : 0.18)
     ctx.strokeStyle = profile.prop
     ctx.lineWidth = 1
     for (let n = 0; n < 9; n++) {

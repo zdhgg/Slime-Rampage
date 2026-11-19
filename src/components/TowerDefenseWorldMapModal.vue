@@ -151,7 +151,7 @@ function selectChapter(chapterId) {
 </script>
 
 <template>
-  <div class="world-map-overlay" role="dialog" aria-modal="true" aria-label="母巢防卫战闯关地图">
+  <div class="world-map-overlay adventure-theme" role="dialog" aria-modal="true" aria-label="守护地图">
     <!-- Top Global Bar -->
     <header class="map-header">
       <div class="header-leading">
@@ -170,9 +170,8 @@ function selectChapter(chapterId) {
         <div class="header-branding">
           <MapIcon class="branding-icon" :size="24" :stroke-width="1.7" aria-hidden="true" />
           <div>
-            <span class="branding-kicker">塔防 · TOWER DEFENSE</span>
-            <h1>母巢防线 · 99关战役大地图</h1>
-            <p>驱逐帝国军团，收复五大母巢生态领地</p>
+            <h1>守护地图</h1>
+            <p>选一关，守护史莱姆的家。</p>
           </div>
         </div>
       </div>
@@ -200,6 +199,7 @@ function selectChapter(chapterId) {
           locked: (save.unlockedStage || 1) < ch.stageRange[0],
         }"
         :style="{ '--ch-color': ch.theme.badgeColor }"
+        :aria-pressed="activeChapterId === ch.id"
         type="button"
         @click="selectChapter(ch.id)"
       >
@@ -231,15 +231,15 @@ function selectChapter(chapterId) {
               </div>
             </div>
             <div class="boss-intel-tag">
-              <span>终极霸主:</span>
+              <span>章节首领</span>
               <strong>{{ activeChapter.bossName }}</strong>
             </div>
           </div>
 
           <div class="overview-right">
             <div class="star-progress-header">
-              <span>本章星级探索度</span>
-              <strong><Star :size="13" class="star-gold" />{{ chapterStarStats.earned }} / {{ chapterStarStats.total }} ({{ chapterStarStats.percent }}%)</strong>
+              <span>本章收集的星星</span>
+              <strong><Star :size="13" class="star-gold" />{{ chapterStarStats.earned }} / {{ chapterStarStats.total }}</strong>
             </div>
             <div class="star-progress-bar">
               <div class="star-progress-fill" :style="{ width: `${chapterStarStats.percent}%`, background: activeChapter.theme.badgeColor }" />
@@ -277,14 +277,14 @@ function selectChapter(chapterId) {
               >
                 <!-- Current Challenge Beacon Indicator -->
                 <div v-if="stg.isCurrent" class="current-indicator">
-                  <span>⚔️ 目标</span>
+                  <span>{{ stg.id === 1 ? '从这里开始' : '最新解锁' }}</span>
                 </div>
 
                 <!-- Main Portal / Landmark Shape -->
                 <div class="landmark-body">
-                  <Crown v-if="stg.isBoss" :size="24" class="landmark-icon boss-crown" />
+                  <Lock v-if="!stg.isUnlocked" :size="18" class="landmark-icon lock-icon" aria-label="尚未解锁" />
+                  <Crown v-else-if="stg.isBoss" :size="24" class="landmark-icon boss-crown" />
                   <Crown v-else-if="stg.isMiniBoss" :size="20" class="landmark-icon treasure-gift" />
-                  <Lock v-else-if="!stg.isUnlocked" :size="18" class="landmark-icon lock-icon" />
                   <span v-else class="stage-badge-number">{{ stg.stageNumber }}</span>
                 </div>
 
@@ -294,7 +294,7 @@ function selectChapter(chapterId) {
                     {{ activeChapter.id }}-{{ stg.stageNumber }} {{ stg.name }}
                   </strong>
                   <!-- Reward / Sneak Peek Chip -->
-                  <span v-if="stg.unlockReward" class="landmark-reward-chip" :class="{ boss: stg.isBoss, gift: stg.isMiniBoss }">
+                  <span v-if="stg.isUnlocked && stg.unlockReward" class="landmark-reward-chip" :class="{ boss: stg.isBoss, gift: stg.isMiniBoss }">
                     {{ stg.unlockReward }}
                   </span>
                 </div>
@@ -348,71 +348,76 @@ function selectChapter(chapterId) {
             </div>
           </div>
 
-          <!-- Tactical Intelligence Recon Grid -->
-          <div class="modal-recon-grid">
-            <div class="recon-cell">
-              <span class="cell-label">⚔️ 波次规模</span>
-              <strong class="cell-value">{{ selectedStageConfig.waveCount }} 波入侵</strong>
+          <p v-if="selectedStageConfig.introductory" class="first-stage-tip">
+            在路边放一只小守卫，和它一起保护巢心。
+          </p>
+          <details class="stage-details" :open="!selectedStageConfig.introductory">
+            <summary>关卡详情</summary>
+            <div class="modal-recon-grid">
+              <div class="recon-cell">
+                <span class="cell-label">需要守住</span>
+                <strong class="cell-value">{{ selectedStageConfig.waveCount }} 波</strong>
+              </div>
+              <div class="recon-cell">
+                <span class="cell-label">🌾 初始养分</span>
+                <strong class="cell-value">{{ selectedStageConfig.startingGold }} 养分</strong>
+              </div>
+              <div class="recon-cell">
+                <span class="cell-label">🗺️ 地形拓扑</span>
+                <strong class="cell-value">{{ selectedStageConfig.topologyName }}</strong>
+              </div>
+              <div class="recon-cell">
+                <span class="cell-label">🌿 推荐阵容</span>
+                <strong class="cell-value">{{ activeChapter.recommendedTypes.filter(id => TOWER_UNLOCK_MAP[id] <= selectedStageId).map(id => TOWER_DEFENSE_TOWER_TYPES[id]?.name || id).join(' / ') }}</strong>
+              </div>
             </div>
-            <div class="recon-cell">
-              <span class="cell-label">🌾 初始养分</span>
-              <strong class="cell-value">{{ selectedStageConfig.startingGold }} 养分</strong>
-            </div>
-            <div class="recon-cell">
-              <span class="cell-label">🗺️ 地形拓扑</span>
-              <strong class="cell-value">{{ selectedStageConfig.topologyName }}</strong>
-            </div>
-            <div class="recon-cell">
-              <span class="cell-label">🌿 推荐阵容</span>
-              <strong class="cell-value">{{ activeChapter.recommendedTypes.filter(id => TOWER_UNLOCK_MAP[id] <= selectedStageId).map(id => TOWER_DEFENSE_TOWER_TYPES[id]?.name || id).join(' / ') }}</strong>
-            </div>
-          </div>
 
-          <div class="modal-rewards-card">
-            <strong>{{ selectedStageConfig.tactic.name }} · {{ selectedStageConfig.assault.name }}</strong>
-            <p>{{ selectedStageConfig.tactic.description }}</p>
-            <p>{{ selectedStageConfig.assault.hint }}</p>
-            <template v-if="selectedStageConfig.miniBoss">
-              <strong>小首领 · {{ selectedStageConfig.miniBoss.name }}</strong>
-              <p>{{ selectedStageConfig.miniBoss.mechanic }}</p>
-              <p>应对：{{ selectedStageConfig.miniBoss.counter }}</p>
-              <p>最终波登场；漏过损失 {{ selectedStageConfig.miniBoss.damage }} 点巢心耐久。</p>
-            </template>
-            <p v-if="selectedStageConfig.isBossStage">首领抵达母巢即失败，必须击杀；提前准备穿甲与控制火力。</p>
-            <span v-for="(stage, type) in TOWER_UNLOCK_MAP" :key="type">
-              <span v-if="stage === selectedStageId" class="reward-chip unlock-chip">本关可用：{{ TOWER_DEFENSE_TOWER_TYPES[type].name }}</span>
-            </span>
-          </div>
-          <!-- Rewards & Special Unlocks -->
-          <div class="modal-rewards-card">
-            <div class="reward-title-row">
-              <Sparkles :size="15" class="sparkle-icon" />
-              <span>通关评价</span>
+            <div class="modal-rewards-card">
+              <strong>{{ selectedStageConfig.tactic.name }} · {{ selectedStageConfig.assault.name }}</strong>
+              <p>{{ selectedStageConfig.tactic.description }}</p>
+              <p>{{ selectedStageConfig.assault.hint }}</p>
+              <template v-if="selectedStageConfig.miniBoss">
+                <strong>小首领 · {{ selectedStageConfig.miniBoss.name }}</strong>
+                <p>{{ selectedStageConfig.miniBoss.mechanic }}</p>
+                <p>应对：{{ selectedStageConfig.miniBoss.counter }}</p>
+                <p>最终波登场；漏过损失 {{ selectedStageConfig.miniBoss.damage }} 点巢心耐久。</p>
+              </template>
+              <p v-if="selectedStageConfig.isBossStage">首领抵达母巢即失败，必须击杀；提前准备穿甲与控制火力。</p>
+              <span v-for="(stage, type) in TOWER_UNLOCK_MAP" :key="type">
+                <span v-if="stage === selectedStageId" class="reward-chip unlock-chip">本关可用：{{ TOWER_DEFENSE_TOWER_TYPES[type].name }}</span>
+              </span>
             </div>
-            <div class="rewards-list">
-              <span class="reward-chip star-chip"><Star :size="13" /> 最高 3 星通关评价</span>
+            <!-- Rewards & Special Unlocks -->
+            <div class="modal-rewards-card">
+              <div class="reward-title-row">
+                <Sparkles :size="15" class="sparkle-icon" />
+                <span>通关评价</span>
+              </div>
+              <div class="rewards-list">
+                <span class="reward-chip star-chip"><Star :size="13" /> 最高 3 星通关评价</span>
+              </div>
             </div>
-          </div>
 
-          <!-- 3-Star Objectives -->
-          <div class="modal-criteria-section">
-            <span class="criteria-title">⭐ 3 星评级挑战目标</span>
-            <div class="criteria-item">
-              <CheckCircle2 :size="14" class="check-icon" :class="{ done: selectedStageStars >= 1 }" />
-              <span>{{ selectedStageConfig.starCriteria.star1 }}</span>
-              <b class="star-count">⭐</b>
+            <!-- 3-Star Objectives -->
+            <div class="modal-criteria-section">
+              <span class="criteria-title">⭐ 3 星评级挑战目标</span>
+              <div class="criteria-item">
+                <CheckCircle2 :size="14" class="check-icon" :class="{ done: selectedStageStars >= 1 }" />
+                <span>{{ selectedStageConfig.starCriteria.star1 }}</span>
+                <b class="star-count">⭐</b>
+              </div>
+              <div class="criteria-item">
+                <CheckCircle2 :size="14" class="check-icon" :class="{ done: selectedStageStars >= 2 }" />
+                <span>{{ selectedStageConfig.starCriteria.star2 }}</span>
+                <b class="star-count">⭐⭐</b>
+              </div>
+              <div class="criteria-item">
+                <CheckCircle2 :size="14" class="check-icon" :class="{ done: selectedStageStars >= 3 }" />
+                <span>{{ selectedStageConfig.starCriteria.star3 }}</span>
+                <b class="star-count">⭐⭐⭐</b>
+              </div>
             </div>
-            <div class="criteria-item">
-              <CheckCircle2 :size="14" class="check-icon" :class="{ done: selectedStageStars >= 2 }" />
-              <span>{{ selectedStageConfig.starCriteria.star2 }}</span>
-              <b class="star-count">⭐⭐</b>
-            </div>
-            <div class="criteria-item">
-              <CheckCircle2 :size="14" class="check-icon" :class="{ done: selectedStageStars >= 3 }" />
-              <span>{{ selectedStageConfig.starCriteria.star3 }}</span>
-              <b class="star-count">⭐⭐⭐</b>
-            </div>
-          </div>
+          </details>
 
           <!-- Action Buttons -->
           <div class="modal-action-row">
@@ -423,7 +428,7 @@ function selectChapter(chapterId) {
               @click="onStartSelectedStage"
             >
               <Play :size="18" fill="currentColor" />
-              <span>开启防御战</span>
+              <span>开始守护</span>
             </button>
             <div v-else class="modal-locked-btn">
               <Lock :size="16" />
@@ -443,20 +448,16 @@ function selectChapter(chapterId) {
 
 <style scoped>
 .world-map-overlay {
-  --map-accent: #d7a657;
-  --map-accent-bright: #ecc477;
-  --map-surface: #12100d;
-  --map-surface-hover: #17130f;
-  --map-text: #f4eee6;
-  --map-text-muted: rgba(244, 238, 230, 0.56);
-  --map-text-faint: rgba(244, 238, 230, 0.38);
-  --map-border: rgba(238, 214, 180, 0.15);
+  --map-surface: var(--adventure-paper);
+  --map-text: var(--adventure-ink);
+  --map-text-muted: var(--adventure-muted);
+  --map-border: var(--adventure-line);
   position: fixed;
   inset: 0;
   z-index: 50;
   display: flex;
   flex-direction: column;
-  background: #090806;
+  background: var(--adventure-bg);
   color: var(--map-text);
   font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
   overflow: hidden;
@@ -470,7 +471,7 @@ function selectChapter(chapterId) {
   gap: 20px;
   min-height: 80px;
   padding: 16px 24px;
-  background: rgba(9, 8, 6, 0.96);
+  background: var(--map-surface);
   border-bottom: 1px solid var(--map-border);
   z-index: 10;
 }
@@ -495,19 +496,10 @@ function selectChapter(chapterId) {
   flex: none;
   width: 36px;
   height: 36px;
-  border: 1px solid rgba(145, 220, 140, 0.42);
-  border-radius: 5px;
-  color: #91dc8c;
-  background: rgba(145, 220, 140, 0.08);
-}
-
-.branding-kicker {
-  display: block;
-  margin-bottom: 2px;
-  color: #91dc8c;
-  font-size: 9px;
-  font-weight: 800;
-  letter-spacing: 0.05em;
+  border: 1px solid var(--map-border);
+  border-radius: 9px;
+  color: var(--adventure-green);
+  background: var(--adventure-leaf);
 }
 
 .header-branding h1 {
@@ -542,8 +534,8 @@ function selectChapter(chapterId) {
   gap: 8px;
   min-height: 36px;
   border: 1px solid var(--map-border);
-  border-radius: 5px;
-  color: rgba(244, 238, 230, 0.74);
+  border-radius: 9px;
+  color: var(--map-text-muted);
   background: transparent;
   font: inherit;
   font-size: 11px;
@@ -559,9 +551,9 @@ function selectChapter(chapterId) {
 
 .map-back-btn:hover,
 .close-map-btn:hover {
-  border-color: rgba(215, 166, 87, 0.48);
-  color: var(--map-accent-bright);
-  background: rgba(215, 166, 87, 0.07);
+  border-color: #9bb98e;
+  color: var(--adventure-green);
+  background: var(--adventure-leaf);
 }
 
 .map-back-btn:focus-visible,
@@ -571,29 +563,8 @@ function selectChapter(chapterId) {
 .stage-landmark-btn:focus-visible,
 .modal-start-btn:focus-visible,
 .modal-cancel-btn:focus-visible {
-  outline: 2px solid #a9e8a0;
+  outline: 2px solid var(--adventure-focus);
   outline-offset: 3px;
-}
-
-.gene-tree-btn {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 14px;
-  border: 1px solid #2ecc71;
-  border-radius: 8px;
-  background: rgba(46, 204, 113, 0.15);
-  color: #2ecc71;
-  font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
-  box-shadow: 0 0 12px rgba(46, 204, 113, 0.2);
-  transition: all 0.15s ease;
-}
-
-.gene-tree-btn:hover {
-  background: #2ecc71;
-  color: #06120d;
 }
 
 .endless-btn {
@@ -603,10 +574,10 @@ function selectChapter(chapterId) {
   gap: 8px;
   min-height: 36px;
   padding: 0 12px;
-  border: 1px solid rgba(165, 94, 234, 0.42);
-  border-radius: 5px;
-  background: rgba(165, 94, 234, 0.08);
-  color: #cda9f5;
+  border: 1px solid #cebde0;
+  border-radius: 9px;
+  background: #f6edf9;
+  color: #68437c;
   font: inherit;
   font-size: 12px;
   font-weight: 700;
@@ -615,21 +586,21 @@ function selectChapter(chapterId) {
 }
 
 .endless-btn:hover {
-  border-color: #c99bff;
-  background: rgba(165, 94, 234, 0.16);
-  color: #e4d2ff;
+  border-color: #aa83c1;
+  background: #ecdcf5;
+  color: #593369;
 }
 
 .star-chip {
   display: flex;
   align-items: center;
   gap: 3px;
-  color: #ffd166;
+  color: var(--adventure-gold);
 }
 
 .star-gold {
-  fill: #ffd166;
-  color: #ffd166;
+  fill: var(--adventure-gold);
+  color: var(--adventure-gold);
 }
 
 .close-map-btn {
@@ -642,7 +613,7 @@ function selectChapter(chapterId) {
   display: flex;
   gap: 8px;
   padding: 10px 24px;
-  background: rgba(18, 16, 13, 0.96);
+  background: var(--adventure-bg);
   border-bottom: 1px solid var(--map-border);
   overflow-x: auto;
   z-index: 10;
@@ -655,8 +626,8 @@ function selectChapter(chapterId) {
   min-height: 54px;
   padding: 8px 14px;
   border: 1px solid var(--map-border);
-  border-radius: 5px;
-  background: rgba(255, 255, 255, 0.025);
+  border-radius: 9px;
+  background: var(--map-surface);
   color: var(--map-text);
   font: inherit;
   cursor: pointer;
@@ -665,19 +636,19 @@ function selectChapter(chapterId) {
 }
 
 .chapter-tab:hover:not(.locked) {
-  background: rgba(255, 255, 255, 0.055);
-  border-color: rgba(236, 196, 119, 0.38);
+  background: var(--adventure-leaf);
+  border-color: #9aba8d;
 }
 
 .chapter-tab.active {
-  border-color: var(--ch-color, #2ecc71);
-  background: rgba(255, 255, 255, 0.06);
-  box-shadow: inset 0 -2px 0 var(--ch-color, #2ecc71);
+  border-color: var(--ch-color, var(--adventure-green));
+  background: #eef1e8;
+  box-shadow: inset 0 -2px 0 var(--ch-color, var(--adventure-green));
 }
 
 .chapter-tab.locked {
-  opacity: 0.45;
-  filter: grayscale(0.8);
+  color: var(--map-text-muted);
+  background: #f4f4ec;
 }
 
 .tab-icon {
@@ -713,23 +684,23 @@ function selectChapter(chapterId) {
 }
 
 .biome-scenery.verdant {
-  background: radial-gradient(circle at 50% 20%, #153326 0%, #0c1f17 50%, #06110c 100%);
+  background: radial-gradient(circle at 50% 20%, #f3f9dd 0%, #e8f4da 50%, #d1e8bf 100%);
 }
 
 .biome-scenery.glacial {
-  background: radial-gradient(circle at 50% 20%, #152d42 0%, #0d1b28 50%, #060e16 100%);
+  background: radial-gradient(circle at 50% 20%, #f0f9fe 0%, #e1f3fb 50%, #cbdfef 100%);
 }
 
 .biome-scenery.volcanic {
-  background: radial-gradient(circle at 50% 20%, #341710 0%, #200d09 50%, #100604 100%);
+  background: radial-gradient(circle at 50% 20%, #fff4da 0%, #fae8d5 50%, #eed0bc 100%);
 }
 
 .biome-scenery.superconductor {
-  background: radial-gradient(circle at 50% 20%, #261642 0%, #170d2a 50%, #0a0514 100%);
+  background: radial-gradient(circle at 50% 20%, #f7f0ff 0%, #eae4f9 50%, #d7c9ef 100%);
 }
 
 .biome-scenery.imperial {
-  background: radial-gradient(circle at 50% 20%, #322612 0%, #1f170a 50%, #0e0a04 100%);
+  background: radial-gradient(circle at 50% 20%, #fff7df 0%, #f3ebd1 50%, #e8d5ae 100%);
 }
 
 .scenery-glow {
@@ -760,11 +731,11 @@ function selectChapter(chapterId) {
   justify-content: space-between;
   gap: 20px;
   padding: 18px 20px;
-  background: rgba(18, 16, 13, 0.88);
-  border-left: 3px solid #2ecc71;
-  border-radius: 6px;
+  background: var(--map-surface);
+  border-left: 3px solid var(--adventure-green);
+  border-radius: 10px;
   backdrop-filter: blur(8px);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.24);
+  box-shadow: 0 2px 0 rgba(56, 92, 48, 0.10);
 }
 
 .chapter-title-row {
@@ -781,13 +752,13 @@ function selectChapter(chapterId) {
   margin: 0;
   font-size: 18px;
   font-weight: 800;
-  color: #ffffff;
+  color: var(--map-text);
 }
 
 .chapter-title-row p {
   margin: 2px 0 0;
   font-size: 12px;
-  color: rgba(238, 245, 242, 0.7);
+  color: var(--map-text-muted);
 }
 
 .boss-intel-tag {
@@ -795,19 +766,19 @@ function selectChapter(chapterId) {
   align-items: center;
   gap: 6px;
   margin-top: 8px;
-  background: rgba(231, 76, 60, 0.15);
-  border: 1px solid rgba(231, 76, 60, 0.35);
+  background: #fae8e1;
+  border: 1px solid #dfb1a3;
   padding: 3px 10px;
-  border-radius: 6px;
+  border-radius: 10px;
   font-size: 11px;
 }
 
 .boss-intel-tag span {
-  color: #ff7675;
+  color: #943a37;
 }
 
 .boss-intel-tag strong {
-  color: #ffffff;
+  color: var(--map-text);
 }
 
 .overview-right {
@@ -824,7 +795,7 @@ function selectChapter(chapterId) {
 
 .star-progress-bar {
   height: 8px;
-  background: rgba(255, 255, 255, 0.1);
+  background: #e7eadf;
   border-radius: 999px;
   overflow: hidden;
 }
@@ -840,11 +811,11 @@ function selectChapter(chapterId) {
   justify-content: space-between;
   margin-top: 6px;
   font-size: 10px;
-  color: rgba(238, 245, 242, 0.45);
+  color: var(--map-text-muted);
 }
 
 .milestone-item.completed {
-  color: #ffd166;
+  color: var(--adventure-gold);
   font-weight: 700;
 }
 
@@ -855,7 +826,7 @@ function selectChapter(chapterId) {
 
 .adventure-trail-grid {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 20px 16px;
 }
 
@@ -870,9 +841,9 @@ function selectChapter(chapterId) {
 .stage-landmark-btn {
   position: relative;
   width: 100%;
-  background: rgba(14, 24, 28, 0.88);
-  border: 1.5px solid rgba(255, 255, 255, 0.14);
-  border-radius: 6px;
+  background: var(--map-surface);
+  border: 1.5px solid #e9ece4;
+  border-radius: 10px;
   padding: 14px 12px;
   display: flex;
   flex-direction: column;
@@ -885,62 +856,42 @@ function selectChapter(chapterId) {
 
 .stage-landmark-btn:hover {
   transform: translateY(-2px);
-  border-color: rgba(255, 255, 255, 0.4);
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+  border-color: #8cac7d;
+  box-shadow: 0 4px 0 rgba(56, 92, 48, 0.16);
 }
 
 .stage-landmark-btn.unlocked {
-  background: rgba(20, 36, 32, 0.92);
-  border-color: rgba(46, 204, 113, 0.5);
+  background: #fdfff8;
+  border-color: #9dbb90;
 }
 
 .stage-landmark-btn.selected {
-  border-color: #ffd166;
-  box-shadow: 0 0 24px rgba(255, 209, 102, 0.5);
+  border-color: var(--adventure-gold);
+  box-shadow: 0 0 0 2px #d2bd8a;
 }
 
 .stage-landmark-btn.current {
-  border-color: #2ecc71;
-  animation: beacon-pulse 2s infinite ease-in-out;
+  border-color: var(--adventure-green);
+  background: #fafff2;
+  box-shadow: 0 0 0 2px #a6c894;
 }
+.stage-landmark-btn.current .landmark-title { font-size: 14px; }
 
-@keyframes beacon-pulse {
-  0%, 100% { box-shadow: 0 0 10px rgba(46, 204, 113, 0.4); }
-  50% { box-shadow: 0 0 24px rgba(46, 204, 113, 0.85); }
-}
-
-.stage-landmark-btn.boss {
-  border-color: rgba(231, 76, 60, 0.6);
-  background: rgba(38, 16, 16, 0.92);
-}
-
-.stage-landmark-btn.treasure {
-  border-color: rgba(241, 196, 15, 0.5);
-}
-
-.stage-landmark-btn.locked {
-  opacity: 0.72;
-  background: rgba(10, 16, 20, 0.75);
-  border-color: rgba(255, 255, 255, 0.08);
-}
+.stage-landmark-btn.boss { border-color: #d49b90; }
+.stage-landmark-btn.treasure { border-color: #d9b77d; }
+.stage-landmark-btn.locked { background: #f5f7f1; border-color: var(--map-border); }
+.stage-landmark-btn.locked .landmark-title { color: var(--map-text-muted); }
 
 /* Current Target Tag */
 .current-indicator {
   position: absolute;
   top: -10px;
-  background: #2ecc71;
-  color: #06140d;
-  font-size: 10px;
+  background: var(--adventure-green);
+  color: #fff;
+  font-size: 11px;
   font-weight: 900;
   padding: 2px 8px;
   border-radius: 999px;
-  box-shadow: 0 2px 8px rgba(46, 204, 113, 0.6);
-  animation: bounce 1.2s infinite ease-in-out;
-}
-
-@keyframes bounce {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-3px); }
 }
 
 /* Node Body & Icons */
@@ -948,34 +899,34 @@ function selectChapter(chapterId) {
   width: 48px;
   height: 48px;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.06);
+  background: #eef1e8;
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid var(--map-border);
 }
 
 .stage-landmark-btn.unlocked .landmark-body {
-  background: rgba(46, 204, 113, 0.18);
-  border-color: rgba(46, 204, 113, 0.45);
+  background: var(--adventure-leaf);
+  border-color: #a9c99b;
 }
 
 .stage-badge-number {
   font-size: 17px;
   font-weight: 800;
-  color: #2ecc71;
+  color: var(--adventure-green);
 }
 
 .landmark-icon.boss-crown {
-  color: #ff7675;
+  color: #943a37;
 }
 
 .landmark-icon.treasure-gift {
-  color: #ffd166;
+  color: var(--adventure-gold);
 }
 
 .landmark-icon.lock-icon {
-  color: rgba(255, 255, 255, 0.45);
+  color: var(--map-text-muted);
 }
 
 /* Info Labels */
@@ -991,7 +942,7 @@ function selectChapter(chapterId) {
 .landmark-title {
   font-size: 12px;
   font-weight: 700;
-  color: #f1f2f6;
+  color: var(--map-text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1002,20 +953,20 @@ function selectChapter(chapterId) {
   font-size: 10px;
   padding: 2px 6px;
   border-radius: 4px;
-  background: rgba(255, 255, 255, 0.08);
-  color: #ffeaa7;
+  background: var(--adventure-leaf);
+  color: var(--adventure-gold);
   font-weight: 600;
   white-space: nowrap;
 }
 
 .landmark-reward-chip.boss {
-  background: rgba(231, 76, 60, 0.2);
-  color: #ff7675;
+  background: #fae8e1;
+  color: #943a37;
 }
 
 .landmark-reward-chip.gift {
-  background: rgba(241, 196, 15, 0.2);
-  color: #ffd166;
+  background: #fbebc7;
+  color: var(--adventure-gold);
 }
 
 /* Stars */
@@ -1025,12 +976,12 @@ function selectChapter(chapterId) {
 }
 
 .landmark-stars .earned {
-  fill: #ffd166;
-  color: #ffd166;
+  fill: var(--adventure-gold);
+  color: var(--adventure-gold);
 }
 
 .landmark-stars .unearned {
-  color: rgba(255, 255, 255, 0.15);
+  color: #879487;
 }
 
 /* Modal Popup Dialog (Interactive Stage Recon & Start Battle) */
@@ -1041,7 +992,7 @@ function selectChapter(chapterId) {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(4, 9, 14, 0.82);
+  background: rgba(27, 51, 41, 0.43);
   backdrop-filter: blur(8px);
   padding: 20px;
 }
@@ -1049,30 +1000,38 @@ function selectChapter(chapterId) {
 .stage-modal-card {
   width: 100%;
   max-width: 520px;
-  background: #0f1922;
-  border: 1.5px solid rgba(88, 201, 165, 0.45);
+  background: var(--map-surface);
+  border: 1.5px solid var(--map-border);
   border-radius: 8px;
   padding: 24px 28px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.58), 0 0 20px rgba(46, 204, 113, 0.1);
+  max-height: calc(100dvh - 40px);
+  overflow-y: auto;
+  box-shadow: 0 14px 40px rgba(27, 51, 41, 0.2);
   display: flex;
   flex-direction: column;
   gap: 16px;
-  animation: modal-pop 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
-.stage-modal-card.is-boss {
-  border-color: rgba(231, 76, 60, 0.55);
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8), 0 0 30px rgba(231, 76, 60, 0.2);
+.stage-modal-card.is-boss { border-color: #d49b90; }
+
+.first-stage-tip {
+  padding: 12px 15px;
+  border-radius: 10px;
+  background: var(--adventure-leaf);
+  color: var(--adventure-green);
+  font-size: 16px;
+  line-height: 1.55;
 }
 
-.stage-modal-card.is-locked {
-  border-color: rgba(255, 255, 255, 0.2);
+.stage-details > summary {
+  width: fit-content;
+  color: var(--map-text-muted);
+  font-size: 14px;
+  font-weight: 650;
+  cursor: pointer;
 }
-
-@keyframes modal-pop {
-  0% { transform: scale(0.92); opacity: 0; }
-  100% { transform: scale(1); opacity: 1; }
-}
+.stage-details[open] > div { margin-top: 12px; }
+.stage-details p { margin: 0; line-height: 1.55; }
 
 .modal-card-header {
   display: flex;
@@ -1089,50 +1048,50 @@ function selectChapter(chapterId) {
 .chapter-tag {
   font-size: 11px;
   font-weight: 700;
-  color: #2ecc71;
-  background: rgba(46, 204, 113, 0.15);
+  color: var(--adventure-green);
+  background: var(--adventure-leaf);
   padding: 3px 8px;
-  border-radius: 6px;
+  border-radius: 10px;
 }
 
 .boss-tag {
   font-size: 11px;
   font-weight: 800;
-  color: #ff7675;
-  background: rgba(231, 76, 60, 0.18);
+  color: #943a37;
+  background: #fae8e1;
   padding: 3px 8px;
-  border-radius: 6px;
+  border-radius: 10px;
 }
 
 .normal-tag {
   font-size: 11px;
   font-weight: 700;
-  color: #ffeaa7;
-  background: rgba(255, 234, 167, 0.15);
+  color: var(--adventure-gold);
+  background: #fbebc7;
   padding: 3px 8px;
-  border-radius: 6px;
+  border-radius: 10px;
 }
 
 .modal-close-btn {
   background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  border-radius: 6px;
-  color: #a4b0be;
+  border: 1px solid #879487;
+  border-radius: 10px;
+  color: var(--map-text-muted);
   padding: 4px;
   cursor: pointer;
   transition: all 0.15s;
 }
 
 .modal-close-btn:hover {
-  background: rgba(255, 255, 255, 0.12);
-  color: #ffffff;
+  background: var(--map-border);
+  color: var(--map-text);
 }
 
 .modal-title-section {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid var(--adventure-leaf);
   padding-bottom: 12px;
 }
 
@@ -1140,7 +1099,7 @@ function selectChapter(chapterId) {
   margin: 0;
   font-size: 20px;
   font-weight: 800;
-  color: #ffffff;
+  color: var(--map-text);
 }
 
 .modal-stars-row {
@@ -1150,17 +1109,17 @@ function selectChapter(chapterId) {
 }
 
 .star-badge {
-  color: rgba(255, 255, 255, 0.15);
+  color: #879487;
 }
 
 .star-badge.earned {
-  color: #ffd166;
-  filter: drop-shadow(0 0 6px rgba(255, 209, 102, 0.7));
+  color: var(--adventure-gold);
+  fill: #efb63f;
 }
 
 .stars-label {
   font-size: 11px;
-  color: rgba(238, 245, 242, 0.6);
+  color: var(--map-text-muted);
   margin-left: 6px;
 }
 
@@ -1172,8 +1131,8 @@ function selectChapter(chapterId) {
 }
 
 .recon-cell {
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: #f6f7f0;
+  border: 1px solid var(--adventure-leaf);
   border-radius: 8px;
   padding: 10px 12px;
   display: flex;
@@ -1183,19 +1142,19 @@ function selectChapter(chapterId) {
 
 .cell-label {
   font-size: 11px;
-  color: rgba(238, 245, 242, 0.55);
+  color: var(--map-text-muted);
 }
 
 .cell-value {
   font-size: 13px;
-  color: #f1f2f6;
+  color: var(--map-text);
   font-weight: 700;
 }
 
 /* Rewards Card */
 .modal-rewards-card {
-  background: rgba(241, 196, 15, 0.06);
-  border: 1px solid rgba(241, 196, 15, 0.25);
+  background: #fffaed;
+  border: 1px solid #ead8b5;
   border-radius: 10px;
   padding: 12px 14px;
   display: flex;
@@ -1209,7 +1168,7 @@ function selectChapter(chapterId) {
   gap: 6px;
   font-size: 12px;
   font-weight: 800;
-  color: #ffd166;
+  color: var(--adventure-gold);
 }
 
 .rewards-list {
@@ -1225,23 +1184,23 @@ function selectChapter(chapterId) {
   font-size: 11px;
   font-weight: 700;
   padding: 4px 8px;
-  border-radius: 6px;
+  border-radius: 10px;
 }
 
 .gold-chip {
-  background: rgba(241, 196, 15, 0.15);
-  color: #ffd166;
+  background: #fbebc7;
+  color: var(--adventure-gold);
 }
 
 .star-chip {
-  background: rgba(88, 201, 165, 0.15);
-  color: #58c9a5;
+  background: var(--adventure-leaf);
+  color: var(--adventure-green);
 }
 
 .unlock-chip {
-  background: rgba(231, 76, 60, 0.2);
-  color: #ff7675;
-  border: 1px solid rgba(231, 76, 60, 0.4);
+  background: #fae8e1;
+  color: #943a37;
+  border: 1px solid #dfb1a3;
 }
 
 /* Criteria List */
@@ -1254,7 +1213,7 @@ function selectChapter(chapterId) {
 .criteria-title {
   font-size: 12px;
   font-weight: 800;
-  color: #ffd166;
+  color: var(--adventure-gold);
   margin-bottom: 2px;
 }
 
@@ -1263,23 +1222,23 @@ function selectChapter(chapterId) {
   align-items: center;
   gap: 8px;
   font-size: 12px;
-  color: rgba(238, 245, 242, 0.7);
-  background: rgba(255, 255, 255, 0.03);
+  color: var(--map-text-muted);
+  background: #f3f5ed;
   padding: 6px 10px;
-  border-radius: 6px;
+  border-radius: 10px;
 }
 
 .check-icon {
-  color: rgba(255, 255, 255, 0.2);
+  color: #879487;
 }
 
 .check-icon.done {
-  color: #2ecc71;
+  color: var(--adventure-green);
 }
 
 .star-count {
   margin-left: auto;
-  color: #ffd166;
+  color: var(--adventure-gold);
 }
 
 /* Action Buttons */
@@ -1295,21 +1254,20 @@ function selectChapter(chapterId) {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  background: linear-gradient(135deg, #ffd166, #f39c12);
-  color: #06140d;
+  background: var(--adventure-green);
+  color: #fff;
   font-size: 15px;
   font-weight: 800;
   padding: 12px 20px;
   border: none;
-  border-radius: 5px;
+  border-radius: 9px;
   cursor: pointer;
-  box-shadow: 0 4px 12px rgba(243, 156, 18, 0.28);
   transition: background 0.14s ease, border-color 0.14s ease, transform 0.12s ease;
 }
 
 .modal-start-btn:hover {
   transform: translateY(-1px);
-  box-shadow: 0 6px 16px rgba(243, 156, 18, 0.4);
+  background: var(--adventure-green-hover);
 }
 
 .modal-locked-btn {
@@ -1318,30 +1276,30 @@ function selectChapter(chapterId) {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  color: #a4b0be;
+  background: #eef1e8;
+  border: 1px solid var(--map-border);
+  color: var(--map-text-muted);
   font-size: 13px;
   font-weight: 700;
   padding: 12px 16px;
-  border-radius: 5px;
+  border-radius: 9px;
 }
 
 .modal-cancel-btn {
   flex: 1;
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  color: #dcdde1;
+  background: var(--adventure-leaf);
+  border: 1px solid #879487;
+  color: var(--map-text);
   font-size: 13px;
   font-weight: 700;
   padding: 12px 16px;
-  border-radius: 5px;
+  border-radius: 9px;
   cursor: pointer;
   transition: background 0.15s;
 }
 
 .modal-cancel-btn:hover {
-  background: rgba(255, 255, 255, 0.14);
+  background: #e9ece4;
 }
 
 @media (max-width: 720px) {
@@ -1352,18 +1310,16 @@ function selectChapter(chapterId) {
     padding: 14px 16px;
   }
 
-  .header-leading {
-    width: 100%;
-  }
+  .map-header .header-leading { flex: 1; min-width: 0; }
+  .map-header .header-actions { gap: 6px; }
 
   .header-actions {
-    width: 100%;
     justify-content: flex-end;
   }
 
   .map-back-btn {
-    order: 2;
-    margin-left: auto;
+    order: 0;
+    padding-inline: 8px;
   }
 
   .header-branding {
@@ -1371,9 +1327,8 @@ function selectChapter(chapterId) {
     min-width: 0;
   }
 
-  .header-branding h1 {
-    font-size: 16px;
-  }
+  .header-branding h1 { font-size: 16px; }
+  .map-back-btn span, .header-branding p, .branding-icon { display: none; }
 
   .map-content-area {
     width: min(calc(100% - 28px), 1180px);
@@ -1396,6 +1351,7 @@ function selectChapter(chapterId) {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .world-map-overlay:is(.modal-fade-enter-active, .modal-fade-leave-active) { transition: none; }
   .stage-landmark-btn,
   .modal-start-btn,
   .map-back-btn,

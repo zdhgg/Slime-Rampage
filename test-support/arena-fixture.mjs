@@ -66,10 +66,10 @@ export function pressSpace(game) {
   game._updateStrainSkill(0)
 }
 
-/** 推进到本次攻击真实结算；兼容转头阶段与不同前摇时长。 */
+/** 推进到本次咬击或深渊吸噬真实结算；兼容转头阶段与不同前摇时长。 */
 export function settleSwing(combat, step = 0.005, maxSteps = 400) {
   let steps = 0
-  while (combat.swing && steps++ < maxSteps) combat.update(step)
+  while ((combat.swing || combat.vortex) && steps++ < maxSteps) combat.update(step)
 }
 
 export function strike(game, target) {

@@ -50,6 +50,14 @@ const bestTimeText = computed(() => fmtTime(props.best?.time))
 
 /** 本局分数（千分位） */
 const scoreText = computed(() => (props.info?.score || 0).toLocaleString('en-US'))
+const highlights = computed(() => props.info?.highlights || {})
+const highlightRows = computed(() => [
+  { label: '最高连续击杀', value: highlights.value.bestCombo || 0, unit: '连杀' },
+  { label: '重击最高收割', value: highlights.value.bestBurst || 0, unit: '名' },
+  { label: '讨伐小队破阵', value: highlights.value.squadBreaks || 0, unit: '次' },
+  { label: '战獒奔潮击杀', value: highlights.value.swarmKills || 0, unit: '只' },
+  ...(highlights.value.overflowWaves ? [{ label: '饱食酸浪', value: highlights.value.overflowWaves, unit: '次' }] : []),
+])
 const publicEntries = computed(() => props.publicBoard?.entries || [])
 const accountSyncText = computed(() => {
   if (props.info?.accountSync === 'synced') {
@@ -97,131 +105,143 @@ const pointsText = computed(() => `${Math.floor(props.info?.earnedDrops || 0)}`)
 <template>
   <div class="gameover-overlay" role="dialog" aria-modal="true" aria-label="本局结算">
     <div class="gameover-panel" :class="{ victory, extracted }">
-      <div class="result-kicker">{{ info.modeName }} · {{ info.difficultyName }}</div>
-      <h2 class="gameover-title">{{ resultTitle }}</h2>
-      <blockquote v-if="victory && info.epilogue" class="boss-epilogue">
-        <p>“{{ info.epilogue.text }}”</p>
-        <cite>— {{ info.epilogue.speaker }}</cite>
-      </blockquote>
-      <div class="gameover-stats">
-        <div class="stat"><span>{{ info.mode === 'expedition' ? '章节' : '波次' }}</span><b>{{ info.mode === 'expedition' ? `${info.stage}/${totalStages}` : info.wave }}</b></div>
-        <div class="stat"><span>等级</span><b>{{ info.level }}</b></div>
-        <div class="stat"><span>击杀</span><b>{{ info.kills }}</b></div>
-        <div class="stat"><span>存活</span><b>{{ timeText }}</b></div>
-        <div class="stat score"><span>分数</span><b>{{ scoreText }}</b></div>
-      </div>
-      <div class="score-breakdown">
-        <div class="breakdown-heading">
-          <b>得分明细</b>
-          <span>存活时间不重复计分</span>
+      <div class="gameover-content">
+        <div class="result-kicker">{{ info.modeName }} · {{ info.difficultyName }}</div>
+        <h2 class="gameover-title">{{ resultTitle }}</h2>
+        <blockquote v-if="victory && info.epilogue" class="boss-epilogue">
+          <p>“{{ info.epilogue.text }}”</p>
+          <cite>— {{ info.epilogue.speaker }}</cite>
+        </blockquote>
+        <div class="gameover-stats">
+          <div class="stat"><span>{{ info.mode === 'expedition' ? '章节' : '波次' }}</span><b>{{ info.mode === 'expedition' ? `${info.stage}/${totalStages}` : info.wave }}</b></div>
+          <div class="stat"><span>等级</span><b>{{ info.level }}</b></div>
+          <div class="stat"><span>击杀</span><b>{{ info.kills }}</b></div>
+          <div class="stat"><span>存活</span><b>{{ timeText }}</b></div>
+          <div class="stat score"><span>分数</span><b>{{ scoreText }}</b></div>
         </div>
-        <div v-for="row in scoreRows" :key="row.label" class="breakdown-row">
-          <span>{{ row.label }}</span>
-          <i>{{ row.detail }}</i>
-          <b>+{{ row.value.toLocaleString('en-US') }}</b>
+        <div v-if="info.highlights" class="combat-highlights">
+          <div class="breakdown-heading"><b>战斗高光</b><span>连续击杀间隔不超过 1.8 秒</span></div>
+          <div class="highlight-grid">
+            <div v-for="row in highlightRows" :key="row.label" class="highlight-stat">
+              <span>{{ row.label }}</span><b>{{ row.value.toLocaleString('zh-CN') }} <small>{{ row.unit }}</small></b>
+            </div>
+          </div>
         </div>
-      </div>
-      <div class="gameover-drops">
-        🎒 战力点
-        <span class="drop-list">
-          <span class="drop-total">分数 {{ scoreText }} ÷ {{ POINTS_PER_SCORE }} · 入账 <b>{{ pointsText }}</b> 点</span>
-        </span>
-        <b v-if="info.mode === 'endless'">
-          结算倍率 ×{{ Number(info.effectiveMultiplier || info.rewardMultiplier || 1).toFixed(2) }} ·
-          {{ info.defeatRetention < 1 ? `战败保留 ${Math.round(info.defeatRetention * 100)}%` : '安全结算 100%' }} ·
-          完成悬赏 {{ info.bountiesCompleted || 0 }}
-        </b>
-        <b v-else>难度倍率 ×{{ info.rewardMultiplier }}</b>
-      </div>
-      <div class="sync-banner" :class="info.accountSync">{{ accountSyncText }}</div>
-      <div v-if="info.unlocked" class="unlock-banner">
-        新难度已解锁：{{ info.unlocked === 'hell' ? '地狱' : '困难' }}
-      </div>
-      <div v-if="info.unlockedMode" class="unlock-banner mode-unlock-banner">
-        新模式已解锁：{{ MODES[info.unlockedMode]?.name || info.unlockedMode }}
-      </div>
-      <div class="gameover-species">
-        <div class="species-name">{{ info.species?.threatIcon }} {{ info.species?.name || '普通史莱姆' }}</div>
-        <div class="species-threat">威胁评估：{{ info.species?.threat || '地下城原生物种' }}</div>
-        <div v-if="info.species?.elements?.length" class="species-line">
-          元素构成：
-          <span v-for="el in info.species.elements" :key="el.id" class="species-el">
-            {{ EL_ICONS[el.id] }} {{ el.share }}%
+        <div class="score-breakdown">
+          <div class="breakdown-heading">
+            <b>得分明细</b>
+            <span>存活时间不重复计分</span>
+          </div>
+          <div v-for="row in scoreRows" :key="row.label" class="breakdown-row">
+            <span>{{ row.label }}</span>
+            <i>{{ row.detail }}</i>
+            <b>+{{ row.value.toLocaleString('en-US') }}</b>
+          </div>
+        </div>
+        <div class="gameover-drops">
+          🎒 战力点
+          <span class="drop-list">
+            <span class="drop-total">分数 {{ scoreText }} ÷ {{ POINTS_PER_SCORE }} · 入账 <b>{{ pointsText }}</b> 点</span>
           </span>
+          <b v-if="info.mode === 'endless'">
+            结算倍率 ×{{ Number(info.effectiveMultiplier || info.rewardMultiplier || 1).toFixed(2) }} ·
+            {{ info.defeatRetention < 1 ? `战败保留 ${Math.round(info.defeatRetention * 100)}%` : '安全结算 100%' }} ·
+            完成悬赏 {{ info.bountiesCompleted || 0 }}
+          </b>
+          <b v-else>难度倍率 ×{{ info.rewardMultiplier }}</b>
         </div>
-        <div v-if="info.species?.genes?.length" class="species-line">
-          基因突变：
-          <span v-for="g in info.species.genes" :key="g.id" class="species-gene">{{ g.name }} Lv.{{ g.lv }}</span>
+        <div class="sync-banner" :class="info.accountSync">{{ accountSyncText }}</div>
+        <div v-if="info.unlocked" class="unlock-banner">
+          新难度已解锁：{{ info.unlocked === 'hell' ? '地狱' : '困难' }}
         </div>
-        <div v-if="info.species?.behavior?.length" class="species-line">
-          代表行为：
-          <span v-for="b in info.species.behavior" :key="b" class="species-gene">{{ b }}</span>
+        <div v-if="info.unlockedMode" class="unlock-banner mode-unlock-banner">
+          新模式已解锁：{{ MODES[info.unlockedMode]?.name || info.unlockedMode }}
         </div>
-        <div v-if="info.species?.secondary?.length" class="species-line">
-          副反应：
-          <span v-for="s in info.species.secondary" :key="s" class="species-gene">{{ s }}</span>
+        <div class="gameover-species">
+          <div class="species-name">{{ info.species?.threatIcon }} {{ info.species?.name || '普通史莱姆' }}</div>
+          <div class="species-threat">威胁评估：{{ info.species?.threat || '地下城原生物种' }}</div>
+          <div v-if="info.species?.elements?.length" class="species-line">
+            元素构成：
+            <span v-for="el in info.species.elements" :key="el.id" class="species-el">
+              {{ EL_ICONS[el.id] }} {{ el.share }}%
+            </span>
+          </div>
+          <div v-if="info.species?.genes?.length" class="species-line">
+            基因突变：
+            <span v-for="g in info.species.genes" :key="g.id" class="species-gene">{{ g.name }} Lv.{{ g.lv }}</span>
+          </div>
+          <div v-if="info.species?.behavior?.length" class="species-line">
+            代表行为：
+            <span v-for="b in info.species.behavior" :key="b" class="species-gene">{{ b }}</span>
+          </div>
+          <div v-if="info.species?.secondary?.length" class="species-line">
+            副反应：
+            <span v-for="s in info.species.secondary" :key="s" class="species-gene">{{ s }}</span>
+          </div>
         </div>
+        <!-- 无尽模式分数榜（阶段十二）：Top 8，本次成绩金色高亮 -->
+        <div v-if="board.length" class="gameover-board">
+          <div class="board-title">🏆 勇者通缉榜</div>
+          <div
+            v-for="(row, i) in board"
+            :key="i"
+            class="board-row"
+            :class="{ current: row === info.entry }"
+          >
+            <span class="board-rank">{{ rankBadge(i) }}</span>
+            <span class="board-score">{{ row.score.toLocaleString('en-US') }}</span>
+            <span class="board-meta">
+              <template v-if="info.mode === 'timed'">
+                {{ row.result === 'victory' ? `通关 · 终局 ${fmtTime(row.finaleTime)}` : `败退 · 波${row.wave}` }}
+              </template>
+              <template v-else-if="info.mode === 'expedition'">
+                {{ row.result === 'victory' ? `通关 · ${fmtTime(row.time)}` : `败退 · 第${row.stage}/${totalStages}章` }}
+              </template>
+              <template v-else>{{ row.result === 'extracted' ? '撤离' : '败退' }} · 波{{ row.wave }} · 杀{{ row.kills }} · {{ fmtTime(row.time) }}</template>
+            </span>
+            <span class="board-species">{{ row.species }}</span>
+            <i v-if="row === info.entry" class="board-tag">本次</i>
+          </div>
+          <div v-if="info.rank === 0" class="board-miss">本次成绩未上榜，继续变强！</div>
+        </div>
+        <div v-if="publicEntries.length" class="gameover-board public">
+          <div class="board-title">公共排行榜</div>
+          <div
+            v-for="entry in publicEntries.slice(0, 8)"
+            :key="entry.runId"
+            class="board-row"
+            :class="{ current: entry.current }"
+          >
+            <span class="board-rank">#{{ entry.rank }}</span>
+            <span class="board-score">{{ entry.score.toLocaleString('en-US') }}</span>
+            <span class="board-meta">
+              <template v-if="info.mode === 'timed'">
+                {{ entry.result === 'victory' ? `通关 · 终局 ${fmtTime(entry.finaleTime)}` : `败退 · 波${entry.wave}` }}
+              </template>
+              <template v-else-if="info.mode === 'expedition'">
+                {{ entry.result === 'victory' ? `通关 · ${fmtTime(entry.time)}` : `败退 · 第${entry.stage}/${totalStages}章` }}
+              </template>
+              <template v-else>{{ entry.result === 'extracted' ? '撤离' : '败退' }} · 波{{ entry.wave }} · {{ fmtTime(entry.time) }}</template>
+            </span>
+            <span class="board-species">{{ entry.username }} · {{ entry.species }}</span>
+            <i v-if="entry.current" class="board-tag">我的</i>
+          </div>
+        </div>
+        <div class="gameover-best" :class="{ new: isNewRecord }">
+          {{ isNewRecord ? '当前规则新纪录' : '当前规则最高纪录' }} ·
+          {{ best.score?.toLocaleString('en-US') || 0 }} 分 ·
+          {{ info.mode === 'expedition' ? `章节 ${best.stage || 1}/${totalStages}` : `波次 ${best.wave}` }} ·
+          击杀 {{ best.kills }} · {{ bestTimeText }}
+        </div>
+        <div class="gameover-hint">{{ victory ? '新的威胁等级正等待挑战。' : extracted ? '这批战力点已完整入账，可以整备后再次深入。' : info.defeatReason === 'nest-destroyed' ? '净化兵突破了防线，优先拦截奔向巢心的近战单位。' : info.defeatReason === 'beacon-timeout' ? '未能在时限内摧毁迁跃信标，王城增援已经抵达。' : '调整构筑或规则，再次迎战勇者。' }}</div>
       </div>
-      <!-- 无尽模式分数榜（阶段十二）：Top 8，本次成绩金色高亮 -->
-      <div v-if="board.length" class="gameover-board">
-        <div class="board-title">🏆 勇者通缉榜</div>
-        <div
-          v-for="(row, i) in board"
-          :key="i"
-          class="board-row"
-          :class="{ current: row === info.entry }"
-        >
-          <span class="board-rank">{{ rankBadge(i) }}</span>
-          <span class="board-score">{{ row.score.toLocaleString('en-US') }}</span>
-          <span class="board-meta">
-            <template v-if="info.mode === 'timed'">
-              {{ row.result === 'victory' ? `通关 · 终局 ${fmtTime(row.finaleTime)}` : `败退 · 波${row.wave}` }}
-            </template>
-            <template v-else-if="info.mode === 'expedition'">
-              {{ row.result === 'victory' ? `通关 · ${fmtTime(row.time)}` : `败退 · 第${row.stage}/${totalStages}章` }}
-            </template>
-            <template v-else>{{ row.result === 'extracted' ? '撤离' : '败退' }} · 波{{ row.wave }} · 杀{{ row.kills }} · {{ fmtTime(row.time) }}</template>
-          </span>
-          <span class="board-species">{{ row.species }}</span>
-          <i v-if="row === info.entry" class="board-tag">本次</i>
+      <footer class="gameover-footer">
+        <div class="result-actions">
+          <button class="restart-btn" @click="emit('restart')">重新开始</button>
+          <button class="rules-btn" @click="emit('menu')">返回主页</button>
         </div>
-        <div v-if="info.rank === 0" class="board-miss">本次成绩未上榜，继续变强！</div>
-      </div>
-      <div v-if="publicEntries.length" class="gameover-board public">
-        <div class="board-title">公共排行榜</div>
-        <div
-          v-for="entry in publicEntries.slice(0, 8)"
-          :key="entry.runId"
-          class="board-row"
-          :class="{ current: entry.current }"
-        >
-          <span class="board-rank">#{{ entry.rank }}</span>
-          <span class="board-score">{{ entry.score.toLocaleString('en-US') }}</span>
-          <span class="board-meta">
-            <template v-if="info.mode === 'timed'">
-              {{ entry.result === 'victory' ? `通关 · 终局 ${fmtTime(entry.finaleTime)}` : `败退 · 波${entry.wave}` }}
-            </template>
-            <template v-else-if="info.mode === 'expedition'">
-              {{ entry.result === 'victory' ? `通关 · ${fmtTime(entry.time)}` : `败退 · 第${entry.stage}/${totalStages}章` }}
-            </template>
-            <template v-else>{{ entry.result === 'extracted' ? '撤离' : '败退' }} · 波{{ entry.wave }} · {{ fmtTime(entry.time) }}</template>
-          </span>
-          <span class="board-species">{{ entry.username }} · {{ entry.species }}</span>
-          <i v-if="entry.current" class="board-tag">我的</i>
-        </div>
-      </div>
-      <div class="gameover-best" :class="{ new: isNewRecord }">
-        {{ isNewRecord ? '当前规则新纪录' : '当前规则最高纪录' }} ·
-        {{ best.score?.toLocaleString('en-US') || 0 }} 分 ·
-        {{ info.mode === 'expedition' ? `章节 ${best.stage || 1}/${totalStages}` : `波次 ${best.wave}` }} ·
-        击杀 {{ best.kills }} · {{ bestTimeText }}
-      </div>
-      <div class="result-actions">
-        <button class="restart-btn" @click="emit('restart')">重新开始</button>
-        <button class="rules-btn" @click="emit('menu')">返回主页</button>
-      </div>
-      <button class="market-btn" @click="emit('market')">🏪 去黑市强化基因</button>
-      <div class="gameover-hint">{{ victory ? '新的威胁等级正等待挑战。' : extracted ? '这批战力点已完整入账，可以整备后再次深入。' : info.defeatReason === 'nest-destroyed' ? '净化兵突破了防线，优先拦截奔向巢心的近战单位。' : info.defeatReason === 'beacon-timeout' ? '未能在时限内摧毁迁跃信标，王城增援已经抵达。' : '调整构筑或规则，再次迎战勇者。' }}</div>
+        <button class="market-btn" @click="emit('market')">🏪 去黑市强化基因</button>
+      </footer>
     </div>
   </div>
 </template>
@@ -234,57 +254,73 @@ const pointsText = computed(() => `${Math.floor(props.info?.earnedDrops || 0)}`)
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.7);
+  background: var(--adventure-scrim);
   backdrop-filter: blur(4px);
 }
 
 .gameover-panel {
   width: min(760px, calc(100vw - 32px));
-  max-height: 92vh;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100dvh - 32px);
+  overflow: hidden;
   text-align: center;
-  padding: 30px 36px 28px;
-  border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: rgba(20, 15, 15, 0.97);
-  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.52);
+  border-radius: 12px;
+  border: 1px solid var(--adventure-line);
+  background: var(--adventure-paper);
+  box-shadow: var(--adventure-shadow);
+}
+
+.gameover-content {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  padding: 25px 35px 18px;
+}
+
+.gameover-footer {
+  flex: none;
+  padding: 12px 20px 14px;
+  border-top: 1px solid var(--adventure-line);
+  background: var(--adventure-paper);
 }
 
 .gameover-title {
   font-size: 30px;
   font-weight: 800;
   letter-spacing: 0;
-  color: #ffd7d7;
+  color: var(--adventure-danger);
   margin-bottom: 26px;
 }
 
 .result-kicker {
   margin-bottom: 7px;
-  color: rgba(255, 255, 255, 0.48);
+  color: var(--adventure-muted);
   font-size: 11px;
 }
 
 .gameover-panel.victory {
   border-color: rgba(138, 232, 74, 0.4);
-  background: rgba(12, 20, 13, 0.97);
+  background: var(--adventure-paper);
 }
 
 .gameover-panel.victory .gameover-title {
-  color: #d2ff8a;
+  color: var(--adventure-green);
 }
 
 .gameover-panel.extracted {
   border-color: rgba(101, 170, 126, 0.5);
-  background: rgba(13, 20, 16, 0.97);
+  background: var(--adventure-paper);
 }
 
 .gameover-panel.extracted .gameover-title {
-  color: #b9ebc7;
+  color: var(--adventure-green);
 }
 
 .boss-epilogue {
   margin: -13px auto 22px;
-  color: rgba(240, 239, 226, 0.76);
+  color: var(--adventure-muted);
 }
 
 .boss-epilogue p {
@@ -296,7 +332,7 @@ const pointsText = computed(() => `${Math.floor(props.info?.earnedDrops || 0)}`)
 .boss-epilogue cite {
   display: block;
   margin-top: 3px;
-  color: rgba(200, 169, 104, 0.72);
+  color: var(--adventure-gold);
   font-size: 10px;
   font-style: normal;
 }
@@ -311,27 +347,35 @@ const pointsText = computed(() => `${Math.floor(props.info?.earnedDrops || 0)}`)
 .stat span {
   display: block;
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.55);
+  color: var(--adventure-muted);
   letter-spacing: 0;
   margin-bottom: 6px;
 }
 
 .stat b {
   font-size: 26px;
-  color: #ff8a8a;
+  color: var(--adventure-danger);
 }
 
 /* 分数格：金色突出（无尽模式得分） */
 .stat.score b {
-  color: #ffd166;
+  color: var(--adventure-gold);
 }
 
 .score-breakdown {
   margin-bottom: 18px;
   padding: 14px 0 12px;
-  border-top: 1px solid rgba(255, 255, 255, 0.12);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  border-top: 1px solid var(--adventure-line);
+  border-bottom: 1px solid var(--adventure-line);
 }
+
+.combat-highlights { margin: 0 0 18px; text-align: left; }
+.highlight-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 20px; }
+.highlight-stat { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--adventure-line); }
+.highlight-stat > span { font-size: 12px; color: var(--adventure-muted); }
+.highlight-stat b { color: var(--adventure-green); font-size: 18px; font-variant-numeric: tabular-nums; }
+.highlight-stat small { font-size: 10px; color: var(--adventure-muted); font-weight: 400; }
+@media (max-width: 480px) { .highlight-grid { gap: 4px 12px; } .combat-highlights .breakdown-heading { display: flex; flex-wrap: wrap; gap: 5px; justify-content: space-between; } }
 
 .breakdown-heading,
 .breakdown-row {
@@ -348,31 +392,31 @@ const pointsText = computed(() => `${Math.floor(props.info?.earnedDrops || 0)}`)
 
 .breakdown-heading b {
   font-size: 13px;
-  color: rgba(255, 255, 255, 0.88);
+  color: var(--adventure-muted);
 }
 
 .breakdown-heading span {
   grid-column: 2 / 4;
   text-align: right;
   font-size: 11px;
-  color: rgba(255, 255, 255, 0.4);
+  color: var(--adventure-muted);
 }
 
 .breakdown-row {
   min-height: 25px;
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.64);
+  color: var(--adventure-muted);
 }
 
 .breakdown-row i {
   font-style: normal;
-  color: rgba(255, 255, 255, 0.38);
+  color: var(--adventure-muted);
 }
 
 .breakdown-row b {
   text-align: right;
   font-variant-numeric: tabular-nums;
-  color: #e8d49a;
+  color: var(--adventure-gold);
 }
 
 /* 无尽模式分数榜（阶段十二） */
@@ -389,7 +433,7 @@ const pointsText = computed(() => `${Math.floor(props.info?.earnedDrops || 0)}`)
 }
 
 .gameover-board.public .board-title {
-  color: #d2ff8a;
+  color: var(--adventure-green);
 }
 
 .board-title {
@@ -397,7 +441,7 @@ const pointsText = computed(() => `${Math.floor(props.info?.earnedDrops || 0)}`)
   font-size: 14px;
   font-weight: 800;
   letter-spacing: 0;
-  color: #ffd166;
+  color: var(--adventure-gold);
 }
 
 .board-row {
@@ -407,14 +451,14 @@ const pointsText = computed(() => `${Math.floor(props.info?.earnedDrops || 0)}`)
   padding: 4px 8px;
   border-radius: 8px;
   font-size: 12.5px;
-  color: rgba(255, 255, 255, 0.75);
+  color: var(--adventure-muted);
 }
 
 .board-rank {
   width: 34px;
   text-align: center;
   font-weight: 800;
-  color: rgba(255, 209, 102, 0.75);
+  color: var(--adventure-gold);
 }
 
 .board-score {
@@ -422,14 +466,14 @@ const pointsText = computed(() => `${Math.floor(props.info?.earnedDrops || 0)}`)
   text-align: right;
   font-weight: 800;
   font-variant-numeric: tabular-nums;
-  color: #ffd166;
+  color: var(--adventure-gold);
 }
 
 .board-meta {
   width: 130px;
   text-align: left;
   font-variant-numeric: tabular-nums;
-  color: rgba(255, 255, 255, 0.55);
+  color: var(--adventure-muted);
 }
 
 .board-species {
@@ -438,7 +482,7 @@ const pointsText = computed(() => `${Math.floor(props.info?.earnedDrops || 0)}`)
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: rgba(255, 255, 255, 0.6);
+  color: var(--adventure-muted);
 }
 
 .board-tag {
@@ -459,7 +503,7 @@ const pointsText = computed(() => `${Math.floor(props.info?.earnedDrops || 0)}`)
 .board-miss {
   margin-top: 6px;
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.45);
+  color: var(--adventure-muted);
 }
 
 .restart-btn {
@@ -469,8 +513,8 @@ const pointsText = computed(() => `${Math.floor(props.info?.earnedDrops || 0)}`)
   font-size: 17px;
   font-weight: 700;
   letter-spacing: 0;
-  color: #0c120d;
-  background: #8cda61;
+  color: #fff;
+  background: var(--adventure-green);
   cursor: pointer;
   transition: background 0.12s ease, transform 0.12s ease;
 }
@@ -483,21 +527,21 @@ const pointsText = computed(() => `${Math.floor(props.info?.earnedDrops || 0)}`)
 
 .rules-btn {
   padding: 12px 28px;
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  border: 1px solid var(--adventure-line);
   border-radius: 7px;
-  color: rgba(255, 255, 255, 0.82);
-  background: rgba(255, 255, 255, 0.06);
+  color: var(--adventure-muted);
+  background: var(--adventure-leaf);
   font: inherit;
   font-weight: 700;
   cursor: pointer;
 }
 
 .rules-btn:hover {
-  background: rgba(255, 255, 255, 0.11);
+  background: #dce9de;
 }
 
 .restart-btn:hover {
-  background: #a1e77a;
+  background: var(--adventure-green-hover);
 }
 
 .restart-btn:active,
@@ -508,7 +552,7 @@ const pointsText = computed(() => `${Math.floor(props.info?.earnedDrops || 0)}`)
 .restart-btn:focus-visible,
 .market-btn:focus-visible,
 .rules-btn:focus-visible {
-  outline: 2px solid rgba(210, 255, 138, 0.9);
+  outline: 2px solid var(--adventure-focus);
   outline-offset: 3px;
 }
 
@@ -516,13 +560,13 @@ const pointsText = computed(() => `${Math.floor(props.info?.earnedDrops || 0)}`)
   margin-bottom: 12px;
   font-size: 13.5px;
   letter-spacing: 0;
-  color: rgba(255, 255, 255, 0.7);
+  color: var(--adventure-muted);
 }
 
 .gameover-drops b {
   display: block;
   margin-top: 6px;
-  color: #d2ff8a;
+  color: var(--adventure-green);
   font-size: 12px;
 }
 
@@ -542,23 +586,23 @@ const pointsText = computed(() => `${Math.floor(props.info?.earnedDrops || 0)}`)
 .sync-banner {
   margin: 0 0 12px;
   padding: 8px 11px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid var(--adventure-line);
   border-radius: 6px;
-  color: rgba(255, 255, 255, 0.62);
-  background: rgba(255, 255, 255, 0.04);
+  color: var(--adventure-muted);
+  background: var(--adventure-paper);
   font-size: 12px;
   font-weight: 700;
 }
 
 .sync-banner.synced {
   border-color: rgba(138, 232, 74, 0.3);
-  color: #d2ff8a;
+  color: var(--adventure-green);
   background: rgba(138, 232, 74, 0.07);
 }
 
 .sync-banner.pending {
   border-color: rgba(255, 138, 138, 0.34);
-  color: #ffb0a5;
+  color: var(--adventure-danger);
   background: rgba(255, 82, 82, 0.08);
 }
 
@@ -567,7 +611,7 @@ const pointsText = computed(() => `${Math.floor(props.info?.earnedDrops || 0)}`)
   padding: 9px 12px;
   border: 1px solid rgba(255, 209, 102, 0.42);
   border-radius: 6px;
-  color: #ffd166;
+  color: var(--adventure-gold);
   background: rgba(255, 209, 102, 0.08);
   font-size: 13px;
   font-weight: 800;
@@ -575,7 +619,7 @@ const pointsText = computed(() => `${Math.floor(props.info?.earnedDrops || 0)}`)
 
 .mode-unlock-banner {
   border-color: rgba(138, 192, 116, 0.42);
-  color: #bde5aa;
+  color: var(--adventure-green);
   background: rgba(111, 160, 91, 0.09);
 }
 
@@ -591,37 +635,37 @@ const pointsText = computed(() => `${Math.floor(props.info?.earnedDrops || 0)}`)
   font-size: 20px;
   font-weight: 800;
   letter-spacing: 0;
-  color: #d2ff8a;
+  color: var(--adventure-green);
 }
 
 .species-threat {
   margin-top: 4px;
   font-size: 12.5px;
   letter-spacing: 0;
-  color: #ff8a8a;
+  color: var(--adventure-danger);
 }
 
 .species-line {
   margin-top: 6px;
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.6);
+  color: var(--adventure-muted);
 }
 
 .species-el,
 .species-gene {
   margin-left: 8px;
-  color: rgba(255, 255, 255, 0.85);
+  color: var(--adventure-muted);
 }
 
 .gameover-best {
   margin-bottom: 22px;
   font-size: 13px;
   letter-spacing: 0;
-  color: rgba(255, 209, 102, 0.65);
+  color: var(--adventure-gold);
 }
 
 .gameover-best.new {
-  color: #ffd166;
+  color: var(--adventure-gold);
   font-weight: 700;
 }
 
@@ -634,7 +678,7 @@ const pointsText = computed(() => `${Math.floor(props.info?.earnedDrops || 0)}`)
   font-size: 14px;
   font-weight: 600;
   letter-spacing: 0;
-  color: #ffd166;
+  color: var(--adventure-gold);
   background: rgba(255, 209, 102, 0.08);
   cursor: pointer;
   transition: background 0.12s ease, transform 0.12s ease;
@@ -647,15 +691,17 @@ const pointsText = computed(() => `${Math.floor(props.info?.earnedDrops || 0)}`)
 .gameover-hint {
   margin-top: 18px;
   font-size: 12.5px;
-  color: rgba(255, 255, 255, 0.45);
+  color: var(--adventure-muted);
 }
 
 @media (max-width: 700px) {
   .gameover-panel {
     width: calc(100vw - 20px);
-    max-height: 96vh;
-    padding: 24px 18px;
+    max-height: calc(100dvh - 20px);
   }
+
+  .gameover-content { padding: 18px 16px; }
+  .gameover-footer { padding: 10px 14px; }
 
   .gameover-title {
     font-size: 24px;
@@ -670,8 +716,10 @@ const pointsText = computed(() => `${Math.floor(props.info?.earnedDrops || 0)}`)
     grid-column: 1 / 3;
   }
 
-  .result-actions {
-    flex-direction: column;
+  .result-actions button {
+    flex: 1;
+    padding: 11px 8px;
+    font-size: 14px;
   }
 
   .breakdown-heading,

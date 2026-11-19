@@ -1,20 +1,18 @@
-import { GLUTTON_CHARGE_MAX, gluttonSkillHud } from './GluttonResource.js'
-import { GLUTTON_HEAVY_DAMAGE, GLUTTON_BOSS_HEAVY_DAMAGE } from './GluttonCombat.js'
+import { GLUTTON_VORTEX_COOLDOWN, GLUTTON_VORTEX_DAMAGE, GLUTTON_BOSS_VORTEX_DAMAGE, GLUTTON_VORTEX_PULL_RADIUS } from './GluttonCombat.js'
 import { PET_RALLY_BASE, getPetRally } from './PetSkills.js'
 
 const VOLLEY_SHOTS = 4
 
-/** 重咬在命中时按正常伤害路径结算；开局可用，猎食点来自吞噬/近战命中首领。 */
+/** 暴食 · 深渊吸噬：聚怪引力漩涡 + 原地 360° 重咬吞噬，全游戏唯一反向拉怪主动技能。 */
 export const GLUTTON_SKILL = {
   id: 'devour_pulse',
-  name: '暴食重咬',
-  icon: '🦷',
-  cooldown: 0,
-  chargeMax: GLUTTON_CHARGE_MAX,
-  desc: `消耗 1 猎食点，对前方近处敌人造成 ${GLUTTON_HEAVY_DAMAGE} 倍攻击伤害（首领 ${GLUTTON_BOSS_HEAVY_DAMAGE} 倍），将可吞噬的残血或被咬杀目标直接吞噬；吞噬或重咬命中首领获得短时护甲。重咬不返还猎食点`,
-  getHud: gluttonSkillHud,
+  name: '深渊吸噬',
+  icon: '🌀',
+  cooldown: GLUTTON_VORTEX_COOLDOWN,
+  desc: `释放约 ${GLUTTON_VORTEX_PULL_RADIUS}px 引力漩涡将周围外围敌人拽入身前，立刻获得 1 层胃铠后闭颚 360° 重咬（普通 ${GLUTTON_VORTEX_DAMAGE} 倍 / 首领 ${GLUTTON_BOSS_VORTEX_DAMAGE} 倍）并吞噬可吞血肉目标。`,
+  getDesc() { return this.desc },
   use(engine) {
-    return engine.weaponSystem?.gluttonCombat?.heavyBite() || false
+    return engine.weaponSystem?.gluttonCombat?.useVortex() || false
   },
 }
 

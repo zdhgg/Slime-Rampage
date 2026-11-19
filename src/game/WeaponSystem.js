@@ -10,7 +10,7 @@ import { CELL_SIZE, GRID_KEY_SCALE } from './EnemyManager.js' // 复用分离阶
 import { ENDLESS_FORMATION_BREAK_ATTACK_INTERVAL_MUL } from './EndlessMode.js'
 import {
   DEVOUR_SOURCE_GLUTTON,
-  GLUTTON_CHARGE_MAX,
+  GLUTTON_FEAST_DURATION,
   onGluttonFDevoured,
   onNormalDevoured,
 } from './GluttonResource.js'
@@ -182,7 +182,8 @@ export class WeaponSystem extends Entity {
     const formationMul = this.game?.endlessFormationBreakTimer > 0 ? ENDLESS_FORMATION_BREAK_ATTACK_INTERVAL_MUL : 1
     // 狩猎亢奋（黑市）：击杀窗口内攻速提升，近战远程共用同一攻击周期
     const huntMul = this.player?._huntRushTimer > 0 ? this.geneHuntHaste || 1 : 1
-    return this.fireInterval * (this.berserkBuffTimer > 0 ? 0.6 : 1) * formationMul * huntMul / (this.game?.bossTomes?.biteHaste || 1)
+    const biteHaste = this.gluttonCombat?.enabled ? this.gluttonCombat.biteHasteMultiplier() : 1
+    return this.fireInterval * (this.berserkBuffTimer > 0 ? 0.6 : 1) * formationMul * huntMul / ((this.game?.bossTomes?.biteHaste || 1) * biteHaste)
   }
 
   /** 重置武器属性与弹幕（游戏重开时由引擎调用） */
@@ -466,7 +467,11 @@ export class WeaponSystem extends Entity {
     if (this.rapidVolley) {
       this.rapidVolley.timer -= dt
       while (this.rapidVolley.remaining > 0 && this.rapidVolley.timer <= 0) {
-        const target = this._findNearest()
+        // 疾射逐轮换锁：有 aimed 共享集时优先锁定未被前几轮占用的敌人，
+        // 敌群全部占用后回落最近敌人——零星残敌仍集火，齐射不会打空。
+        const target = this.rapidVolley.aimed
+          ? this.ricochetCombat.findTarget(this.player.x, this.player.y, this.rapidVolley.aimed) || this._findNearest()
+          : this._findNearest()
         if (target) this.fire(target, { ...this.rapidVolley, activeVolley: true })
         this.rapidVolley.remaining--
         this.rapidVolley.timer += 0.12
@@ -842,6 +847,8 @@ export class WeaponSystem extends Entity {
     // 再被飞弹/雷击/酸液命中致死时，不再重复发放击杀数/宝石/核心
     if (e._settled) return
     e._settled = true
+    this.game.enemyManager.crowds?.onDefeated(e)
+    if (e.swarmTide) this.stats.swarmKills = (this.stats.swarmKills || 0) + 1
     // 异源能量击杀奖励统一在唯一结算点发放：飞弹/震荡/液痕/DOT/路线伤害
     // 都经过 _settleKill，因此不会漏掉，也不会因多次 _onKill 重复结算。
     // 例外：源质技能与各种「衍生伤害」造成的击杀不充能（否则击杀 → 充能 →
@@ -861,10 +868,14 @@ export class WeaponSystem extends Entity {
     this.player.triggerKillRush?.(2)
     // 狩猎亢奋（黑市）：击杀刷新 2.5 秒攻速窗口
     if (this.geneHuntHaste > 0) this.player._huntRushTimer = 2.5
+    if (this.gluttonCombat.enabled && !e.isBoss) {
+      this.player.gluttonFeastTimer = GLUTTON_FEAST_DURATION
+    }
     // 死亡扩散环（阶段十五美化）：Boss 金色大环，普通怪制服色小环
     this._ring(e.x, e.y, e.isBoss ? '#ffd166' : getPaletteMid(e.paletteKey), e.isBoss ? 48 : 26)
     // 连杀窗口内递增 → 击杀音高爬升（清屏叠加爽感）；窗口外重新起数
     this._combo = this._comboTimer < 1.8 ? this._combo + 1 : 1
+    this.stats.bestCombo = Math.max(this.stats.bestCombo || 0, this._combo)
     this._comboTimer = 0
     this.game.sound.kill(this._combo)
 
@@ -1008,7 +1019,10 @@ export class WeaponSystem extends Entity {
             // 原生印记副弹：只结算一次直接伤害，不参与暴击/元素/分裂/充能/击杀加成，
             // 避免“印记副弹 → 更多能量 → 更多超载”的递归。
             if (p.isOriginEcho) {
-              e.hit(p.damage, { originDamageKind: 'mark' })
+              const echoEffects = (p.vx || p.vy)
+                ? { originDamageKind: 'mark', hitAngle: Math.atan2(p.vy, p.vx) }
+                : { originDamageKind: 'mark', hitFromX: this.player.x, hitFromY: this.player.y }
+              e.hit(p.damage, echoEffects)
               this._burstColor(e.x, e.y, p.visual.impact, 4, false)
               this.game.sound.hit(p.visual.sound)
               this.game.enemyManager.addText(e.x, e.y, String(Math.round(p.damage * 10) / 10), null, '#ffffff', 13)
@@ -1095,7 +1109,10 @@ export class WeaponSystem extends Entity {
             const penetrates = p.pierces > 0
             if (penetrates) p.pierces--
             else p.destroy()
-            e.hit(damage, effects)
+            const hitEffects = (p.vx || p.vy)
+              ? { ...effects, hitAngle: Math.atan2(p.vy, p.vx) }
+              : { ...effects, hitFromX: this.player.x, hitFromY: this.player.y }
+            e.hit(damage, hitEffects)
             // 拟态能量（origin 独占，P0）：飞弹命中计来源①；本次命中触发元素附魔另计来源③。
             // 函数内部对非 origin 直接短路，其他血统零开销零行为变化。
             gainPrimalEnergy(this.game, PRIMAL_SOURCES.PROJECTILE)
@@ -1155,22 +1172,21 @@ export class WeaponSystem extends Entity {
   onDevoured(e, ctx = null) {
     if (e._settled) return // 防御：已结算的敌人不再重复发放（_checkDevour 已过滤，双保险）
     e._settled = true // 吞噬路径独立结算，标记防止与 DOT/即时路径重复
+    this.game.enemyManager.crowds?.onDefeated(e)
+    if (e.swarmTide) this.stats.swarmKills = (this.stats.swarmKills || 0) + 1
+    this._combo = this._comboTimer < 1.8 ? this._combo + 1 : 1
+    this._comboTimer = 0
+    this.stats.bestCombo = Math.max(this.stats.bestCombo || 0, this._combo)
     this.kills++
     this._tickLeech()
     this.devours++
-    // 猎食点进度：只有普通吞噬计入（F 主动捕食走 onGluttonFDevoured，恒不增加进度）
+    // 饱食度：普通吞噬与猛扑吞噬统一累计饱食槽，满槽后触发饱食酸浪与续航叠甲
     if (ctx?.source === DEVOUR_SOURCE_GLUTTON) {
-      onGluttonFDevoured(this.player)
-    } else if (onNormalDevoured(this.player)) {
-      this.game.enemyManager?.addText?.(
-        this.player.x,
-        this.player.y - 46,
-        `🍽️ 猎食点 +1（${this.player.gluttonCharge}/${GLUTTON_CHARGE_MAX}）`,
-        null,
-        '#8ae84a',
-        15
-      )
+      onGluttonFDevoured(this.player, e)
+    } else {
+      onNormalDevoured(this.player, e)
     }
+    this.game?.bossTomes?.onGluttonDevour?.()
     if (e.isElite) this.eliteKills++
     this.game.worldEvents?.onEnemyDefeated(e)
     this.player.triggerKillRush?.(2)
@@ -1406,17 +1422,35 @@ export class WeaponSystem extends Entity {
   }
 
   /**
-   * 分裂：从命中点迸出 2 枚小弹，各自锁定一个其他存活敌人（homing 追踪）。
+   * 分裂：从命中点迸出 2 枚小弹，各自锁定距命中点最近的其他存活敌人（homing 追踪）。
+   * 出膛方向对准目标 ±0.55rad 交替——保留迸裂视觉，但不再把 1.2s 寿命浪费在
+   * 随机方向的修正飞行上；目标按距离选取而非数组序，避免锁定射程外敌人空飞。
+   * 寿命按目标距离延伸（上限 2.2s ≈ 920px），保证锁定目标在追踪射程内可达；
+   * 只剩一个可选目标时两发集火收残，一个都没有则不出弹。
    * 小弹伤害为母弹 50%、按 splitInherit 比例继承母弹的暴击/元素附魔概率
    * （机枪×元素/刺客协同的通路；机枪主专精把继承率抬到 100%，分裂不再稀释附魔），
    * isSplit 标记防二次分裂。
    */
   _split(origin, parent) {
     const inherit = this.splitInherit ?? 0.5
-    let spawned = 0
+    let first = null
+    let second = null
+    let d1 = Infinity
+    let d2 = Infinity
     for (const t of this.enemyManager.enemies) {
       if (!t.active || t === origin || t.devouring) continue
-      const a = Math.random() * TAU // 随机出膛角
+      const d = (t.x - origin.x) ** 2 + (t.y - origin.y) ** 2
+      if (d < d1) {
+        second = first; d2 = d1; first = t; d1 = d
+      } else if (d < d2) {
+        second = t; d2 = d
+      }
+    }
+    if (!first) return // 无其他存活敌人：与旧口径一致，不出弹
+    const targets = second ? [first, second] : [first, first]
+    targets.forEach((t, i) => {
+      const dist = Math.hypot(t.x - origin.x, t.y - origin.y)
+      const a = Math.atan2(t.y - origin.y, t.x - origin.x) + (i % 2 ? 0.55 : -0.55)
       this._projectiles.push(
         new Projectile({
           x: origin.x,
@@ -1424,7 +1458,7 @@ export class WeaponSystem extends Entity {
           target: t,
           speed: 420,
           damage: Math.max(1, Math.round(parent.damage * 0.5)),
-          life: 1.2 * (this.geneRangeMul || 1),
+          life: Math.min(2.2, Math.max(1.2, (dist / 420) * 1.12)) * (this.geneRangeMul || 1),
           radius: 4,
           splitChance: 0,
           critChance: (parent.critChance || 0) * inherit,
@@ -1439,8 +1473,7 @@ export class WeaponSystem extends Entity {
           homing: 0.95,
         })
       )
-      if (++spawned >= 2) break
-    }
+    })
   }
 
   _renderWeaponFeedback(ctx) {

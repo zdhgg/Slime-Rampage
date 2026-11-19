@@ -3,6 +3,7 @@ import { createArena, spawn, spawnBoss, dispose, settleSwing } from './test-supp
 import { BOSS_TOMES, rollBossTomes } from './src/game/BossTomes.js'
 import { gainPrimalEnergy, trySpendPrimalOverload } from './src/game/PrimalEnergy.js'
 import { onNormalDevoured } from './src/game/GluttonResource.js'
+import { GLUTTON_VORTEX_WINDUP } from './src/game/GluttonCombat.js'
 import { ordinarySpellCoreSkills } from './src/game/SpellRules.js'
 import { elementalSkillOptions } from './src/game/ElementalBuild.js'
 import { ELEMENTAL_SKILLS } from './src/game/SpellRules.js'
@@ -92,16 +93,20 @@ test('origin', '充能/超载费用固定；源质调谐不放余震只给移速
   assert.equal(trySpendPrimalOverload(g), true); assert.equal(g.player.primalEnergy, 0); assert.equal(g.bossTomes.shield, 1)
   g.bossTomes.clearStage(); assert.equal(g.bossTomes.shield, 0); assert.equal(g.bossTomes.jobs.length, 0)
 })
-test('glutton', '猎食节律真实充能触发、满仓无隐藏储备；重咬前摇和标记兑现', g => {
+test('glutton', '猎食节律吞噬与饱食爆发触发攻速与吸噬减冷却；王猎重颚吸噬易伤标记兑现', g => {
   learn(g, 'glutton_rhythm', 3); learn(g, 'glutton_jaw', 3)
   const before = g.weaponSystem.attackInterval
-  for (let i = 0; i < 5; i++) onNormalDevoured(g.player)
-  assert.equal(g.player.gluttonCharge, 1); near(g.weaponSystem.attackInterval, before / 1.25)
+  onNormalDevoured(g.player); g.bossTomes.onGluttonDevour()
+  near(g.weaponSystem.attackInterval, before / 1.25)
+  g.player.strainSkillCd = 3
+  for (let i = 0; i < 6; i++) onNormalDevoured(g.player)
+  g.weaponSystem.gluttonCombat.update(0.01)
+  near(g.player.strainSkillCd, 2)
   const e = spawnBoss(g, 1000), bite = g.weaponSystem.gluttonCombat
-  assert.equal(bite.bite(e, true), true); near(bite.swing.windup, .2)
+  assert.equal(bite.useVortex(), true); near(bite.vortex.windup, GLUTTON_VORTEX_WINDUP * .8)
   settleSwing(bite)
-  assert.equal(g.player.gluttonCharge, 0, 'heavy bite never refunds')
   assert.ok(g.bossTomes.jaw.get(e) > 0)
+  near(g.bossTomes.gluttonPounceCooldownMultiplier(), .9)
 })
 test('elemental', '自动施法第五次强化、主动循环与护盾数值；延迟法印不触发反应', g => {
   const spells = g.weaponSystem.spellCombat
@@ -153,12 +158,13 @@ test('summoner', '随机招募预告固定、最多四只；生命成长按总�
   const pet = pets[0], a = g.weaponSystem.petCombat.attackDamage(pet), b = g.weaponSystem.petCombat.attackDamage(pet)
   near(a / b, 1.4)
 })
-test('glutton', '捕食护甲挡伤也反震，但三秒内不重复；辉胃等待敌人且重咬只减一次计时', g => {
+test('glutton', '胃铠挡伤触发反震与荆棘脉冲，冷却内不重复；辉胃等待敌人且猛扑只减一次计时', g => {
   learn(g, 'glutton_thorns', 3); learn(g, 'glutton_radiance', 3)
   const e = spawn(g, { hp: 1000 }), hp = g.player.hp
   g.player.gluttonGuard = 1; g.player.gluttonGuardTimer = 1
   g.player.hit(1, { enemyAttack: true })
-  near(e.hp, 1000 - 1.2 * g.bossTomes.base()); assert.equal(g.player.hp, hp)
+  assert.ok(e.hp < 1000 - 1.2 * g.bossTomes.base()); assert.equal(g.player.hp, hp)
+  assert.ok(g.bossTomes.until.biteFirst > g.bossTomes.time)
   const before = e.hp
   g.player.invincible = 0; g.player.hit(1, { enemyAttack: true }); near(e.hp, before)
   g.bossTomes.afterHit(e, e.hp + 1, { bossTomeContext: { heavy: true } })
@@ -166,16 +172,16 @@ test('glutton', '捕食护甲挡伤也反震，但三秒内不重复；辉胃等
   g.bossTomes.afterHit(e, e.hp + 1, { bossTomeContext: { heavy: true } })
   assert.equal(g.bossTomes.ready.radiance, 3)
 })
-test('origin', '蓄能增伤按门槛生效，超载后窗口到期退出，异源首击只消费一次', g => {
+test('origin', '蓄能原核超载后窗口增伤，到期退出，异源首击只消费一次', g => {
   learn(g, 'origin_reservoir', 3); learn(g, 'origin_conduit', 3)
-  const e = spawn(g, { hp: 1000 }); g.player.primalEnergy = 60
-  e.hit(10); near(e.hp, 988.5)
+  const e = spawn(g, { hp: 1000 })
+  e.hit(10); near(e.hp, 990)
   g.player.primalEnergy = 40; trySpendPrimalOverload(g)
-  e.hit(10); near(e.hp, 977)
-  g.bossTomes.update(3.1); e.hit(10); near(e.hp, 967)
+  e.hit(10); near(e.hp, 978.5)
+  g.bossTomes.update(5.1); e.hit(10); near(e.hp, 968.5)
   g.bossTomes.until.originFirst = g.bossTomes.time + 3
-  e.hit(10, { bossTomeContext: { basic: true } }); near(e.hp, 954)
-  e.hit(10, { bossTomeContext: { basic: true } }); near(e.hp, 944)
+  e.hit(10, { bossTomeContext: { basic: true } }); near(e.hp, 955.5)
+  e.hit(10, { bossTomeContext: { basic: true } }); near(e.hp, 945.5)
 })
 test('ricochet', '三级冷凝治疗来自真实主动命中，受伤才消耗冷却，不能按多弹重复回血', g => {
   learn(g, 'rico_recharge', 3)

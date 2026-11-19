@@ -40,9 +40,9 @@ export function organicPath(ctx, x, y, rx, ry, phase = 0, strength = 0.16) {
 export function paintFrontierGround(ctx, w, h, seed) {
   const rng = sceneryRandom(seed)
   const gradient = ctx.createLinearGradient(0, 0, w * 0.45, h)
-  gradient.addColorStop(0, '#283c32')
-  gradient.addColorStop(0.55, '#304234')
-  gradient.addColorStop(1, '#202f2b')
+  gradient.addColorStop(0, '#afbf94')
+  gradient.addColorStop(0.55, '#96a981')
+  gradient.addColorStop(1, '#7e9a7a')
   ctx.fillStyle = gradient
   ctx.fillRect(0, 0, w, h)
 
@@ -52,27 +52,27 @@ export function paintFrontierGround(ctx, w, h, seed) {
     const x = rng() * w, y = rng() * h, phase = rng() * TAU
     const radius = range(rng, 75, 190)
     for (let layer = 1; layer >= 0; layer--) {
-      ctx.fillStyle = ['#3c513833', '#4b60402b', '#142b2420', '#6a744a10'][i % 4]
+      ctx.fillStyle = ['#4f714533', '#d5d7a234', '#45685426', '#b3bd802e'][i % 4]
       organicPath(ctx, x, y, radius + layer * 11, radius * 0.55 + layer * 9, phase, 0.24)
       ctx.fill()
     }
     for (let j = 0; j < 12; j++) {
       const px = x + range(rng, -radius, radius), py = y + range(rng, -radius * 0.6, radius * 0.6)
-      ctx.fillStyle = j % 3 ? '#71805216' : '#0d251c20'
+      ctx.fillStyle = j % 3 ? '#d4d2a025' : '#48634b20'
       organicPath(ctx, px, py, range(rng, 4, 17), range(rng, 2, 7), phase + j)
       ctx.fill()
     }
   }
   const grain = Math.min(12000, Math.ceil(w * h / 460))
   for (let i = 0; i < grain; i++) {
-    ctx.fillStyle = i % 3 ? 'rgba(162,168,113,0.055)' : 'rgba(8,25,19,0.12)'
+    ctx.fillStyle = i % 3 ? '#edeac91a' : '#263f3421'
     ctx.fillRect(rng() * w, rng() * h, range(rng, 0.6, 2), range(rng, 0.5, 1.5))
   }
   const tufts = Math.min(2000, Math.ceil(w * h / 3600))
   ctx.lineWidth = 1
   for (let i = 0; i < tufts; i++) {
     const x = rng() * w, y = rng() * h
-    ctx.strokeStyle = i % 3 ? '#7b885328' : '#10291f45'
+    ctx.strokeStyle = i % 3 ? '#526d464f' : '#e3e0af3b'
     ctx.beginPath()
     ctx.moveTo(x - 3, y)
     ctx.quadraticCurveTo(x - 4, y - 3, x - 5, y - 5)
@@ -152,7 +152,7 @@ export function drawWoodlandRoad(ctx, item) {
   for (const p of bottom.reverse()) ctx.lineTo(...p)
   ctx.closePath()
   ctx.fillStyle = '#111f1955'; ctx.lineWidth = 13; ctx.strokeStyle = '#17251c40'; ctx.stroke()
-  ctx.fillStyle = '#514d38'; ctx.fill()
+  ctx.fillStyle = '#aa9770'; ctx.fill()
   ctx.save(); ctx.clip()
   for (let i = 0; i < item.length * 0.6; i++) {
     const x = range(rng, -item.length / 2, item.length / 2), y = range(rng, -75, 75)

@@ -1,10 +1,11 @@
 import { Entity } from '../core/Entity.js'
 import { AssetManager } from '../AssetManager.js'
 import { drawEnemyArt, drawEnemyShadow, enemySizeMul, hasEnemyArt } from '../EnemyArtRenderer.js'
+import { CROWD_RULES } from '../CrowdDirector.js'
 
 const TAU = Math.PI * 2
 
-/** 敌方配色（人类六职 + 非人三族：战獒棕 / 魔像石蓝 / 怨灵幽绿） */
+/** 敌方配色（人类九职 + 非人三族：战獒棕 / 魔像石蓝 / 怨灵幽绿） */
 const PALETTES = {
   knight: ['#9db8e8', '#4a72b8', '#2c4a7d'],
   mage: ['#c9a6f0', '#8a5cc8', '#5a3680'],
@@ -12,6 +13,9 @@ const PALETTES = {
   assassin: ['#e056fd', '#8854d0', '#3b1c6e'],
   priest: ['#ffffff', '#f1c40f', '#d35400'],
   berserker: ['#ff7675', '#d63031', '#2d3436'],
+  bulwark: ['#c8d6e5', '#68798d', '#3b4a59'],
+  alchemist: ['#a3e635', '#65a30d', '#365314'],
+  bannerman: ['#fda4af', '#e11d48', '#881337'],
   hound: ['#d8a06a', '#8a5a2e', '#4a2f16'],
   golem: ['#a8c0d8', '#5d7d9a', '#2e4258'],
   wraith: ['#b8f0dd', '#4db89a', '#1e5c4a'],
@@ -52,7 +56,15 @@ export const getPaletteMid = (key) => (PALETTES[key] ? PALETTES[key][1] : PALETT
  *  导出供暴食 F 的主动捕食资格复用：一个集合、一处口径，不允许出现第二份副本。 */
 export const NO_DEVOUR_TYPES = new Set(['golem', 'wraith'])
 
-/** 敌方数值表：人类六职 + 非人三族（战獒快袭 / 魔像重壁 / 怨灵吸血） */
+/** 拥有三阶兵种演化（1 阶民兵/见习 → 2 阶常规 → 3 阶皇家/大魔导）的基础职业 */
+export const TIERED_TYPES = new Set(['knight', 'mage', 'archer', 'priest'])
+const RANK_HP_MUL = { 1: 0.72, 2: 1, 3: 1.55 }
+const RANK_SPEED_MUL = { 1: 0.94, 2: 1, 3: 1.08 }
+const RANK_TEMPO_MUL = { 1: 0.9, 2: 1, 3: 1.18 }
+const RANK_EXP_MUL = { 1: 0.8, 2: 1, 3: 1.45 }
+export const BANNER_AURA_RADIUS = 185
+
+/** 敌方数值表：人类九职 + 非人三族（重盾正面减伤 / 炼金抛瓶减速 / 战旗群体鼓舞） */
 const CLASSES = {
   knight: { hpMul: 1.6, speedMul: 0.85, radius: 14, range: 0, attackInterval: 1.0, sx: 1.18, sy: 0.96 },
   mage: { hpMul: 0.9, speedMul: 0.65, radius: 13, range: 340, attackInterval: 2.4, sx: 0.86, sy: 1.12 },
@@ -60,6 +72,9 @@ const CLASSES = {
   assassin: { hpMul: 0.65, speedMul: 1.45, radius: 12, range: 0, attackInterval: 1.6, sx: 0.9, sy: 0.95 },
   priest: { hpMul: 0.85, speedMul: 0.7, radius: 13, range: 320, attackInterval: 2.5, sx: 0.9, sy: 1.05 },
   berserker: { hpMul: 2.2, speedMul: 0.75, radius: 15, range: 0, attackInterval: 1.2, sx: 1.2, sy: 1.0 },
+  bulwark: { hpMul: 2.5, speedMul: 0.68, radius: 15, range: 0, attackInterval: 1.25, sx: 1.2, sy: 1.02 },
+  alchemist: { hpMul: 0.95, speedMul: 0.78, radius: 13, range: 310, attackInterval: 3.1, sx: 0.94, sy: 1.06 },
+  bannerman: { hpMul: 1.35, speedMul: 0.85, radius: 13, range: 0, attackInterval: 1.35, sx: 0.98, sy: 1.15 },
   hound: { hpMul: 0.55, speedMul: 1.55, radius: 11, range: 0, attackInterval: 0.75, sx: 1.24, sy: 0.82 },
   golem: { hpMul: 4.5, speedMul: 0.5, radius: 17, range: 0, attackInterval: 1.6, sx: 1.12, sy: 1.06 },
   wraith: { hpMul: 1.1, speedMul: 1.05, radius: 13, range: 0, attackInterval: 1.3, sx: 0.94, sy: 1.12 },
@@ -85,6 +100,7 @@ export class Enemy extends Entity {
     hp,
     rewardHp = hp,
     type = 'knight',
+    rank = 2,
     elite = false,
     affix = null,
     affixes = null,
@@ -94,23 +110,30 @@ export class Enemy extends Entity {
     super()
     this.x = x
     this.y = y
-    this.type = type // 'knight' | 'mage' | 'archer'
+    this.type = type // 'knight' | 'mage' | 'archer' | ...
+    this.rank = TIERED_TYPES.has(type) ? Math.max(1, Math.min(3, Math.round(rank || 2))) : 2
+    const tierHpMul = RANK_HP_MUL[this.rank] || 1
+    const tierSpeedMul = RANK_SPEED_MUL[this.rank] || 1
+    const tierTempoMul = RANK_TEMPO_MUL[this.rank] || 1
+    const tierExpMul = RANK_EXP_MUL[this.rank] || 1
     this.isElite = elite // 精英怪：属性 ×3、金色光环、必掉元素核心
     this.affixes = Array.from(new Set((affixes || (affix ? [affix] : [])).filter(Boolean)))
     this.affix = this.affixes[0] || null // 兼容旧调用；新逻辑用 hasAffix 支持双词缀
     // 职业系数在此应用（速度/血量），spawn 只需传基础值
-    this.speed = speed * CLASSES[type].speedMul * (elite ? 1.2 : 1) // px/s
+    this.speed = speed * CLASSES[type].speedMul * tierSpeedMul * (elite ? 1.2 : 1) // px/s
     if (this.hasAffix('swift')) this.speed *= 1.5 // 迅捷词缀：移速再 ×1.5
     this.speed = Math.min(this.speed, speedCap)
-    this.hp = Math.round(hp * CLASSES[type].hpMul * (elite ? 3 : 1)) // 生命值
+    this.hp = Math.round(hp * CLASSES[type].hpMul * tierHpMul * (elite ? 3 : 1)) // 生命值
     this.maxHp = this.hp // 记录满血（精英/Boss 血条用）
-    const baseExp = Math.round(rewardHp * CLASSES[type].hpMul) * 5
+    const baseExp = Math.round(rewardHp * CLASSES[type].hpMul * tierExpMul) * 5
     // 精英生命约为 3 倍，并额外承担词缀风险；固定 5 倍经验既有奖励感，
     // 又避免旧公式的约 9 倍收益让随机精英密度直接制造等级暴冲。
     this.expValue = baseExp * (elite ? 5 : 1)
-    this.radius = CLASSES[type].radius + (elite ? 3 : 0) // 碰撞半径
+    this.radius = CLASSES[type].radius + (elite ? 3 : 0) + (this.rank === 3 ? 1 : 0) // 碰撞半径
     this.range = CLASSES[type].range // 远程射程（骑士为 0 = 纯近战）
-    this.attackInterval = CLASSES[type].attackInterval / Math.max(0.1, attackTempo)
+    // 三阶大法师（多发散射）额外放宽出手间隔，避免多只高阶法师叠满全屏弹幕
+    const mageBurstCdMul = type === 'mage' && this.rank === 3 ? 1.35 : 1
+    this.attackInterval = (CLASSES[type].attackInterval / Math.max(0.1, attackTempo * tierTempoMul)) * mageBurstCdMul
     this.facing = 0 // 朝向玩家的角度（渲染用）
     this.paletteKey = type // 敌方配色即制服
     this.flash = 0 // 受击白闪计时（秒）
@@ -127,8 +150,15 @@ export class Enemy extends Entity {
 
     // —— 状态效果（冰冻/燃烧/染毒/减速） ——
     this.gluttonStagger = 0
-    this.gluttonCow = 0 // 咬合震慑剩余时间（饕甲路线卡）：期间出手伤害打折
+    this.routTime = 0
+    this.gluttonCow = 0 // 胃压/咬合震慑剩余时间（饕甲路线卡）：期间出手伤害打折
     this.gluttonCowMul = 0 // 震慑减伤系数（随卡等级写入）
+    this.corrodeSlowTime = 0 // 暴食腐蚀减速剩余时间（秒，首领免疫）
+    this.corrodeSlowAmount = 0 // 暴食腐蚀减速幅度（0~0.45）
+    this.gluttonCorrodeTime = 0 // 腐沼融甲易伤剩余时间（秒）
+    this.gluttonCorrodeVuln = 0 // 腐沼融甲易伤增伤系数
+    this.gluttonBreachTime = 0 // 破阵重压易伤剩余时间（秒）
+    this.gluttonBreachVuln = 0 // 破阵重压易伤增伤系数
     this._devourPullT = 0 // 捕食引力拖拽反馈计时（渲染可读）
     this.freeze = 0 // 冻结剩余时间：期间完全定身
     this.primeSlow = 0
@@ -147,7 +177,11 @@ export class Enemy extends Entity {
     this._poisonTick = 1
     this._poisonDmg = 1
     // 护盾词缀：吸收前 N 次伤害（DOT/溅射一并吸收，吞噬直接绕过——护盾怪的反制点）
-    this.shieldHits = this.hasAffix('shielded') ? 2 : 0
+    this.shieldHits = (this.hasAffix('shielded') ? 2 : 0) + (type === 'knight' && this.rank === 3 ? 1 : 0)
+    this._facingInit = false
+    this._blockTextCd = 0
+    this._bannerBuff = 0
+    this._rallyT = Math.random() * TAU
 
     // —— 刺客专属状态机（阶段十七：新职业） ——
     this.assassinState = 'stalking' // 'stalking' | 'charging' | 'dashing' | 'cooldown'
@@ -179,8 +213,9 @@ export class Enemy extends Entity {
     return this.affixes.includes(id)
   }
 
-  /** 美术注册表键：普通敌人就是自身职业；Boss 子类覆盖为 `boss:*` 首领 cast。 */
+  /** 美术注册表键：三阶演化职业按 rank 解析 `knight:1` / `knight:3`，2 阶沿用原 cast。 */
   get artId() {
+    if (this.rank !== 2 && TIERED_TYPES.has(this.type)) return `${this.type}:${this.rank}`
     return this.type
   }
 
@@ -199,13 +234,49 @@ export class Enemy extends Entity {
    * 残血（≤25%）且非 Boss → 进入可吞噬状态（吞噬是核心爽点）
    */
   hit(damage, effects = null) {
+    if (!this.isBoss && this.routTime > 0 && damage > 0) damage *= CROWD_RULES.vulnerability
+    if (damage > 0 && this.gluttonCorrodeTime > 0 && this.gluttonCorrodeVuln > 0) {
+      damage *= 1 + this.gluttonCorrodeVuln
+    }
+    if (damage > 0 && this.gluttonBreachTime > 0 && this.gluttonBreachVuln > 0) {
+      damage *= 1 + this.gluttonBreachVuln
+    }
     damage *= this.game?.bossTomes?.hitMultiplier(this, effects) ?? 1
+    if (this.type === 'bulwark' && damage > 0 && !effects?.ignoreShield) {
+      let fromX = effects?.hitFromX
+      let fromY = effects?.hitFromY
+      if (fromX == null && effects?.hitAngle != null) {
+        fromX = this.x - Math.cos(effects.hitAngle) * 40
+        fromY = this.y - Math.sin(effects.hitAngle) * 40
+      }
+      if (fromX != null && fromY != null) {
+        const toHitX = fromX - this.x
+        const toHitY = fromY - this.y
+        const len = Math.hypot(toHitX, toHitY)
+        if (len > 0.001) {
+          const cosFront = (toHitX * Math.cos(this.facing) + toHitY * Math.sin(this.facing)) / len
+          if (cosFront > 0.25) {
+            damage *= 0.55
+            if (this._blockTextCd <= 0) {
+              this._blockTextCd = 0.45
+              this.game?.enemyManager?.addText(this.x, this.y - this.radius - 10, '盾挡', null, '#94a3b8', 11)
+            }
+          }
+        }
+      }
+    }
     const tomeHp = this.hp
     if (this.shieldHits > 0 && damage > 0) {
       this.shieldHits-- // 护盾吸收本次伤害
       damage = 0
     }
     this.hp -= damage
+    const stats = this.game?.weaponSystem?.stats
+    if (stats && tomeHp > 0 && !this._settled && !this.devouring) {
+      const dealt = Math.max(0, tomeHp - Math.max(0, this.hp))
+      stats.damageDealt = (stats.damageDealt || 0) + dealt
+      if (this.isBoss) stats.bossDamageDealt = (stats.bossDamageDealt || 0) + dealt
+    }
     this.game?.bossTomes?.afterHit(this, tomeHp, effects)
     this.flash = 0.12
 
@@ -274,9 +345,16 @@ export class Enemy extends Entity {
    */
   _tickStatus(dt) {
     this.flash = Math.max(0, this.flash - dt)
+    this.routTime = Math.max(0, this.routTime - dt)
     if (this.freeze > 0) this.freeze -= dt
     this.gluttonStagger = Math.max(0, (this.gluttonStagger || 0) - dt)
     this.gluttonCow = Math.max(0, (this.gluttonCow || 0) - dt)
+    this.corrodeSlowTime = this.isEnraged || this.isBoss ? 0 : Math.max(0, (this.corrodeSlowTime || 0) - dt)
+    if (this.corrodeSlowTime === 0) this.corrodeSlowAmount = 0
+    this.gluttonCorrodeTime = Math.max(0, (this.gluttonCorrodeTime || 0) - dt)
+    if (this.gluttonCorrodeTime === 0) this.gluttonCorrodeVuln = 0
+    this.gluttonBreachTime = Math.max(0, (this.gluttonBreachTime || 0) - dt)
+    if (this.gluttonBreachTime === 0) this.gluttonBreachVuln = 0
     this._devourPullT = Math.max(0, (this._devourPullT || 0) - dt)
     this.primeSlow = Math.max(0, (this.primeSlow || 0) - dt)
     this.elementStun = Math.max(0, (this.elementStun || 0) - dt)
@@ -288,6 +366,7 @@ export class Enemy extends Entity {
     this._spawnT = Math.max(0, this._spawnT - dt) // 出生弹入计时（Boss 继承复用）
     this._swingT = Math.max(0, this._swingT - dt)
     this._shootFlash = Math.max(0, this._shootFlash - dt)
+    this._blockTextCd = Math.max(0, (this._blockTextCd || 0) - dt)
     if (this.burnHits > 0) {
       this._burnTick -= dt
       if (this._burnTick <= 0) {
@@ -316,9 +395,31 @@ export class Enemy extends Entity {
     return this.freeze <= 0 && this.gluttonStagger <= 0 && this.elementStun <= 0
   }
 
-  /** 远程职业射击：向玩家方向发射一枚弹幕 */
+  /** 远程职业射击：法师保持慢速奥术法球方便走位闪避；多弹三阶进一步降速、拉宽夹角并缩短续航避免满屏弹幕 */
   _shoot() {
-    this.game.enemyManager.spawnBullet(this.x, this.y, this.facing, this.type, { damage: this.outgoingDamage(1) })
+    const dmg = this.outgoingDamage(1)
+    if (this.type === 'mage') {
+      const speed = this.rank === 1 ? 110 : this.rank === 3 ? 90 : 115
+      const life = this.rank === 3 ? 4.2 : 4.0
+      if (this.rank === 3) {
+        for (const off of [-0.2, 0, 0.2]) {
+          this.game.enemyManager.spawnBullet(this.x, this.y, this.facing + off, 'mage', { rank: 3, speed, life, damage: dmg })
+        }
+      } else {
+        this.game.enemyManager.spawnBullet(this.x, this.y, this.facing, 'mage', { rank: this.rank, speed, life, damage: dmg })
+      }
+    } else if (this.type === 'archer') {
+      if (this.rank === 3) {
+        for (const off of [-0.08, 0.08]) {
+          this.game.enemyManager.spawnBullet(this.x, this.y, this.facing + off, 'archer', { rank: 3, speed: 410, damage: dmg })
+        }
+      } else {
+        const speed = this.rank === 1 ? 330 : 380
+        this.game.enemyManager.spawnBullet(this.x, this.y, this.facing, 'archer', { rank: this.rank, speed, damage: dmg })
+      }
+    } else {
+      this.game.enemyManager.spawnBullet(this.x, this.y, this.facing, this.type, { rank: this.rank, damage: dmg })
+    }
     this.game.sound.enemyShoot()
     this._shootFlash = 0.12 // 射击闪光
   }
@@ -333,12 +434,18 @@ export class Enemy extends Entity {
     if (target.isMapObjective) target.hit?.(damage, this)
     else if (target.isPet) return this.game.weaponSystem.petCombat.hit(target, damage)
     else if (target.isDecoy) player.hitDecoy(target, damage)
-    else return player.hit(damage, { enemyAttack: true })
+    else return player.hit(damage, { enemyAttack: true, swarmTide: !!this.swarmTide })
   }
 
   update(dt) {
     if (this.devouring) return // 正在被史莱姆吸入：不行动
     if (!this._tickStatus(dt)) return
+    if (this.game.enemyManager.crowds?.steer(this, dt)) {
+      this._walkT += dt * 9
+      this.x = Math.max(this.radius, Math.min(this.game.worldWidth - this.radius, this.x))
+      this.y = Math.max(this.radius, Math.min(this.game.worldHeight - this.radius, this.y))
+      return
+    }
     const player = this.game.player
     const target = this.game.mapFeatures?.getEnemyTarget(this) || player.getEnemyTarget?.(this) || player
     const targetRadius = target.radius || player.radius
@@ -346,33 +453,50 @@ export class Enemy extends Entity {
     const dy = target.y - this.y
     const dist = Math.sqrt(dx * dx + dy * dy)
 
-    // 默认面朝玩家
+    // 默认面朝玩家（重盾塔兵缓慢转身，玩家可绕背或借弹幕折射打击其侧后破防）
     if (this.assassinState !== 'dashing') {
-      this.facing = Math.atan2(dy, dx)
+      const desired = Math.atan2(dy, dx)
+      if (this.type === 'bulwark' && this._facingInit) {
+        let diff = desired - this.facing
+        while (diff > Math.PI) diff -= TAU
+        while (diff < -Math.PI) diff += TAU
+        const maxTurn = 2.6 * dt
+        this.facing += Math.max(-maxTurn, Math.min(maxTurn, diff))
+      } else {
+        this.facing = desired
+        this._facingInit = true
+      }
     }
 
     // —— 职业行为 ——
     const ux = dx / (dist || 1)
     const uy = dy / (dist || 1)
     const terrainMul = this.game.mapFeatures?.speedMultiplierAt(this.x, this.y, 'enemy') || 1
-    const slowMul = Math.min(this.slow > 0 ? SLOW_MUL : this.primeSlow > 0 ? .7 : 1, this.spellSlowTime > 0 ? 1 - this.spellSlowAmount : 1)
-    const spd = this.speed * slowMul * terrainMul
+    const slowMul = Math.min(
+      this.slow > 0 ? SLOW_MUL : this.primeSlow > 0 ? .7 : 1,
+      this.spellSlowTime > 0 ? 1 - this.spellSlowAmount : 1,
+      this.corrodeSlowTime > 0 ? 1 - (this.corrodeSlowAmount || 0) : 1
+    )
+    const bannerMul = this._bannerBuff > 0 ? 1 + this._bannerBuff : 1
+    const actDt = dt * bannerMul
+    const spd = this.speed * slowMul * terrainMul * bannerMul
     this._moving = false
 
     if (
       this.type === 'knight' ||
+      this.type === 'bulwark' ||
       this.type === 'hound' ||
       this.type === 'golem' ||
       this.type === 'wraith'
     ) {
-      // 近战突进：骑士贴脸 / 战獒快袭 / 魔像重压（2 点伤害）/ 怨灵索命（命中吸血）
+      // 近战突进：骑士贴脸 / 重盾重推 / 战獒快袭 / 魔像重压（2 点伤害）/ 怨灵索命（命中吸血）
       const stopDist = this.radius + targetRadius + 4
       if (dist > stopDist) {
         this.x += ux * spd * dt
         this.y += uy * spd * dt
         this._moving = true
       } else {
-        this.attackCd -= dt
+        this.attackCd -= actDt
         if (this.attackCd <= 0) {
           this.attackCd = this.attackInterval
           this._swingT = this.type === 'golem' ? 0.3 : 0.22 // 魔像重砸前摇更长
@@ -384,6 +508,28 @@ export class Enemy extends Entity {
             this.game?.enemyManager?.addText(this.x, this.y - 12, `+${drain} 吸取`, null, '#7ce8c8', 12)
           }
         }
+      }
+    } else if (this.type === 'bannerman') {
+      // 王国战旗官：保持中前排阵位，给周边友军提供战旗鼓舞（靠近仍会用旗枪戳刺）
+      this._rallyT += dt * 4
+      const stopDist = this.radius + targetRadius + 6
+      const retreat = 110
+      const keepDist = 180
+      if (dist <= stopDist) {
+        this.attackCd -= actDt
+        if (this.attackCd <= 0) {
+          this.attackCd = this.attackInterval
+          this._swingT = 0.22
+          this._hitTarget(target, player, this.damage)
+        }
+      } else if (dist > keepDist) {
+        this.x += ux * spd * dt
+        this.y += uy * spd * dt
+        this._moving = true
+      } else if (dist < retreat) {
+        this.x -= ux * spd * 0.72 * dt
+        this.y -= uy * spd * 0.72 * dt
+        this._moving = true
       }
     } else if (this.type === 'assassin') {
       // 刺客：暗影潜行逼近 → 0.4s 蓄力红线预警 → 超高速暗影突刺（880px/s） → 0.6s 硬直
@@ -505,15 +651,49 @@ export class Enemy extends Entity {
         if (healTarget) {
           this._healingTarget = healTarget
           this._healBeamTimer = 0.7
-          this._healCd = 2.5
-          const healAmt = Math.max(1, Math.round(healTarget.maxHp * 0.2))
+          this._healCd = this.rank === 3 ? 2.2 : this.rank === 1 ? 2.8 : 2.5
+          const healRatio = this.rank === 3 ? 0.26 : this.rank === 1 ? 0.14 : 0.2
+          const healAmt = Math.max(1, Math.round(healTarget.maxHp * healRatio))
           healTarget.hp = Math.min(healTarget.maxHp, healTarget.hp + healAmt)
           healTarget.flash = 0.15
+          if (this.rank === 3) healTarget.shieldHits = Math.max(healTarget.shieldHits || 0, 1)
           const devourHp = Math.max(1, Math.ceil(healTarget.maxHp * healTarget._devourThresh()))
           if (healTarget.hp > devourHp) healTarget.devourable = false
-          this.game?.enemyManager?.addText(healTarget.x, healTarget.y - 12, `+${healAmt} 圣光`, null, '#ffd32a', 13)
+          const label = this.rank === 3 ? `+${healAmt} 圣佑` : `+${healAmt} 圣光`
+          this.game?.enemyManager?.addText(healTarget.x, healTarget.y - 12, label, null, '#ffd32a', 13)
         } else {
           this._healCd = 0.6
+        }
+      }
+    } else if (this.type === 'alchemist') {
+      // 炼金投弹手：中距风筝，抛掷落地带清晰预警圈与短暂减速酸液池的炼金药瓶
+      const range = this.range
+      const retreat = range * 0.55
+      if (dist > range) {
+        this.x += ux * spd * dt
+        this.y += uy * spd * dt
+        this._moving = true
+      } else if (dist < retreat) {
+        this.x -= ux * spd * 0.8 * dt
+        this.y -= uy * spd * 0.8 * dt
+        this._moving = true
+      } else {
+        this.attackCd -= actDt
+        if (this.attackCd <= 0) {
+          this.attackCd = this.attackInterval
+          this._shootFlash = 0.16
+          this.game.enemyManager?.spawnLobHazard?.({
+            startX: this.x,
+            startY: this.y,
+            targetX: target.x,
+            targetY: target.y,
+            radius: 52,
+            flightDur: 0.72,
+            lingerDur: 3.4,
+            slowMul: 0.68,
+            damage: this.outgoingDamage(1),
+          })
+          this.game.sound.enemyShoot?.()
         }
       }
     } else {
@@ -529,7 +709,7 @@ export class Enemy extends Entity {
         this.y -= uy * spd * 0.8 * dt
         this._moving = true
       } else {
-        this.attackCd -= dt
+        this.attackCd -= actDt
         if (this.attackCd <= 0) {
           this.attackCd = this.attackInterval
           this._shoot()
@@ -552,7 +732,7 @@ export class Enemy extends Entity {
   _artState() {
     const type = this.type
     const idle = !this._moving
-    const chargeWindow = type === 'mage' ? 0.5 : type === 'archer' ? 0.45 : 0 // 与原蓄力帧窗口一致
+    const chargeWindow = type === 'mage' ? 0.5 : type === 'archer' ? 0.45 : type === 'alchemist' ? 0.48 : 0 // 与原蓄力帧窗口一致
     const charging = chargeWindow > 0 && idle && this.attackCd > 0 && this.attackCd < chargeWindow
     const swingDur = type === 'golem' ? 0.3 : 0.22 // 魔像重砸前摇更长（update 里同步设定）
     return {
@@ -563,21 +743,21 @@ export class Enemy extends Entity {
       sizeMul: enemySizeMul(this._artSeed, this.isElite), // 视觉 ±4% 体型抖动 + 精英 ×1.08，不动碰撞半径
       elite: this.isElite,
       swing: this._swingT > 0 ? 1 - this._swingT / swingDur : -1,
-      windup: (type === 'knight' || type === 'hound') && idle && this._swingT <= 0 && this.attackCd > 0 && this.attackCd < 0.28,
+      windup: (type === 'knight' || type === 'bulwark' || type === 'hound') && idle && this._swingT <= 0 && this.attackCd > 0 && this.attackCd < 0.28,
       casting: type === 'priest' ? (this._healBeamTimer > 0 ? 'heal' : null)
-        : chargeWindow ? (this._shootFlash > 0 ? 'fire' : charging ? 'charge' : null) : null,
+        : type === 'bannerman' ? ((this._rallyT % (TAU * 1.5)) < 2.2 ? 'rally' : null)
+          : chargeWindow ? (this._shootFlash > 0 ? 'fire' : charging ? 'charge' : null) : null,
       stance: type === 'assassin' ? this.assassinState : null,
       enraged: type === 'berserker' ? !!this.isEnraged : false,
       hurt: this.flash > 0 ? Math.min(1, this.flash / 0.12) : 0,
-      elite: this.isElite,
-      sizeMul: enemySizeMul(this._artSeed, this.isElite), // 视觉体型抖动+精英增体；碰撞半径不变
     }
   }
 
   render(ctx) {
     const r = this.radius
+    const artId = this.artId
     const assets = AssetManager.getInstance()
-    const hasArt = hasEnemyArt(this.type)
+    const hasArt = hasEnemyArt(artId)
     const phase = this._walkT + this._artSeed // 装饰相位加个体偏移，同屏不再齐步
 
     // 地面软阴影（悬浮单位更淡更散）
@@ -586,7 +766,40 @@ export class Enemy extends Entity {
     // 已迁移到新美术的职业：影子钉在地面接触线上，不随弹跳/悬浮或朝向翻转移动
     if (hasArt) {
       const lift = floating ? 2.5 - Math.sin(this.game.elapsed * 3 + phase) * 2 : 0
-      drawEnemyShadow(ctx, this.type, this.x, this.y, r, { lift, scale: this._spawnScale(), sizeMul: enemySizeMul(this._artSeed, this.isElite) })
+      drawEnemyShadow(ctx, artId, this.x, this.y, r, { lift, scale: this._spawnScale(), sizeMul: enemySizeMul(this._artSeed, this.isElite) })
+    }
+
+    // 战旗官 185px 鼓舞范围环 & 受鼓舞友军金色底环（世界空间，方便玩家快速锁头优先切旗手）
+    if (this.type === 'bannerman') {
+      ctx.save()
+      ctx.strokeStyle = 'rgba(251, 191, 36, 0.22)'
+      ctx.lineWidth = 1.6
+      ctx.setLineDash([8, 8])
+      ctx.beginPath()
+      ctx.arc(this.x, this.y, BANNER_AURA_RADIUS, 0, TAU)
+      ctx.stroke()
+      ctx.setLineDash([])
+      ctx.restore()
+    } else if (this._bannerBuff > 0) {
+      ctx.save()
+      ctx.strokeStyle = 'rgba(251, 191, 36, 0.42)'
+      ctx.lineWidth = 1.6
+      ctx.beginPath()
+      ctx.ellipse(this.x, this.y + r * 0.65, r + 3, (r + 3) * 0.42, 0, 0, TAU)
+      ctx.stroke()
+      ctx.restore()
+    }
+
+    // 重盾塔兵正面盾弧朝向指示（世界空间，不受左右翻转影响）
+    if (this.type === 'bulwark') {
+      ctx.save()
+      ctx.strokeStyle = 'rgba(148, 163, 184, 0.6)'
+      ctx.lineWidth = 3
+      ctx.lineCap = 'round'
+      ctx.beginPath()
+      ctx.arc(this.x, this.y, r + 6, this.facing - 1.15, this.facing + 1.15)
+      ctx.stroke()
+      ctx.restore()
     }
 
     // 牧师圣光治疗光束（世界空间）
@@ -772,7 +985,7 @@ export class Enemy extends Entity {
     }
 
     let artMode = false
-    if (hasArt) artMode = drawEnemyArt(ctx, this.type, r, artState, this.game.dpr)
+    if (hasArt) artMode = drawEnemyArt(ctx, artId, r, artState, this.game.dpr)
     if (!artMode) {
       const artV1Key = { archer: 'artV1EnemyArcher', golem: 'artV1EnemyGolem' }[this.type]
       const artV1 = artV1Key && assets.drawArt(ctx, artV1Key, 0, 0, r * 3.05, r * 3.05)
@@ -843,8 +1056,8 @@ export class Enemy extends Entity {
       ctx.fill()
     }
 
-    // 精英词缀装备化标识
-    if (this.hasAffix('shielded')) {
+    // 精英词缀 / 三阶护盾 / 大主教圣佑护盾弧
+    if (this.shieldHits > 0) {
       ctx.strokeStyle = 'rgba(90, 216, 232, 0.8)'
       ctx.lineWidth = 2.5
       ctx.beginPath()
@@ -954,5 +1167,6 @@ export class Enemy extends Entity {
       ctx.textAlign = 'center'
       ctx.fillText(icon, this.x, this.y - r - 11 + ib)
     }
+    this.game.enemyManager.crowds?.renderMarker(ctx, this)
   }
 }

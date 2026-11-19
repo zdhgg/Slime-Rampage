@@ -24,7 +24,7 @@ function trap(event) {
 </script>
 
 <template>
-  <div class="spell-core-overlay" @keydown.tab.prevent="trap">
+  <div class="spell-core-overlay" @keydown.tab.prevent="trap" @keydown.space.prevent @keydown.enter="$event.repeat && $event.preventDefault()">
     <section ref="panel" class="spell-core-panel" :class="{ 'milestone-panel': info.milestone }" role="dialog" aria-modal="true" aria-labelledby="spell-core-title" aria-describedby="spell-core-copy">
       <div class="core-heading"><SkillIcon skill="spec_elemental" size="inline" /><div><p>{{ info.milestone ? '元素成长' : '法术核心' }} · {{ info.source }}</p><h2 id="spell-core-title">{{ heading }}</h2></div></div>
       <p id="spell-core-copy" class="core-copy">{{ copy }}</p>
@@ -36,28 +36,28 @@ function trap(event) {
           <span v-if="!info.first && info.stage !== 'first'" class="core-upgrade">{{ option.stats }}</span><span class="core-select">{{ info.stage === 'first' ? '学习法术' : info.first ? '确定融合' : option.isEvolution ? '进化法术' : '吸收强化' }} <span aria-hidden="true">→</span></span>
         </button>
       </div>
-      <p class="core-footer">{{ info.stage === 'first' ? '自动瞄准与施法，专心移动躲避敌人即可' : info.stage === 'boss' ? '首领核心只强化当前构筑，不替你决定路线' : '多系法术 · 随机路线 · 一个空格主动术' }}</p>
+      <p class="core-footer">{{ info.stage === 'first' ? '自动瞄准与施法，专心移动躲避敌人即可' : info.stage === 'boss' ? '首领核心只强化当前构筑，不替你决定路线' : '多系法术 · 随机路线 · 一个空格主动术' }} · Tab 切换 · Enter 确认</p>
     </section>
   </div>
 </template>
 
 <style scoped>
-.spell-core-overlay { position: fixed; inset: 0; z-index: 160; display: grid; place-items: center; padding: 24px; background: rgb(5 7 9 / .84); pointer-events: auto; }
-.spell-core-panel { width: min(880px, 100%); max-height: calc(100dvh - 48px); overflow-y: auto; padding: 30px; color: #e9e8ed; background: #17171c; border: 1px solid #41404c; border-radius: 12px; box-shadow: 0 20px 70px rgb(0 0 0 / .3); }
-.core-heading { display: flex; align-items: center; gap: 16px; }.core-glyph { font-size: 32px; color: #b6a4ff; }
-.core-heading p { margin: 0 0 7px; color: #a99bc8; font-size: 12px; }.core-heading h2 { margin: 0; font-size: 24px; line-height: 1.35; }
-.core-copy { color: #a8a7b2; font-size: 13px; line-height: 1.7; margin: 18px 0 24px; }
+.spell-core-overlay { position: fixed; inset: 0; z-index: 160; display: grid; place-items: center; padding: 24px; background: var(--adventure-scrim); pointer-events: auto; }
+.spell-core-panel { width: min(880px, 100%); max-height: calc(100dvh - 48px); overflow-y: auto; padding: 30px; color: var(--adventure-ink); background: var(--adventure-paper); border: 1px solid var(--adventure-line); border-radius: 12px; box-shadow: var(--adventure-shadow); }
+.core-heading { display: flex; align-items: center; gap: 16px; }.core-glyph { font-size: 32px; color: #6a597f; }
+.core-heading p { margin: 0 0 7px; color: #6a597f; font-size: 12px; }.core-heading h2 { margin: 0; font-size: 24px; line-height: 1.35; }
+.core-copy { color: var(--adventure-muted); font-size: 13px; line-height: 1.7; margin: 18px 0 24px; }
 .core-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .first-spell-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .evolution-options { grid-template-columns: minmax(0, 1fr); max-width: 520px; margin: 0 auto; }
-.core-option { display: flex; flex-direction: column; text-align: left; padding: 20px; border: 1px solid #393843; border-radius: 8px; color: #e9e8ed; background: #202027; font: inherit; cursor: pointer; transition: border-color .15s, background .15s; }
-.core-option:hover { border-color: var(--core-accent); background: #272630; }.core-option:focus-visible { outline: 2px solid var(--core-accent); outline-offset: 3px; }.core-option:active { background: #302e3b; }
-.core-option-top { display: flex; align-items: center; gap: 9px; margin-bottom: 17px; color: var(--core-accent); }.core-option-top :deep(.skill-glyph) { margin: 0; }.core-option-top small { font-size: 11px; }
-.core-option > strong { font-size: 18px; line-height: 1.4; }.core-option p { margin: 10px 0 16px; color: #b2b1bd; font-size: 12px; line-height: 1.8; }
-.core-fusion { padding-top: 14px; border-top: 1px solid #3a3944; }.core-fusion b, .core-fusion span { display: block; }.core-fusion b { color: var(--core-accent); font-size: 14px; }.core-fusion span { margin-top: 8px; font-size: 12px; }
-.core-upgrade { display: block; margin-top: auto; padding-top: 16px; color: #c6bbdf; font-size: 11px; line-height: 1.7; }
-.core-select { display: flex; justify-content: space-between; padding-top: 17px; margin-top: 16px; border-top: 1px solid #3a3944; font-size: 12px; font-weight: 600; }
-.core-footer { margin: 22px 0 0; color: #777583; font-size: 11px; text-align: center; }
+.core-option { display: flex; flex-direction: column; text-align: left; padding: 20px; border: 1px solid var(--adventure-line); border-radius: 8px; color: var(--adventure-ink); background: #f3f1f6; font: inherit; cursor: pointer; transition: border-color .15s, background .15s; }
+.core-option:hover { border-color: color-mix(in srgb, var(--core-accent) 35%, var(--adventure-ink)); background: #edebf3; }.core-option:focus-visible { outline: 2px solid var(--core-accent); outline-offset: 3px; }.core-option:active { background: #e9e5f0; }
+.core-option-top { display: flex; align-items: center; gap: 9px; margin-bottom: 17px; color: color-mix(in srgb, var(--core-accent) 35%, var(--adventure-ink)); }.core-option-top :deep(.skill-glyph) { margin: 0; }.core-option-top small { font-size: 11px; }
+.core-option > strong { font-size: 18px; line-height: 1.4; }.core-option p { margin: 10px 0 16px; color: var(--adventure-muted); font-size: 12px; line-height: 1.8; }
+.core-fusion { padding-top: 14px; border-top: 1px solid var(--adventure-line); }.core-fusion b, .core-fusion span { display: block; }.core-fusion b { color: color-mix(in srgb, var(--core-accent) 35%, var(--adventure-ink)); font-size: 14px; }.core-fusion span { margin-top: 8px; font-size: 12px; }
+.core-upgrade { display: block; margin-top: auto; padding-top: 16px; color: #57476e; font-size: 11px; line-height: 1.7; }
+.core-select { display: flex; justify-content: space-between; padding-top: 17px; margin-top: 16px; border-top: 1px solid var(--adventure-line); font-size: 12px; font-weight: 600; }
+.core-footer { margin: 22px 0 0; color: var(--adventure-muted); font-size: 11px; text-align: center; }
 @media (max-width: 620px) {
   .spell-core-overlay { padding: 12px; }.spell-core-panel { padding: 20px; max-height: calc(100dvh - 24px); }
   .core-heading h2 { font-size: 20px; }.core-heading { gap: 10px; }.core-glyph { font-size: 25px; }

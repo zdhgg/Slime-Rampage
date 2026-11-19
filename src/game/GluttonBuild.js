@@ -10,69 +10,133 @@ export const GLUTTON_ROUTES = Object.freeze({
   mire: {
     id: 'mire', name: '腐沼吞城', short: '腐沼', icon: '☣', color: '#b5d66f',
     seed: 'glut_maw', seedName: '深渊胃囊', ultimate: 'glut_capstone',
-    desc: '扩大吞噬与胃酸收益，让每次成功捕食都能继续清理周围怪群。',
-    bonus: '吞噬后酸液残留；酸液伤害不会递归吞噬或返还猎食点。',
-    skills: ['胃酸迸发', '腐蚀残渣'], ultimateName: '荒古吞噬领主',
-    ultimateDesc: '保留领主体型与吞噬强化；重咬可吞噬半血以下的普通血肉敌人。',
+    desc: '扩大体表腐蚀光环与吞噬引力，把贴近的敌群持续软化并卷入口中。',
+    bonus: '腐蚀光环范围 +15%、跳伤加快且使圈内敌人承受伤害 +8%；光环与酸沼可将普通敌人压入吞噬线。',
+    skills: ['酸蚀沸腾', '胃酸迸发', '腐蚀残渣'], ultimateName: '荒古吞噬领主',
+    ultimateDesc: '体型 +25%，光环与咬击范围/伤害 +20%；深渊吸噬可吞噬半血以下血肉敌人，光环内低于 18% 血量的普通猎物直接卷入吞噬。',
   },
   jaw: {
     id: 'jaw', name: '裂颚破阵', short: '裂颚', icon: '⌁', color: '#f28a59',
     seed: 'glut_ram', seedName: '腐蚀重碾', ultimate: 'glut_jaw_ultimate',
-    desc: '强化重咬的扇形覆盖与冲击，让猎食点转化成正面清场爆发。',
-    bonus: '重咬命中后追加一次前向震荡波；每次重咬最多触发一轮。',
-    skills: ['腐蚀重碾', '颚震余波'], ultimateName: '断岳暴食',
-    ultimateDesc: '重咬后释放两道逐渐衰减的前向余震，每个目标每道余震最多受击一次。',
+    desc: '强化深渊吸噬的碎甲聚怪与闭颚余波，把外围敌群连盾一并扯碎。',
+    bonus: '深渊吸噬击碎护盾并无视重盾正面格挡；确认路线时立即获得 1 层胃铠。',
+    skills: ['颚震余波', '血宴连噬', '裂颚狂咬', '破阵重压'], ultimateName: '断岳暴食',
+    ultimateDesc: '深渊吸噬引力范围 +30% 并震出两道全向碎地震波（第二波震晕 0.6 秒）；单次吸噬吞杀 ≥3 名敌人时触发 3 秒狂怒（移速 +25%、咬击 +35%）。',
   },
   shell: {
     id: 'shell', name: '饕甲反噬', short: '饕甲', icon: '⬟', color: '#e3bd73',
     seed: 'glut_bulk', seedName: '硬化甲壳', ultimate: 'glut_shell_ultimate',
-    desc: '培养甲壳与捕食续航；护甲挡住攻击时反击近身敌群。',
-    bonus: '反击共享护甲触发节奏，不叠加护甲，也不额外生成猎食点。',
-    skills: ['硬化甲壳', '消化代谢', '反胃脉冲', '咬合震慑'], ultimateName: '不灭胃铠',
-    ultimateDesc: '重咬命中后补上一次捕食护甲；护甲挡伤时释放更强的近身反击。',
+    desc: '强化多层胃铠、高额反伤与吞噬续航；越被敌群围攻，反震爆发越频繁。',
+    bonus: '胃铠上限 +1、反伤范围 +20px 且反震冷却 −25%；把挨打变成清屏输出。',
+    skills: ['荆棘反胃', '消化代谢', '胃压震慑', '蓄甲爆刺'], ultimateName: '不灭胃铠',
+    ultimateDesc: '胃铠上限 +1 且每 3.5 秒自动再生 1 层；满层溢出触发反震；挡伤时释放 1.5 倍超大反震、晕眩近敌并缩短深渊吸噬冷却 0.5 秒。',
   },
 })
 
 const routeSkillIds = Object.freeze({
-  mire: ['glut_maw', 'glut_eruption', 'glut_mire'],
-  jaw: ['glut_ram', 'glut_aftershock'],
-  shell: ['glut_bulk', 'glut_counter', 'glut_cow'],
+  mire: ['glut_maw', 'glut_acid_aura', 'glut_eruption', 'glut_mire'],
+  jaw: ['glut_ram', 'glut_aftershock', 'glut_pounce_reset', 'glut_frenzy_jaw', 'glut_breach'],
+  shell: ['glut_bulk', 'glut_counter', 'glut_sub_digest', 'glut_cow', 'glut_thorns_surge'],
 })
 const sharedCoreIds = new Set(['glut_maw', 'glut_bulk', 'glut_ram'])
 
-const makeRouteSkill = (id, name, route, maxLevel, desc, stats, apply) => ({
+const makeRouteSkill = (id, name, route, maxLevel, desc, stats, apply, extra = {}) => ({
   id, name, spec: 'gluttony', route, kind: 'advanced', maxLevel, desc, stats,
-  isGluttonSkill: true, growthClass: 'core', tier: 3, weight: 0.8,
+  isGluttonSkill: true, growthClass: extra.growthClass || 'common', tier: 3, weight: 0.85,
   icon: route === 'mire' ? '☣' : route === 'jaw' ? '⌁' : '⬟',
-  tags: ['路线进阶', GLUTTON_ROUTES[route].short], apply,
+  tags: ['路线进阶', GLUTTON_ROUTES[route].short], apply, ...extra,
 })
 
+/** 「咬合/胃压震慑」（饕甲进阶卡）：受光环/反伤/咬击命中的非首领敌人出手伤害折扣与持续时间。 */
+export const gluttonCowPowerAt = level => Math.min(0.54, 0.26 + Math.max(0, Math.floor(Number(level) || 0)) * 0.07)
+export const gluttonCowDurationAt = level => 1.6 + Math.max(0, Math.floor(Number(level) || 0)) * 0.25
+
+/** 酸蚀沸腾：光环半径、伤害加成与融甲易伤。 */
+export const gluttonAcidAuraBonusAt = level => Math.max(0, Math.floor(Number(level) || 0)) * 10
+export const gluttonAcidAuraDamageAt = level => 1 + Math.max(0, Math.floor(Number(level) || 0)) * 0.15
+export const gluttonAcidAuraVulnAt = level => Math.min(0.24, 0.04 + Math.max(0, Math.floor(Number(level) || 0)) * 0.04)
+
+/** 荆棘反胃：反伤半径与基础倍率。 */
+export const gluttonCounterRadiusAt = level => 112 + Math.max(0, Math.floor(Number(level) || 0)) * 11
+export const gluttonCounterDamageAt = level => 0.75 + Math.max(0, Math.floor(Number(level) || 0)) * 0.18
+
+/** 血宴连噬：每次吞噬/击杀返还深渊吸噬冷却与单次封顶比例。 */
+export const gluttonPounceResetPerKillAt = level => Math.min(0.65, 0.2 + Math.max(0, Math.floor(Number(level) || 0)) * 0.15)
+export const gluttonPounceResetCapRatioAt = level => Math.min(0.6, 0.35 + Math.max(0, Math.floor(Number(level) || 0)) * 0.08)
+
+/** 裂颚狂咬：吸噬重咬后咬击攻速与额外弧度。 */
+export const gluttonFrenzyHasteAt = level => [0, 0.18, 0.25, 0.32][Math.min(3, Math.max(0, Math.floor(Number(level) || 0)))] || 0.32
+export const gluttonFrenzyArcDegAt = level => [0, 45, 65, 85][Math.min(3, Math.max(0, Math.floor(Number(level) || 0)))] || 85
+
+/** 破阵重压：吸噬重咬额外伤害与易伤。 */
+export const gluttonBreachDamageAt = level => Math.max(0, Math.floor(Number(level) || 0)) * 0.12
+export const gluttonBreachVulnAt = level => Math.min(0.24, 0.05 + Math.max(0, Math.floor(Number(level) || 0)) * 0.05)
+
 export const GLUTTON_ROUTE_SKILLS = [
+  // —— 腐沼吞城（mire） ——
+  makeRouteSkill('glut_acid_aura', '酸蚀沸腾', 'mire', 4,
+    '大幅扩大体表腐蚀光环范围与跳伤威力，使圈内敌人减速并承受额外伤害（对首领同样生效）。',
+    lv => `光环半径 +${gluttonAcidAuraBonusAt(lv + 1)}px · 伤害 +${Math.round((gluttonAcidAuraDamageAt(lv + 1) - 1) * 100)}% · 额外融甲 +${Math.round(gluttonAcidAuraVulnAt(lv + 1) * 100)}%`,
+    (game, level) => { game.player.gluttonAcidAuraLevel = level },
+    { growthClass: 'core' }),
+  makeRouteSkill('glut_eruption', '胃酸迸发', 'mire', 3,
+    '吞噬或深渊吸噬咬合时爆发近身强酸溅射，减速周围普通敌人并将残血猎物压入吞噬线（每 0.35 秒最多一次）。',
+    lv => `酸爆半径 ${105 + (lv + 1) * 12}px · 伤害 ×${(0.9 + (lv + 1) * 0.35).toFixed(2)} · 减速 0.8 秒`,
+    (game, level) => { game.player.devourAcidBurst = level }),
   makeRouteSkill('glut_mire', '腐蚀残渣', 'mire', 4,
-    '每次正常吞噬后在猎物位置留下短暂酸沼，周期伤害附近敌人；酸沼不触发吞噬、猎食点或其他捕食效果。',
-    lv => `酸沼半径 ${46 + Math.min(7, lv) * 5}px · 持续 ${Math.min(3.2, 2.2 + lv * 0.2).toFixed(1)} 秒 · 伤害随等级递减成长`,
+    '吞噬或深渊吸噬咬合后在原处留下沸腾酸沼，周期伤害并减速附近敌人，同时牵引圈内白旗猎物；酸沼可将普通敌人压进吞噬线。',
+    lv => `酸沼半径 ${64 + Math.min(7, lv + 1) * 8}px · 持续 ${Math.min(4.0, 2.6 + (lv + 1) * 0.3).toFixed(1)} 秒`,
     (game, level) => { game.player.gluttonMireLevel = level }),
-  makeRouteSkill('glut_aftershock', '颚震余波', 'jaw', 3,
-    '重咬命中后追加一道前向震荡波；余波只造成伤害，不追加重咬、吞噬或猎食点。',
-    lv => `余波伤害 ${Math.round((0.3 + Math.min(5, lv - 1) * 0.08) * 100)}% · 前向范围 ${120 + Math.min(5, lv) * 12}px`,
-    (game, level) => { game.player.gluttonAftershockLevel = level }),
-  makeRouteSkill('glut_counter', '反胃脉冲', 'shell', 4,
-    '捕食护甲挡下攻击时，对周围敌人释放一次反击；伤害不触发吞噬与猎食点。',
-    lv => `反击半径 ${92 + Math.min(6, lv) * 8}px · 伤害 ${Math.round((0.4 + Math.min(5, lv - 1) * 0.08) * 100)}%`,
-    (game, level) => { game.player.gluttonCounterLevel = level }),
-  makeRouteSkill('glut_cow', '咬合震慑', 'shell', 4,
-    '本体咬中的非首领敌人在短时间内出手伤害降低；重复咬中刷新时长，不叠加。',
-    lv => `出手伤害 −${Math.round(gluttonCowPowerAt(lv + 1) * 100)}% · 持续 ${gluttonCowDurationAt(lv + 1).toFixed(1)} 秒`,
-    (game, level) => { game.player.gluttonCowLevel = level }),
+
+  // —— 裂颚破阵（jaw） ——
+  makeRouteSkill('glut_aftershock', '颚震余波', 'jaw', 4,
+    '深渊吸噬闭颚重咬与普攻咬击后追加冲击余波，可将外围敌人震入吞噬线；余波不递归触发自身。',
+    lv => `余波伤害 ${Math.round((0.5 + Math.min(8, lv + 1) * 0.14) * 100)}% · 范围 ${145 + Math.min(8, lv + 1) * 14}px`,
+    (game, level) => { game.player.gluttonAftershockLevel = level },
+    { growthClass: 'core' }),
+  makeRouteSkill('glut_pounce_reset', '血宴连噬', 'jaw', 3,
+    '深渊吸噬每吞噬或击杀敌人，返还深渊吸噬冷却时间，拉聚吞食敌群后更快凝聚下一口。',
+    lv => `每吞杀返还 ${gluttonPounceResetPerKillAt(lv + 1).toFixed(2)} 秒 · 单次至多返还 ${Math.round(gluttonPounceResetCapRatioAt(lv + 1) * 100)}% 冷却`,
+    (game, level) => { game.player.gluttonPounceResetLevel = level }),
+  makeRouteSkill('glut_frenzy_jaw', '裂颚狂咬', 'jaw', 3,
+    '深渊吸噬咬合后 3 秒内进入狂咬狂热：大幅拓宽普攻咬击扇角并提高咬击攻速。',
+    lv => `咬击弧度 +${gluttonFrenzyArcDegAt(lv + 1)}° · 攻速 +${Math.round(gluttonFrenzyHasteAt(lv + 1) * 100)}%（持续 3 秒）`,
+    (game, level) => { game.player.gluttonFrenzyJawLevel = level }),
+  makeRouteSkill('glut_breach', '破阵重压', 'jaw', 3,
+    '大幅提高深渊吸噬重咬伤害，并使命中目标 3 秒内承受伤害提高（对精英与首领同样生效）。',
+    lv => `吸噬伤害 +${Math.round(gluttonBreachDamageAt(lv + 1) * 100)}% · 命中易伤 +${Math.round(gluttonBreachVulnAt(lv + 1) * 100)}%`,
+    (game, level) => { game.player.gluttonBreachLevel = level }),
   {
     id: 'glut_jaw_ultimate', name: '🌟 断岳暴食', spec: 'gluttony', route: 'jaw', kind: 'ultimate',
-    maxLevel: 1, desc: GLUTTON_ROUTES.jaw.ultimateDesc, stats: '互斥终极 · 重咬后两道前向余震',
+    maxLevel: 1, desc: GLUTTON_ROUTES.jaw.ultimateDesc, stats: '互斥终极 · 引力 +30% · 双重碎地震波 · 狂怒增益',
     isGluttonSkill: true, isCapstone: true, tier: 4, weight: 0.65, icon: '⌁',
     tags: ['互斥终极', '裂颚破阵'], apply(game) { game.player.gluttonJawUltimate = true },
   },
+
+  // —— 饕甲反噬（shell） ——
+  makeRouteSkill('glut_counter', '荆棘反胃', 'shell', 4,
+    '大幅强化胃铠挡伤与受击时的 360° 酸刺反震；反震伤害额外受自身生命上限加成，并可将敌人震入吞噬线。',
+    lv => `反震半径 ${gluttonCounterRadiusAt(lv + 1)}px · 威力 ${Math.round(gluttonCounterDamageAt(lv + 1) * 100)}%（每点最大生命 +5%）`,
+    (game, level) => { game.player.gluttonCounterLevel = level },
+    { growthClass: 'core' }),
+  makeRouteSkill('glut_sub_digest', '消化代谢', 'shell', 3,
+    '吞噬或触发饱食酸浪时恢复 1 点生命（共享 3.5 秒间隔），并获得 3.5 秒百分比减伤。',
+    lv => `恢复 +1 生命（3.5 秒冷却）· 减伤 ${[18, 26, 34][Math.min(2, lv)]}%`,
+    (game, level) => {
+      game.player.devourHeal = true
+      game.player.devourDamageReduction = [0.18, 0.26, 0.34][Math.min(2, level - 1)] || 0.34
+    }),
+  makeRouteSkill('glut_cow', '胃压震慑', 'shell', 4,
+    '被腐蚀光环、反震或咬击命中的非首领敌人在短时间内出手伤害大幅降低；刷新时长不叠加。',
+    lv => `出手伤害 −${Math.round(gluttonCowPowerAt(lv + 1) * 100)}% · 持续 ${gluttonCowDurationAt(lv + 1).toFixed(1)} 秒`,
+    (game, level) => { game.player.gluttonCowLevel = level }),
+  makeRouteSkill('glut_thorns_surge', '蓄甲爆刺', 'shell', 3,
+    '每通过胃铠挡伤或受击承受 3 次攻击，自动向外爆射一轮高伤穿透钢刺并立刻再生 1 层胃铠。',
+    lv => `爆刺威力 ${[135, 175, 220][Math.min(2, lv)]}% 反伤 · 立即 +1 层胃铠`,
+    (game, level) => { game.player.gluttonThornsSurgeLevel = level }),
   {
     id: 'glut_shell_ultimate', name: '🌟 不灭胃铠', spec: 'gluttony', route: 'shell', kind: 'ultimate',
-    maxLevel: 1, desc: GLUTTON_ROUTES.shell.ultimateDesc, stats: '互斥终极 · 重咬补甲 · 护甲反击强化',
+    maxLevel: 1, desc: GLUTTON_ROUTES.shell.ultimateDesc, stats: '互斥终极 · 甲上限 +1 · 自动再生 · 挡伤缩 CD',
     isGluttonSkill: true, isCapstone: true, tier: 4, weight: 0.65, icon: '⬟',
     tags: ['互斥终极', '饕甲反噬'], apply(game) { game.player.gluttonShellUltimate = true },
   },
@@ -82,7 +146,7 @@ export const GLUTTON_ENDLESS_SKILL = {
   id: 'glut_endless_hunger', name: '无尽饥肠', spec: 'gluttony', kind: 'endless', maxLevel: Infinity,
   growthClass: 'endless', isGluttonSkill: true, isEndlessGlutton: true, weight: 0.4,
   icon: '∞', tags: ['无尽精通', '暴食'],
-  desc: '无尽模式中提升咬击、重咬与路线衍生伤害；每级收益递减并趋近软上限。',
+  desc: '无尽模式中提升咬击、深渊吸噬、腐蚀光环、反伤与路线衍生伤害；每级收益递减并趋近软上限。',
   stats(level) { return `累计暴食伤害 +${((getSoftRankMultiplier(level + 1, 0.035, 5, 1.4) - 1) * 100).toFixed(1)}%（上限趋近 +40%）` },
   apply(game) { game.weaponSystem.gluttonCombat.refreshStats() },
 }
@@ -96,17 +160,13 @@ export function getGluttonEndlessDamageMultiplier(levels = {}) {
 
 export function getGluttonHeavyDamageMultiplier(level = 0) {
   const rank = Math.max(0, Math.floor(Number(level) || 0))
-  return rank <= 3 ? 1 + rank * 0.15 : 1.45 + 0.9 * (1 - 0.9 ** (rank - 3))
+  return rank <= 3 ? 1 + rank * 0.15 : 1.45 + 0.75 * (1 - 0.9 ** (rank - 3))
 }
 
 export function getGluttonHeavyReachMultiplier(level = 0) {
   const rank = Math.max(0, Math.floor(Number(level) || 0))
   return rank <= 3 ? 1 + rank * 0.1 : 1.3 + 0.7 * (1 - 0.9 ** (rank - 3))
 }
-
-/** 「咬合震慑」（饕甲进阶卡）：被本体咬中的敌人出手伤害折扣与持续时间。 */
-export const gluttonCowPowerAt = level => Math.min(0.58, 0.34 + Math.max(0, Math.floor(Number(level) || 0)) * 0.06)
-export const gluttonCowDurationAt = level => 1.2 + Math.max(0, Math.floor(Number(level) || 0)) * 0.2
 
 export function gluttonRouteInvestment(game, route) {
   return (routeSkillIds[route] || []).reduce((sum, id) => sum + (game.skillLevels?.[id] || 0), 0)
@@ -134,17 +194,15 @@ function routeSkillAvailable(game, skill, baseSkills) {
   if (!game.primarySpec) return skill.kind === 'common' || skill.tier === 1
   const route = game.weaponSystem?.gluttonCombat?.route
   if (skill.isEndlessGlutton) return game.runSelection?.mode === 'endless' && (game.enemyManager?.wave || 1) >= 25
-  const routeId = skill.route || (skill.id === 'glut_eruption' || skill.id === 'glut_capstone' ? 'mire' : null)
+  const routeId = skill.route || (skill.id === 'glut_capstone' ? 'mire' : null)
   if (skill.isCapstone || skill.kind === 'ultimate') {
     return !!route && route === routeId && (game.player?.level || 1) >= GLUTTON_RULES.ultimateLevel &&
       gluttonProgressReady(game, true) && gluttonRouteInvestment(game, route) >= GLUTTON_RULES.ultimateInvestment &&
-      !hasOtherUltimate(game) && (skill.id !== 'glut_capstone' || (game.skillLevels?.glut_eruption || 0) > 0)
+      !hasOtherUltimate(game)
   }
   if (skill.isGluttonSkill) return !!route && route === routeId
-  if (!sharedCoreIds.has(skill.id)) {
-    // The original acid branch remains available during the pre-route deepening
-    // phase; once a route is confirmed, only its branch survives.
-    if (!route && skill.id !== 'glut_eruption') return false
+  if (!sharedCoreIds.has(skill.id) && skill.id !== 'glut_bite_sweep') {
+    if (!route) return false
     if (route && routeId && route !== routeId) return false
   }
   if (skill.requires?.length && !skill.requires.some(id => (game.skillLevels?.[id] || 0) > 0)) return false
@@ -160,27 +218,28 @@ export function gluttonSkillAvailable(game, skill, baseSkills) {
   if (skill.originOnly) return false
   const role = skill.kind === 'common' ? 'common' : 'primary'
   if ((game.skillLevels?.[skill.id] || 0) >= getEffectiveSkillMaxLevel(game, skill, role)) return false
-  if (skill.kind === 'common' || skill.growthClass === 'common') return true
-  if (skill === GLUTTON_ENDLESS_SKILL || skill.isEndlessGlutton) return routeSkillAvailable(game, skill, baseSkills)
+  if (skill.kind === 'common' || skill.growthClass === 'common') {
+    // 暴食路线进阶卡虽然 growthClass 可为 common，但带有 isGluttonSkill 与 route 限制，不能绕过路线检查。
+    if (skill.isGluttonSkill) return routeSkillAvailable(game, skill, baseSkills)
+    return true
+  }
   return routeSkillAvailable(game, skill, baseSkills)
 }
 
 export function gluttonRouteOptions(game) {
-  return Object.values(GLUTTON_ROUTES).map(route => {
-    return {
-      ...route, id: `glut_route_${route.id}`, route: route.id, spec: 'gluttony',
-      isMilestone: true, isGluttonRoute: true, milestoneType: 'glutton',
-      locked: !(game.skillLevels?.[route.seed] > 0),
-      requirement: `需要【${route.seedName}】Lv.1`,
-      investment: gluttonRouteInvestment(game, route.id),
-    }
-  })
+  return Object.values(GLUTTON_ROUTES).map(route => ({
+    ...route, id: `glut_route_${route.id}`, route: route.id, spec: 'gluttony',
+    isMilestone: true, isGluttonRoute: true, milestoneType: 'glutton',
+    locked: !(game.skillLevels?.[route.seed] > 0),
+    requirement: `需要【${route.seedName}】Lv.1`,
+    investment: gluttonRouteInvestment(game, route.id),
+  }))
 }
 
 export function gluttonBuildNote(game) {
   const state = game.weaponSystem?.gluttonCombat
   const route = GLUTTON_ROUTES[state?.route]
-  if (!route) return `随机探索胃囊、甲壳与重咬，每次至少出现 1 个方向入口；选卡满 ${GLUTTON_RULES.choicesBeforeRoute} 次且第 ${GLUTTON_RULES.routeWave} 波／远征第 ${GLUTTON_RULES.routeStage} 章后，根据已获得入口确认路线。`
+  if (!route) return `随机探索胃囊、甲壳与重碾，每次至少出现 1 个方向入口；选卡满 ${GLUTTON_RULES.choicesBeforeRoute} 次且第 ${GLUTTON_RULES.routeWave} 波／远征第 ${GLUTTON_RULES.routeStage} 章后，根据已获得入口确认路线。`
   if (game.skillLevels?.[route.ultimate]) return `${route.name}已锁定 · 终极【${route.ultimateName}】已获得 · 已学基础技能继续生效`
   const ready = (game.player?.level || 1) >= GLUTTON_RULES.ultimateLevel && gluttonProgressReady(game, true)
   return `${route.name}已锁定 · 路线投入 ${gluttonRouteInvestment(game, route.id)}/${GLUTTON_RULES.ultimateInvestment} · ${ready ? '终极已进入随机池' : '终极需 Lv.14＋第 10 波／远征第 5 章'} · 达标后不保证抽到`
@@ -198,7 +257,6 @@ export function rollGluttonSkills(game, count, baseSkills, commonSkills, random 
   const weight = skill => (skill.weight || 1) * Math.min(GLUTTON_RULES.maxWeightBoost,
     (levels[skill.id] ? GLUTTON_RULES.ownedWeight : 1) *
     (route && (skill.route === route || sharedCoreIds.has(skill.id)) ? GLUTTON_RULES.routeWeight : 1))
-  // 加权无放回抽一张；调用方保证 from 非空且权重恒正。
   const drawWeighted = (from) => {
     let ticket = random() * from.reduce((sum, skill) => sum + weight(skill), 0), index = 0
     while (index < from.length - 1 && (ticket -= weight(from[index])) > 0) index++
@@ -206,9 +264,6 @@ export function rollGluttonSkills(game, count, baseSkills, commonSkills, random 
   }
   const choices = []
   while (pool.length && choices.length < count) {
-    // 探索期保底：三选一里至少出现 1 个方向入口。此前只有 2 个 T1 入口对 5 张通用卡，
-    // 约 29% 的升级一面全是通用卡，体感像「专精技能坏了」。路线确认后不再保底，
-    // 避免稀释本路线的进阶卡；入口全部满级时自动退化为普通抽取。
     const entrances = !route && choices.length === 0
       ? pool.filter(skill => sharedCoreIds.has(skill.id))
       : []

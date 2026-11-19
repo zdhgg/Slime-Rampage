@@ -3,8 +3,8 @@ import { sceneryRandom, organicPath, paintFrontierGround } from './FrontierScene
 const TAU = Math.PI * 2
 const palettes = {
   frontier: { ground: ['#293d32', '#22352c'], bank: '#577348', light: '#8a9d6b', stone: '#606954', dark: '#26382c', accent: '#a28a58' },
-  blight: { ground: ['#30343d', '#252e32'], bank: '#655574', light: '#a296ae', stone: '#696672', dark: '#292d39', accent: '#91ae84' },
-  royal: { ground: ['#363e45', '#283238'], bank: '#56645d', light: '#9b9e92', stone: '#6b7475', dark: '#303c43', accent: '#b39863' },
+  blight: { ground: ['#8f9a8b', '#637e79'], bank: '#66768a', light: '#ced6bd', stone: '#85848f', dark: '#47555e', accent: '#adc791' },
+  royal: { ground: ['#a5aa9f', '#7b9092'], bank: '#819487', light: '#d3d4be', stone: '#838f96', dark: '#4b5e69', accent: '#c4a873' },
 }
 
 // The same material language, with different silhouettes and floor plans per chapter.
@@ -15,13 +15,13 @@ export const CHAPTER_SCENES = {
   'slime-nest': { kind: 'nest', prop: 'fungus' },
   'slime-nest-sieged': { kind: 'nest', prop: 'fungus', cloth: '#9a6f4d' },
   'outer-bailey': { kind: 'court', prop: 'pillar', cloth: '#835453' },
-  'reliquary': { kind: 'hall', prop: 'relic', cloth: '#647f80', ground: ['#3d4242', '#303735'] },
-  'sanctum': { kind: 'sanctum', prop: 'pillar', cloth: '#917a58', ground: ['#403d39', '#302f30'] },
-  'royal-crypt': { kind: 'crypt', prop: 'tomb', cloth: '#637c83', ground: ['#303c44', '#252e37'] },
-  'seal-chamber': { kind: 'seal', prop: 'obelisk', cloth: '#648e89', ground: ['#2f4140', '#273333'] },
-  'throne-gallery': { kind: 'gallery', prop: 'pillar', cloth: '#785365', ground: ['#3b3b46', '#2c303b'] },
-  'war-camp': { kind: 'camp', prop: 'tent', cloth: '#84564c', ground: ['#414037', '#31362f'] },
-  'shattered-court': { kind: 'throne', prop: 'pillar', cloth: '#795455', ground: ['#3e4045', '#30333a'] },
+  'reliquary': { kind: 'hall', prop: 'relic', cloth: '#647f80', ground: ['#a5b2a8', '#748982'] },
+  'sanctum': { kind: 'sanctum', prop: 'pillar', cloth: '#917a58', ground: ['#ada58e', '#877f76'] },
+  'royal-crypt': { kind: 'crypt', prop: 'tomb', cloth: '#637c83', ground: ['#83949d', '#526874'] },
+  'seal-chamber': { kind: 'seal', prop: 'obelisk', cloth: '#648e89', ground: ['#849d96', '#586f70'] },
+  'throne-gallery': { kind: 'gallery', prop: 'pillar', cloth: '#785365', ground: ['#a39ca8', '#777d91'] },
+  'war-camp': { kind: 'camp', prop: 'tent', cloth: '#84564c', ground: ['#aa9e80', '#7c886e'] },
+  'shattered-court': { kind: 'throne', prop: 'pillar', cloth: '#795455', ground: ['#a2a5a3', '#777e89'] },
 }
 
 const palette = theme => palettes[theme] || palettes.frontier

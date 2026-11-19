@@ -258,6 +258,27 @@ assert.equal(gemManager._gems[0].value, 10)
 assert.ok(gemManager._gems[0].size >= 6.5) // 合并后重新分级为中宝石
 ok('宝石合并：同位置（<16px）经验宝石并为一颗且数值累加')
 
+{
+  const magnetPlayer = new Player({ input })
+  const magnetGame = { elapsed: 0, sound, worldWidth: 1000, worldHeight: 1000 }
+  const magnetGems = new GemManager({ player: magnetPlayer })
+  magnetPlayer.attach(magnetGame)
+  magnetGems.attach(magnetGame)
+  magnetGems.spawn(magnetPlayer.x + magnetPlayer.pickupRadius - 5, magnetPlayer.y, 15)
+
+  const dt = 1 / 60
+  for (let frame = 0; frame < 45; frame++) {
+    // 宝石已开始吸附时横移，再停下等宝石入体。
+    if (frame >= 9 && frame < 22) magnetPlayer.y += magnetPlayer.speed * dt
+    magnetGame.elapsed += dt
+    magnetGems.update(dt)
+  }
+
+  assert.equal(magnetGems.count, 0, '横移后停下，磁吸宝石应飞入身体')
+  assert.equal(magnetPlayer.exp, 15, '同一颗经验宝石只结算一次')
+  ok('宝石磁吸：玩家横移后停下仍能完成拾取')
+}
+
 // 9b) 合并回收循环的边界：末位元素本身 merged 时，旧的「i-- 写在 else 分支」实现
 //     pop 后 i 不回退 → i === list.length → list[i] === undefined → 读 .merged 抛 TypeError。
 //     180s 长局已稳定复现，因此这里同时断言「不抛异常」与「清理后的真实数组内容」。
@@ -1080,10 +1101,16 @@ const archerBoss = new Boss({ x: 360, y: 500, wave: 5, type: 'boss-archer' })
 archerBoss.attach(game)
 archerBoss.specialCd = 0
 archerBoss.update(0.016)
+// 弓王强招已改为「王庭三判」：不再齐射扇形，而是三个预判落点同时开火
+assert.equal(archerBoss._tribunal.points.length, 3)
+const tribPoint = { ...archerBoss._tribunal.points[0] }
+player.x = 900
+player.y = 800 // 离开第一个预判落点
 archerBoss.update(archerBoss.specialDuration + 0.01)
-assert.equal(enemyManager._bullets.length, 6)
+assert.deepEqual(archerBoss._tribunal.points[0], tribPoint, '预警开始后落点应冻结')
+assert.equal(enemyManager._bullets.length, 0, '三判不产生扇形弹幕')
 assert.equal(archerBoss.specialState, 'recover')
-ok('法师王定点环爆与弓王扇形齐射使用独立弹幕规模并进入破绽期')
+ok('法师王定点环爆与弓王三判落点：各自的结算规模独立并进入破绽期')
 
 enemyManager.reset()
 enemyManager.spawnAt(player.x + 80, player.y, 'knight')

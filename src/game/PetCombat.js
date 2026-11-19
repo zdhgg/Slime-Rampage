@@ -64,11 +64,11 @@ export class PetCombat {
   get moveScale() { return (this.rallyTime > 0 ? 1 + this.rallyStats.move : 1) * (1 + this.level('sym_sub_surge') * 0.15) }
   get playerDamageReduction() {
     if (this.route !== 'guard' || this.rallyTime <= 0) return 0
-    return Math.min(.42, .08 + this.routeGuardLevel * .05 + this.routeGuardAegisLevel * .03 + (this.routeUltimate === 'guard' ? .1 : 0))
+    return Math.min(.30, .08 + this.routeGuardLevel * .05 + this.routeGuardAegisLevel * .03 + (this.routeUltimate === 'guard' ? .1 : 0))
   }
   reset() {
     this.items = []; this.shots = []; this.rallyTime = 0; this.rallyDuration = 0; this.rallyOverloaded = false; this.rallyFlash = 0; this.serial = 0
-    this.route = null; this.normalChoices = 0; this.routeUltimate = null; this.routeHitCount = 0; this.routeFieldCooldown = 0
+    this.route = null; this.normalChoices = 0; this.routeUltimate = null; this.routeFieldCooldown = 0
     this.routeHuntLevel = 0; this.routeHuntChainLevel = 0; this.routeHuntEchoLevel = 0
     this.routeSporeLevel = 0; this.routeSporeFieldLevel = 0; this.routeSporeBloomLevel = 0
     this.routeGuardLevel = 0; this.routeGuardAegisLevel = 0; this.routeGuardPulseLevel = 0
@@ -229,11 +229,14 @@ export class PetCombat {
   }
 
   nearest(pet, point = pet, radius = 420, preferRanged = pet.type === 'hunter') {
+    const hunt = this.route === 'hunt'
+    const reach = radius + (hunt ? this.routeHuntEchoLevel * 35 : 0)
     let best = null, score = Infinity
     for (const e of this.weapon.enemyManager.enemies) {
-      if (!alive(e) || Math.hypot(e.x - point.x, e.y - point.y) > radius ||
+      if (!alive(e) || Math.hypot(e.x - point.x, e.y - point.y) > reach ||
           Math.hypot(e.x - this.player.x, e.y - this.player.y) > 600) continue
-      const d = Math.hypot(e.x - pet.x, e.y - pet.y) - (preferRanged && ranged(e) && !e.isBoss ? 450 : 0)
+      const markPriority = hunt && e.petHuntMarkTime > 0 ? 300 : 0
+      const d = Math.hypot(e.x - pet.x, e.y - pet.y) - (preferRanged && ranged(e) && !e.isBoss ? 450 : 0) - markPriority
       if (d < score && shadowLineClear(this.game, pet, e)) { best = e; score = d }
     }
     return best
@@ -269,7 +272,7 @@ export class PetCombat {
   }
 
   attackDamage(pet) {
-    const teamwork = this.level('pet_capstone') && this.items.filter(p => p.hp > 0).length >= 2 ? 1.3 : 1
+    const teamwork = this.level('pet_capstone') && this.items.length >= 2 && this.items.every(p => p.hp > 0) ? 1.3 : 1
     return this.weapon.damage * this.weapon.levelMul * TYPES[pet.type].power * this.typeScale(pet.type) * this.damageScale * teamwork *
       (this.rallyTime > 0 ? 1 + this.rallyStats.damage : 1) * (this.game?.bossTomes?.petAttackMultiplier(pet, this.rallyTime > 0) || 1)
   }
@@ -326,16 +329,18 @@ export class PetCombat {
 
   dealHit(pet, enemy, damage, boosted = false) {
     if (!this.available || !alive(enemy)) return false
+    let chainHit = false
     if (this.route === 'hunt' && enemy.petHuntMarkTime > 0 && enemy.petHuntMarkDamage > 0) {
       damage *= 1 + enemy.petHuntMarkDamage
       enemy.petHuntMarkTime = 0
       enemy.petHuntMarkDamage = 0
+      chainHit = this.routeHuntChainLevel > 0
     }
     const before = enemy.hp
     enemy.hit(damage)
     if (enemy.hp < before) {
       if (this.route === 'hunt' && this.routeHuntLevel > 0) {
-        enemy.petHuntMarkTime = Math.min(5, 2.5 + this.routeHuntLevel * .5)
+        enemy.petHuntMarkTime = Math.min(5, 2.5 + this.routeHuntLevel * .5) + (this.rallyTime > 0 ? Math.min(4, this.routeHuntEchoLevel) : 0)
         enemy.petHuntMarkDamage = Math.min(.36, .12 + this.routeHuntLevel * .06)
       }
       if (this.route === 'spore' && this.routeSporeLevel > 0 && this.routeFieldCooldown <= 0) {
@@ -355,8 +360,39 @@ export class PetCombat {
       this.game.enemyManager.addText(enemy.x, enemy.y - 18, String(Math.round(damage * 10) / 10), null, TYPES[pet.type].color, 12)
       this.weapon._burstColor(enemy.x, enemy.y - 6, TYPES[pet.type].color, boosted ? 6 : 4, false)
     }
+    if (chainHit && enemy.active && enemy.hp < before) {
+      this.lurePets(enemy, pet)
+      enemy.petHuntChainHits = (enemy.petHuntChainHits || 0) + 1
+      if (enemy.petHuntChainHits >= Math.max(2, 5 - this.routeHuntChainLevel)) {
+        enemy.petHuntChainHits = 0
+        this.huntChainStrike(pet, enemy, damage)
+      }
+    }
     if (!enemy.active) this.weapon._onKill(enemy)
     return enemy.hp < before
+  }
+
+  /** 群猎标记：短暂牵引附近伙伴转向标记目标，不打断已在进行的攻击。 */
+  lurePets(enemy, attacker) {
+    if (Math.hypot(enemy.x - this.player.x, enemy.y - this.player.y) > 600) return
+    for (const pet of this.items) {
+      if (pet === attacker || pet.hp <= 0 || pet.down > 0) continue
+      if (Math.hypot(pet.x - enemy.x, pet.y - enemy.y) > 320) continue
+      pet.target = enemy
+      pet.retarget = Math.max(pet.retarget, 0.5)
+    }
+  }
+
+  /** 协同攻击：派生伤害直接结算，不重入 dealHit，不再附标记/孢息/计数。 */
+  huntChainStrike(pet, enemy, triggerDamage) {
+    const damage = triggerDamage * Math.min(.7, .35 + this.routeHuntChainLevel * .07)
+    const before = enemy.hp
+    enemy.hit(damage)
+    if (enemy.hp < before) {
+      this.weapon.stats.petDamage = (this.weapon.stats.petDamage || 0) + Math.min(before, before - enemy.hp)
+      this.game.enemyManager.addText(enemy.x, enemy.y - 30, '协同攻击', null, '#d7fff3', 12)
+      this.weapon._burstColor(enemy.x, enemy.y - 6, '#d7fff3', 5, false)
+    }
   }
 
   launchShot(pet, target, damage, offset = 0) {
@@ -462,8 +498,9 @@ export class PetCombat {
     this.sync()
     if (!this.available) return
     if (this.route === 'hunt') for (const enemy of this.weapon.enemyManager.enemies) {
-      if (enemy.petHuntMarkTime > 0) enemy.petHuntMarkTime = Math.max(0, enemy.petHuntMarkTime - dt)
-      if (enemy.petHuntMarkTime === 0) enemy.petHuntMarkDamage = 0
+      const rallyHold = this.rallyTime > 0 && this.routeHuntEchoLevel > 0
+      if (enemy.petHuntMarkTime > 0 && !rallyHold) enemy.petHuntMarkTime = Math.max(0, enemy.petHuntMarkTime - dt)
+      if (enemy.petHuntMarkTime === 0) { enemy.petHuntMarkDamage = 0; enemy.petHuntChainHits = 0 }
     }
     this.rallyTime = Math.max(0, this.rallyTime - dt)
     if (this.rallyTime === 0) this.rallyOverloaded = false
@@ -566,18 +603,19 @@ export class PetCombat {
     ctx.save()
     ctx.lineWidth = 1.5
     for (const enemy of this.weapon.enemyManager.enemies) {
-      if (!alive(enemy) || enemy.isBoss) continue
-      const taunted = this.isTaunted(enemy), weakened = enemy.petWeakenTime > 0
-      if (!taunted && !weakened) continue
+      if (!alive(enemy)) continue
+      const taunted = this.isTaunted(enemy), weakened = enemy.petWeakenTime > 0, hunted = enemy.petHuntMarkTime > 0
+      if (!taunted && !weakened && !hunted) continue
       const y = enemy.y - enemy.radius - 8
-      const marks = [...(taunted ? ['taunt'] : []), ...(weakened ? ['weaken'] : [])]
+      const marks = [...(taunted ? ['taunt'] : []), ...(weakened ? ['weaken'] : []), ...(hunted ? ['hunt'] : [])]
       for (const [index, kind] of marks.entries()) {
         const x = enemy.x + (index - (marks.length - 1) / 2) * 14
-        ctx.strokeStyle = kind === 'taunt' ? '#edc479' : '#8edacb'
+        ctx.strokeStyle = kind === 'taunt' ? '#edc479' : kind === 'hunt' ? '#d7fff3' : '#8edacb'
         ctx.fillStyle = 'rgba(9,20,16,.85)'
         ctx.beginPath(); ctx.arc(x, y, 6, 0, Math.PI * 2); ctx.fill(); ctx.stroke()
         ctx.beginPath()
         if (kind === 'taunt') { ctx.moveTo(x, y - 3); ctx.lineTo(x, y + 1) }
+        else if (kind === 'hunt') { ctx.moveTo(x - 3, y); ctx.lineTo(x + 3, y); ctx.moveTo(x, y - 3); ctx.lineTo(x, y + 3) }
         else { ctx.moveTo(x, y - 3); ctx.lineTo(x, y + 3); ctx.moveTo(x - 2, y + 1); ctx.lineTo(x, y + 3); ctx.lineTo(x + 2, y + 1) }
         ctx.stroke()
         if (kind === 'taunt') { ctx.fillStyle = '#edc479'; ctx.beginPath(); ctx.arc(x, y + 3, .8, 0, Math.PI * 2); ctx.fill() }

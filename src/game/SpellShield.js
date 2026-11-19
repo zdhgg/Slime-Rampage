@@ -1,10 +1,11 @@
-/** A passive barrier: one opening point, rebuilt only after the barrier breaks. */
+/** A passive barrier: one opening point; broken barriers rebuild on cooldown, partial barriers slowly regen. */
+const REGEN_INTERVAL = 10
 export class SpellShield {
   constructor(combat) { this.combat = combat; this.reset() }
   get capacity() { return this.combat.level('spell_shield') >= 2 ? 2 : 1 }
   get cooldown() { return Math.max(4, (this.combat.level('spell_shield') > 0 ? 6 : 8) - (this.combat.game?.bossTomes?.veilReduction || 0)) }
   reset(full = false) {
-    this.points = full ? this.capacity : 0; this.remaining = 0; this.flash = 0
+    this.points = full ? this.capacity : 0; this.remaining = 0; this.regen = 0; this.flash = 0
     this.previousCapacity = this.capacity; this.previousCooldown = this.cooldown
   }
   upgrade() {
@@ -18,7 +19,7 @@ export class SpellShield {
     const absorbed = Math.min(this.points, damage)
     this.points = Math.max(0, this.points - absorbed); this.flash = .3
     const broken = this.points < .001
-    if (broken) { this.points = 0; this.remaining = this.cooldown; s.game?.bossTomes?.onSpellShieldBroken() }
+    if (broken) { this.points = 0; this.remaining = this.cooldown; this.regen = 0; s.game?.bossTomes?.onSpellShieldBroken() }
     const palette = s.palette(), colors = [palette.main, palette.accent]
     s.fx(s.player.x, s.player.y, s.player.radius + 12, palette.main, broken ? 'shield-break' : 'shield-hit', .4, { colors })
     s.stats.shieldAbsorbed += absorbed
@@ -29,7 +30,18 @@ export class SpellShield {
   }
   update(dt) {
     this.flash = Math.max(0, this.flash - dt)
-    if (this.points > 0 || this.remaining <= 0) return
+    if (this.points > 0) {
+      if (this.points < this.capacity) {
+        this.regen += dt
+        if (this.regen >= REGEN_INTERVAL) {
+          this.regen = 0; this.points += 1; this.flash = .3
+          this.combat.fx(this.combat.player.x, this.combat.player.y, this.combat.player.radius + 12, this.combat.palette().main, 'shield-hit', .4)
+        }
+      } else this.regen = 0
+      return
+    }
+    this.regen = 0
+    if (this.remaining <= 0) return
     this.remaining = Math.max(0, this.remaining - dt)
     if (this.remaining <= .000001) {
       this.remaining = 0; this.points = this.capacity; this.flash = .3

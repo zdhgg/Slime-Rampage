@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { createArena, spawn, spawnBoss, pressSpace, rollSkills, learn, dispose } from './test-support/arena-fixture.mjs'
-import { ORIGIN_BASE, ORIGIN_RULES, ORIGIN_ROUTES, ORIGIN_SKILL_BY_ID, getOriginShockProfile, getOriginGrowth, originRouteOptions, originMarkOptions } from './src/game/OriginBuild.js'
+import { ORIGIN_BASE, ORIGIN_RULES, ORIGIN_ROUTES, ORIGIN_SKILL_BY_ID, getOriginShockProfile, getOriginGrowth, originRouteOptions, originMarkOptions, originSkillAvailable } from './src/game/OriginBuild.js'
+import { originSourceCastMods, originPrismMarginal } from './src/game/OriginSourceSkills.js'
 import { gainOriginEnergy, trySpendOriginOverload, ORIGIN_SOURCES } from './src/game/PrimalEnergy.js'
 import { triggerOriginMarkEcho } from './src/game/OriginEchoes.js'
 import { Projectile } from './src/game/entities/Projectile.js'
@@ -433,6 +434,25 @@ check('暗影/共生碎片手感数值与卡面一致', g => {
   assert.ok(g.player.markState.icdByFamily.symbiosis > 9.7)
   assert.match(ORIGIN_SKILL_BY_ID.ori_frag_assassin.stats(0, g), /0\.5 秒隐匿/)
   assert.match(ORIGIN_SKILL_BY_ID.ori_frag_symbiosis.stats(0, g), /10 秒 ICD/)
+})
+
+check('乘区撞顶后超载棱镜退出卡池，未撞顶时正常出现', g => {
+  chooseRoute(g, 'assimilation')
+  g.bossSkillLevels.boss_origin_aftershock = 3
+  g.skillLevels.origin_overload = 12
+  assert.equal(originPrismMarginal(g), false)
+  assert.equal(originSkillAvailable(g, ORIGIN_SKILL_BY_ID.origin_overload), false)
+  g.skillLevels.origin_overload = 0
+  assert.equal(originPrismMarginal(g), true)
+  assert.equal(originSkillAvailable(g, ORIGIN_SKILL_BY_ID.origin_overload), true)
+})
+
+check('共振 ×0.9 在乘区封顶后结算，频率代价始终成立', g => {
+  g.originRoute = 'resonance'
+  g.skillLevels.origin_overload = 12
+  g.bossSkillLevels.boss_origin_aftershock = 3
+  const mods = originSourceCastMods(g, { circuits: 3 })
+  assert.ok(Math.abs(mods.damage - 1.62) < 1e-9, String(mods.damage))
 })
 
 console.log(`\n原生黏液重构验证通过：${passed} 组 ✓`)

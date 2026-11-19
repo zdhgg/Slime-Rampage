@@ -35,6 +35,27 @@ body {
   -webkit-user-select: none;
 }
 
+.adventure-theme {
+  --adventure-bg: #edf0e9;
+  --adventure-paper: #fbfcf8;
+  --adventure-ink: #26332e;
+  --adventure-muted: #46554f;
+  --adventure-line: #d6ddd4;
+  --adventure-green: #2d624d;
+  --adventure-green-hover: #214d3c;
+  --adventure-leaf: #e4ede3;
+  --adventure-gold: #865309;
+  --adventure-slate: #345e74;
+  --adventure-danger: #963c34;
+  --adventure-danger-paper: #f8eee9;
+  --adventure-danger-line: #dfb8ad;
+  --adventure-warning-paper: #f7f0df;
+  --adventure-warning-line: #dfcaa2;
+  --adventure-focus: #285d7e;
+  --adventure-scrim: #152a237a;
+  --adventure-shadow: 0 14px 40px #24382e2a;
+}
+
 /* Canvas 承载层：CSS 决定展示尺寸，缓冲区分辨率由引擎按 DPR 设置 */
 .game-canvas {
   position: absolute;

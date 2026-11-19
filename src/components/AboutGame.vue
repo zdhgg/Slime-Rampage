@@ -100,30 +100,30 @@ h2 { font-size: 30px; line-height: 1.3; outline: none; }
 .about-tabs a[aria-current] { color: var(--accent-bright); border-color: var(--accent-bright); }
 .guide-intro { margin: 30px 0 24px; }
 .guide-intro h3 { font-size: 18px; font-weight: 600; margin-bottom: 9px; }
-.guide-intro p, .common-note p, .guide-goal, .guide-columns, .guide-tip, .release-body { font-size: 13px; line-height: 1.9; color: #bdb7ad; }
-.common-note { display: flex; align-items: baseline; gap: 20px; padding: 16px 20px; background: rgba(215, 166, 87, .045); border-left: 2px solid var(--accent); }
+.guide-intro p, .common-note p, .guide-goal, .guide-columns, .guide-tip, .release-body { font-size: 13px; line-height: 1.9; color: var(--adventure-muted); }
+.common-note { display: flex; align-items: baseline; gap: 20px; padding: 16px 20px; background: #f7f2e5; border-left: 2px solid var(--accent); }
 .common-note > span { flex-shrink: 0; font-size: 12px; font-weight: 600; color: var(--accent-bright); }
 kbd { padding: 1px 5px; border: 1px solid var(--border); border-radius: 3px; font: inherit; color: var(--text); }
 .guide-index { display: flex; gap: 24px; margin: 24px 0 10px; flex-wrap: wrap; }
-.guide-index a { display: flex; align-items: center; gap: 8px; min-height: 40px; font-size: 13px; color: var(--guide-accent); }
+.guide-index a { display: flex; align-items: center; gap: 8px; min-height: 40px; font-size: 13px; color: color-mix(in srgb, var(--guide-accent) 42%, var(--adventure-ink)); }
 .guide-index a:hover { text-decoration: underline; text-underline-offset: 5px; }
 .guide-section { padding: 30px 0; border-bottom: 1px solid var(--border); scroll-margin-top: 24px; }
-.guide-heading { display: flex; align-items: center; gap: 15px; color: var(--guide-accent); }
+.guide-heading { display: flex; align-items: center; gap: 15px; color: color-mix(in srgb, var(--guide-accent) 42%, var(--adventure-ink)); }
 .guide-number { font-size: 11px; font-weight: 700; align-self: flex-start; padding-top: 5px; }
 .guide-heading h3 { font-size: 22px; color: var(--text); }
 .guide-heading p { margin-top: 5px; font-size: 11px; color: var(--text-muted); }
 .guide-goal { margin: 20px 0 24px; max-width: 760px; }
 .guide-columns { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.3fr); gap: 48px; }
 h4 { color: var(--text); font-size: 12px; font-weight: 600; margin-bottom: 12px; }
-.controls > div { padding: 9px 0; border-bottom: 1px solid rgba(238, 214, 180, .07); }
+.controls > div { padding: 9px 0; border-bottom: 1px solid var(--adventure-line); }
 .controls > div:first-child { padding-top: 0; }
-.controls dt { color: #e1d9cd; font-size: 12px; }
-.controls dd { margin-top: 3px; font-size: 12px; color: #a9a297; }
+.controls dt { color: var(--adventure-ink); font-size: 12px; }
+.controls dd { margin-top: 3px; font-size: 12px; color: var(--adventure-muted); }
 ol, ul { padding-left: 20px; }
 li + li { margin-top: 12px; }
-ol li::marker { color: var(--guide-accent); font-size: 11px; }
+ol li::marker { color: color-mix(in srgb, var(--guide-accent) 42%, var(--adventure-ink)); font-size: 11px; }
 .guide-tip { margin-top: 24px; font-size: 12px; }
-.guide-tip strong { color: var(--guide-accent); margin-right: 12px; font-weight: 500; }
+.guide-tip strong { color: color-mix(in srgb, var(--guide-accent) 42%, var(--adventure-ink)); margin-right: 12px; font-weight: 500; }
 .device-note { margin-top: 20px; color: var(--text-muted); font-size: 12px; line-height: 1.8; }
 .release { border-bottom: 1px solid var(--border); }
 .release summary { display: flex; align-items: center; gap: 18px; padding: 24px 0; list-style: none; cursor: pointer; }
@@ -134,7 +134,7 @@ ol li::marker { color: var(--guide-accent); font-size: 11px; }
 .release-toggle { width: 18px; color: var(--accent-bright); font-size: 22px; font-weight: 300; text-align: center; }
 .release[open] .release-toggle { transform: rotate(45deg); }
 .release-body { padding-bottom: 30px; overflow-wrap: anywhere; }
-.release-intro { margin-bottom: 24px; color: #d3c9bb; }
+.release-intro { margin-bottom: 24px; color: var(--adventure-muted); }
 .release-section + .release-section { margin-top: 28px; }
 .release-section h4 { color: var(--accent-bright); }
 .about-footer { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-top: 40px; padding: 20px 0 0; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-muted); }

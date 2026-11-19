@@ -28,7 +28,7 @@ try {
   db.close()
   db = openDatabase(filename)
   assert.equal(JSON.parse(db.prepare('SELECT data_json FROM profiles WHERE user_id = 1').get().data_json).drops, 123)
-  assert.equal(db.prepare('SELECT count(*) AS n FROM schema_migrations').get().n, 2)
+  assert.equal(db.prepare('SELECT count(*) AS n FROM schema_migrations').get().n, 4)
   server = createLanApp({ db, registration: true }).listen(0, '127.0.0.1')
   await new Promise(resolve => server.once('listening', resolve))
   const base = `http://127.0.0.1:${server.address().port}`
@@ -186,7 +186,7 @@ try {
     const response = await api(`/api/runs/${queued.ticketId}/finish`, { cookie: alice.cookie, body: { run: queued.run } })
     assert.equal(response.status, 200)
     return response.data
-  }, () => acknowledgements++)
+  }, () => acknowledgements++, { force: true })
   assert.equal(acknowledgements, 1)
   assert.equal(queue.list(job.accountId).length, 0)
   assert.equal((await api('/api/auth/me', { cookie: alice.cookie })).data.accountData.records['runner:blitz'].plays, 1)

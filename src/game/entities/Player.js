@@ -12,6 +12,9 @@ import { GLUTTON_FEAST_SPEED } from '../GluttonResource.js'
 const TAU = Math.PI * 2
 
 const clamp = (v, min, max) => (v < min ? min : v > max ? max : v)
+// Tide contact damage stays fractional after mitigation; ordinary attacks retain their integer floor.
+const reduceIncomingDamage = (damage, reduction, fractional) => fractional
+  ? Math.max(0, damage * (1 - reduction)) : Math.max(1, Math.round(damage * (1 - reduction)))
 
 /** 角度向目标平滑插值（取最短弧，避免跨 ±π 边界时反向旋转） */
 const angleLerp = (current, target, k) =>
@@ -208,23 +211,35 @@ export class Player extends Entity {
     this.strainSkillReadyFlash = 0 // 冷却归零瞬间的反馈脉冲（秒）：HUD 的「就绪弹」
     // 两个脉冲由 GameEngine 在各自时刻置位、逐帧递减，HUD 只做 >0 的布尔化；
     // 分开是因为「刚可用」和「刚用掉」在视觉上必须能区分（见 HudOverlay 的动画）。
-    // —— 暴食猎食点资源（暴食 空格 主动捕食） ——
-    // 与「空格 冷却」是两套语义：暴食没有主冷却，只有资源 + 0.3s 再次释放锁。
-    // 状态放在 Player 上（与 strainSkillCd 同层）：随 resetRunState 归零、
-    // 由 applyStrain 决定本角色的启用与否，不新建通用 ResourceSystem。
-    // 口径与读写函数在 GluttonResource.js；这里只持有数值。
-    this.gluttonCharge = 0 // 当前猎食点（-1 = 该角色不拥有此资源）
-    this.gluttonDevourProgress = 0 // 正常吞噬进度（满 5 → +1 点）
-    this.gluttonBossHuntProgress = 0 // Boss 普攻猎食进度（默认满 10 → +1 点，觉醒满 8）
-    this.gluttonRecastLock = 0 // 再次释放锁剩余（0.3s，防同帧/连点连扣两点）
+    // —— 暴食饱食与胃铠状态（暴食重构：冷却猛扑 + 腐蚀光环 + 多层胃铠反伤 + 饱食酸浪） ——
+    this.gluttonSatiety = 0 // 当前饱食点（-1 = 非暴食角色哨兵）
+    this.gluttonSatietyCooldown = 0 // 饱食酸浪内置触发间隔
+    this.gluttonSatietyBursts = 0 // 本局饱食酸浪爆发次数
+    this.gluttonCharge = 0 // 兼容字段
+    this.gluttonDevourProgress = 0
+    this.gluttonBossHuntProgress = 0
+    this.gluttonRecastLock = 0
     this.gluttonGuard = 0
     this.gluttonGuardTimer = 0
     this.gluttonGuardCooldown = 0
-    this.gluttonGuardDuration = 1.6
+    this.gluttonGuardDuration = 2.2
+    this.gluttonGuardRegenTimer = 3.5
     this.gluttonHealCooldown = 0
-    this.gluttonLastGainPulse = 0 // 获得猎食点瞬间的 HUD 反馈脉冲（秒）
+    this.gluttonLastGainPulse = 0
     this.gluttonFeastTimer = 0 // 吞噬惯性：捕食/咬杀后的短时移速剩余（秒）
-    this.gluttonCowLevel = 0 // 饕甲路线卡「咬合震慑」等级：咬中的敌人出手减伤
+    this.gluttonFrenzyTimer = 0 // 裂颚狂咬：吸噬咬合后的普攻狂热窗口（秒）
+    this.gluttonBerserkTimer = 0 // 断岳暴食：终极吸噬连吞狂怒窗口（秒）
+    this.gluttonCowLevel = 0 // 饕甲路线卡「胃压震慑」等级
+    this.gluttonMawAuraLevel = 0
+    this.gluttonAcidAuraLevel = 0
+    this.gluttonBulkLevel = 0
+    this.gluttonBulkGuardBonus = 0
+    this.gluttonBiteSweepLevel = 0
+    this.gluttonPounceResetLevel = 0
+    this.gluttonFrenzyJawLevel = 0
+    this.gluttonBreachLevel = 0
+    this.gluttonThornsSurgeLevel = 0
+    this.gluttonThornsSurgeCount = 0
     // —— 肾上腺素（通用技能：受击转机动） ——
     this.adrenalineSpeed = 0 // 受击后移速加成（0 = 未习得）
     this.adrenalineTimer = 0 // 剩余爆发时间（秒）
@@ -415,7 +430,10 @@ export class Player extends Entity {
     this.strainSkillMax = 0
     this.strainSkillReadyPulse = 0
     this.strainSkillReadyFlash = 0
-    // 暴食猎食点资源归零（新局/重开不得残留；非暴食角色随后由 applyStrain 置 -1 关闭）
+    // 暴食状态归零（新局/重开不得残留；非暴食角色随后由 applyStrain 置 -1 关闭）
+    this.gluttonSatiety = 0
+    this.gluttonSatietyCooldown = 0
+    this.gluttonSatietyBursts = 0
     this.gluttonCharge = 0
     this.gluttonDevourProgress = 0
     this.gluttonBossHuntProgress = 0
@@ -423,11 +441,24 @@ export class Player extends Entity {
     this.gluttonGuard = 0
     this.gluttonGuardTimer = 0
     this.gluttonGuardCooldown = 0
-    this.gluttonGuardDuration = 1.6
+    this.gluttonGuardDuration = 2.2
+    this.gluttonGuardRegenTimer = 3.5
     this.gluttonHealCooldown = 0
     this.gluttonLastGainPulse = 0
     this.gluttonFeastTimer = 0
+    this.gluttonFrenzyTimer = 0
+    this.gluttonBerserkTimer = 0
     this.gluttonCowLevel = 0
+    this.gluttonMawAuraLevel = 0
+    this.gluttonAcidAuraLevel = 0
+    this.gluttonBulkLevel = 0
+    this.gluttonBulkGuardBonus = 0
+    this.gluttonBiteSweepLevel = 0
+    this.gluttonPounceResetLevel = 0
+    this.gluttonFrenzyJawLevel = 0
+    this.gluttonBreachLevel = 0
+    this.gluttonThornsSurgeLevel = 0
+    this.gluttonThornsSurgeCount = 0
     this.elementProcCap = ELEMENT_PROC_CHANCE_CAP // 专精改写的附魔封顶归位
     resetPrimalEnergy(this) // 异源能量/超载/同化/印记运行态归零
     this.originMoveBuff = 0
@@ -704,28 +735,30 @@ export class Player extends Entity {
       }
     }
     if (this.devourDamageReductionTimer > 0 && this.devourDamageReduction > 0) {
-      damage = Math.max(1, Math.round(damage * (1 - this.devourDamageReduction)))
+      damage = reduceIncomingDamage(damage, this.devourDamageReduction, attack?.swarmTide)
     }
     const petRouteReduction = this.game?.weaponSystem?.petCombat?.playerDamageReduction || 0
-    if (petRouteReduction > 0) damage = Math.max(1, Math.round(damage * (1 - petRouteReduction)))
+    if (petRouteReduction > 0) damage = reduceIncomingDamage(damage, petRouteReduction, attack?.swarmTide)
     // 基因同化：层数提供少量减伤（OriginCombat 每帧写入 originDr）。
-    if (this.originDr > 0 && damage > 0) damage = Math.max(1, Math.round(damage * (1 - this.originDr)))
+    if (this.originDr > 0 && damage > 0) damage = reduceIncomingDamage(damage, this.originDr, attack?.swarmTide)
     // 适应性膜：只在超载窗口内生效。
     if (this.overloadState?.active && this.originAdaptReduction > 0 && damage > 0) {
-      damage = Math.max(1, Math.round(damage * (1 - this.originAdaptReduction)))
+      damage = reduceIncomingDamage(damage, this.originAdaptReduction, attack?.swarmTide)
     }
     // 局部形态重组：超载后的短时形变减伤。
-    if (this.originFormDr > 0 && damage > 0) damage = Math.max(1, Math.round(damage * (1 - this.originFormDr)))
+    if (this.originFormDr > 0 && damage > 0) damage = reduceIncomingDamage(damage, this.originFormDr, attack?.swarmTide)
     if (attack?.enemyAttack) this.game?.bossTomes?.onHurt()
+    let gluttonHitCounterFired = false
     if (this.gluttonGuard > 0 && this.gluttonGuardTimer > 0 && damage > 0) {
-      damage = Math.max(0, damage - this.gluttonGuard)
-      this.gluttonGuard = 0
-      this.gluttonGuardTimer = 0
+      this.gluttonGuard = Math.max(0, this.gluttonGuard - 1)
+      damage = Math.max(0, damage - 1)
+      if (this.gluttonGuard <= 0) this.gluttonGuardTimer = 0
       this.game.weaponSystem._ring(this.x, this.y, '#d1efa0', this.radius + 14)
-      this.game.weaponSystem.gluttonCombat?.onGuardBlocked?.()
+      gluttonHitCounterFired = true
+      this.game.weaponSystem.gluttonCombat?.onHurt?.({ blocked: true })
       if (damage <= 0) {
-        this.invincible = 0.18
-        return
+        this.invincible = Math.max(this.invincible, 0.10)
+        return false
       }
     }
     // 暴食印记/碎片：原生护甲（只挡 1 点，不触发暴食路线反击）。
@@ -762,6 +795,8 @@ export class Player extends Entity {
     this.game.shakeScreen(3, 0.15) // 受击屏幕震动（阶段十五美化）
     // 肾上腺素（通用技能）：受击触发移速爆发——把「挨打」转化为走位资源
     if (this.adrenalineSpeed > 0) this.adrenalineTimer = 3
+    // 暴食：本体受击同样触发酸刺反震（若本次已被胃铠分支触发过则不重复计入蓄甲计数）
+    if (!gluttonHitCounterFired) this.game.weaponSystem?.gluttonCombat?.onHurt?.({ blocked: false })
 
     // 暴食：硬化甲壳反震波
     if (this.thornsPulse && this.game.enemyManager) {
@@ -814,7 +849,17 @@ export class Player extends Entity {
     this.gluttonCounterCooldown = Math.max(0, this.gluttonCounterCooldown - dt)
     this.gluttonHealCooldown = Math.max(0, this.gluttonHealCooldown - dt)
     this.gluttonFeastTimer = Math.max(0, this.gluttonFeastTimer - dt)
+    this.gluttonFrenzyTimer = Math.max(0, this.gluttonFrenzyTimer - dt)
+    this.gluttonBerserkTimer = Math.max(0, this.gluttonBerserkTimer - dt)
     if (this.gluttonGuardTimer <= 0) this.gluttonGuard = 0
+    // 饕甲终极「不灭胃铠」：每 3.5 秒自动再生 1 层胃铠
+    if (this.gluttonShellUltimate && this.game?.weaponSystem?.gluttonCombat?.enabled) {
+      this.gluttonGuardRegenTimer -= dt
+      if (this.gluttonGuardRegenTimer <= 0) {
+        this.gluttonGuardRegenTimer = 3.5
+        this.game.weaponSystem.gluttonCombat.grantGuard(true)
+      }
+    }
     this.elapsed += dt
 
     // 暴食 BOSS 秘典：周期性的近身光辉，强化贴脸和吞噬节奏。
@@ -942,22 +987,24 @@ export class Player extends Entity {
     if (this.adrenalineTimer > 0) this.adrenalineTimer -= dt // 肾上腺素计时与移动状态无关，统一衰减
     if (this.originMoveBuffTimer > 0) this.originMoveBuffTimer = Math.max(0, this.originMoveBuffTimer - dt)
 
-    // 影袭独占位移，其余技能不打断普通移动。
+    // 影袭独占冲刺位移，暴食吸噬保持正常走位避免与刺客位移机制重叠。
     const shadowMoving = this.game.weaponSystem?.shadowCombat?.updateMovement(dt)
     if (shadowMoving) {
-      // 影袭自己处理分段移动、碰撞与穿行伤害，避免同时普通移动。
+      // 技能自己处理分段移动、碰撞与穿行伤害，避免同时普通移动。
     } else if (moving) {
       if (this.speedBuffTimer > 0) this.speedBuffTimer -= dt
       const rushBonus = this.killRushTimer > 0 ? this.killRushSpeed : 0
       const adrenaline = this.adrenalineTimer > 0 ? this.adrenalineSpeed : 0
-      const feast = this.gluttonFeastTimer > 0 ? GLUTTON_FEAST_SPEED : 0
+      const feast = (this.gluttonFeastTimer > 0 ? GLUTTON_FEAST_SPEED : 0) + (this.gluttonBerserkTimer > 0 ? 0.25 : 0)
       const originFlow = this.originMoveBuffTimer > 0 ? (this.originMoveBuff || 0) : 0
       const terrainMul = this.game.mapFeatures?.speedMultiplierAt(this.x, this.y, 'player') || 1
+      // 首领劣地（骑士王落点裂地）：与地形同一口径，取更低的一层，不改位置也不做碰撞
+      const bossFieldMul = this.game.enemyManager?.playerFieldMultiplierAt?.(this.x, this.y) || 1
       const formationMul = this.game.endlessFormationBreakTimer > 0
         ? ENDLESS_FORMATION_BREAK_SPEED_MUL
         : 1
       const curSpeed = this.speed * (this.speedBuffTimer > 0 ? 1.25 : 1) *
-        (1 + rushBonus + adrenaline + feast + originFlow) * terrainMul * formationMul * (this.volleyMoveTimer > 0 ? 1.2 : 1) * (this.game?.bossTomes?.moveMultiplier || 1)
+        (1 + rushBonus + adrenaline + feast + originFlow) * terrainMul * bossFieldMul * formationMul * (this.volleyMoveTimer > 0 ? 1.2 : 1) * (this.game?.bossTomes?.moveMultiplier || 1)
       this.x += dir.x * curSpeed * dt
       this.y += dir.y * curSpeed * dt
       // 点地移动：本帧位移越过落点时贴到目标并收掉目标点，
@@ -1003,6 +1050,13 @@ export class Player extends Entity {
     this.x = clamp(this.x, this.radius, worldWidth - this.radius)
     this.y = clamp(this.y, this.radius, worldHeight - this.radius)
     if (!shadowMoving) this.game.mapFeatures?.resolvePlayerMovement(this, previousX, previousY)
+
+    // 速度采样：预判类招式（王庭三判）读这一组，避免各处自己再算一遍。
+    // 被击退/影袭瞬移会瞬时拉高读数，按移速的 2.2 倍截断，别让它变成必中弹。
+    const trackDt = Math.max(1 / 120, Math.min(0.2, dt))
+    const maxV = (this.speed || 340) * 2.2
+    this.vx = Math.max(-maxV, Math.min(maxV, (this.x - previousX) / trackDt))
+    this.vy = Math.max(-maxV, Math.min(maxV, (this.y - previousY) / trackDt))
   }
 
   render(ctx) {
@@ -1117,8 +1171,8 @@ export class Player extends Entity {
       sx *= bite.sx * horizontal + bite.sy * (1 - horizontal)
       sy *= bite.sy * horizontal + bite.sx * (1 - horizontal)
     }
-    // 猎食点脉冲按资源归属而非血统名判定：origin 拟态暴食后同样反馈
-    const chargePulse = this.gluttonCharge >= 0 ? this.gluttonLastGainPulse / 0.6 : 0
+    // 饱食脉冲按资源归属而非血统名判定
+    const chargePulse = this.gluttonSatiety >= 0 ? this.gluttonLastGainPulse / 0.45 : 0
     if (chargePulse > 0) { sx *= 1 + chargePulse * 0.07; sy *= 1 + chargePulse * 0.07 }
 
     // 吞噬膨胀脉冲（吞咽瞬间果冻鼓起）

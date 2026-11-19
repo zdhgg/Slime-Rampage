@@ -40,7 +40,7 @@ export const PET_SKILLS = {
       const rally = getPetRally(lv + 1)
       return `鼓舞 ${rally.duration} 秒 · 攻击力 +${Math.round(rally.damage * 100)}%`
     }, PET_PARTNER_SKILLS),
-    { ...skill('pet_capstone', '🌟 共生守望', 4, 1, '至少两只伙伴存活时，全体伙伴伤害额外提高 30%', '两只以上存活 · 全体伤害 ×1.3', ['pet_command']), isCapstone: true },
+    { ...skill('pet_capstone', '🌟 共生守望', 4, 1, '全体伙伴存活（至少两只）时，全体伙伴伤害额外提高 30%', '全员存活 · 全体伤害 ×1.3', ['pet_command']), isCapstone: true },
   ],
   // 共鸣挂件不带 requiresStrain：历史上面向 origin 副专精；原生重构后不再产出，保留数据兼容。
   secondary: [

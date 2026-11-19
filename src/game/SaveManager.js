@@ -1,3 +1,4 @@
+import { availableLocalStorage, createRecoverableStorage } from '../services/RecoverableStorage.js'
 import {
   DIFFICULTY_IDS,
   MODE_IDS,
@@ -22,6 +23,39 @@ export const SAVE_SLOT_COUNT = 3
 const LEGACY_DROPS_DIVISOR = 15
 /** V6 展示尺度：产出与定价同步 ×100，存量战力点同乘保持购买力不变。 */
 const POINTS_SCALE = 100
+
+export function isSaveData(value) {
+  const object = item => !!item && typeof item === 'object' && !Array.isArray(item)
+  const number = item => Number.isFinite(item) && item >= 0
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+    && ['drops', 'genes', 'records', 'best', 'board', 'progression'].some(key => Object.hasOwn(value, key))
+    && (value.version == null || Number.isInteger(value.version) && value.version >= 1 && value.version <= CATALOG_VERSION)
+    && (!Object.hasOwn(value, 'drops') || number(value.drops))
+    && (!Object.hasOwn(value, 'genes') || object(value.genes) && Object.values(value.genes).every(number))
+    && ['records', 'best', 'progression'].every(key => !Object.hasOwn(value, key) || object(value[key]))
+    && (!Object.hasOwn(value, 'board') || Array.isArray(value.board))
+}
+
+export function isSaveCatalog(value) {
+  if (Array.isArray(value?.slots)) {
+    return value.slots.length <= SAVE_SLOT_COUNT && value.slots.some(slot => isSaveData(slot?.data))
+      && value.slots.every(slot => slot == null || isSaveData(slot.data))
+      && !(Number(value.version) > CATALOG_VERSION)
+  }
+  return isSaveData(value)
+}
+
+let localStore
+let localStorageRef
+function catalogStore() {
+  const storage = availableLocalStorage()
+  if (!localStore || localStorageRef !== storage) {
+    localStorageRef = storage
+    localStore = createRecoverableStorage(KEY, isSaveCatalog, localStorageRef)
+  }
+  return localStore
+}
+export const getLocalSaveStatus = () => catalogStore().status
 
 const emptyBest = () => ({
   score: 0,
@@ -243,12 +277,7 @@ export function normalizeCatalog(source) {
 
 /** 读取三槽档案目录；V4 及更早的单档会自动放入档案 1。 */
 export function loadSaveCatalog() {
-  try {
-    const raw = localStorage.getItem(KEY)
-    return normalizeCatalog(raw ? JSON.parse(raw) : null)
-  } catch {
-    return normalizeCatalog(null)
-  }
+  return normalizeCatalog(catalogStore().read())
 }
 
 export function getActiveSaveSlot(catalog) {
@@ -299,11 +328,7 @@ export function updateActiveSave(catalog, save) {
 }
 
 export function saveSaveCatalog(catalog) {
-  try {
-    localStorage.setItem(KEY, JSON.stringify({ ...catalog, version: CATALOG_VERSION }))
-  } catch {
-    /* localStorage 不可用时游戏仍可继续。 */
-  }
+  return catalogStore().write({ ...catalog, version: CATALOG_VERSION })
 }
 
 /** 兼容旧调用：返回当前档案的数据，而不是档案目录。 */

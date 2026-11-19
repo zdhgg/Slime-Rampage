@@ -75,6 +75,8 @@ try {
   await shot('03-inline-study')
   await page.waitForTimeout(220)
   await page.keyboard.press('Digit1')
+  assert.equal(await page.locator('.skill-card.is-selected .key-hint').innerText(), '1')
+  await page.keyboard.press('Enter')
   await page.locator('.reward-overlay').waitFor({state:'hidden'})
   assert.equal(await game(() => document.querySelector('#app').__vue_app__._instance.setupState.engine.expeditionStage), 2)
   await open('summoner')

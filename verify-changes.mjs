@@ -842,6 +842,18 @@ assert.ok(splits.every((s) => Math.abs(s.freezeChance - 0.25) < 1e-9), '分裂�
 assert.ok(splits.every((s) => Math.abs(s.burnChance - 0.25) < 1e-9), '分裂弹继承 50% 燃烧概率')
 assert.ok(splits.every((s) => Math.abs(s.critChance - 0.2) < 1e-9), '分裂弹继承 50% 暴击概率')
 assert.equal(splits[0].damage, 5, '分裂弹伤害仍为母弹 50%')
+
+// 目标选择改为距命中点最近（旧口径取数组前两个，射程外目标会导致小弹空飞浪费）
+const nearRank = em.enemies
+  .filter((t) => t.active && t !== origin && !t.devouring)
+  .sort((a, b) => ((a.x - origin.x) ** 2 + (a.y - origin.y) ** 2) - ((b.x - origin.x) ** 2 + (b.y - origin.y) ** 2))
+assert.equal(splits[0].target, nearRank[0], '第一枚分裂弹应锁定距命中点最近的敌人')
+assert.equal(splits[1].target, nearRank[1] || nearRank[0], '第二枚应锁定次近敌人（不足时复用最近）')
+for (const s of splits) {
+  const aim = Math.atan2(s.target.y - s.y, s.target.x - s.x)
+  const off = Math.abs(((Math.atan2(s.vy, s.vx) - aim + Math.PI * 3) % (Math.PI * 2)) - Math.PI)
+  assert.ok(off <= 0.56, '分裂弹出膛方向应对准锁定目标 ±0.55rad 内')
+}
 ok('分裂弹：按 50% 继承母弹暴击/元素附魔概率（机枪×元素协同打通）')
 
 // —— 4. 主动震荡击杀走统一结算 ——
