@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { createArena, spawn, spawnBoss, dispose, settleSwing } from './test-support/arena-fixture.mjs'
+import { createArena, spawn, spawnBoss, dispose, pressSpace, settleSwing } from './test-support/arena-fixture.mjs'
 import { BOSS_TOMES, rollBossTomes } from './src/game/BossTomes.js'
 import { gainPrimalEnergy, trySpendPrimalOverload } from './src/game/PrimalEnergy.js'
 import { onNormalDevoured } from './src/game/GluttonResource.js'
@@ -42,22 +42,28 @@ for (const strain of Object.keys(BOSS_TOMES)) test(strain, '四本三级、独�
   assert.ok(Object.values(g.weaponSystem.visualTiers).every(tier => tier < 4), 'tomes never unlock a visual ultimate')
   g.reset(); assert.deepEqual(g.bossSkillLevels, {}); assert.equal(g.bossTomes.jobs.length, 0)
 })
-for (const strain of Object.keys(BOSS_TOMES)) test(strain, '一把暂停锁串行秘典→补给→下一章，失效/重复选择不推进', g => {
+for (const strain of Object.keys(BOSS_TOMES)) test(strain, '确认秘典后回满生命并进入下一章，失效或重复选择不推进', g => {
   g.configureRun({ mode: 'expedition', difficulty: 'normal' }); g.reset(); g.running = true
-  let latest; g.onExpeditionReward = payload => { latest = payload }
+  const rewards = [], checkpoints = []
+  g.onExpeditionReward = payload => rewards.push(payload)
+  g.onCheckpoint = checkpoint => checkpoints.push(checkpoint)
+  g.player.hp = 1
   g.runState = 'stage-clearing'; g._stageClearT = 1
   g._updateExpedition(.01)
-  assert.equal(latest.phase, 'boss'); assert.equal(g._pauseLock, 1)
-  assert.equal(g.resolveExpeditionReward('rest'), false)
-  const id = latest.options[0].id
+  const [reward] = rewards
+  assert.equal(reward.phase, 'boss'); assert.equal(g._pauseLock, 1); assert.equal(g.running, false)
+  for (const id of ['rest', 'tome', 'blood']) assert.equal(g.resolveExpeditionReward(id), false)
+  assert.equal(g.expeditionStage, 1)
+  assert.equal(g.player.hp, 1)
+  const { id } = reward.options[0]
   assert.equal(g.resolveExpeditionReward(id), true)
-  assert.equal(latest.phase, 'supply'); assert.equal(g._pauseLock, 1); assert.equal(g.running, false)
   assert.equal(g.resolveExpeditionReward(id), false)
-  g.player.maxHp = g.player.hp = 1
-  const damage = g.weaponSystem.damage
-  assert.equal(g.resolveExpeditionReward('blood'), false); near(g.weaponSystem.damage, damage)
-  assert.equal(g.resolveExpeditionReward('rest'), true)
-  assert.equal(g.expeditionStage, 2); assert.equal(g._pauseLock, 0); assert.equal(latest, null)
+  assert.deepEqual(rewards, [reward, null])
+  assert.equal(g.expeditionStage, 2); assert.equal(g._pauseLock, 0)
+  assert.equal(g.player.hp, g.player.maxHp)
+  assert.equal(checkpoints.length, 1)
+  assert.equal(checkpoints[0].stage, 2)
+  assert.equal(checkpoints[0].components.player.hp, g.player.maxHp)
   assert.equal(g.running, true)
   assert.ok(g.gemManager._gems.every(gem => !gem.mastery))
 })
@@ -183,14 +189,44 @@ test('origin', '蓄能原核超载后窗口增伤，到期退出，异源首击�
   e.hit(10, { bossTomeContext: { basic: true } }); near(e.hp, 955.5)
   e.hit(10, { bossTomeContext: { basic: true } }); near(e.hp, 945.5)
 })
-test('ricochet', '三级冷凝治疗来自真实主动命中，受伤才消耗冷却，不能按多弹重复回血', g => {
-  learn(g, 'rico_recharge', 3)
-  const e = spawn(g, { hp: 1000 }), ws = g.weaponSystem
-  const shoot = () => { ws.ricochetCombat.fire(e, { ricochetActive: true }); ws.ricochetCombat.hit(ws._projectiles.at(-1), e) }
-  const hp = g.player.maxHp; shoot(); assert.equal(g.bossTomes.ready.heal, undefined)
-  g.player.hp = hp - 1; shoot(); assert.equal(g.player.hp, hp)
-  g.player.hp = hp - 1; shoot(); assert.equal(g.player.hp, hp - 1)
-  g.bossTomes.update(20); shoot(); assert.equal(g.player.hp, hp)
+test('ricochet', '冷凝弹腺一级开始治疗，逐级提高治疗量、缩短治疗冷却', g => {
+  const e = spawn(g, { hp: 1000 }), p = g.player, ws = g.weaponSystem
+  const hurtHp = p.maxHp - 3
+  const shoot = (active = true) => {
+    ws._projectiles.length = 0
+    p.strainSkillCd = 0
+    if (active) pressSpace(g)
+    else ws.fire(e)
+    assert.ok(ws._projectiles.length > 1, '射出多枚弹体进行命中结算')
+    for (const projectile of ws._projectiles) ws.ricochetCombat.hit(projectile, e)
+  }
+
+  p.hp = hurtHp; shoot(); assert.equal(p.hp, hurtHp)
+  for (const [amount, cooldown, skillReduction] of [[1, 30, 8], [1.5, 25, 15], [2, 20, 15]]) {
+    const offer = rollBossTomes(g, 99).find(card => card.id === 'boss_rico_recharge')
+    assert.equal(offer.stats, `空格冷却 −${skillReduction}% · 回血 ${amount} 点 · 治疗冷却 ${cooldown} 秒`)
+    assert.equal(g.applySkill(offer), true)
+
+    const previousReady = g.bossTomes.ready.heal
+    p.hp = p.maxHp; shoot()
+    assert.equal(g.bossTomes.ready.heal, previousReady, '满血命中不消耗治疗冷却')
+    near(p.strainSkillCd, 8 * (1 - skillReduction / 100))
+
+    p.hp = hurtHp; shoot(false)
+    assert.equal(p.hp, hurtHp, '普攻不触发治疗')
+    e.shieldHits = ws.projectileCount; shoot()
+    assert.equal(p.hp, hurtHp, '护盾吸收全部伤害时不触发治疗')
+    shoot()
+    assert.equal(p.hp, hurtHp + amount, '多弹命中只治疗一次')
+    assert.equal(g.bossTomes.ready.heal, g.bossTomes.time + cooldown)
+
+    p.hp = p.maxHp - .5
+    g.bossTomes.update(cooldown - .25); shoot()
+    assert.equal(p.hp, p.maxHp - .5, '冷却结束前不触发治疗')
+    g.bossTomes.update(.25); shoot()
+    assert.equal(p.hp, p.maxHp, '冷却结束后再次治疗，最多回到满血')
+    g.bossTomes.update(cooldown)
+  }
 })
 test('elemental', '未融合的原质释放也兑现奥术回路主动增伤', g => {
   const spells = g.weaponSystem.spellCombat, e = spawn(g, { hp: 1000 })
@@ -223,16 +259,22 @@ test('summoner', '万灵满员治疗仍有永久成长，复苏减伤真实生�
   pet.hurt = 0; const before = pet.hp; pets.hit(pet, 4)
   near(before - pet.hp, 3)
 })
-test('origin', '秘典满级后补偿普通选卡仍在同一结算中，补给研习不放开暂停', g => {
+test('origin', '秘典满级时只确认一次普通强化，随后回满生命并换章', g => {
+  g.configureRun({ mode: 'expedition', difficulty: 'normal' })
+  g.reset()
   for (const card of BOSS_TOMES.origin) learn(g, card.id.slice(5), 3)
-  g.onExpeditionReward = () => {}; g.runState = 'stage-reward'
+  const rewards = []
+  g.onExpeditionReward = reward => rewards.push(reward)
+  g.player.hp = 1
+  g.runState = 'stage-reward'
+  const level = g.player.level
   g._beginBossSettlement(true)
-  assert.equal(g._chapterSettlement.phase, 'compensation')
-  g.resolveExpeditionReward(g._chapterSettlement.options[0].id)
-  assert.equal(g._chapterSettlement.phase, 'supply'); assert.equal(g._pauseLock, 1)
-  g.resolveExpeditionReward('tome')
-  assert.equal(g._chapterSettlement.phase, 'study'); assert.equal(g._pauseLock, 1)
-  g.resolveExpeditionReward(g._chapterSettlement.options[0].id)
+  const [reward] = rewards
+  assert.equal(reward.phase, 'compensation'); assert.equal(g._pauseLock, 1)
+  assert.equal(g.resolveExpeditionReward(reward.options[0].id), true)
+  assert.deepEqual(rewards, [reward, null])
+  assert.equal(g.player.level, level)
+  assert.equal(g.player.hp, g.player.maxHp)
   assert.equal(g.expeditionStage, 2); assert.equal(g._pauseLock, 0)
 })
 test('origin', '通关同帧经验选卡先完成，秘典不会叠加第二层暂停或覆盖旧面板', g => {

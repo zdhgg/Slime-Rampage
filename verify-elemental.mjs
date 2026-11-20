@@ -157,7 +157,7 @@ check('升级与核心串行：恢复进入核心选择，暂停锁与溢出经�
   g.applySkill(ELEMENTAL_SKILLS[0]); assert.ok(reward); assert.equal(g._pauseLock, 1); assert.equal(levels, 1)
   g.resolveSpellCore(reward.options[0].id); assert.equal(g._pauseLock, 0); assert.equal(s.cores, 1)
 })
-check('远征秘典先于补给，转场不会丢失奖励或重复发核心', (g, s) => {
+check('确认远征秘典后直接换章，保留秘典且不重复发核心', (g, s) => {
   fuse(s, 'poison')
   let reward
   g.onExpeditionReward = info => { reward = info }
@@ -166,9 +166,11 @@ check('远征秘典先于补给，转场不会丢失奖励或重复发核心', (
   const boss = spawnBoss(g, 1); boss.isExpeditionStageBoss = true
   s.damage(boss, 10, 'fire'); assert.equal(g.runState, 'stage-clearing')
   g._updateRunState(.7); assert.equal(reward.phase, 'boss')
-  g.resolveExpeditionReward(reward.options[0].id)
-  assert.equal(reward.phase, 'supply'); assert.equal(s.cores, 0); assert.equal(g._pauseLock, 1)
-  g.resolveExpeditionReward('rest'); assert.equal(g.expeditionStage, 2); assert.equal(g._pauseLock, 0)
+  const { id } = reward.options[0]
+  assert.equal(g.resolveExpeditionReward(id), true)
+  assert.equal(g.bossSkillLevels[id], 1)
+  assert.equal(reward, null); assert.equal(s.cores, 0)
+  assert.equal(g.expeditionStage, 2); assert.equal(g._pauseLock, 0)
 })
 check('终局与死亡结算优先，不弹无用途核心；DOT 击杀只结算一次', (g, s) => {
   let rewards = 0; g.onSpellCore = () => rewards++

@@ -16,6 +16,7 @@ import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import GameCanvas from './components/GameCanvas.vue'
 import HudOverlay from './components/HudOverlay.vue'
 import RunnerHudOverlay from './components/RunnerHudOverlay.vue'
+import RunnerDraftModal from './components/RunnerDraftModal.vue'
 import RunnerResultModal from './components/RunnerResultModal.vue'
 import TowerDefenseHudOverlay from './components/TowerDefenseHudOverlay.vue'
 import TowerDefenseResultModal from './components/TowerDefenseResultModal.vue'
@@ -52,7 +53,9 @@ import {
   pushScore,
   saveSaveCatalog,
 } from './game/SaveManager.js'
-import { normalizeRunSelection, scoreToPoints } from './game/RunRules.js'
+import { formatRunClock, normalizeRunSelection, scoreToPoints } from './game/RunRules.js'
+import { GENES, getGeneLevel } from './game/GenePool.js'
+import { hasPurchasedGenes } from './game/BlackMarketRefund.js'
 import { createDefaultStats } from './game/GameEngine.js'
 import { getRunIntro } from './game/RunIntro.js'
 import { accountApi, setAccountVersion } from './services/AccountClient.js'
@@ -61,6 +64,7 @@ import { loadCampaignSave, loadLegacyCampaign, setAccountCampaign } from './game
 const engine = shallowRef(null) // 仅作为挂载句柄：浅响应，避免 Vue 深代理整个引擎对象树
 const started = ref(false) // 序章结束、主循环已启动
 const showMarket = ref(false) // 黑市打开
+const marketBusy = ref(false)
 const showSaveSlots = ref(false)
 const showAccount = ref(false)
 const offlineCatalog = ref(loadSaveCatalog())
@@ -106,8 +110,8 @@ const damagedSettlements = ref(0)
 const saveConfirmation = shallowRef(null)
 let lastCatalogSequence = 0
 let lastCheckpointAt = 0
-function confirmProgressChange(message) {
-  return new Promise(resolve => { saveConfirmation.value = { message, resolve } })
+function confirmProgressChange(message, labels = {}) {
+  return new Promise(resolve => { saveConfirmation.value = { props: { message, ...labels }, resolve } })
 }
 function resolveSaveConfirmation(accepted) {
   const pending = saveConfirmation.value
@@ -191,7 +195,12 @@ async function flushSettlements(retryFailed = false, force = false) {
         isNewRecord.value = !!result.isNewRecord
       }
       if (gameplayResult.value?.ticketId === job.ticketId) {
-        gameplayResult.value = { ...gameplayResult.value, accountSync: 'synced', rank: payload.leaderboard?.currentRank }
+        gameplayResult.value = {
+          ...gameplayResult.value,
+          earnedDrops: payload.result?.earnedDrops ?? gameplayResult.value.earnedDrops,
+          accountSync: 'synced',
+          rank: payload.leaderboard?.currentRank,
+        }
       }
       if (gameplayHud.value?.ticketId === job.ticketId) {
         gameplayHud.value = { ...gameplayHud.value, accountSync: 'synced' }
@@ -303,11 +312,13 @@ function onUiSound(effect) {
 // stats：引擎快照直接整树赋值（shallowRef 不深层代理，形状由 createDefaultStats 保证）
 const stats = shallowRef(createDefaultStats())
 const levelUpOptions = ref(null) // 升级面板的 3 个技能选项（null = 不显示）
+const runnerDraft = shallowRef(null) // 突围模式进化抽卡三选一
 const spellCoreReward = shallowRef(null)
 // 高频冷却数据（引擎 onCooldown ~10Hz 推送）：冲刺 CD / Boss 施法条是连续递变量，
 // 走 2Hz 大快照会肉眼跳变，单独小通道进响应式（仅少量数字，HUD 重渲染开销可忽略）
 const cooldown = ref({
   cast: 0,
+  bossCast: null,
   formationBreak: 0,
   formationBreakMax: 8,
   // 所有角色共享空格主动技能入口；暴食显示猎食点，其余显示冷却。
@@ -315,6 +326,7 @@ const cooldown = ref({
   skillName: '',
   skillCd: 0,
   skillMax: 0,
+  skillReady: false,
   // 资源型 F（暴食猎食点）：非 null 时 HUD 用它替换冷却条渲染
   charge: null,
   // 远征章节时限剩余秒数（10Hz 推送，末段大屏逐秒倒数的数据源）
@@ -428,12 +440,16 @@ function onEngineReady(eng) {
   eng.onGameplayFinished = (result) => {
     if (result?.mode !== 'runner' && result?.mode !== 'tower-defense') return
     paused.value = false
+    runnerDraft.value = null
     activeGameplay.value = result.mode
     const ticketId = queueRunResult(result, result.mode)
     if (result.mode === 'runner') gameplayResult.value = { ...result, ticketId, accountSync: 'pending' }
     else gameplayHud.value = { ...gameplayHud.value, ticketId, accountSync: 'pending' }
     flushSettlements()
 
+  }
+  eng.onRunnerDraft = (draft) => {
+    runnerDraft.value = draft
   }
   // 引擎升级暂停后回调：把 3 个技能选项交给 Vue 渲染面板
   eng.onLevelUp = (options) => {
@@ -519,7 +535,7 @@ function onEngineReady(eng) {
     elementToast.value = event.kind === 'warning'
       ? '终局勇者正在集结 · 30 秒后降临'
       : event.kind === 'deadline-start'
-      ? `限时任务 · ${event.seconds} 秒内${event.brief || '完成章节目标'}`
+      ? `限时 ${formatRunClock(event.seconds)} · ${event.brief || '完成章节目标'}`
       : event.kind === 'deadline-warning'
       ? `章节目标剩余 ${event.seconds} 秒 · 超时即失败`
       : event.kind === 'deadline-final'
@@ -537,7 +553,7 @@ function onEngineReady(eng) {
       : event.kind === 'formation-break'
       ? `${event.name} · 追击 ${event.duration} 秒（攻速 +25% / 移速 +15%）`
       : event.kind === 'expedition-guardian'
-      ? `${event.boss} 阻断去路 · ${event.special}`
+      ? event.beaconSealed ? `信标已封锁 · 击败${event.boss}` : `击败${event.boss} · ${event.special}`
       : event.kind === 'expedition-clear'
       ? `第 ${event.stage} 章 · ${event.title} 已完成`
       : ''
@@ -850,22 +866,28 @@ async function onDeployRun() {
 }
 
 const currentRunnerSubmode = ref('marathon')
+const currentRunnerOptions = ref({ submode: 'marathon', strainId: 'origin', chipId: 'magnet_engine', pacts: [] })
 
 /**
- * 独立玩法：Runner（三线推进射击）。
- * 使用独立规则与账号结算，不改主战场 preferences。
+ * 独立玩法：Runner（三线动作肉鸽突围）。
+ * 支持整备室传参（字符串或配置对象），使用独立规则与账号结算。
  */
-async function onStartRunner(submode = 'marathon') {
+async function onStartRunner(payload = 'marathon') {
   if (!engine.value) return
-  if (!(await beginAccountRun({ gameplay: 'runner', mode: submode, difficulty: 'standard' }))) return
+  const opts = typeof payload === 'string'
+    ? { submode: payload || 'marathon', strainId: 'origin', chipId: 'magnet_engine', pacts: [] }
+    : { submode: payload?.submode || 'marathon', strainId: payload?.strainId || 'origin', chipId: payload?.chipId || null, pacts: Array.isArray(payload?.pacts) ? [...payload.pacts] : [] }
+  if (!(await beginAccountRun({ gameplay: 'runner', mode: opts.submode, difficulty: 'standard' }))) return
   snd()?.uiSelect()
-  currentRunnerSubmode.value = (typeof submode === 'string' && submode) ? submode : 'marathon'
+  currentRunnerSubmode.value = opts.submode
+  currentRunnerOptions.value = opts
   // 清理局内 UI 状态（与 onDeployRun/onChangeRules 同一套复位口径）
   gameOverInfo.value = null
   gameplayResult.value = null
   gameplayHud.value = null
   paused.value = false
   levelUpOptions.value = null
+  runnerDraft.value = null
   fusionConfirm.value = null
   expeditionReward.value = null
   endlessDecision.value = null
@@ -874,9 +896,19 @@ async function onStartRunner(submode = 'marathon') {
   elementToast.value = ''
   activeGameplay.value = 'runner'
   engine.value.configureGameplay('runner')
-  engine.value.resetGameplaySession(undefined, currentRunnerSubmode.value)
+  engine.value.resetGameplaySession(undefined, currentRunnerOptions.value)
   engine.value.start()
   started.value = true
+}
+
+function onSelectRunnerDraft(optionId) {
+  snd()?.select()
+  engine.value?.selectRunnerDraft(optionId)
+}
+
+function onRerollRunnerDraft() {
+  snd()?.uiClick()
+  engine.value?.rerollRunnerDraft()
 }
 
 /** 独立玩法：固定路径塔防闯关战役大地图 */
@@ -1016,7 +1048,8 @@ function onDeleteSaveSlot(id) {
   if (requireAccount()) runCatalogAction(() => accountApi.deleteSlot(id), '账号档案已删除')
 }
 async function onBuyGene(geneId) {
-  if (!requireAccount()) return
+  if (marketBusy.value || saveConfirmation.value || started.value || !requireAccount()) return
+  marketBusy.value = true
   try {
     const payload = await accountApi.buyGene(geneId)
     applyCatalog(payload.catalog, payload.requestSequence)
@@ -1024,6 +1057,40 @@ async function onBuyGene(geneId) {
   } catch (error) {
     snd()?.buyFail()
     showToast(accountErrorMessage(error), 'danger', 3200)
+  } finally {
+    marketBusy.value = false
+  }
+}
+
+async function onResetGenes() {
+  if (marketBusy.value || saveConfirmation.value || started.value || !requireAccount()) return
+  const catalog = saveCatalog.value
+  if (!hasPurchasedGenes(save.value.genes) || !Number.isSafeInteger(save.value.geneInvestment)) return
+  const refund = save.value.geneInvestment
+  const hasRetiredGenes = GENES.some(gene => gene.hidden && getGeneLevel(save.value.genes, gene) > 0)
+  const message = `将返还 ${refund} 战力点，并清空当前档案的基因、原核和违禁品。重置免费，不影响已开始的对局。`
+  const accepted = await confirmProgressChange(message + (hasRetiredGenes ? ' 已下架的旧基因也会清除，之后无法重新购买。' : ''), {
+    title: '重置黑市加点', cancelLabel: '取消', confirmLabel: '确认重置',
+  })
+  if (!accepted || !showMarket.value || started.value) return
+  const current = saveCatalog.value
+  if (['accountId', 'saveEpoch', 'accountRevision', 'activeSlotId'].some(key => catalog[key] !== current[key])) {
+    showToast('档案已更新，请重新确认返还金额', 'danger')
+    return
+  }
+  marketBusy.value = true
+  try {
+    const payload = await accountApi.resetGenes()
+    applyCatalog(payload.catalog, payload.requestSequence)
+    snd()?.uiSelect()
+    showToast(`黑市加点已重置，返还 ${payload.refund.points} 战力点`, 'success')
+  } catch (error) {
+    if (error.code === 'save_conflict') {
+      await accountApi.profile().then(payload => applyCatalog(payload.catalog, payload.requestSequence)).catch(() => {})
+    }
+    showToast(accountErrorMessage(error), 'danger', 3200)
+  } finally {
+    marketBusy.value = false
   }
 }
 
@@ -1101,9 +1168,9 @@ function onRestart() {
   }
 }
 
-/** Runner 重试：保留模式，重新领取账号行动票据。 */
+/** Runner 重试：保留整备配置，重新领取账号行动票据。 */
 function onRestartRunner() {
-  return onStartRunner(currentRunnerSubmode.value)
+  return onStartRunner(currentRunnerOptions.value)
 }
 
 function onRestartTowerDefense() {
@@ -1125,6 +1192,7 @@ function onChangeRules() {
   gameplayHud.value = null
   gameplayResult.value = null
   levelUpOptions.value = null
+  runnerDraft.value = null
   gameOverInfo.value = null
   paused.value = false
   fusionConfirm.value = null
@@ -1155,6 +1223,7 @@ const isModalOpen = computed(
   () =>
     !!(
       levelUpOptions.value ||
+      runnerDraft.value ||
       spellCoreReward.value ||
       gameOverInfo.value ||
       gameplayResult.value ||
@@ -1266,7 +1335,7 @@ onUnmounted(() => {
       :hud="gameplayHud"
       :muted="muted"
       :paused="paused"
-      :controls-disabled="!!gameplayResult || !!levelUpOptions || !!gameOverInfo || !!expeditionReward || !!endlessDecision"
+      :controls-disabled="!!gameplayResult || !!levelUpOptions || !!runnerDraft || !!gameOverInfo || !!expeditionReward || !!endlessDecision"
       @activate-fever="engine?.gameplay?.activateFever?.()"
       @change-lane="engine?.gameplay?.changeLane?.($event)"
       @jump="engine?.gameplay?.jump?.()"
@@ -1305,6 +1374,15 @@ onUnmounted(() => {
     />
 
     <!-- 升级面板：覆盖层之上，点击卡片应用技能并恢复游戏 -->
+    <Transition name="modal-fade">
+      <RunnerDraftModal
+        v-if="runnerDraft"
+        :draft="runnerDraft"
+        @select="onSelectRunnerDraft"
+        @reroll="onRerollRunnerDraft"
+      />
+    </Transition>
+
     <Transition name="modal-fade">
       <LevelUpModal v-if="levelUpOptions" :options="levelUpOptions" :level="stats.level" :role-spec="stats.roleSpec" :can-use-elements="stats.canUseElements" :rerolls="stats.skillRerolls || 0" @select="onSelectSkill" @reroll="onRerollSkill" />
     </Transition>
@@ -1389,7 +1467,10 @@ onUnmounted(() => {
         v-if="showMarket"
         :drops="save.drops"
         :genes="save.genes"
+        :refund-points="save.geneInvestment"
+        :busy="marketBusy"
         @buy="onBuyGene"
+        @reset="onResetGenes"
         @close="onCloseMarket"
       />
     </Transition>
@@ -1515,7 +1596,7 @@ onUnmounted(() => {
     <LeaderboardModal v-if="showLeaderboard" @close="showLeaderboard = false" />
     <PlayerRecordsModal v-if="showPlayerRecords" :account-data="accountData" :pending="pendingSettlements" :syncing="syncing" :damaged-count="damagedSettlements"
       @close="showPlayerRecords = false" @retry="flushSettlements(true)" @data="applyAccountData" @discard="discardSettlement" @export="exportPendingSettlements" @import="importPendingSettlements" />
-    <SaveConfirmModal v-if="saveConfirmation" :message="saveConfirmation.message" @resolve="resolveSaveConfirmation" />
+    <SaveConfirmModal v-if="saveConfirmation" v-bind="saveConfirmation.props" @resolve="resolveSaveConfirmation" />
     <div v-if="pendingSettlements.length" class="account-sync-bar" role="status">
       <span>{{ syncing ? '正在保存游戏记录…' : `${pendingSettlements.length} 条记录等待同步` }}{{ !queueDurable ? ' · 浏览器无法暂存，请保持此页面打开' : '' }}</span>
       <button :disabled="syncing" @click="flushSettlements(true)">重试</button>

@@ -19,6 +19,8 @@ export const CORE_SKILL_RANK_CAPS = Object.freeze({
   glut_counter: { expedition: { hard: 7, hell: 10 }, timed: 8, endless: 12 },
   gat_velocity: { expedition: { hard: 8, hell: 12 }, timed: 10, endless: 14 },
   ele_resonance: { expedition: { hard: 7, hell: 11 }, timed: 9, endless: 13 },
+  ass_lethal: { expedition: { hard: 7, hell: 10 }, timed: 8, endless: 12 },
+  ass_ward: { expedition: { hard: 7, hell: 10 }, timed: 8, endless: 12 },
   ass_stride: { expedition: { hard: 7, hell: 10 }, timed: 9, endless: 12 },
   ass_execute: { expedition: { hard: 8, hell: 12 }, timed: 10, endless: 14 },
   pet_power: { expedition: { hard: 8, hell: 12 }, timed: 10, endless: 14 },

@@ -1,4 +1,5 @@
 import { availableLocalStorage, createRecoverableStorage } from '../services/RecoverableStorage.js'
+import { estimateGeneInvestment, hasPurchasedGenes } from './BlackMarketRefund.js'
 import {
   DIFFICULTY_IDS,
   MODE_IDS,
@@ -23,6 +24,7 @@ export const SAVE_SLOT_COUNT = 3
 const LEGACY_DROPS_DIVISOR = 15
 /** V6 展示尺度：产出与定价同步 ×100，存量战力点同乘保持购买力不变。 */
 const POINTS_SCALE = 100
+const legacyDropsToPoints = drops => Math.round(drops / LEGACY_DROPS_DIVISOR) * POINTS_SCALE
 
 export function isSaveData(value) {
   const object = item => !!item && typeof item === 'object' && !Array.isArray(item)
@@ -83,6 +85,7 @@ export const defaultSave = () => ({
   version: 6,
   drops: 0,
   genes: {},
+  geneInvestment: 0,
   records: emptyRecords(),
   progression: { highestDifficulty: 'normal', highestMode: 'expedition' },
   preferences: { mode: 'expedition', difficulty: 'normal' },
@@ -136,11 +139,20 @@ function sanitizeRecord(record, selection) {
   }
 }
 
+function readGeneProgress(save, source) {
+  save.genes = source?.genes && typeof source.genes === 'object' ? source.genes : {}
+  if (!hasPurchasedGenes(save.genes)) return
+  const invested = source?.geneInvestment
+  save.geneInvestment = Number(source.version) >= 6 && Number.isSafeInteger(invested) && invested > 0
+    ? invested
+    : estimateGeneInvestment(save.genes, source.version, legacyDropsToPoints)
+}
+
 function migrateLegacy(source) {
   const save = defaultSave()
   // V3 前的战利品是旧货币，按购买力折算为战力点
-  save.drops = Math.max(0, Math.round((Number(source?.drops) || 0) / LEGACY_DROPS_DIVISOR) * POINTS_SCALE)
-  save.genes = source?.genes && typeof source.genes === 'object' ? source.genes : {}
+  save.drops = Math.max(0, legacyDropsToPoints(Number(source?.drops) || 0))
+  readGeneProgress(save, source)
   save.sound.muted = !!source?.sound?.muted
   save.preferences = { mode: 'endless', difficulty: 'normal' }
   save.progression.highestMode = 'endless'
@@ -208,7 +220,7 @@ export function sanitizeSave(source) {
   if (Number(source.version || 0) < 5) save.drops = Math.round(save.drops / LEGACY_DROPS_DIVISOR)
   // V6：战力点产出/定价同步 ×100，存量同乘保持购买力（V4 档先 ÷15 再 ×100，等价于 ÷0.15）
   if (Number(source.version || 0) < 6) save.drops = Math.round(save.drops * POINTS_SCALE)
-  save.genes = source.genes && typeof source.genes === 'object' ? source.genes : {}
+  readGeneProgress(save, source)
   save.sound.muted = !!source.sound?.muted
   save.preferences = normalizeRunSelection(source.preferences)
   save.progression.highestDifficulty = DIFFICULTY_IDS.includes(

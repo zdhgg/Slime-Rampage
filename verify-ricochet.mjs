@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { performance } from 'node:perf_hooks'
 import { createArena, spawn, spawnBoss, pressSpace, dispose, ctx2d, learn as learnLegacy } from './test-support/arena-fixture.mjs'
 import { rollSkills, rollBossSkills, getSpecInfo } from './src/game/SkillPool.js'
+import { BOSS_TOMES } from './src/game/BossTomes.js'
 import { RICOCHET_SKILL_BY_ID as skills, RICOCHET_ROUTES as routes, RICOCHET_RULES, rollRicochetSkills, ricochetInvestment } from './src/game/RicochetRules.js'
 
 let passed = 0
@@ -49,7 +50,7 @@ check('路线需要 4 次普通选卡和战局进度；无入口时继续随机�
   g.applySkill({ ...options[2], route: 'pierce' }); assert.equal(g.weaponSystem.ricochetCombat.route, 'bounce')
 })
 
-check('远征使用章节门槛；定向替代当次秘籍奖励且正确推进章节', g => {
+check('远征使用章节门槛；秘典满级补偿可确认路线并推进章节', g => {
   g.configureRun({ mode: 'expedition', difficulty: 'normal' })
   g.reset()
   for (const id of ['split', 'bounce', 'multishot', 'velocity']) learn(g, id)
@@ -58,9 +59,9 @@ check('远征使用章节门槛；定向替代当次秘籍奖励且正确推进�
   g.expeditionStage = RICOCHET_RULES.routeStage
   g.runState = 'stage-reward'
   g.onExpeditionReward = () => {}
+  for (const { id } of BOSS_TOMES.ricochet) g.bossSkillLevels[id] = 3
   g._beginBossSettlement(true)
-  g.resolveExpeditionReward(g._chapterSettlement.options[0].id)
-  g.resolveExpeditionReward('tome')
+  assert.equal(g._chapterSettlement.phase, 'compensation')
   const cards = g._chapterSettlement.options
   assert.ok(cards.every(s => s.isRicochetRoute))
   g.resolveExpeditionReward(cards.find(s => s.route === 'split').id)

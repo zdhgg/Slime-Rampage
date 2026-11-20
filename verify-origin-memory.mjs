@@ -627,7 +627,7 @@ check('E 状态结构：nextOriginMemory 与 reset 的纯函数契约', g => {
   assert.equal(ORIGIN_SOURCE_BY_ID.knight_breach.bossType, 'boss-knight')
 })
 
-check('A9 远征章节结算：章间秘典阶段同样可吸收源质，步骤顺序不变', g => {
+check('A9 远征章节结算：确认源质记忆后直接换章', g => {
   const payloads = []
   g.onExpeditionReward = (info) => { payloads.push(info) }
   g._lastChapterBoss = '弓王 罗宾'
@@ -642,9 +642,8 @@ check('A9 远征章节结算：章间秘典阶段同样可吸收源质，步骤�
   assert.equal(memory.memoryId, 'archer_hunt')
   assert.ok(bossPhase.options.filter(card => card.isBossSkill).length <= 2, '其余位置仍是本职秘典')
   assert.equal(g.resolveExpeditionReward(memory.id), true)
-  const supply = payloads.at(-1)
-  assert.equal(supply.phase, 'supply', '仍然进入原有补给阶段')
-  assert.match(supply.summary, /弓王源质·棘刺追猎雨 · Lv\.1\/3/)
+  assert.deepEqual(payloads, [bossPhase, null])
+  assert.equal(g.expeditionStage, 2)
   assert.deepEqual(g.originSourceMemories, [{ id: 'archer_hunt', level: 1 }])
 })
 

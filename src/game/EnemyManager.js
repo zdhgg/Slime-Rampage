@@ -195,6 +195,7 @@ export class EnemyManager extends Entity {
       phaseName: combat.phaseName || '王级交锋',
       state: combat.state || '追猎',
       special: combat.special || '',
+      casting: !!combat.casting,
       castProgress: combat.castProgress || 0,
       vulnerable: !!combat.vulnerable,
       count: active.length,
@@ -206,6 +207,7 @@ export class EnemyManager extends Entity {
         name: boss.name,
         hp: Math.max(0, boss.hp),
         maxHp: boss.maxHp,
+        phase: boss.phase || 1,
         enraged: !!boss.enraged,
         casting: boss === this._bossCaster,
         protected: formation?.id === 'royal_guard' && formation.captainId === boss.bossMemberId && formation.active,
@@ -1435,7 +1437,7 @@ export class EnemyManager extends Entity {
             const dx = player.x - h.x
             const dy = player.y - h.y
             if (dx * dx + dy * dy <= rr * rr) {
-              player.hit(h.damage, { enemyAttack: true })
+              player.hit(h.damage, { enemyAttack: true, spellAttack: true })
             }
           }
         }

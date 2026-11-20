@@ -12,6 +12,8 @@ const weaponMetric = computed(() => {
   if (props.info.weapon?.id === 'pierce') return `贯穿 ${props.info.weaponStats?.pierced || 0} 次`
   if (props.info.weapon?.id === 'burst') return `爆裂 ${props.info.weaponStats?.explosions || 0} 次`
   if (props.info.weapon?.id === 'corrosion') return `腐蚀命中 ${props.info.weaponStats?.corrosionStacks || 0} 次`
+  if (props.info.weapon?.id === 'spread') return `弹片 / 折光 ${(props.info.weaponStats?.splinterCount || 0) + (props.info.weaponStats?.crossPrisms || 0)} 次`
+  if (props.info.weapon?.id === 'beam') return `牵引 / 爆破 ${(props.info.weaponStats?.voidPulls || 0) + (props.info.weaponStats?.minesDetonated || 0)} 次`
   return ''
 })
 </script>
@@ -28,24 +30,34 @@ const weaponMetric = computed(() => {
       <div class="score-block">
         <span>行动得分</span>
         <strong>{{ scoreText }}</strong>
+        <div class="meta-rewards" v-if="info.earnedDrops > 0 || info.bestStyleRank">
+          <span v-if="info.bestStyleRank" class="meta-pill style">最高技巧评级 {{ info.bestStyleRank }}</span>
+          <span v-if="info.earnedDrops > 0" class="meta-pill drops">黑市战力点 +{{ info.earnedDrops }}</span>
+        </div>
       </div>
 
-      <div v-if="info.weapon" class="weapon-result" :style="{ '--weapon-color': info.weapon.color }">
+      <div v-if="info.weapon || info.strain" class="weapon-result" :style="{ '--weapon-color': info.weapon?.color || info.strain?.color || '#38bdf8' }">
         <i aria-hidden="true" />
-        <span>最终弹道</span>
-        <strong>{{ info.weapon.name }} Lv.{{ info.weapon.level }}</strong>
+        <span v-if="info.strain">{{ info.strain.name }}</span>
+        <strong v-if="info.weapon">{{ info.weapon.name }} Lv.{{ info.weapon.level }}</strong>
         <em v-if="weaponMetric">{{ weaponMetric }}</em>
+      </div>
+
+      <div v-if="(info.modules?.length || info.kinetics?.length || info.relics?.length)" class="build-summary-pills">
+        <span v-for="m in (info.modules || [])" :key="m" class="build-tag">{{ m }}</span>
+        <span v-for="k in (info.kinetics || [])" :key="k" class="build-tag kinetic">{{ k }}</span>
+        <span v-for="r in (info.relics || [])" :key="r" class="build-tag relic">{{ r }}</span>
       </div>
 
       <div class="result-stats">
         <div><span>{{ info.isEndless ? '存活时间' : '用时' }}</span><b>{{ info.timeLabel }}</b></div>
         <div v-if="info.isEndless"><span>极限里程</span><b>{{ info.distance }}m</b></div>
+        <div><span>进化等级</span><b>Lv.{{ info.level || 1 }}</b></div>
         <div><span>击破</span><b>{{ info.kills }}</b></div>
         <div><span>强化门</span><b>{{ info.gates }}</b></div>
         <div><span>最高连破</span><b>×{{ info.bestCombo }}</b></div>
         <div><span>狂热暴走</span><b>{{ info.feverCount || 0 }} 次</b></div>
-        <div><span>战术道具</span><b>{{ (info.tacticalStats?.magnets || 0) + (info.tacticalStats?.bulletTimes || 0) + (info.tacticalStats?.boosters || 0) + (info.tacticalStats?.drones || 0) }} 次</b></div>
-        <div><span>引爆炸药</span><b>{{ info.tacticalStats?.barrels || 0 }} 桶</b></div>
+        <div><span>守关首领</span><b>{{ info.bossDefeatedCount || 0 }} 座</b></div>
         <div><span>承受冲击</span><b>{{ info.hitsTaken }}</b></div>
         <div><span>护盾吸收</span><b>{{ info.shieldAbsorbed || 0 }}</b></div>
         <div><span>最终攻击</span><b>{{ info.attack }}</b></div>
@@ -139,6 +151,38 @@ h2 {
   font-variant-numeric: tabular-nums;
   line-height: 1.1;
 }
+.meta-rewards {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+.meta-pill {
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 750;
+}
+.meta-pill.style { background: #e0f2fe; color: #0369a1; }
+.meta-pill.drops { background: #fef3c7; color: #92400e; }
+.build-summary-pills {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: -10px 0 14px;
+}
+.build-tag {
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: #e2e8f0;
+  color: #334155;
+  font-size: 11px;
+  font-weight: 650;
+}
+.build-tag.kinetic { background: #e0f2fe; color: #0369a1; }
+.build-tag.relic { background: #fef3c7; color: #b45309; }
 
 .result-stats {
   display: grid;

@@ -2,7 +2,7 @@ import {
   DEVOUR_SOURCE_GLUTTON, DEVOUR_SOURCE_NORMAL, GLUTTON_FEAST_DURATION,
   gluttonSkillHud, hasGluttonResource, onGluttonBossBasicHit,
 } from './GluttonResource.js'
-import { bitePose, renderBiteFeedback, renderBiteMotion, renderCorrodeAura } from './effects/GluttonBiteVisual.js'
+import { bitePose, renderBiteFeedback, renderBiteMotion, renderCorrodeAura, renderGluttonGuard, renderMires } from './effects/GluttonBiteVisual.js'
 import {
   GLUTTON_ROUTES, GLUTTON_RULES,
   getGluttonEndlessDamageMultiplier, getGluttonHeavyDamageMultiplier, getGluttonHeavyReachMultiplier,
@@ -119,7 +119,9 @@ export class GluttonCombat {
     this.slams = []
     this.spikes = []
     this.auraPulses = []
+    this.guardShatters = []
     this.guardPulse = 0
+    this._groundRendered = false
     this.acidPending = false
     this.acidSource = DEVOUR_SOURCE_NORMAL
     this.acidCooldown = 0
@@ -465,9 +467,37 @@ export class GluttonCombat {
     this.guardPulse = 0.24
   }
 
+  spawnGuardShatter(count = 6) {
+    const p = this.player
+    if (!p || this.game?.runFinished) return
+    const isShell = this.route === 'shell'
+    const rx = p.radius * 1.28
+    const ry = p.radius * 0.96
+    const cy = p.y + p.radius * 0.14
+    const baseAngle = (p.elapsed || 0) * 0.42
+    for (let i = 0; i < count; i++) {
+      const a = baseAngle + (i / count) * TAU + Math.sin(i * 7.3 + (p.elapsed || 0) * 19) * 0.35
+      const speed = 95 + (i % 3) * 38
+      this.guardShatters.push({
+        x: p.x + Math.cos(a) * rx * 0.92,
+        y: cy + Math.sin(a) * ry * 0.92,
+        vx: Math.cos(a) * speed,
+        vy: Math.sin(a) * speed - 18,
+        angle: a,
+        spin: (i % 2 ? 1 : -1) * (3.5 + (i % 3) * 1.6),
+        size: 4.2 + (i % 3) * 1.2,
+        shell: isShell,
+        life: 0.32,
+        maxLife: 0.32,
+      })
+    }
+    while (this.guardShatters.length > 24) this.guardShatters.shift()
+  }
+
   /** 胃铠挡伤或本体受击时触发 360° 酸刺反震与蓄甲爆刺。 */
   onHurt({ blocked = false } = {}) {
     if (!this.enabled || this.player.dead || this.game.runFinished) return
+    if (blocked) this.spawnGuardShatter(this.player.gluttonShellUltimate ? 8 : 6)
     const p = this.player
     if (p.gluttonThornsSurgeLevel > 0) {
       p.gluttonThornsSurgeCount = (p.gluttonThornsSurgeCount || 0) + 1
@@ -760,6 +790,20 @@ export class GluttonCombat {
         if (list[i].life <= 0) list.splice(i, 1)
       }
     }
+    for (let i = this.guardShatters.length - 1; i >= 0; i--) {
+      const sh = this.guardShatters[i]
+      sh.life -= dt
+      if (sh.life <= 0) {
+        this.guardShatters.splice(i, 1)
+        continue
+      }
+      const damp = Math.max(0, 1 - 4.5 * dt)
+      sh.vx *= damp
+      sh.vy *= damp
+      sh.x += sh.vx * dt
+      sh.y += sh.vy * dt
+      sh.angle += sh.spin * dt
+    }
 
     // 体表腐蚀光环（360° 贴身威慑）
     this.updateAura(dt)
@@ -864,19 +908,24 @@ export class GluttonCombat {
     if (this.satietyPending && !p.dead && !this.game.runFinished) this.releaseSatietyBurst()
   }
 
-  render(ctx) {
-    if (!this.biteUnlocked || this.player.dead) return
-    renderCorrodeAura(ctx, this)
-    for (const mire of this.mires) {
-      ctx.save()
-      ctx.globalAlpha = Math.max(0, mire.life / mire.maxLife) * 0.45
-      ctx.fillStyle = '#b5d66f'
-      ctx.beginPath(); ctx.arc(mire.x, mire.y, mire.r, 0, TAU); ctx.fill()
-      ctx.globalAlpha = Math.max(0, mire.life / mire.maxLife) * 0.75
-      ctx.strokeStyle = '#dff6a1'; ctx.lineWidth = 2
-      ctx.beginPath(); ctx.arc(mire.x, mire.y, mire.r * 0.82, 0, TAU); ctx.stroke()
-      ctx.restore()
+  renderGround(ctx) {
+    if (!this.biteUnlocked || this.player.dead) {
+      this._groundRendered = false
+      return
     }
+    this._groundRendered = true
+    renderCorrodeAura(ctx, this)
+    renderMires(ctx, this)
+  }
+
+  render(ctx) {
+    if (!this.biteUnlocked || this.player.dead) {
+      this._groundRendered = false
+      return
+    }
+    if (!this._groundRendered) this.renderGround(ctx)
+    this._groundRendered = false
+    renderGluttonGuard(ctx, this)
     renderBiteMotion(ctx, this.player, this.swing, this.flash, this.vortex)
     renderBiteFeedback(ctx, this)
   }

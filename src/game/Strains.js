@@ -84,8 +84,9 @@ export const STRAINS = {
     name: '暗影史莱姆',
     attackMode: 'melee',
     icon: '🗡️',
-    desc: '近战影刃，刺击起手向目标小步突进；闪避率 18%，成功后虚化 0.2 秒。暴击后 60% 概率生影，最多 2 个、持续 4 秒、攻击 40%。分身诱导普通远程敌人并优先追击，每挡一发普通弹幕消耗 0.5 秒。本体击杀在原地留下短暂残影替身继续诱敌。空格 首击必暴并指挥夹击。暴击率 +12%、生命 −1。',
+    desc: '高机动近战影刃（移速 +12%，智能微步不逆向拉人，每 3 刀斩出影波并加速分身共鸣，挥刃每 0.5 秒可破 1 发普通弹幕，击杀残影消散／触敌爆碎斩）；闪避率 18%（未闪避累积韧性，成功后虚化 0.2 秒并触发反击）。自带 1 层「影刃格挡」（物理 −1 伤震退近敌，7 秒重聚、影波与影袭命中缩冷 1.2 秒）、1 层「影织魔盾」专防法术与 40 秒「替身移影」致命换位；「影魄汲取」攒 16 点回血（满血满盾爆发 360° 环斩与 25% 挥刃加速）。空格 影袭天生起点留影、突袭破弹，落地 2 秒 +20% 移速并随机增益闪避暴击。暴击率 +12%、生命 −1。',
     roleSpec: 'assassin',
+    speedMul: 1.12,
     critChance: 0.12,
     maxHp: -1,
     fireIntervalMul: 0.55,
@@ -182,7 +183,10 @@ export function applyStrain(engine, id) {
   if (strain.projectileSpeedMul) ws.projectileSpeed *= strain.projectileSpeedMul
   if (strain.projectileCount) ws.projectileCount += strain.projectileCount
   if (strain.fireIntervalMul) ws.fireInterval *= strain.fireIntervalMul
-  if (strain.critChance) ws.critChance += strain.critChance
+  if (strain.critChance) {
+    ws.critChance += strain.critChance
+    ws.rawCritChance = ws.critChance
+  }
 
   p.hp = p.maxHp
 }

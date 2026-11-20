@@ -30,8 +30,8 @@ export const STRAIN_PRESENTATION = {
   },
   shadow: {
     ...SLIME_FAMILY_ART.shadow,
-    label: '暴击分身', epithet: '虚实之间的围猎者',
-    intro: '闪避后短暂虚化，暴击凝出分身诱敌挡弹。学习影袭留身后，空格空放也能留下分身自保，命中可指挥群影夹击。',
+    label: '暴击分身', epithet: '虚实织盾的围猎者',
+    intro: '高机动近战刺客：基础移速提升且落地 2 秒疾行；普攻每 3 刀斩出影波且可刀光破箭；闪避虚化，未闪避物理攻击由【影刃格挡】−1 伤震退，法术由【影织魔盾】专防；场上有分身时可触发【替身移影】致命换位保命；空格 影袭天生留影破弹。',
   },
 }
 
@@ -62,7 +62,9 @@ export function strainTraits(id) {
     ]
     case 'shadow': return [
       { label: '暴击率', value: `+${percent(strain.critChance)}%` },
-      { label: '闪避率', value: '15%' },
+      { label: '基础移速', value: `+${percent((strain.speedMul || 1) - 1)}%` },
+      { label: '闪避 / 格挡', value: '18% / 1 层' },
+      { label: '法术护盾', value: '1 层' },
       { label: '生命上限', value: String(strain.maxHp).replace('-', '−'), cost: true },
     ]
     default: return [

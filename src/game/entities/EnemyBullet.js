@@ -13,6 +13,7 @@ export class EnemyBullet {
     this.x = x
     this.y = y
     this.kind = kind // 'mage'（奥术法球）| 'archer'（飞箭）
+    this.spellAttack = kind === 'mage'
     this.rank = Math.max(1, Math.min(3, Math.round(rank || 2)))
     this.speed = speed || (kind === 'mage' ? (isBoss ? 210 : 115) : 380)
     this.radius = radius || (kind === 'mage' ? (this.rank === 1 ? 6.5 : this.rank === 3 ? 8.5 : 8) : (this.rank === 3 ? 5.5 : 5))

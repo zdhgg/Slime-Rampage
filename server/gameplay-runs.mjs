@@ -3,6 +3,7 @@ import { applyCampaignClear, boundedInt, compareAccountEntries } from '../src/ga
 import { RUNNER_SUBMODES } from '../src/game/gameplay/runner/RunnerRules.js'
 import { getStageConfig } from '../src/game/gameplay/tower-defense/TowerDefenseCampaignRules.js'
 import { accountGameData, writeAccountGameData } from './account-store.mjs'
+import { parseProfileData, profileRowById, writeProfileData } from './profile-store.mjs'
 
 function reject(message) {
   throw Object.assign(new Error(message), { status: 422, code: 'implausible_run' })
@@ -22,11 +23,22 @@ export function finishGameplayRun(db, userId, ticket, raw) {
   const data = accountGameData(db, userId)
   let wave = 0
   let stars = 0
+  let earnedDrops = 0
   if (ticket.gameplay === 'runner') {
     const duration = RUNNER_SUBMODES[ticket.mode].duration
     if (Number.isFinite(duration) && elapsed > duration + 1) reject('突围用时超过模式上限')
     // 首领可提前击破，通关并不要求耗尽模式时长。
     if (duration === Infinity && raw.outcome === 'victory') reject('无尽突围不存在通关结算')
+    const rawDrops = Math.max(0, Math.round(score / 35))
+    earnedDrops = rawDrops > 2000 ? 2000 + Math.round((rawDrops - 2000) / 2) : rawDrops
+    if (earnedDrops > 0 && ticket.profile_id) {
+      const profile = profileRowById(db, userId, ticket.profile_id)
+      if (profile) {
+        const profileData = parseProfileData(profile, db)
+        profileData.drops = (profileData.drops || 0) + earnedDrops
+        writeProfileData(db, profile, profileData)
+      }
+    }
   } else {
     const config = getStageConfig(ticket.stage_id)
     const hp = Number(raw.baseHp)
@@ -61,7 +73,7 @@ export function finishGameplayRun(db, userId, ticket, raw) {
   record.last = entry
   data.records[key] = record
   writeAccountGameData(db, userId, data)
-  const result = { runId: randomUUID(), entry, score: entry.score, isNewRecord, stars }
+  const result = { runId: randomUUID(), entry, score: entry.score, earnedDrops, isNewRecord, stars }
   db.prepare(`INSERT INTO runs(
     id, ticket_id, user_id, profile_id, mode, difficulty, result, stage, wave, kills,
     elapsed, finale_time, devours, elite_kills, boss_kills, events_completed, species,

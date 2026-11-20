@@ -3,7 +3,7 @@ import { createArena, dispose, learn, spawn } from './test-support/arena-fixture
 import { rollSkills, SKILL_DATABASE } from './src/game/SkillPool.js'
 import { getEffectiveSkillMaxLevel } from './src/game/SkillProgression.js'
 import {
-  SHADOW_ROUTES, SHADOW_ROUTE_SKILL_BY_ID, getShadowSkill,
+  SHADOW_ROUTES, SHADOW_ROUTE_SKILL_BY_ID, SHADOW_ENDLESS_SKILL, getShadowSkill,
   shadowRouteInvestment, shadowRouteReady, shadowSkillAvailable,
 } from './src/game/ShadowBuild.js'
 import { SHADOW_CLONE_POWERS } from './src/game/ShadowSkills.js'
@@ -195,7 +195,7 @@ check('模式等级上限延长成长跑道，分身强度始终有限', game =>
   game.runSelection.mode = 'endless'; assert.equal(getEffectiveSkillMaxLevel(game, pursuit, 'primary'), 12)
   const execute = getShadowSkill('ass_execute', SKILL_DATABASE.assassin.primary, SKILL_DATABASE.common)
   assert.equal(getEffectiveSkillMaxLevel(game, execute, 'primary'), 14)
-  assert.equal(SHADOW_CLONE_POWERS[14], 1.23)
+  assert.equal(SHADOW_CLONE_POWERS[14], 1.5)
   assert.ok(SHADOW_CLONE_POWERS.every(Number.isFinite))
   const combat = game.weaponSystem.shadowCombat
   combat.route = 'hunt'; combat.huntPursuitLevel = 12
@@ -210,6 +210,44 @@ check('模式等级上限延长成长跑道，分身强度始终有限', game =>
   assert.equal(combat.bladeRangeBonus, 84)
   assert.equal(combat.bladeMaxTargets, 10)
   assert.ok(Math.abs(combat.bladeEchoMultiplier - .68) < 1e-7)
+})
+
+check('全暗影共用魔盾与分身强化卡，猎手直觉计入猎杀投入，路线新进阶严格互斥', game => {
+  const base = SKILL_DATABASE.assassin.primary
+  const combat = game.weaponSystem.shadowCombat
+  learn(game, 'ass_lethal', 1); learn(game, 'ass_execute', 1); learn(game, 'ass_decoy', 1)
+  for (const route of ['hunt', 'swarm', 'blade']) {
+    combat.route = route
+    assert.ok(shadowSkillAvailable(game, getShadowSkill('ass_ward', base, SKILL_DATABASE.common)), `${route} 可学噬法暗幕`)
+    assert.ok(shadowSkillAvailable(game, getShadowSkill('ass_execute', base, SKILL_DATABASE.common)), `${route} 可学影刃凝实`)
+    assert.ok(shadowSkillAvailable(game, getShadowSkill('ass_decoy', base, SKILL_DATABASE.common)), `${route} 可学长夜留影`)
+    assert.ok(shadowSkillAvailable(game, getShadowSkill('ass_legion', base, SKILL_DATABASE.common)), `${route} 可学群影增殖`)
+  }
+  combat.route = 'hunt'
+  game.skillLevels.shadow_hunt_refund = 2
+  assert.equal(shadowRouteInvestment(game, 'hunt'), 2)
+  assert.equal(shadowSkillAvailable(game, SHADOW_ROUTE_SKILL_BY_ID.shadow_hunt_spellbreak), true)
+  assert.equal(shadowSkillAvailable(game, SHADOW_ROUTE_SKILL_BY_ID.shadow_swarm_crit), false)
+  assert.equal(shadowSkillAvailable(game, SHADOW_ROUTE_SKILL_BY_ID.shadow_swarm_bulwark), false)
+  assert.equal(shadowSkillAvailable(game, SHADOW_ROUTE_SKILL_BY_ID.shadow_blade_riposte), false)
+  assert.equal(shadowSkillAvailable(game, SHADOW_ROUTE_SKILL_BY_ID.shadow_blade_rend), false)
+})
+
+check('无尽影蚀仅在无尽 25 波后解锁并可无限叠加，同步放大暗影伤害与暴伤', game => {
+  game.runSelection = { ...game.runSelection, mode: 'timed', difficulty: 'normal' }
+  game.enemyManager.wave = 30
+  assert.equal(shadowSkillAvailable(game, SHADOW_ENDLESS_SKILL), false)
+  game.runSelection = { ...game.runSelection, mode: 'endless', difficulty: 'normal' }
+  game.enemyManager.wave = 24
+  assert.equal(shadowSkillAvailable(game, SHADOW_ENDLESS_SKILL), false)
+  game.enemyManager.wave = 25
+  assert.equal(shadowSkillAvailable(game, SHADOW_ENDLESS_SKILL), true)
+  const baseCritMul = game.weaponSystem.critMul
+  assert.equal(game.weaponSystem.shadowCombat.endlessDamageMultiplier, 1)
+  for (let i = 0; i < 3; i++) game.applySkill(SHADOW_ENDLESS_SKILL)
+  assert.ok(game.weaponSystem.shadowCombat.endlessDamageMultiplier > 1.1)
+  assert.ok(game.weaponSystem.critMul > baseCritMul + 0.2)
+  assert.equal(getEffectiveSkillMaxLevel(game, SHADOW_ENDLESS_SKILL, 'primary'), Infinity)
 })
 
 console.log(`暗影路线与构筑：${passed} 组通过`)

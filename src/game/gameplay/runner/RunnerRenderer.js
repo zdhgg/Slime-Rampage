@@ -186,6 +186,8 @@ export class RunnerRenderer {
     ctx.save()
     if (shake) ctx.translate(shake * 0.7, -shake * 0.35)
     this._drawRoad(ctx, profile)
+    this._drawTerrains(ctx)
+    this._drawLaneCollapse(ctx)
     this._drawSpeedStreaks(ctx, profile)
     this._drawFinishLine(ctx)
     this._drawEnemyThreats(ctx)
@@ -194,6 +196,7 @@ export class RunnerRenderer {
     this._drawBullets(ctx)
     this._drawWorldEffects(ctx)
     this._drawFusionWave(ctx)
+    this._drawClones(ctx)
     this._drawPlayer(ctx)
     ctx.restore()
 
@@ -453,6 +456,7 @@ export class RunnerRenderer {
       ctx.restore()
     }
     this._drawGroundFires(ctx)
+    this._drawMines(ctx)
     // The location ring follows the actual player during a lane change.
     const px = this.lanePositionX(gameplay.lanePosition)
     ctx.save()
@@ -463,6 +467,111 @@ export class RunnerRenderer {
     ctx.ellipse(px, this.playerY + 8, this.baseUnit * 1.08, this.baseUnit * 0.38, 0, 0, TAU)
     ctx.stroke()
     ctx.restore()
+  }
+
+  _drawTerrains(ctx) {
+    const list = this.gameplay.terrains || []
+    for (const strip of list) {
+      if (!strip.active) continue
+      const far = clamp(strip.depth, 0.01, 1.04)
+      const near = clamp(strip.depth + strip.length, far, 1.05)
+      if (near <= far) continue
+      ctx.save()
+      const fill = strip.type === 'accel'
+        ? 'rgba(56, 189, 248, 0.24)'
+        : strip.type === 'mire'
+        ? 'rgba(168, 85, 247, 0.26)'
+        : 'rgba(245, 158, 11, 0.28)'
+      const stroke = strip.color || '#38bdf8'
+      ctx.fillStyle = fill
+      ctx.strokeStyle = stroke
+      ctx.lineWidth = 1.6
+      ctx.beginPath()
+      ctx.moveTo(this.laneBoundaryX(strip.lane, far) + 6, this.depthToY(far))
+      ctx.lineTo(this.laneBoundaryX(strip.lane + 1, far) - 6, this.depthToY(far))
+      ctx.lineTo(this.laneBoundaryX(strip.lane + 1, near) - 6, this.depthToY(near))
+      ctx.lineTo(this.laneBoundaryX(strip.lane, near) + 6, this.depthToY(near))
+      ctx.closePath()
+      ctx.fill()
+      ctx.stroke()
+      const mid = (far + near) * 0.5
+      const mp = this.project(strip.lane, mid)
+      ctx.fillStyle = stroke
+      ctx.font = `700 ${Math.max(10, Math.round(12 * mp.scale))}px "Segoe UI", "PingFang SC", sans-serif`
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(strip.shortLabel || strip.name, mp.x, mp.y)
+      ctx.restore()
+    }
+  }
+
+  _drawLaneCollapse(ctx) {
+    const collapse = this.gameplay.laneCollapse
+    if (!collapse) return
+    const far = 0.04
+    const near = 1.05
+    ctx.save()
+    const isWarn = collapse.phase === 'warning'
+    const pulse = 0.55 + Math.sin(this.motionTime * 12) * 0.3
+    ctx.fillStyle = isWarn
+      ? `rgba(239, 68, 68, ${(0.18 * pulse).toFixed(3)})`
+      : 'rgba(6, 10, 16, 0.86)'
+    ctx.strokeStyle = isWarn ? 'rgba(248, 113, 113, 0.85)' : 'rgba(239, 68, 68, 0.95)'
+    ctx.lineWidth = isWarn ? 2 : 3
+    ctx.beginPath()
+    ctx.moveTo(this.laneBoundaryX(collapse.lane, far) + 3, this.depthToY(far))
+    ctx.lineTo(this.laneBoundaryX(collapse.lane + 1, far) - 3, this.depthToY(far))
+    ctx.lineTo(this.laneBoundaryX(collapse.lane + 1, near) - 3, this.depthToY(near))
+    ctx.lineTo(this.laneBoundaryX(collapse.lane, near) + 3, this.depthToY(near))
+    ctx.closePath()
+    ctx.fill()
+    ctx.stroke()
+    const mp = this.project(collapse.lane, 0.72)
+    ctx.fillStyle = isWarn ? '#fca5a5' : '#ff6b6b'
+    ctx.font = '800 13px "Segoe UI", "PingFang SC", sans-serif'
+    ctx.textAlign = 'center'
+    ctx.fillText(isWarn ? '⚠️ 路面崩裂预警' : '✕ 断崖塌陷', mp.x, mp.y)
+    ctx.restore()
+  }
+
+  _drawMines(ctx) {
+    const mines = this.gameplay.mines || []
+    for (const mine of mines) {
+      const point = this.project(mine.lane, mine.depth)
+      const r = this.baseUnit * point.scale * 0.28
+      ctx.save()
+      ctx.translate(point.x, point.y)
+      ctx.fillStyle = '#fb923c'
+      ctx.strokeStyle = '#ffedd5'
+      ctx.lineWidth = 1.5
+      ctx.beginPath()
+      ctx.arc(0, 0, r, 0, TAU)
+      ctx.fill()
+      ctx.stroke()
+      ctx.fillStyle = '#ef4444'
+      ctx.beginPath()
+      ctx.arc(0, 0, r * 0.45, 0, TAU)
+      ctx.fill()
+      ctx.restore()
+    }
+  }
+
+  _drawClones(ctx) {
+    const clones = this.gameplay.clones || []
+    if (!clones.length) return
+    const strainId = this.gameplay.strainId || 'origin'
+    const artTime = this.gameplay.visualTime || 0
+    for (const clone of clones) {
+      const x = this.lanePositionX(clone.lane)
+      const y = this.playerY - 12
+      const r = this.baseUnit * 0.48
+      ctx.save()
+      ctx.globalAlpha = clamp((clone.duration / (clone.maxDuration || 2)) * 0.75, 0.25, 0.75)
+      ctx.translate(x, y)
+      renderSlimeFamilyBody(ctx, strainId, r, slimeFamilyBodyState(artTime))
+      paintSlimeFamilySilhouette(ctx, strainId, r, { stroke: '#a78bfa', width: 2 })
+      ctx.restore()
+    }
   }
 
   _drawDangerZone(ctx, lane, farDepth, nearDepth, urgency) {
@@ -582,9 +691,27 @@ export class RunnerRenderer {
         const urgency = entity.charging ? 1 : clamp(1 - entity.chargeTelegraph / entity.chargeDelay, 0, 1)
         this._drawDangerZone(ctx, entity.lane, entity.depth, RUNNER_COLLISION_DEPTH + 0.04, urgency)
       }
+      if (entity.shiftTelegraph > 0 && entity.shiftTargetLane !== null) {
+        const from = this.project(entity.lane, entity.depth)
+        const to = this.project(entity.shiftTargetLane, entity.depth)
+        ctx.save()
+        ctx.strokeStyle = '#facc15'
+        ctx.fillStyle = '#facc15'
+        ctx.lineWidth = 2.5
+        ctx.setLineDash([5, 4])
+        ctx.beginPath()
+        ctx.moveTo(from.x, from.y)
+        ctx.lineTo(to.x, to.y)
+        ctx.stroke()
+        ctx.setLineDash([])
+        ctx.beginPath()
+        ctx.arc(to.x, to.y, 6, 0, TAU)
+        ctx.fill()
+        ctx.restore()
+      }
       if (!entity.attacking) continue
       const progress = entity.attackDelay > 0 ? clamp(1 - entity.attackTimer / entity.attackDelay, 0, 1) : 1
-      if (entity.behavior === 'archer') {
+      if (entity.behavior === 'archer' || entity.behavior === 'aerial') {
         const from = this.project(entity.lane, entity.depth)
         const target = this.project(entity.attackLane, RUNNER_COLLISION_DEPTH)
         ctx.save()
@@ -614,7 +741,7 @@ export class RunnerRenderer {
         ctx.lineTo(target.x, target.y + 6 + radius * 0.6)
         ctx.stroke()
         ctx.restore()
-      } else if (entity.behavior === 'mage') {
+      } else if (entity.behavior === 'mage' || entity.partRole === 'pulse_hammer') {
         // 法师地面奥术爆破阵 (可按 W / 向上滑跳跃规避)
         for (const lane of entity.attackLanes || []) {
           this._drawDangerZone(ctx, lane, RUNNER_COLLISION_DEPTH - 0.09, RUNNER_COLLISION_DEPTH + 0.045, progress)
@@ -697,6 +824,9 @@ export class RunnerRenderer {
       else if (entity.kind === 'module_mutation') this._drawModuleMutationGate(ctx, entity, size)
       else if (entity.kind === 'gate') this._drawGate(ctx, entity, size)
       else if (entity.behavior === 'barrel') this._drawBarrel(ctx, entity, size)
+      else if (entity.behavior === 'crystal_ice' || entity.behavior === 'crystal_volt') this._drawCrystal(ctx, entity, size)
+      else if (entity.behavior === 'roller_mine') this._drawRollerMine(ctx, entity, size)
+      else if (entity.behavior === 'switch_gate') this._drawSwitchGate(ctx, entity, size)
       else if (entity.behavior === 'laser_gate') this._drawLaserGate(ctx, entity, size)
       else if (entity.kind === 'hazard' || entity.kind === 'obstacle') this._drawBarrier(ctx, entity, size)
       else this._drawEnemy(ctx, entity, size)
@@ -747,6 +877,14 @@ export class RunnerRenderer {
   }
 
   _drawEnemy(ctx, entity, size) {
+    if (entity.boss && entity.type === 'stage_boss_part') {
+      this._drawBossPart(ctx, entity, size)
+      return
+    }
+    if (entity.behavior === 'aerial') {
+      this._drawGunship(ctx, entity, size)
+      return
+    }
     if (entity.behavior === 'convoy') {
       this._drawConvoy(ctx, size)
       return
@@ -961,6 +1099,110 @@ export class RunnerRenderer {
     ctx.fillText('TNT', 0, 0)
   }
 
+  _drawCrystal(ctx, entity, size) {
+    const r = size * 0.56
+    ctx.fillStyle = entity.color
+    ctx.strokeStyle = '#ffffff'
+    ctx.lineWidth = Math.max(1.5, size * 0.045)
+    ctx.beginPath()
+    ctx.moveTo(0, -r)
+    ctx.lineTo(r * 0.52, -r * 0.15)
+    ctx.lineTo(r * 0.36, r * 0.6)
+    ctx.lineTo(-r * 0.36, r * 0.6)
+    ctx.lineTo(-r * 0.52, -r * 0.15)
+    ctx.closePath()
+    ctx.fill()
+    ctx.stroke()
+  }
+
+  _drawRollerMine(ctx, entity, size) {
+    const r = size * 0.48
+    ctx.save()
+    ctx.rotate(this.motionTime * 6)
+    ctx.fillStyle = '#3f1d2b'
+    ctx.strokeStyle = '#fb7185'
+    ctx.lineWidth = Math.max(2, size * 0.05)
+    ctx.beginPath()
+    ctx.arc(0, 0, r, 0, TAU)
+    ctx.fill()
+    ctx.stroke()
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * TAU
+      ctx.beginPath()
+      ctx.moveTo(Math.cos(a) * r, Math.sin(a) * r)
+      ctx.lineTo(Math.cos(a) * r * 1.28, Math.sin(a) * r * 1.28)
+      ctx.stroke()
+    }
+    ctx.restore()
+    ctx.fillStyle = '#fecdd3'
+    ctx.font = '800 11px "Segoe UI", sans-serif'
+    ctx.textAlign = 'center'
+    ctx.fillText('JUMP', 0, -r - 8)
+  }
+
+  _drawSwitchGate(ctx, entity, size) {
+    this._drawLaserGate(ctx, entity, size)
+    const r = size * 0.24
+    ctx.fillStyle = '#fde047'
+    ctx.strokeStyle = '#1f2937'
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    ctx.arc(size * 0.58, -size * 0.42, r, 0, TAU)
+    ctx.fill()
+    ctx.stroke()
+    ctx.fillStyle = '#fef9c3'
+    ctx.font = '700 11px "Segoe UI", "PingFang SC", sans-serif'
+    ctx.textAlign = 'center'
+    ctx.fillText('打开关', size * 0.58, -size * 0.42 - r - 6)
+  }
+
+  _drawGunship(ctx, entity, size) {
+    const hover = -size * 0.46 + Math.sin(this.motionTime * 7 + entity.id) * 4
+    ctx.save()
+    ctx.translate(0, hover)
+    ctx.fillStyle = '#1e3a5f'
+    ctx.strokeStyle = '#60a5fa'
+    ctx.lineWidth = Math.max(2, size * 0.05)
+    ctx.beginPath()
+    ctx.moveTo(0, -size * 0.35)
+    ctx.lineTo(size * 0.58, 0)
+    ctx.lineTo(0, size * 0.28)
+    ctx.lineTo(-size * 0.58, 0)
+    ctx.closePath()
+    ctx.fill()
+    ctx.stroke()
+    ctx.fillStyle = '#93c5fd'
+    ctx.beginPath()
+    ctx.arc(0, 0, size * 0.16, 0, TAU)
+    ctx.fill()
+    ctx.restore()
+  }
+
+  _drawBossPart(ctx, entity, size) {
+    const w = size * 1.25
+    const h = size * 0.92
+    const vulnerable = (entity.armor || 0) <= 0.1
+    ctx.fillStyle = entity.partRole === 'core_reactor'
+      ? (vulnerable ? '#7f1d1d' : '#1e293b')
+      : '#292524'
+    ctx.strokeStyle = entity.partRole === 'core_reactor'
+      ? (vulnerable ? '#fb923c' : '#94a3b8')
+      : (entity.color || '#ef4444')
+    ctx.lineWidth = Math.max(2.5, size * 0.06)
+    ctx.fillRect(-w / 2, -h / 2, w, h)
+    ctx.strokeRect(-w / 2, -h / 2, w, h)
+    ctx.fillStyle = vulnerable ? '#fde047' : '#cbd5e1'
+    ctx.beginPath()
+    ctx.arc(0, 0, size * 0.24, 0, TAU)
+    ctx.fill()
+    if (entity.partRole === 'core_reactor' && !vulnerable) {
+      ctx.fillStyle = '#e2e8f0'
+      ctx.font = '700 11px "Segoe UI", "PingFang SC", sans-serif'
+      ctx.textAlign = 'center'
+      ctx.fillText('装甲保护·先破两翼', 0, size * 0.65)
+    }
+  }
+
   _drawLaserGate(ctx, entity, size) {
     const w = size * 1.3
     ctx.fillStyle = '#ed6d66'
@@ -979,11 +1221,13 @@ export class RunnerRenderer {
   }
 
   _drawGate(ctx, entity, size) {
-    const pulse = 1
+    const chargeTier = entity.chargeLevel || 1
+    const tierColor = chargeTier >= 3 ? '#ffd166' : chargeTier === 2 ? '#c084fc' : entity.color
+    const pulse = chargeTier >= 3 ? 1.08 : 1
     const r = size * 0.53 * pulse
     ctx.fillStyle = '#182e3b'
-    ctx.strokeStyle = entity.color
-    ctx.lineWidth = Math.max(1.5, size * 0.04)
+    ctx.strokeStyle = tierColor
+    ctx.lineWidth = Math.max(1.5, size * (chargeTier >= 3 ? 0.075 : chargeTier === 2 ? 0.055 : 0.04))
     ctx.beginPath()
     ctx.moveTo(0, -r)
     ctx.lineTo(r * 0.82, 0)
@@ -992,6 +1236,18 @@ export class RunnerRenderer {
     ctx.closePath()
     ctx.fill()
     ctx.stroke()
+    if (entity.chargeable && entity.chargeMax > 0) {
+      const ratio = clamp((entity.chargeProgress || 0) / entity.chargeMax, 0, 1)
+      ctx.strokeStyle = tierColor
+      ctx.lineWidth = 2.5
+      ctx.beginPath()
+      ctx.arc(0, 0, r * 1.05, -Math.PI / 2, -Math.PI / 2 + TAU * ratio)
+      ctx.stroke()
+      ctx.fillStyle = tierColor
+      ctx.font = '800 11px "Segoe UI", sans-serif'
+      ctx.textAlign = 'center'
+      ctx.fillText(chargeTier >= 3 ? 'MAX' : `Lv.${chargeTier}`, 0, -r - 8)
+    }
 
     ctx.fillStyle = entity.color
     ctx.strokeStyle = entity.color
@@ -1293,13 +1549,14 @@ export class RunnerRenderer {
 
   _drawBullets(ctx) {
     for (const bullet of this.gameplay.bullets) {
-      const point = this.project(bullet.lane, bullet.depth)
-      const tail = this.project(bullet.lane, Math.min(1, bullet.depth + 0.04))
+      const lanePos = bullet.laneFloat ?? bullet.lane
+      const point = this.project(lanePos, bullet.depth)
+      const tail = this.project(lanePos, Math.min(1, bullet.depth + 0.04))
       const size = (bullet.size || 1) * (2.4 + point.scale * 2.2)
       ctx.save()
       ctx.globalAlpha = 0.28
       ctx.strokeStyle = bullet.color || '#ffe39a'
-      ctx.lineWidth = (3 + point.scale * 2) * (bullet.core === 'pierce' ? 0.72 : 1)
+      ctx.lineWidth = (3 + point.scale * 2) * (bullet.core === 'pierce' || bullet.core === 'beam' ? 0.72 : 1)
       ctx.lineCap = 'round'
       ctx.beginPath()
       ctx.moveTo(tail.x, tail.y)
@@ -1308,8 +1565,8 @@ export class RunnerRenderer {
       ctx.globalAlpha = 1
       ctx.fillStyle = bullet.color || '#ffe39a'
       ctx.beginPath()
-      if (bullet.core === 'pierce') {
-        ctx.ellipse(point.x, point.y, size * 0.58, size * 1.45, 0, 0, TAU)
+      if (bullet.core === 'pierce' || bullet.core === 'beam') {
+        ctx.ellipse(point.x, point.y, size * 0.58, size * (bullet.core === 'beam' ? 1.85 : 1.45), 0, 0, TAU)
       } else {
         ctx.arc(point.x, point.y, size, 0, TAU)
       }
@@ -1541,7 +1798,7 @@ export class RunnerRenderer {
     ctx.ellipse(0, r * 0.58 + jumpY, r * 0.88 * shadowScale, r * 0.28 * shadowScale, 0, 0, TAU)
     ctx.fill()
 
-    const strainId = gameplay.game?.player?.strainId || gameplay.strainId || 'origin'
+    const strainId = gameplay.strainId || gameplay.game?.player?.strainId || 'origin'
     // Share the selection portrait and arena actor, including glutton's face.
     const actorRadius = r * 0.8
     const artTime = gameplay.visualTime || 0
@@ -1569,7 +1826,7 @@ export class RunnerRenderer {
     } else if (gameplay.secondaryElement) {
       const elem = gameplay.secondaryElement
       const pulse = gameplay.reducedMotion ? 1 : 1 + Math.sin(gameplay.visualTime * 6) * 0.05
-      const color = elem === 'lightning' ? '#ffea79' : elem === 'flame' ? '#ff6b4a' : '#7be3ff'
+      const color = elem === 'lightning' ? '#ffea79' : elem === 'flame' ? '#ff6b4a' : elem === 'void' ? '#c084fc' : '#7be3ff'
       ctx.save()
       ctx.strokeStyle = color
       ctx.lineWidth = 2
@@ -1622,8 +1879,9 @@ export class RunnerRenderer {
       ctx.restore()
     }
 
-    if (gameplay.droneTimer > 0) {
-      const droneX = this.lanePositionX(gameplay.droneLane) - x
+    if (gameplay.droneTimer > 0 || gameplay.strain?.permanentDrone) {
+      const activeDroneLane = gameplay.droneTimer > 0 ? gameplay.droneLane : (gameplay.currentLane === 0 ? 1 : gameplay.currentLane === 2 ? 1 : 0)
+      const droneX = this.lanePositionX(activeDroneLane) - x
       const droneY = -r * 0.4 + (gameplay.reducedMotion ? 0 : Math.sin(gameplay.visualTime * 10) * 6)
       ctx.save()
       ctx.translate(droneX, droneY)

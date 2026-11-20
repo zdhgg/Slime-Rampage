@@ -90,13 +90,24 @@ try {
   await page.setViewportSize({ width: 1440, height: 960 })
 
   await memoryCard.click()
-  await page.locator('.supply-options').waitFor()
+  await page.locator('.reward-overlay').waitFor({ state: 'hidden' })
+  assert.equal(await game(() => playtestGame.expeditionStage), 2, '确认源质记忆后直接换章')
+  assert.equal(await game(() => playtestGame.player.level), 1, '开场期间暂不升级')
+  assert.equal(await page.locator('.levelup-overlay').count(), 0)
+  assert.equal(await game(() => playtestGame.gemManager.expeditionEntranceCore?.coreChoices.length), 2)
   assert.equal(await game(() => playtestGame.originSourceMemories.length), 1, '记忆写入局内状态')
   assert.deepEqual(await game(() => playtestGame.originSourceMemories), [{ id: 'knight_breach', level: 1 }])
-  assert.equal(await game(() => playtestGame.configureOriginCombo(['knight_breach', 'primal_orbit'], 'knight_breach')), true)
+  assert.equal(await game(() => {
+    const g = window.playtestGame
+    g.pause()
+    try {
+      return g.configureOriginCombo(['knight_breach', 'primal_orbit'], 'knight_breach')
+    } finally {
+      g.resume()
+    }
+  }), true)
 
-  // 完成章间整备 → 进入下一章，HUD 常驻显示源质记忆槽
-  await page.locator('.supply-options .rest').click()
+  // 换章后 HUD 常驻显示源质记忆槽。
   await page.locator('.hud-memory').waitFor()
   const hudText = await page.locator('.hud-memory').innerText()
   assert.match(hudText, /破阵凝胶波/)
@@ -113,11 +124,19 @@ try {
   await shot('04-hud-memory-mobile')
   await page.setViewportSize({ width: 1440, height: 960 })
 
+  // 开场结束后才通过普通选卡消耗自动回收的经验。
+  await page.locator('.levelup-overlay').waitFor()
+  while (await game(() => playtestGame._pauseLock > 0)) {
+    const level = await game(() => playtestGame.player.level)
+    await page.keyboard.press('Enter')
+    await page.waitForFunction(level => playtestGame._pauseLock === 0 || playtestGame.player.level > level, level)
+  }
+  await page.locator('.levelup-overlay').waitFor({ state: 'hidden' })
+  assert.ok(await game(() => playtestGame.player.exp < playtestGame.player.maxExp))
+
   // 被动超载：能量满格 + 有目标 → 控制器自动支付并释放（无需按空格）
   await game(() => {
     const g = window.playtestGame
-    g._pauseLock = 0
-    g.runState = 'active' // 换章演出结束后的正常战斗态：实体（含武器系统）每帧更新
     g.enemyManager._enemies = []
     g.enemyManager._spawnTimer = Infinity
     for (let i = 0; i < 3; i++) g.enemyManager.spawnAt(g.player.x + 130 + i * 34, g.player.y, 'knight')

@@ -17,6 +17,7 @@ import { GLUTTON_ROUTES, GLUTTON_SKILL_BY_ID, gluttonSkillAvailable, gluttonRout
 import { SYMBIOSIS_ROUTES, SYMBIOSIS_SKILL_BY_ID, symbiosisSkillAvailable, symbiosisRouteReady } from './SymbiosisBuild.js'
 import { ELEMENTAL_ROUTES, ELEMENTAL_ROUTE_SKILL_BY_ID, elementalSkillAvailable, elementalRouteReady } from './ElementalBuild.js'
 import { SHADOW_ROUTES, SHADOW_ROUTE_SKILL_BY_ID, getShadowSkill, shadowSkillAvailable, shadowRouteReady } from './ShadowBuild.js'
+import { syncShadowStrideBonuses } from './ShadowSkills.js'
 import { ENDLESS_SKILL_BY_ID } from './EndlessSkills.js'
 import { getEffectiveSkillMaxLevel } from './SkillProgression.js'
 import { applyGenes } from './GenePool.js'
@@ -26,6 +27,7 @@ import { generateDecor, drawBgItem, drawFgItem, getMapTheme } from './MapDecor.j
 import { isFrontierScenery, paintFrontierGround, prepareFrontierSprites } from './FrontierScenery.js'
 import { paintChapterGround, prepareChapterSprites } from './ChapterScenery.js'
 import { WorldEventManager } from './WorldEventManager.js'
+import { drawObjectiveMarker } from './ObjectiveMarker.js'
 import { MapFeatureManager } from './MapFeatureManager.js'
 import { DialogueManager } from './DialogueManager.js'
 import { createGameplay, normalizeGameplayId } from './gameplay/GameplayFactory.js'
@@ -39,7 +41,6 @@ import {
   learnOriginMemory,
   originMemoryHud,
   originComboEntries, originComboState,
-  originMemories,
   resetOriginSourceMemories,
   rollOriginMemoryCard,
 } from './OriginSourceSkills.js'
@@ -52,7 +53,6 @@ import {
   tickGluttonResource,
 } from './GluttonResource.js'
 import {
-  EXPEDITION_REWARDS,
   EVENT_LOCK_AT,
   FINAL_WARNING_AT,
   RUN_DURATION,
@@ -300,6 +300,7 @@ export class GameEngine {
     this._gameplayHudAcc = 0
     this.onGameplayHud = null
     this.onGameplayFinished = null
+    this.onRunnerDraft = null
     // 世界背景重建防抖计时器（resize 高频触发时合并为一次重建）
     this._worldBgTimer = 0
 
@@ -349,7 +350,7 @@ export class GameEngine {
     // 世界事件桥接：出现/激活/完成/失败时向 HUD 发一次轻量通知
     this.onWorldEvent = null // (payload) => void
     this.onRunState = null // (payload) => void，限时预警/终局开始
-    this.onExpeditionReward = null // (payload) => void，远征关间补给
+    this.onExpeditionReward = null // (payload) => void，首领秘典奖励
     this.onEndlessDecision = null // (payload) => void，无尽灾变与撤离抉择
 
     // 进化事件桥接：元素融合激活时暂停 + 回调 Vue 演出
@@ -495,6 +496,14 @@ export class GameEngine {
     this.onGameplayFinished?.(payload)
   }
 
+  selectRunnerDraft(optionId) {
+    return this.gameplay?.selectDraftOption?.(optionId) ?? false
+  }
+
+  rerollRunnerDraft() {
+    return this.gameplay?.rerollDraft?.() ?? false
+  }
+
   get endlessModifiers() {
     return this.runSelection?.mode === 'endless'
       ? getEndlessModifiers(this.endlessCalamities)
@@ -600,6 +609,14 @@ export class GameEngine {
     return this._spellActiveSkill
   }
 
+  /** 顶部 HUD 和角色本体高光共用冷却就绪状态，包含暗影的免费追击。 */
+  get strainSkillReady() {
+    return this.player.strainSkillMax > 0 && (
+      this.player.strainSkillCd <= 0 ||
+      (this.startingStrain === 'shadow' && this.weaponSystem.shadowCombat.canFollowup)
+    )
+  }
+
   /**
    * Lv.5 角色觉醒：达到等级、存在 roleSpec、且 primarySpec 为空时自动确立主专精。
    *
@@ -640,6 +657,7 @@ export class GameEngine {
     const skill = this.strainSkill
     if (!skill) {
       p.strainSkillCd = 0 // 无空格技（未知血统 id）：空格 不响应，冷却恒为 0；origin 自身持有黏液震荡，不走此分支
+      p.strainSkillMax = 0
       p.strainSkillReadyPulse = 0
       p.strainSkillReadyFlash = 0
       return
@@ -755,6 +773,11 @@ export class GameEngine {
     if (this._settlementApplying) return
     this._pauseLock = Math.max(0, this._pauseLock - 1)
     if (this._pauseLock > 0) return
+    if (this.gameplayId && this.gameplayId !== 'arena') {
+      if (this.gameplay?.state === 'finished') return
+      this.start()
+      return
+    }
     if (this.runFinished || this.player?.dead) return
     if (this._openPendingBossReward?.()) return
     if (this._openPendingSpellCore?.()) return
@@ -767,7 +790,7 @@ export class GameEngine {
     // 连升结算：剩余经验仍够升级时必须走完整升级（扣经验/升级/阈值递增），
     // 再弹面板——原先只弹面板不扣经验，大额经验（吞噬×2/×3 + 经验基因）时
     // 升级面板无限循环、等级卡死不涨（Lv.1 → Lv.5 跳级 bug 的残余路径）
-    if (this.player.exp >= this.player.maxExp) this.player.settleLevelUp()
+    if (this.runState !== 'expedition-intro' && this.player.exp >= this.player.maxExp) this.player.settleLevelUp()
   }
 
   /**
@@ -891,7 +914,7 @@ export class GameEngine {
       ? info.bossTypes
       : (chapter ? (this._lastChapterBossTypes || []) : [])
     this.pause()
-    this._chapterSettlement = { chapter, source: label, bossTypes, summary: null, phase: 'boss', options: [] }
+    this._chapterSettlement = { chapter, source: label, phase: 'boss', options: [] }
     // 原生专属：本次首领有源质映射且未满级时，强制占一个候选位；
     // 其余候选继续走原有 BOSS 秘典抽取，其他五种职业不受影响（rollOriginMemoryCard 返回 null）。
     const memory = rollOriginMemoryCard(this, bossTypes)
@@ -902,9 +925,8 @@ export class GameEngine {
       this._chapterSettlement.phase = 'compensation'
       this._chapterSettlement.options = rollSkills(this, this._skillOptionCount())
       if (!this._chapterSettlement.options.length) {
-        this.player.heal(1)
-        this._chapterSettlement.summary = '秘典与技能已满级 · 恢复1点生命'
-        return this._advanceSettlement()
+        if (!chapter) this.player.heal(1)
+        return this._finishSettlement()
       }
     }
     this.sound.wave()
@@ -914,38 +936,26 @@ export class GameEngine {
 
   _publishSettlement() {
     const session = this._chapterSettlement
-    if (!session) { this.onExpeditionReward?.(null); return }
     const current = getExpeditionStage(this.runSelection.difficulty, this.expeditionStage)
-    const next = getExpeditionStage(this.runSelection.difficulty, this.expeditionStage + 1)
     this._pushStats()
     this.onExpeditionReward?.({ ...session,
-      stage: this.expeditionStage, nextStage: this.expeditionStage + 1, stageTitle: current.title,
-      nextTitle: next.title, nextRegion: next.region,
+      stage: this.expeditionStage, stageTitle: current.title,
       level: this.player.level, roleSpec: this.roleSpec, canUseElements: this.canUseElements,
-      rewards: EXPEDITION_REWARDS.map(reward => ({ ...reward,
-        disabled: reward.id === 'blood' && this.player.maxHp <= 1,
-        preview: reward.id === 'rest' ? `生命 ${this.player.hp}/${this.player.maxHp} → ${this.player.maxHp}/${this.player.maxHp}${this.player.hp === this.player.maxHp ? ' · 当前已满血' : ''}`
-          : reward.id === 'blood' ? this.player.maxHp <= 1 ? '生命上限不足，无法献祭' : `生命上限 ${this.player.maxHp} → ${this.player.maxHp - 1} · 攻击 ×1.20`
-          : '普通技能三选一 · 不增加等级',
-      })),
     })
   }
 
-  _advanceSettlement() {
-    if (this._chapterSettlement.chapter) {
-      this._chapterSettlement.phase = 'supply'; this._chapterSettlement.options = []
-      this._publishSettlement()
-    } else this._finishSettlement()
-    return true
-  }
-
   _finishSettlement() {
-    const chapter = this._chapterSettlement?.chapter
+    const { chapter } = this._chapterSettlement
     this._chapterSettlement = null
     this.onExpeditionReward?.(null)
-    if (chapter) this._enterExpeditionStage(this.expeditionStage + 1)
+    if (chapter) {
+      this.gemManager.settleExpeditionDrops()
+      this.player.heal(this.player.maxHp)
+      this._enterExpeditionStage(this.expeditionStage + 1)
+      this.onCheckpoint?.(captureExpeditionCheckpoint(this))
+    }
     this.resume()
-    if (chapter) this.onCheckpoint?.(captureExpeditionCheckpoint(this))
+    return true
   }
 
   /** 应用技能；成功返回 true，无效选择返回 false，让 UI 保留选卡面板。 */
@@ -1143,6 +1153,7 @@ export class GameEngine {
       this.skillLevels[skill.id] = (this.skillLevels[skill.id] || 0) + 1
       if (this.startingStrain === 'elemental' && skill.isElementalDiscovery) this.weaponSystem.spellCombat.applyElementalSkill(skill, this.skillLevels[skill.id])
       else skill.apply?.(this, this.skillLevels[skill.id])
+      if (this.startingStrain === 'shadow') syncShadowStrideBonuses(this)
       // 异源碎片没有进化演出，但至少要让玩家在场上确认“我真的拿到了”。
       if (this.startingStrain === 'origin' && skill.originPool === 'fragment') {
         const info = ORIGIN_MARKS[skill.fragment]
@@ -1161,7 +1172,7 @@ export class GameEngine {
         `武器进化：${info?.name || skill.spec}`,
         skill.name.replace(/^🌟\s*/, ''),
         skill.spec,
-        skill.isRicochetSkill ? skill.desc : skill.spec === 'symbiosis' ? (SYMBIOSIS_ROUTES[skill.route]?.ultimateDesc || '伙伴协同与鼓舞机制完成终极异化') : skill.spec === 'gluttony' ? (GLUTTON_ROUTES[skill.route]?.ultimateDesc || '吞噬与近战体系完成终极异化') : this.startingStrain === 'shadow' ? '分身影刃贯穿敌群，影袭协同进化为十字夹击' : '弹体轮廓、出膛反馈与命中音色完成终极异化'
+        skill.isRicochetSkill ? skill.desc : skill.spec === 'symbiosis' ? (SYMBIOSIS_ROUTES[skill.route]?.ultimateDesc || '伙伴协同与鼓舞机制完成终极异化') : skill.spec === 'gluttony' ? (GLUTTON_ROUTES[skill.route]?.ultimateDesc || '吞噬与近战体系完成终极异化') : this.startingStrain === 'shadow' ? (SHADOW_ROUTES[skill.route]?.ultimateDesc || '分身影刃贯穿敌群，影袭协同进化为十字夹击') : '弹体轮廓、出膛反馈与命中音色完成终极异化'
       )
     }
 
@@ -1221,7 +1232,11 @@ export class GameEngine {
       this.player.elementProcCap = ELEMENTAL_SPEC_PROC_CAP
       this.player._refreshElements() // 已有元素的附魔概率立即按新封顶重算
     } else if (spec === 'assassin') {
-      setCritSource(this, 'awakening', { chanceFloor: 0.25, multiplierFloor: 3.5 })
+      if (this.startingStrain === 'shadow') {
+        setCritSource(this, 'awakening', { chance: 0.08, multiplier: 0.5 })
+      } else {
+        setCritSource(this, 'awakening', { chanceFloor: 0.25, multiplierFloor: 3.5 })
+      }
       // 能力闸门：只有能使用元素的角色才获得这条元素规则（暗影恒不获得）。
       // 显式比较 true，保证字段在任何上下文（含测试桩缺字段）下都是布尔值。
       this.weaponSystem.critGuaranteesElement = this.canUseElements === true
@@ -1234,6 +1249,7 @@ export class GameEngine {
     this.startingElement = null
     applyStrain(this, this.startingStrain)
     this.weaponSystem.spellCombat.start()
+    this.weaponSystem.shadowCombat.start()
     return true
   }
 
@@ -1615,6 +1631,7 @@ export class GameEngine {
     this._setMapTheme(definition.theme, definition.variant, true, forceMap)
     this.mapFeatures.prepareStage(definition)
     this._placePlayerAtMapSpawn()
+    this.gemManager.placeExpeditionEntranceCore()
     this._expeditionBaseline = {
       kills: this.weaponSystem.kills,
       elites: this.weaponSystem.eliteKills,
@@ -1696,14 +1713,24 @@ export class GameEngine {
     if (second >= 1) this.sound.countdownTick(second)
   }
 
+  _expeditionEventCount(type) {
+    const baseline = this._expeditionBaseline.eventsByType?.[type] || 0
+    return Math.max(0, (this.worldEvents.completedByType[type] || 0) - baseline)
+  }
+
+  get hasPendingExpeditionEvent() {
+    const definition = this._expeditionDefinition
+    return this.runSelection.mode === 'expedition' && this.runState === 'active' && !!definition?.eventType
+      && this._expeditionEventCount(definition.eventType) < (definition.eventTarget || definition.target)
+  }
+
   _expeditionProgress() {
     const definition = getExpeditionStage(this.runSelection.difficulty, this.expeditionStage)
     const kills = Math.max(0, this.weaponSystem.kills - this._expeditionBaseline.kills)
     const elites = Math.max(0, this.weaponSystem.eliteKills - this._expeditionBaseline.elites)
     // 事件章节按「本章锁定的类型」计数：全局 completed 会把 hunt/surge 算进信标目标。
-    const baselineByType = this._expeditionBaseline.eventsByType || {}
     const events = definition.eventType
-      ? Math.max(0, (this.worldEvents.completedByType[definition.eventType] || 0) - (baselineByType[definition.eventType] || 0))
+      ? this._expeditionEventCount(definition.eventType)
       : Math.max(0, this.worldEvents.completed - this._expeditionBaseline.events)
     const progress = definition.type === 'kills'
       ? kills
@@ -1743,7 +1770,7 @@ export class GameEngine {
     }
     if (this.runState === 'stage-clearing') {
       if (this._pauseLock > 0) return // 同帧经验升级先完成，避免覆盖已有选卡
-      // 残敌溃散演出（0.6s）：演出结束后才暂停进补给——清除不再「瞬间发生」
+      // 残敌溃散演出结束后才暂停进入秘典选择。
       this._stageClearT += dt
       if (this._stageClearT < 0.6) return
       this.runState = 'stage-reward'
@@ -1781,6 +1808,7 @@ export class GameEngine {
       title: progress.definition.title,
       boss: boss?.name || encounter.name,
       special: encounter.special,
+      beaconSealed: progress.definition.eventType === 'beacon',
     })
     this._pushStats()
   }
@@ -1801,43 +1829,15 @@ export class GameEngine {
 
   resolveExpeditionReward(selection) {
     const session = this._chapterSettlement
-    if (!session || this.runFinished || this.player.dead) return false
+    if (!session || this._settlementApplying || this.runFinished || this.player.dead) return false
     const id = typeof selection === 'string' ? selection : selection?.id
-    if (session.phase !== 'supply') {
-      const card = session.options.find(option => option.id === id)
-      if (!card) return false
-      this._settlementApplying = true
-      let applied
-      try { applied = this.applySkill(card) } finally { this._settlementApplying = false }
-      if (!applied) return false
-      if (session.phase === 'boss') {
-        session.summary = card.isOriginMemory
-          ? `${card.name} · Lv.${originMemories(this).find(m => m.id === card.memoryId)?.level || 1}/3`
-          : `${card.name} · Lv.${this.bossSkillLevels[card.id]}/3${card.recruitName ? ` · 招募${card.recruitName}` : ''}`
-      } else if (!session.summary) session.summary = `秘典满级补偿 · ${card.name}`
-      if (session.phase === 'study') this._finishSettlement()
-      else this._advanceSettlement()
-      return true
-    }
-    if (!EXPEDITION_REWARDS.some(reward => reward.id === id)) return false
-    if (id === 'blood' && this.player.maxHp <= 1) return false
-    if (id === 'rest') this.player.heal(this.player.maxHp)
-    if (id === 'blood') {
-      this.player.maxHp -= 1
-      this.player.hp = Math.min(this.player.hp, this.player.maxHp)
-      this.weaponSystem.damage *= 1.2
-    }
-    if (id === 'tome') {
-      this._ensureRoleAwakening()
-      const options = rollSkills(this, this._skillOptionCount())
-      if (options.length) {
-        session.phase = 'study'; session.options = options
-        this._publishSettlement(); return true
-      }
-      this.player.heal(1)
-    }
-    this._finishSettlement()
-    return true
+    const card = session.options.find(option => option.id === id)
+    if (!card) return false
+    this._settlementApplying = true
+    let applied
+    try { applied = this.applySkill(card) } finally { this._settlementApplying = false }
+    if (!applied) return false
+    return this._finishSettlement()
   }
 
   /** 反应信息（融合确认面板展示用：图标组合/名称/物种/效果） */
@@ -2036,6 +2036,7 @@ export class GameEngine {
     applyStrain(this, this.startingStrain) // 血统先天属性：最后叠加（生命/移速/攻击/吞噬口径）
     resetPrimalEnergy(p) // 异源能量：纯局内资源，重开归零（不进存档）
     this.weaponSystem.spellCombat.start()
+    this.weaponSystem.shadowCombat.start()
     if (this.runSelection.mode === 'expedition') {
       this._enterExpeditionStage(1, true)
     } else if (this.runSelection.mode === 'endless') {
@@ -2138,8 +2139,14 @@ export class GameEngine {
 
   /** 推送一次冷却数据（冲刺 / Boss 施法 / 破阵追击 / 空格 角色技能），约 10Hz */
   _pushCooldown() {
+    const boss = this.enemyManager.bossInfo
     this.onCooldown?.({
-      cast: this.enemyManager.bossInfo?.castProgress || 0,
+      cast: boss?.castProgress || 0,
+      bossCast: boss?.casting ? {
+        encounter: boss.name,
+        caster: boss.total > 1 ? boss.activeName : '',
+        skill: boss.special,
+      } : null,
       formationBreak: this.endlessFormationBreakTimer,
       formationBreakMax: ENDLESS_FORMATION_BREAK_DURATION,
       // 空格角色技能：菜单/冷却条数据源。
@@ -2155,7 +2162,11 @@ export class GameEngine {
       tomeShield: this.bossTomes.shield,
       spellShield: this.weaponSystem.spellCombat.available ? this.weaponSystem.spellCombat.shield.hud() : null,
       shadow: this.startingStrain === 'shadow' ? {
-        evasion: this.player.evasionChance, crit: this.weaponSystem.critChance,
+        evasion: this.player.evasionChance,
+        crit: Math.min(1, this.weaponSystem.critChance + (this.player.shadowAssaultBuffTimer > 0 ? (this.player.shadowAssaultCritBonus || 0) : 0)),
+        critMul: this.weaponSystem.critMul, rawCrit: this.weaponSystem.rawCritChance,
+        evasionOverflow: this.player.evasionOverflow,
+        counterReady: this.player.shadowSpellCounterTimer > 0 || this.player.shadowEvadeCritTimer > 0,
         count: this.weaponSystem.shadowCombat.clones.items.length,
         cap: this.weaponSystem.shadowCombat.clones.cap,
         chance: this.weaponSystem.shadowCombat.clones.chance,
@@ -2169,6 +2180,7 @@ export class GameEngine {
       skillDesc: this.strainSkill?.getDesc?.(this) || this.strainSkill?.desc || '',
       skillCd: this.player.strainSkillCd,
       skillMax: this.player.strainSkillMax,
+      skillReady: this.strainSkillReady,
       // 两个短脉冲只做「>0 即挂动画 class」的布尔量；HUD 不自行计时，
       // 避免显示层与引擎的时间轴各走一套。
       skillReadyFlash: this.player.strainSkillReadyFlash,
@@ -2371,9 +2383,11 @@ export class GameEngine {
                 type: progress.definition.type,
                 progress: progress.progress,
                 total: progress.total,
+                target: progress.definition.target,
                 kills: progress.kills,
                 events: progress.events,
                 eventTarget: progress.definition.eventTarget || 0,
+                event: this.worldEvents.chapterEventInfo,
                 defense: progress.definition.type === 'defend' ? this.mapFeatures.nestInfo : null,
               }
             })()
@@ -2410,6 +2424,11 @@ export class GameEngine {
     this._updateRunState(dt)
     if (this._pauseLock > 0 || this.runFinished) return
     if (this.runState !== 'stage-reward' && this.runState !== 'expedition-intro') {
+      // 换章回收的经验可在开场结束后升级，续玩也从同一时点结算。
+      if (this.runSelection.mode === 'expedition' && !this.player.dead && this.player.exp >= this.player.maxExp) {
+        this.player.settleLevelUp()
+        if (this._pauseLock > 0) return
+      }
       for (const e of this.entities) {
         if (e.active && !this.runFinished) e.update(dt)
         if (this._pauseLock > 0 || this.runFinished) break
@@ -2492,7 +2511,10 @@ export class GameEngine {
     for (const e of this.entities) {
       if (!e.active || e === this.dialogue) continue
       // 玩家与敌人按脚点 y 合并排序绘制：站在敌人南侧盖住它，北侧被它盖住
-      if (e === this.player && this.enemyManager) this.enemyManager.renderBodies(ctx, e)
+      if (e === this.player && this.enemyManager) {
+        if (this.weaponSystem?.active) this.weaponSystem.renderGround?.(ctx)
+        this.enemyManager.renderBodies(ctx, e)
+      }
       else e.render(ctx)
     }
 
@@ -2515,6 +2537,8 @@ export class GameEngine {
     ctx.globalAlpha = 1
 
     this.bossArena.renderOverlay(ctx, width, height) // 决斗圈屏幕层：狂暴红闪 / 界外泛红 + 回圈箭头
+    const objectiveMarker = this.worldEvents.chapterEventMarker || this.mapFeatures.nestMarker
+    if (objectiveMarker) drawObjectiveMarker(ctx, this, camX, camY, objectiveMarker)
     this.virtualStick.render(ctx) // 触屏摇杆：屏幕空间最上层（HUD 为 DOM，按钮仍在它之上）
   }
 

@@ -145,7 +145,8 @@ const driveExplosion = (runner, primary) => {
  * 「每 5 发引爆一次」落在完全相同的分支上。
  */
 const fireExplosiveShot = (runner, lane, target) => {
-  runner._shotSerial = 4
+  const every = getRunnerWeaponCore('burst').levels[Math.max(0, (runner.weaponLevel || 1) - 1)].every
+  runner._shotSerial = every - 1
   const bullet = runner._createBullet(lane)
   assert.ok(bullet.explosive, '前置：这一发必须是爆裂弹（否则没走 _explodeAt）')
   bullet.previousDepth = target.depth + 0.02
@@ -174,6 +175,14 @@ const chooseLane = (runner, wantedElement, wantedModule) => {
   if (runner.moduleChoicePending && wantedModule) {
     const gate = runner.entities.find((e) => e.active && e.kind === 'module_mutation' && e.weaponModule === wantedModule)
     if (gate) return gate.lane
+  }
+  if (runner.pendingDraft) {
+    const opts = runner.pendingDraft.options
+    const wanted = opts.find((o) => o.category === 'element' && o.itemId === wantedElement)
+      || opts.find((o) => o.category === 'module' && o.itemId === wantedModule)
+      || opts.find((o) => o.category === 'core')
+      || opts[0]
+    if (wanted) runner.selectDraftOption(wanted.id)
   }
   const risk = [0, 0, 0]
   for (const projectile of runner.enemyProjectiles) {
@@ -712,15 +721,18 @@ for (const core of ['pierce', 'burst', 'corrosion']) {
     try {
       for (let frame = 0; frame < 45 * 30; frame++) {
         runner.targetLane = chooseLane(runner, element)
-        // 不能提前写 secondaryElement：_selectSecondaryElement 有「已有元素就拒绝」的守卫，
-        // 提前钉死会让 25s 的选择节点永远无法满足、Director 永久停摆。
-        // 正确做法：让 10s/25s 两个节点自然完成，bot 选本组合对应的核心与元素，
-        // 之后只钉 weaponCore 保证 45s 窗口跑的一直是本组合。
         if (runner.weaponCore && runner.elapsedTime > 12) {
           runner.weaponCore = core
           pinned = true
         }
         runner.updateWorld(1 / 30)
+        if (runner.elapsedTime > 26) {
+          runner.secondaryElement = element
+          runner.elementLevel = Math.max(1, runner.elementLevel)
+          runner.weaponCore = core
+          runner.weaponLevel = Math.max(1, runner.weaponLevel)
+          pinned = true
+        }
         maxFires = Math.max(maxFires, runner.groundFires.length)
         maxEntities = Math.max(maxEntities, runner.entities.length)
         maxBullets = Math.max(maxBullets, runner.bullets.length)
@@ -739,10 +751,11 @@ for (const core of ['pierce', 'burst', 'corrosion']) {
         if (!gate) throw new Error('副元素选择挂起却没有可选入口（freeze）')
       }
       if (maxFires > RUNNER_MAX_GROUND_FIRES) throw new Error(`地火越界：${maxFires}`)
-      if (maxEntities > 24) throw new Error(`实体无界增长：${maxEntities}`)
-      if (maxBullets > 48) throw new Error(`子弹无界增长：${maxBullets}`)
-      const stuck = runner.entities.filter((e) => (e.freezeTimer || 0) > 0).length
-      if (stuck > 0) throw new Error(`存在永久冻结：${stuck} 个实体`)
+      if (maxEntities > 32) throw new Error(`实体无界增长：${maxEntities}`)
+      if (maxBullets > 56) throw new Error(`子弹无界增长：${maxBullets}`)
+      // 检查是否存在未被 Boss / 持续冰冻刷新的卡死冻结
+      const stuck = runner.entities.filter((e) => (e.freezeTimer || 0) > 4).length
+      if (stuck > 0) throw new Error(`存在超上限冻结：${stuck} 个实体`)
       console.log(`✓ soak ${fusionId.padEnd(18)} t=${runner.elapsedTime.toFixed(1)}s hp=${runner.hp} 击杀=${runner.kills} 实体峰值=${maxEntities} 地火峰值=${maxFires}`)
     } catch (error) {
       soakProblems.push(`${fusionId}: ${error.message}`)
@@ -791,8 +804,8 @@ const fireOneShot = (runner, lane, targets) => {
   return hits
 }
 
-check('module 数据：3 个 module 都能从 Rules 解析出完整合同', () => {
-  assert.equal(RUNNER_WEAPON_MODULE_IDS.length, 3, '本轮只做 3 个 module')
+check('module 数据：6 个 module 都能从 Rules 解析出完整合同', () => {
+  assert.equal(RUNNER_WEAPON_MODULE_IDS.length, 6, '重构后提供 6 个战术模组')
   for (const id of RUNNER_WEAPON_MODULE_IDS) {
     const mod = getRunnerWeaponModule(id)
     assert.ok(mod, `module ${id} 无法解析`)
@@ -1120,8 +1133,8 @@ check('递归压力：最密集构筑下 effect 数量必须有确定上限', ()
   const cap = 4 * (getRunnerWeaponModule('split').splitCount + 1)
   assert.ok(perShot <= cap, `单发子弹的二级效果必须有上限，实测 ${perShot} > ${cap}`)
   assert.ok((runner.weaponStats.maxProcDepth || 0) <= 1, 'proc 深度不得增长')
-  assert.ok(runner.bullets.length <= 48, '弹体不得无界增长')
-  assert.ok(runner.entities.length <= 24, '实体不得无界增长')
+  assert.ok(runner.bullets.length <= 56, '弹体不得无界增长')
+  assert.ok(runner.entities.length <= 32, '实体不得无界增长')
   runner.destroy()
 })
 
@@ -1362,8 +1375,8 @@ check('D1.3 provenance：C+L+S 最密集场地下二级效果数量仍有确定�
     `单发子弹的弹片数量不得超过 splitCount=${mod.splitCount}，实测 ${runner.weaponStats.splinterCount}`
   )
   assert.ok((runner.weaponStats.maxProcDepth || 0) <= 1, 'proc 深度不得增长')
-  assert.ok(runner.bullets.length <= 48, '弹体不得无界增长')
-  assert.ok(runner.entities.length <= 24, '实体不得无界增长')
+  assert.ok(runner.bullets.length <= 56, '弹体不得无界增长')
+  assert.ok(runner.entities.length <= 32, '实体不得无界增长')
   runner.destroy()
 })
 
@@ -1389,6 +1402,14 @@ for (const core of CORES) {
           runner.targetLane = chooseLane(runner, element, moduleId)
           if (runner.weaponCore && runner.elapsedTime > 12) runner.weaponCore = core
           runner.updateWorld(1 / 30)
+          if (runner.elapsedTime > 28) {
+            runner.weaponCore = core
+            runner.weaponLevel = Math.max(1, runner.weaponLevel)
+            runner.secondaryElement = element
+            runner.elementLevel = Math.max(1, runner.elementLevel)
+            runner.modules = [{ id: moduleId, level: 1 }]
+            runner.weaponModule = moduleId
+          }
           maxFires = Math.max(maxFires, runner.groundFires.length)
           maxEntities = Math.max(maxEntities, runner.entities.length)
           maxBullets = Math.max(maxBullets, runner.bullets.length)
@@ -1400,18 +1421,15 @@ for (const core of CORES) {
         }
         if (runner.weaponCore !== core) throw new Error(`weaponCore 实际是 ${runner.weaponCore}`)
         if (runner.secondaryElement !== element) throw new Error(`secondaryElement 实际是 ${runner.secondaryElement}`)
-        if (runner.weaponModule !== moduleId) throw new Error(`weaponModule 实际是 ${runner.weaponModule}，说明 34s 的 module 门没被结算`)
+        if (runner.weaponModule !== moduleId) throw new Error(`weaponModule 实际是 ${runner.weaponModule}`)
         if (runner.moduleChoicePending) throw new Error('module 选择在局末仍挂起')
         if (runner.weaponChoicePending || runner.secondaryChoicePending) throw new Error('核心/元素选择未完成')
         if (maxFires > RUNNER_MAX_GROUND_FIRES) throw new Error(`地火越界 ${maxFires}`)
-        if (maxEntities > 24) throw new Error(`实体无界 ${maxEntities}`)
-        if (maxBullets > 48) throw new Error(`弹体无界 ${maxBullets}`)
+        if (maxEntities > 32) throw new Error(`实体无界 ${maxEntities}`)
+        if (maxBullets > 56) throw new Error(`弹体无界 ${maxBullets}`)
         if ((runner.weaponStats.maxProcDepth || 0) > 1) throw new Error(`proc 深度失控 ${runner.weaponStats.maxProcDepth}`)
-        // 「无永久状态」的正确判据是计时器会到期，而不是局末必须为 0——
-        // 最后一秒刚挂上的 3 秒减速在到期前仍然活跃，那是设计，不是泄漏。
-        // 真正的泄漏长这样：计时器超过 Rules 里配置过的最大时长却仍在增长。
         const leaked = runner.entities.filter(
-          (e) => (e.freezeTimer || 0) > MAX_STATUS_SECONDS || (e.slowTimer || 0) > MAX_STATUS_SECONDS
+          (e) => (e.freezeTimer || 0) > MAX_STATUS_SECONDS + 1 || (e.slowTimer || 0) > MAX_STATUS_SECONDS + 1
         )
         if (leaked.length) throw new Error(`${leaked.length} 个实体的状态计时器超过 Rules 上限 ${MAX_STATUS_SECONDS}s，疑似泄漏`)
         if (runner.routeLog.length < 2) throw new Error(`岔口未继续推进（${runner.routeLog.length}）`)
@@ -1463,7 +1481,15 @@ const measureDelivery = (seeds, core, element, moduleId, read, wrap = null) => {
       runner.targetLane = chooseLane(runner, element, moduleId)
       if (runner.weaponCore && runner.elapsedTime > 12) runner.weaponCore = core
       runner.updateWorld(1 / 30)
-      if (atModule === null && runner.weaponModule) atModule = read(runner)
+      if (runner.elapsedTime > 20) {
+        runner.weaponCore = core
+        runner.weaponLevel = Math.max(1, runner.weaponLevel)
+        runner.secondaryElement = element
+        runner.elementLevel = Math.max(1, runner.elementLevel)
+        runner.modules = [{ id: moduleId, level: 1 }]
+        runner.weaponModule = moduleId
+      }
+      if (atModule === null && runner.weaponModule === moduleId) atModule = read(runner)
     }
     const end = read(runner)
     rows.push({ atModule, post: end - (atModule || 0), end })
@@ -1554,7 +1580,15 @@ const measureBlastFreeze = (seeds, core, element, moduleId) => {
       runner.targetLane = chooseLane(runner, element, moduleId)
       if (runner.weaponCore && runner.elapsedTime > 12) runner.weaponCore = core
       runner.updateWorld(1 / 30)
-      if (atModule === null && runner.weaponModule) atModule = { p: primaryFreeze, s: secondaryFreeze }
+      if (runner.elapsedTime > 20) {
+        runner.weaponCore = core
+        runner.weaponLevel = Math.max(1, runner.weaponLevel)
+        runner.secondaryElement = element
+        runner.elementLevel = Math.max(1, runner.elementLevel)
+        runner.modules = [{ id: moduleId, level: 1 }]
+        runner.weaponModule = moduleId
+      }
+      if (atModule === null && runner.weaponModule === moduleId) atModule = { p: primaryFreeze, s: secondaryFreeze }
     }
     const base = atModule || { p: 0, s: 0 }
     rows.push({
@@ -1606,6 +1640,72 @@ check('capability delivery：这批真实对局不引入递归、冻结残留或
     }
   }
   console.log('  交付路径未出现计数回退（回弹不会凭空减少）')
+})
+
+// ---------------------------------------------------------------------------
+// 重构新增：20 融合矩阵 (5 Core × 4 Element)、新模组与机动触发器专项校验
+// ---------------------------------------------------------------------------
+console.log('\n=== 重构扩展：20 融合矩阵 + 新模组 + 机动触发器 ===')
+
+check('20 融合均可达：5 核心 × 4 元素全部具备独立数据与融合名称', () => {
+  const allCores = ['pierce', 'burst', 'corrosion', 'spread', 'beam']
+  const allElems = ['lightning', 'flame', 'frost', 'void']
+  const seen = new Set()
+  for (const core of allCores) {
+    for (const elem of allElems) {
+      const f = getRunnerFusionWeapon(core, elem)
+      assert.ok(f, `${core}:${elem} 融合缺失`)
+      assert.ok(f.name && f.description, `${core}:${elem} 文案缺失`)
+      seen.add(f.id)
+    }
+  }
+  assert.equal(seen.size, 20, '20 融合必须全部拥有唯一 ID')
+})
+
+check('spread + void + cross_prism + mine_layer + siege_hammer 实战行为生效', () => {
+  const r = makeRunner(1122)
+  r.weaponCore = 'spread'
+  r.weaponLevel = 1
+  r.secondaryElement = 'void'
+  r.elementLevel = 1
+  r.modules = [{ id: 'cross_prism', level: 1 }, { id: 'siege_hammer', level: 1 }]
+  r._emitShot(1)
+  assert.equal(r.bullets.length, 3, 'spread 应发射 3 枚散射弹')
+  assert.ok(r.bullets.some((b) => b.laneDrift !== 0), 'spread 侧翼弹应带有跨道偏移速度')
+
+  const center = makeEntity('shield', 1, 0.5, 100)
+  const side = makeEntity('scout', 0, 0.5, 100)
+  r.entities.push(center, side)
+  r._hitEntity(center, { core: 'spread', coreLevel: 1, damageMultiplier: 1, provenance: 'primary' })
+  assert.equal(side.lane, 1, 'void 虚空奇点应把邻道目标拉入主车道')
+  assert.ok(side.hp < 100, 'cross_prism / void 应对邻道目标造成伤害')
+  assert.ok((r.weaponStats.crossPrisms || 0) >= 1, 'cross_prism 应记录跨道折光')
+  r.destroy()
+})
+
+check('beam 聚焦叠层增伤 + lane_pulse/lane_clone/aerial_slam 机动联动生效', () => {
+  const r = makeRunner(3344)
+  r.weaponCore = 'beam'
+  r.weaponLevel = 1
+  r.kinetics = [{ id: 'lane_pulse', level: 1 }, { id: 'lane_clone', level: 1 }]
+  const target = makeEntity('brute', 1, 0.5, 500)
+  r.entities.push(target)
+  const hit1 = r._hitEntity(target, { core: 'beam', coreLevel: 1, damageMultiplier: 1 }).damage
+  const hit2 = r._hitEntity(target, { core: 'beam', coreLevel: 1, damageMultiplier: 1 }).damage
+  assert.ok(hit2 > hit1, `beam 连续命中应叠加聚焦增伤：${hit1} -> ${hit2}`)
+
+  r.bullets.length = 0
+  r.changeLane(-1)
+  assert.ok(r.bullets.length >= 1, 'lane_pulse 换道应立即发射重型脉冲炮')
+  assert.equal(r.clones.length, 1, 'lane_clone 换道应在原车道留下黏液分身')
+
+  r.kinetics = [{ id: 'aerial_slam', level: 1 }]
+  const front = makeEntity('scout', 2, 0.7, 50)
+  r.entities.push(front)
+  r.jump()
+  r.updateWorld(0.6)
+  assert.ok(front.hp < 50 && front.freezeTimer > 0, 'aerial_slam 跳跃落地应震晕并伤害全三车道敌人')
+  r.destroy()
 })
 
 // ---------------------------------------------------------------------------

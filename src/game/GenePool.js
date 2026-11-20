@@ -66,7 +66,7 @@ export const GENES = [
     tier: 1,
     name: '应激刺膜',
     icon: '🛡️',
-    desc: '受击时震开近身敌人并造成反震伤害，每级 +2 点',
+    desc: '因受击损失生命时，震退并反伤 160px 内的敌人；反伤每级 +2 点',
     costs: [200, 300, 500, 600],
     maxLevel: 4,
     apply(game, lv) {
@@ -226,7 +226,7 @@ export const GENES = [
     isCapstone: true,
     name: '兵工原核',
     icon: '◆',
-    desc: '攻击伤害 +15%；攻击间隔 ×0.92；所有攻击额外穿透 1 个目标',
+    desc: '攻击伤害 +15%；攻击间隔 ×0.92；适用飞弹额外穿透 1 个目标',
     costs: [2500],
     maxLevel: 1,
     apply(game) {
@@ -298,11 +298,11 @@ export const GENES = [
     requires: [{ id: 'expand', level: 1 }],
     name: '全域磁感',
     icon: '🧲',
-    desc: '经验宝石拾取半径扩展到全屏',
+    desc: '经验宝石与秘籍的吸附半径翻倍',
     costs: [1300],
     maxLevel: 1,
     apply(game) {
-      game.player.geneMagnetAll = 1
+      game.player.pickupRadius *= 2
     },
   },
   {
@@ -682,13 +682,12 @@ export function applyGenes(game, genes) {
   p.geneLeechKills = 0
   p.geneLeechKillsMul = 1
   p.geneSiphonRate = 0
-  p.thornsPulse = false // 应激刺膜与暴食甲壳共用震退通道，基线复位
+  p.thornsPulse = false
   p.thornsDamage = 2
   p.geneCocoon = 0
   p.geneFuryPerMissing = 0
   p.geneRerolls = 0
   p.geneExtraOptions = 0
-  p.geneMagnetAll = 0
   p.geneShadowEvasionBonus = 0
   p.geneShadowCloneLifeBonus = 0
   p.geneShadowClonePowerBonus = 0
@@ -698,6 +697,7 @@ export function applyGenes(game, genes) {
   weapon.damage = 1
   weapon.fireInterval = 1.0
   weapon.critChance = 0.1
+  weapon.rawCritChance = 0.1
   weapon.critMul = 3.0
   weapon.baseSplitChance = 0
   weapon.genePierces = 0
@@ -716,6 +716,7 @@ export function applyGenes(game, genes) {
     if (level > 0) gene.apply(game, level)
   }
   weapon.splitChance = weapon.baseSplitChance
+  weapon.rawCritChance = weapon.critChance
   weapon.spellGenePowerMul = 1 + weapon.baseSplitChance * .3
   p.hp = p.maxHp
 }

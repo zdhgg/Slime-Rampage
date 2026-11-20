@@ -11,12 +11,13 @@ const server = createLanApp({ db, registration: true }).listen(0, '127.0.0.1')
 await new Promise((resolve) => server.once('listening', resolve))
 const baseUrl = `http://127.0.0.1:${server.address().port}`
 
-async function api(path, { method = 'GET', body, cookie } = {}) {
+async function api(path, { method = 'GET', body, cookie, catalog } = {}) {
   const response = await fetch(`${baseUrl}${path}`, {
     method,
     headers: {
       ...(body ? { 'Content-Type': 'application/json' } : {}),
       ...(cookie ? { Cookie: cookie } : {}),
+      ...(catalog ? { 'X-Save-Epoch': catalog.saveEpoch, 'X-Save-Revision': String(catalog.accountRevision) } : {}),
     },
     body: body ? JSON.stringify(body) : undefined,
   })
@@ -126,6 +127,59 @@ try {
   assert.equal(repeated.status, 200)
   assert.equal(repeated.payload.result.runId, finish.payload.result.runId)
   assert.equal(repeated.payload.catalog.slots[1].data.drops, 502)
+
+  const resetPath = '/api/profile/genes/reset'
+  const resetOptions = { method: 'POST', cookie: aliceCookie, catalog: repeated.payload.catalog }
+  assert.equal(repeated.payload.catalog.slots[1].data.geneInvestment, 200)
+  assert.equal((await api(resetPath, { method: 'POST', cookie: aliceCookie })).status, 409)
+  assert.equal((await api(resetPath, { method: 'POST' })).status, 401)
+  const attempts = await Promise.all([
+    api(resetPath, { ...resetOptions, body: { points: 100000, slotId: 'slot-1' } }),
+    api(resetPath, { ...resetOptions, body: { points: 100000, slotId: 'slot-1' } }),
+  ])
+  assert.deepEqual(attempts.map(attempt => attempt.status).sort(), [200, 409])
+  const reset = attempts.find(attempt => attempt.status === 200).payload
+  assert.equal(reset.refund.points, 200)
+  assert.equal(reset.catalog.saveEpoch, resetOptions.catalog.saveEpoch)
+  assert.equal(reset.catalog.slots[1].data.drops, 702)
+  assert.equal(reset.catalog.slots[1].data.geneInvestment, 0)
+  assert.deepEqual(reset.catalog.slots[1].data.genes, {})
+  assert.deepEqual(reset.catalog.slots[1].data.records, resetOptions.catalog.slots[1].data.records)
+  assert.deepEqual(reset.catalog.slots[0], resetOptions.catalog.slots[0])
+  const emptyReset = await api(resetPath, { ...resetOptions, catalog: reset.catalog })
+  assert.equal(emptyReset.payload.refund.points, 0)
+  assert.equal(emptyReset.payload.catalog.accountRevision, reset.catalog.accountRevision)
+
+  const repurchase = await api('/api/profile/genes/giant/purchase', { ...resetOptions, catalog: reset.catalog })
+  assert.equal(repurchase.status, 200)
+  const reroll = await api(resetPath, { ...resetOptions, catalog: repurchase.payload.catalog })
+  assert.equal(reroll.payload.refund.points, 200)
+  assert.equal(reroll.payload.catalog.slots[1].data.drops, 702)
+
+  const legacySave = { version: 4, drops: 30, records: {}, genes: { giant: 2, split: 1, predator_origin: 1 } }
+  const legacyProfileId = reroll.payload.catalog.slots[1].profileId
+  db.prepare('UPDATE profiles SET data_json = ? WHERE id = ?').run(JSON.stringify(legacySave), legacyProfileId)
+  const legacy = (await api('/api/profile', { cookie: aliceCookie })).payload.catalog
+  assert.deepEqual(legacy.slots[1].data.genes, legacySave.genes)
+  assert.equal(legacy.slots[1].data.drops, 200)
+  assert.equal(legacy.slots[1].data.geneInvestment, 1200)
+  assert.deepEqual(JSON.parse(db.prepare('SELECT data_json FROM profiles WHERE id = ?').get(legacyProfileId).data_json), legacySave)
+  const switched = await api('/api/profiles/slot-1/activate', { ...resetOptions, catalog: legacy })
+  assert.equal(switched.status, 200)
+  assert.equal((await api(resetPath, { ...resetOptions, catalog: legacy })).status, 409)
+  const returned = await api('/api/profiles/slot-2/activate', { ...resetOptions, catalog: switched.payload.catalog })
+  const legacyReset = await api(resetPath, { ...resetOptions, catalog: returned.payload.catalog })
+  assert.equal(legacyReset.payload.refund.points, 1200)
+  assert.equal(legacyReset.payload.catalog.slots[1].data.drops, 1400)
+  assert.deepEqual(legacyReset.payload.catalog.slots[1].data.genes, {})
+
+  const forgedImport = await api('/api/profile/import', {
+    ...resetOptions, catalog: legacyReset.payload.catalog,
+    body: { slot: { data: { version: 6, drops: 100, records: {}, genes: { giant: 1 }, geneInvestment: 100000 } } },
+  })
+  assert.equal(forgedImport.status, 200)
+  assert.equal(forgedImport.payload.catalog.slots[1].data.geneInvestment, 200)
+  console.log('✓ 黑市重置：实付返还、无限重配、旧档估算、档案隔离与版本冲突保护通过')
 
   const bobRegistration = await api('/api/auth/register', {
     method: 'POST',

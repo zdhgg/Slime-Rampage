@@ -85,6 +85,7 @@ export const accountApi = {
     request('/api/profile/preferences', { method: 'PATCH', body: { preferences } }),
   buyGene: (geneId) =>
     request(`/api/profile/genes/${encodeURIComponent(geneId)}/purchase`, { method: 'POST' }),
+  resetGenes: () => request('/api/profile/genes/reset', { method: 'POST' }),
   startRun: (selection) => request('/api/runs/start', { method: 'POST', body: selection }),
   resumeRun: (ticketId) => request(`/api/runs/${encodeURIComponent(ticketId)}/resume`, { method: 'POST' }),
   finishRun: async (ticketId, run) => {

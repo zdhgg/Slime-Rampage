@@ -578,7 +578,7 @@ export const SKILL_DATABASE = {
         requiresStrain: 'shadow',
         name: '裂影横斩',
         icon: '⚔️',
-        desc: '暴击命中后，在目标两侧扫出短距影刃，伤害最多 4 名其他敌人。横斩不能暴击或连续触发自身。',
+        desc: '暴击命中后，在目标两侧扫出短距影刃，伤害最多 4 名其他敌人；冷却中的暴击可缩短剩余触发间隔。横斩不能暴击或连续触发自身。',
         tags: ['刺客·T2', '近身群攻'],
         maxLevel: 2,
         stats(lv) { return lv === 0 ? '横斩伤害 0.85 倍攻击 · 触发间隔 0.9 秒' : '横斩伤害 1.2 倍攻击 · 范围扩大 · 触发间隔 0.65 秒' },
@@ -707,8 +707,8 @@ export const SKILL_DATABASE = {
         const rank = lv + 1
         const before = getSoftRankMultiplier(lv, 0.25, 3, 3.0518)
         const after = getSoftRankMultiplier(rank, 0.25, 3, 3.0518)
-        const r = Math.round(game.player.pickupRadius)
-        return `拾取半径 ${r} → ${Math.round(r * after / before)}`
+        const r = game.player.pickupRadius
+        return `拾取半径 ${Math.round(r)} → ${Math.round(r * (after / before))}`
       },
       apply(game, lv) {
         applyRankMultiplier(game.player, 'pickupRadius', lv - 1, lv, rank => getSoftRankMultiplier(rank, 0.25, 3, 3.0518))
@@ -752,7 +752,7 @@ export const SKILL_DATABASE = {
 const CORE_GROWTH_IDS = new Set([
   'glut_maw', 'glut_bulk', 'glut_ram', 'glut_acid_aura', 'glut_aftershock', 'glut_counter',
   'gat_velocity', 'ele_resonance',
-  'ass_stride', 'ass_execute', 'pet_power', 'pet_vitality', 'pet_haste',
+  'ass_lethal', 'ass_ward', 'ass_stride', 'ass_execute', 'pet_power', 'pet_vitality', 'pet_haste',
   'origin_flux', 'origin_overload', 'origin_concord',
 ])
 for (const [treeKey, tree] of Object.entries(SKILL_DATABASE)) {
@@ -774,6 +774,10 @@ for (const skill of SKILL_DATABASE.common) {
 // Shared IDs retain origin behavior; the shadow role resolves both effects and presentation.
 SKILL_DATABASE.assassin.primary.push(...SHADOW_EXTRA_SKILLS)
 for (const skill of SKILL_DATABASE.assassin.primary) {
+  if (CORE_GROWTH_IDS.has(skill.id)) {
+    skill.growthClass = 'core'
+    skill.rankCaps = CORE_SKILL_RANK_CAPS[skill.id]
+  }
   const originalApply = skill.apply
   skill.apply = (game, lv) => {
     const variant = game.startingStrain === 'shadow' && SHADOW_SKILL_VARIANTS[skill.id]

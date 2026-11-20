@@ -51,11 +51,17 @@ function measureHud() {
 }
 
 function handleKeyDown(event) {
+  if (event.key === 'Escape' && showCodex.value) {
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    showCodex.value = false
+    return
+  }
+  if (props.controlsDisabled || props.paused) return
   if (event.key === 'Tab' || event.key.toLowerCase() === 'c') {
     event.preventDefault()
     showCodex.value = !showCodex.value
-  } else if (event.key === 'Escape' && showCodex.value) {
-    showCodex.value = false
   }
 }
 
@@ -64,7 +70,7 @@ onMounted(() => {
   updateTouchControls()
   touchMedia.addEventListener('change', updateTouchControls)
   window.addEventListener('blur', gesture.reset)
-  window.addEventListener('keydown', handleKeyDown)
+  window.addEventListener('keydown', handleKeyDown, true)
   resizeObserver = new ResizeObserver(measureHud)
   for (const element of [hudRoot.value, hudTop.value, skillDock.value]) resizeObserver.observe(element)
   measureHud()
@@ -74,7 +80,7 @@ onUnmounted(() => {
   resizeObserver?.disconnect()
   touchMedia?.removeEventListener('change', updateTouchControls)
   window.removeEventListener('blur', gesture.reset)
-  window.removeEventListener('keydown', handleKeyDown)
+  window.removeEventListener('keydown', handleKeyDown, true)
 })
 
 const countdownLabel = computed(() => props.hud.state === 'countdown' ? Math.ceil(props.hud.countdown || 0) || '突破' : '')
@@ -99,10 +105,17 @@ function activate(event, action, allowed = true) {
 }
 
 const slots = computed(() => props.hud.slots || {
-  core: { equipped: false, name: '凝胶弹', level: 0, nextTime: 10 },
-  element: { equipped: false, nextTime: 25 },
+  core: { equipped: false, name: '凝胶弹', level: 0 },
+  element: { equipped: false },
   fusion: { active: false },
-  module: { equipped: false, nextTime: 34 },
+  module: { equipped: false, list: [] },
+  kinetic: { equipped: false, list: [] },
+})
+
+const xpPercent = computed(() => {
+  const cur = props.hud.xp || 0
+  const max = Math.max(1, props.hud.xpToNext || 28)
+  return percent(cur / max)
 })
 
 const codexList = computed(() => props.hud.fusionCodex || [])
@@ -120,10 +133,11 @@ const currentCoreId = computed(() => slots.value.core?.id)
       <!-- 左侧：战备构筑与生命装备 -->
       <section class="vitals hud-surface" aria-label="生命与构筑槽位">
         <div class="deck-header">
-          <span class="mode-badge">{{ hud.submodeName || '极速突围' }}</span>
+          <span class="mode-badge">{{ hud.strain?.name || hud.submodeName || '极速突围' }}</span>
+          <span class="lv-badge">Lv.{{ hud.level || 1 }}</span>
           <button type="button" class="codex-btn" :class="{ active: showCodex }" @click="showCodex = !showCodex" aria-label="查看超武图谱">
             <BookOpen :size="13" aria-hidden="true" />
-            <span>超武图谱</span>
+            <span>20超武图谱</span>
             <kbd v-if="!touchControls">Tab</kbd>
           </button>
         </div>
@@ -143,7 +157,7 @@ const currentCoreId = computed(() => slots.value.core?.id)
           <b>{{ hud.shield || 0 }}<small> / {{ hud.maxShield || 3 }}</small></b>
         </div>
 
-        <!-- 三槽插槽式构筑展示 -->
+        <!-- 四维插槽式构筑展示 -->
         <div class="build-deck">
           <!-- 融合超武高亮标牌 -->
           <div v-if="slots.fusion?.active" class="fusion-badge" :style="{ '--glow': slots.fusion.color }">
@@ -154,8 +168,8 @@ const currentCoreId = computed(() => slots.value.core?.id)
             </div>
           </div>
 
-          <!-- 三插槽并列 -->
-          <div class="slots-grid">
+          <!-- 四插槽并列 -->
+          <div class="slots-grid slots-four">
             <!-- 槽位 1：主核心 -->
             <div class="build-slot core-slot" :class="{ equipped: slots.core?.equipped }" :style="{ '--slot-color': slots.core?.color || '#79d5e6' }">
               <span class="slot-tag">核心</span>
@@ -164,7 +178,7 @@ const currentCoreId = computed(() => slots.value.core?.id)
                 <b class="slot-lv">Lv.{{ slots.core.level }}</b>
               </template>
               <template v-else>
-                <span class="slot-empty">⏳ {{ slots.core?.nextTime }}s</span>
+                <span class="slot-empty">待进化</span>
               </template>
             </div>
 
@@ -176,19 +190,34 @@ const currentCoreId = computed(() => slots.value.core?.id)
                 <span class="slot-name">{{ slots.element.shortName || slots.element.name }}</span>
               </template>
               <template v-else>
-                <span class="slot-empty">⏳ {{ slots.element?.nextTime }}s</span>
+                <span class="slot-empty">待附魔</span>
               </template>
             </div>
 
             <!-- 槽位 3：战术模组 -->
             <div class="build-slot mod-slot" :class="{ equipped: slots.module?.equipped }" :style="{ '--slot-color': slots.module?.color || '#7ce0c3' }">
               <span class="slot-tag">模组</span>
-              <template v-if="slots.module?.equipped">
-                <span class="slot-icon">{{ slots.module.icon }}</span>
+              <template v-if="slots.module?.list?.length">
+                <span class="slot-name">{{ slots.module.list.map(m => m.shortLabel).join('·') }}</span>
+                <b class="slot-lv">{{ slots.module.list.length }}/2</b>
+              </template>
+              <template v-else-if="slots.module?.equipped">
                 <span class="slot-name">{{ slots.module.shortLabel || slots.module.name }}</span>
               </template>
               <template v-else>
-                <span class="slot-empty">⏳ {{ slots.module?.nextTime }}s</span>
+                <span class="slot-empty">0/2</span>
+              </template>
+            </div>
+
+            <!-- 槽位 4：机动触发 -->
+            <div class="build-slot kin-slot" :class="{ equipped: slots.kinetic?.equipped }" :style="{ '--slot-color': slots.kinetic?.color || '#38bdf8' }">
+              <span class="slot-tag">机动</span>
+              <template v-if="slots.kinetic?.list?.length">
+                <span class="slot-name">{{ slots.kinetic.list.map(k => k.shortLabel).join('·') }}</span>
+                <b class="slot-lv">{{ slots.kinetic.list.length }}/2</b>
+              </template>
+              <template v-else>
+                <span class="slot-empty">0/2</span>
               </template>
             </div>
           </div>
@@ -213,11 +242,29 @@ const currentCoreId = computed(() => slots.value.core?.id)
           <strong class="timer-display">{{ hud.timeLabel }}</strong>
         </div>
 
-        <!-- 双层进度条：全局进度与当前阶段进度 -->
+        <!-- 阶段守关 Boss 部位血条 -->
+        <div v-if="hud.boss" class="boss-bar-wrap">
+          <div class="boss-bar-head">
+            <strong>🚨 {{ hud.boss.name }}</strong>
+            <span>{{ Math.ceil(hud.boss.hp) }} / {{ hud.boss.maxHp }}</span>
+          </div>
+          <div class="boss-parts-row">
+            <span v-for="p in hud.boss.parts" :key="p.lane" :class="{ dead: p.destroyed, armored: p.armored }">
+              {{ p.destroyed ? '已破坏' : p.name }}{{ p.armored ? '🛡️' : '' }}
+            </span>
+          </div>
+        </div>
+
+        <!-- 双层进度条：全局进度 + 进化经验槽 -->
         <div v-if="!hud.isEndless" class="track-wrapper">
           <div class="track route-track" title="总突围进度" aria-hidden="true">
             <i class="total-fill" :style="{ width: percent(hud.progress || 0) }" />
           </div>
+        </div>
+        <div class="xp-bar-row" title="进化充能槽：满格后暂停抽卡升级">
+          <span class="xp-label">⚡ Lv.{{ hud.level || 1 }}</span>
+          <div class="xp-track"><i :style="{ width: xpPercent }" /></div>
+          <span class="xp-num">{{ Math.floor(hud.xp || 0) }}/{{ hud.xpToNext || 28 }}</span>
         </div>
 
         <!-- 动态战术行动口号与指令 -->
@@ -230,7 +277,7 @@ const currentCoreId = computed(() => slots.value.core?.id)
           <div v-for="lane in (hud.lanes || [])" :key="lane.lane" class="lane-cell" :class="[lane.status, { current: lane.lane === hud.lane }]" :aria-label="`${laneNames[lane.lane]}道：${lane.intent}${lane.lane === hud.lane ? '，当前所在' : ''}`">
             <span class="radar-dot" aria-hidden="true" />
             <span class="lane-title">{{ laneNames[lane.lane] }}<b v-if="lane.lane === hud.lane">·当前</b></span>
-            <em v-if="lane.status === 'danger' || ['冲锋', '瞄准', '封锁'].includes(lane.intent)">{{ lane.intent }}</em>
+            <em v-if="lane.intent && lane.intent !== '开放'">{{ lane.intent }}</em>
           </div>
         </div>
 
@@ -240,9 +287,12 @@ const currentCoreId = computed(() => slots.value.core?.id)
         </div>
       </section>
 
-      <!-- 右侧：得分与控制 -->
+      <!-- 右侧：得分、技巧段位与控制 -->
       <section class="score hud-surface" aria-label="得分与游戏控制">
         <div class="game-controls">
+          <span v-if="hud.style" class="style-badge" :style="{ '--style-color': hud.style.color }">
+            {{ hud.style.rank }} <b>×{{ hud.style.multiplier }}</b>
+          </span>
           <button type="button" :aria-label="muted ? '取消静音' : '静音'" :aria-pressed="muted" @click="activate($event, 'toggle-mute')">
             <VolumeX v-if="muted" :size="18" aria-hidden="true" />
             <Volume2 v-else :size="18" aria-hidden="true" />
@@ -253,8 +303,12 @@ const currentCoreId = computed(() => slots.value.core?.id)
           </button>
         </div>
         <div class="score-value">
-          <span class="score-label">SCORE</span>
+          <span class="score-label">SCORE · ×{{ hud.totalMultiplier || 1 }}</span>
           <strong>{{ (hud.score || 0).toLocaleString('en-US') }}</strong>
+        </div>
+        <div class="score-meta">
+          <span v-if="hud.nextMilestone">悬赏目标 {{ hud.nextMilestone.toLocaleString('en-US') }}</span>
+          <span>信用 {{ (hud.bountyCredits || 0).toLocaleString('en-US') }}</span>
         </div>
         <div class="score-feedback">
           <em v-if="hud.combo > 1" class="combo-pulse">COMBO ×{{ hud.combo }}</em>
@@ -327,7 +381,7 @@ const currentCoreId = computed(() => slots.value.core?.id)
             <Sparkles :size="20" class="codex-icon" />
             <div>
               <h3>超武演化矩阵图谱</h3>
-              <p>主武器核心 + 元素附魔 = 9 种终极融合形态</p>
+              <p>5 主武器核心 × 4 元素附魔 = 20 种融合超武形态</p>
             </div>
           </div>
           <button type="button" class="codex-close" @click="showCodex = false" aria-label="关闭图谱">
@@ -413,6 +467,22 @@ small { color: var(--muted); font-size: 11px; font-weight: 400; }
 .fusion-info small { display: block; font-size: 10px; color: var(--adventure-muted); line-height: 1.2; }
 
 .slots-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.slots-grid.slots-four { grid-template-columns: repeat(4, 1fr); gap: 5px; }
+.lv-badge { font-size: 11px; font-weight: 800; color: #0369a1; background: #e0f2fe; padding: 2px 6px; border-radius: 4px; }
+.xp-bar-row { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; font-size: 11px; }
+.xp-label { font-weight: 800; color: #0369a1; white-space: nowrap; }
+.xp-track { flex: 1; height: 5px; border-radius: 3px; background: #dde5e1; overflow: hidden; }
+.xp-track i { display: block; height: 100%; background: linear-gradient(90deg, #38bdf8, #818cf8); transition: width 0.15s ease; }
+.xp-num { font-size: 10px; color: var(--muted); white-space: nowrap; }
+.boss-bar-wrap { margin-bottom: 6px; padding: 5px 8px; border-radius: 6px; background: #fef2f2; border: 1px solid #fecaca; }
+.boss-bar-head { display: flex; justify-content: space-between; font-size: 11px; color: #b91c1c; }
+.boss-parts-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-top: 4px; font-size: 10px; text-align: center; }
+.boss-parts-row span { padding: 2px 4px; border-radius: 4px; background: #fee2e2; color: #7f1d1d; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.boss-parts-row span.dead { background: #e5e7eb; color: #6b7280; text-decoration: line-through; }
+.boss-parts-row span.armored { background: #e2e8f0; color: #334155; }
+.style-badge { display: inline-flex; align-items: center; gap: 3px; margin-right: auto; padding: 2px 8px; border-radius: 6px; background: color-mix(in srgb, var(--style-color) 18%, #ffffff); border: 1px solid var(--style-color); color: color-mix(in srgb, var(--style-color) 40%, #0f172a); font-size: 13px; font-weight: 900; }
+.style-badge b { font-size: 10px; }
+.score-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; font-size: 10px; color: var(--muted); margin-top: 2px; }
 .build-slot { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 5px 4px; border-radius: 6px; background: #eef2ef; border: 1px dashed rgba(80, 110, 130, 0.5); text-align: center; min-height: 48px; transition: all 0.2s ease; }
 .build-slot.equipped { border-style: solid; border-color: color-mix(in srgb, var(--slot-color) 35%, var(--adventure-ink)); background: #e7eef2; box-shadow: none; }
 .slot-tag { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }

@@ -1,7 +1,7 @@
 export const shadowTargetAlive = e => e?.active && !e.devouring && !e._settled && e.hp > 0
 
-/** 后排远程敌人分类（法师/弓手）：分身索敌与「猎手直觉」返还共用同一份口径。 */
-export const shadowRangedEnemy = e => e && !e.isBoss && (e.type === 'mage' || e.type === 'archer')
+/** 后排远程敌人分类（法师/弓手/炼金）：分身索敌与「猎手直觉」返还共用同一份口径。 */
+export const shadowRangedEnemy = e => e && !e.isBoss && (e.type === 'mage' || e.type === 'archer' || e.type === 'alchemist')
 
 /** First contact along a swept circle; Infinity means the segment misses. */
 export function shadowCircleEntry(ax, ay, bx, by, target, radius = 0) {

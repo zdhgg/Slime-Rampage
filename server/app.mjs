@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import express from 'express'
 import { getGene, getGenePurchaseState } from '../src/game/GenePool.js'
+import { hasPurchasedGenes } from '../src/game/BlackMarketRefund.js'
 import {
   getRunRecord,
   pushScore,
@@ -500,7 +501,7 @@ export function createGameApp({ db, distDir = null, registration = null, beforeD
       const row = activeProfileRow(db, req.account.id)
       const accountData = withTransaction(db, () => {
         archiveAccount(db, req.account.id, 'before-import')
-        writeProfileData(db, row, sanitizeSave(source))
+        writeProfileData(db, row, sanitizeSave({ ...source, geneInvestment: undefined }))
         if (req.body?.campaign) mergeLegacyCampaign(db, req.account.id, req.body.campaign)
         rotateSaveEpoch(db, req.account.id)
         return accountGameData(db, req.account.id)
@@ -525,16 +526,41 @@ export function createGameApp({ db, distDir = null, registration = null, beforeD
 
   app.post('/api/profile/genes/:geneId/purchase', (req, res, next) => {
     try {
-      const row = activeProfileRow(db, req.account.id)
-      const data = parseProfileData(row, db)
       const gene = getGene(req.params.geneId)
       if (!gene) throw new HttpError(404, 'gene_not_found', '没有找到这个基因')
-      const state = getGenePurchaseState(gene, data.genes, data.drops)
-      if (!state.canBuy) throw new HttpError(409, 'gene_unavailable', state.reason || '当前无法购买这个基因')
-      data.drops -= state.cost
-      data.genes[gene.id] = state.level + 1
-      withTransaction(db, () => writeProfileData(db, row, data))
-      res.json({ catalog: profileCatalog(db, req.account.id), purchase: { geneId: gene.id, level: state.level + 1, cost: state.cost } })
+      const purchase = withTransaction(db, () => {
+        if (req.get('X-Save-Epoch')) assertAccountVersion(db, req.account.id, { saveEpoch: req.get('X-Save-Epoch'), accountRevision: req.get('X-Save-Revision') })
+        const row = activeProfileRow(db, req.account.id)
+        const data = parseProfileData(row, db)
+        const state = getGenePurchaseState(gene, data.genes, data.drops)
+        if (!state.canBuy) throw new HttpError(409, 'gene_unavailable', state.reason || '当前无法购买这个基因')
+        data.drops -= state.cost
+        data.genes[gene.id] = state.level + 1
+        data.geneInvestment += state.cost
+        writeProfileData(db, row, data)
+        return { geneId: gene.id, level: state.level + 1, cost: state.cost }
+      })
+      res.json({ catalog: profileCatalog(db, req.account.id), purchase })
+    } catch (error) {
+      next(error)
+    }
+  })
+
+  app.post('/api/profile/genes/reset', (req, res, next) => {
+    try {
+      const refunded = withTransaction(db, () => {
+        assertAccountVersion(db, req.account.id, { saveEpoch: req.get('X-Save-Epoch'), accountRevision: req.get('X-Save-Revision') })
+        const row = activeProfileRow(db, req.account.id)
+        const data = parseProfileData(row, db)
+        if (!hasPurchasedGenes(data.genes)) return 0
+        const amount = data.geneInvestment
+        data.drops += amount
+        data.genes = {}
+        data.geneInvestment = 0
+        writeProfileData(db, row, data)
+        return amount
+      })
+      res.json({ catalog: profileCatalog(db, req.account.id), refund: { points: refunded } })
     } catch (error) {
       next(error)
     }

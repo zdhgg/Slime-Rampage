@@ -9,6 +9,7 @@ globalThis.requestAnimationFrame = () => 0
 globalThis.cancelAnimationFrame = () => {}
 const { GameEngine } = await import('./src/game/GameEngine.js')
 const { rollSkills } = await import('./src/game/SkillPool.js')
+const { getExpeditionBoss } = await import('./src/game/RunRules.js')
 const { STRAIN_IDS } = await import('./src/game/Strains.js')
 const { setAccountCampaign } = await import('./src/game/gameplay/tower-defense/TowerDefenseSave.js')
 const engine = GameEngine.create(canvas)
@@ -76,6 +77,102 @@ try {
     assert.equal(engine.runFinished, false)
     console.log(`✓ ${strain}: actual skills, build, resources, cooldowns and random state survive chapter resume`)
   }
+  engine.setGenes({ swift: 1, expand: 1, magnet: 1 })
+  engine._enterExpeditionStage(3)
+  const magnetCheckpoint = captureExpeditionCheckpoint(engine)
+  const legacyMagnet = structuredClone(magnetCheckpoint)
+  legacyMagnet.components.player.geneMagnetAll = 1
+  legacyMagnet.components.player.pickupRadius = 215.625
+  restoreExpeditionCheckpoint(engine, legacyMagnet)
+  assert.equal(engine.player.pickupRadius, 431.25, '旧版全域磁感按已保存的局内半径翻倍')
+  restoreExpeditionCheckpoint(engine, captureExpeditionCheckpoint(engine))
+  assert.equal(engine.player.pickupRadius, 431.25, '新版续玩存档只应用一次翻倍')
+  engine.setGenes({})
+  engine.applyStartingStrain('origin')
+  engine.reset()
+  engine.evolutionEvent = () => {}
+  const { player, gemManager } = engine
+  const skillChoices = []
+  let reward, checkpoint, coreChoice
+  engine.onLevelUp = options => skillChoices.push(options)
+  engine.onExpeditionReward = info => { reward = info }
+  engine.onCheckpoint = saved => { checkpoint = saved }
+  engine.onFusionConfirm = info => { coreChoice = info }
+  player.expGainMul = 1.5
+  player.exp = 7
+  gemManager.spawn(80, 80, 101)
+  gemManager.spawn(200, 200, 3).state = 'magnet'
+  gemManager.spawn(400, 400, 0, 'poison')
+  engine.runState = 'expedition-guardian'
+  const boss = engine.enemyManager.beginExpeditionStageBoss(getExpeditionBoss(engine._expeditionDefinition.bossId))
+  boss.destroy()
+  engine.weaponSystem._settleKill(boss)
+  assert.deepEqual(gemManager._gems.filter(gem => gem.type !== 'exp').map(gem => gem.type), ['poison'])
+  const totalExp = player.exp + gemManager._gems
+    .filter(gem => gem.type === 'exp')
+    .reduce((sum, gem) => sum + Math.round(gem.value * player.expGainMul), 0)
+  engine._updateExpedition(.7)
+  assert.equal(reward.phase, 'boss')
+  const tome = reward.options.find(card => card.isBossSkill)
+  assert.equal(engine.resolveExpeditionReward(tome.id), true)
+  assert.equal(engine.resolveExpeditionReward(tome.id), false)
+  assert.equal(engine.expeditionStage, 2)
+  assert.equal(engine.runState, 'expedition-intro')
+  assert.equal(player.exp, totalExp)
+  assert.equal(skillChoices.length, 0)
+  assert.equal(player.level, 1)
+  assert.equal(gemManager.count, 1)
+  const [entranceCore] = gemManager._gems
+  assert.equal(entranceCore.coreChoices.length, 2)
+  gemManager.update(.05)
+  assert.equal(entranceCore.state, 'idle')
+  assert.equal(coreChoice, undefined)
+
+  const savedLoot = JSON.parse(JSON.stringify(checkpoint))
+  assert.equal(savedLoot.components.player.exp, totalExp)
+  assert.deepEqual(savedLoot.entranceCore, { type: entranceCore.type, coreChoices: entranceCore.coreChoices })
+  const invalidCore = structuredClone(savedLoot)
+  invalidCore.entranceCore.type = 'exp'
+  assert.throws(() => restoreExpeditionCheckpoint(engine, invalidCore))
+  const legacyCheckpoint = structuredClone(savedLoot)
+  delete legacyCheckpoint.entranceCore
+  restoreExpeditionCheckpoint(engine, legacyCheckpoint)
+  assert.equal(gemManager.count, 0)
+  assert.equal(player.exp, totalExp)
+  restoreExpeditionCheckpoint(engine, savedLoot)
+  assert.equal(gemManager.count, 1)
+  const [restoredCore] = gemManager._gems
+  assert.deepEqual([restoredCore.x, restoredCore.y, restoredCore.type, restoredCore.coreChoices],
+    [entranceCore.x, entranceCore.y, entranceCore.type, entranceCore.coreChoices])
+  engine.start()
+  engine.update(.05)
+  assert.equal(skillChoices.length, 0, '读档后先播放开场，再结算升级')
+  engine.update(2)
+  assert.equal(engine.runState, 'active')
+  assert.equal(player.level, 2)
+  assert.equal(skillChoices.length, 1)
+  assert.equal(engine._pauseLock, 1)
+  while (skillChoices.length) {
+    assert.equal(skillChoices.length, 1)
+    const level = player.level
+    const canLevelAgain = player.exp >= player.maxExp
+    const [skill] = skillChoices.shift()
+    assert.equal(engine.applySkill(skill), true)
+    assert.equal(player.level, level + Number(canLevelAgain))
+  }
+  assert.ok(player.level >= 3)
+  assert.ok(player.exp < player.maxExp)
+  assert.equal(engine._pauseLock, 0)
+  assert.equal(restoredCore.state, 'idle')
+  player.x = restoredCore.x
+  player.y = restoredCore.y
+  for (let i = 0; i < 3 && !coreChoice; i++) gemManager.update(.05)
+  assert.equal(coreChoice?.coreChoice, true)
+  assert.equal(engine.resolveOriginCoreChoice(restoredCore.coreChoices[1]), true)
+  assert.equal(gemManager.count, 0)
+  assert.equal(player.elements.get(restoredCore.coreChoices[1]), 1)
+  console.log('✓ Expedition loot: full XP and the guardian core survive checkpoints, with level choices deferred until after the intro')
+
   setAccountCampaign({ unlockedStage: 20, stageStars: {}, tutorialCompleted: true })
   engine.configureGameplay('tower-defense')
   for (const endless of [false, true]) {

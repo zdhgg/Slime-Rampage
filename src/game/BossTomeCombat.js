@@ -1,4 +1,4 @@
-import { BOSS_TOME_BY_ID, PARTNER_TOME_CHOICES, tomeLevel } from './BossTomes.js'
+import { BOSS_TOME_BY_ID, PARTNER_TOME_CHOICES, RICOCHET_RECHARGE_RANKS, tomeLevel } from './BossTomes.js'
 import { traceShadowPath, shadowLineClear } from './ShadowGeometry.js'
 
 const alive = e => e?.active && e.hp > 0 && !e.devouring
@@ -43,7 +43,11 @@ export class BossTomeCombat {
       w.damage *= ratio(1 + bonus(level, .12, .2), 1 + bonus(old, .12, .2))
       w.projectileSpeed *= ratio(1 + bonus(level, .1, .15), 1 + bonus(old, .1, .15))
     }
-    if (['boss_rico_recharge', 'boss_assassin_voidstep', 'boss_pet_command'].includes(s.id)) {
+    if (s.id === 'boss_rico_recharge') {
+      const previousReduction = RICOCHET_RECHARGE_RANKS[old - 1]?.skillReduction ?? 0
+      const { skillReduction } = RICOCHET_RECHARGE_RANKS[level - 1]
+      p.activeSkillCdMultiplier *= ratio(100 - skillReduction, 100 - previousReduction)
+    } else if (s.id === 'boss_assassin_voidstep' || s.id === 'boss_pet_command') {
       p.activeSkillCdMultiplier *= ratio(1 - bonus(level, .08, .15), 1 - bonus(old, .08, .15))
     }
     if (s.id === 'boss_pet_vitality') {
@@ -199,8 +203,11 @@ export class BossTomeCombat {
       if (target) this.schedule(0, () => { this.deal(target, this.base()); this.w._ring?.(target.x, target.y, '#c39be6', 28) })
     }
     if (ctx.autoSpell) this.onSpellHit(e)
-    if (ctx.activeRico && this.rank('rico_recharge') === 3 && this.p.hp < this.p.maxHp && this.time >= (this.ready.heal || 0)) {
-      this.ready.heal = this.time + 20; this.p.heal(1)
+    if (ctx.activeRico && !this.p.dead && this.p.hp < this.p.maxHp && this.time >= (this.ready.heal || 0)) {
+      const rank = RICOCHET_RECHARGE_RANKS[this.rank('rico_recharge') - 1]
+      if (!rank) return
+      this.ready.heal = this.time + rank.healCooldown
+      this.p.heal(rank.healAmount, '冷凝弹腺')
     }
   }
   echoMultiplier(random = Math.random) {

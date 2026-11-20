@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict'
 import { SKILL_DATABASE } from './src/game/SkillPool.js'
-import { SHADOW_ROUTE_SKILLS } from './src/game/ShadowBuild.js'
+import { SHADOW_ROUTE_SKILLS, SHADOW_ENDLESS_SKILL } from './src/game/ShadowBuild.js'
 import { SHADOW_ICON_COLORS, SHADOW_ICON_MAP, SHADOW_ICON_ROUTES } from './src/components/shadowIconMap.js'
 
 const shadowIds = [...new Set([
   ...SKILL_DATABASE.assassin.primary.map(skill => skill.id),
   ...SHADOW_ROUTE_SKILLS.map(skill => skill.id),
+  SHADOW_ENDLESS_SKILL.id,
 ])]
 const missing = shadowIds.filter(id => !SHADOW_ICON_MAP[id])
 assert.deepEqual(missing, [], `暗影技能缺少线性图标：${missing.join(', ')}`)

@@ -62,4 +62,15 @@ function pressure(legacy) {
 const before=pressure(true), after=pressure(false)
 assert.ok(after.killed > before.killed)
 assert.ok(after.damage > before.damage)
+{
+  const g = createArena('shadow')
+  try {
+    const cs = g.weaponSystem.shadowCombat.clones
+    const knight = spawn(g, { type: 'knight', x: 35 })
+    const alch = spawn(g, { type: 'alchemist', x: 200 })
+    const clone = cs.createAt(g.player, 0)
+    assert.equal(cs.nearest(clone), alch, '分身优先将炼金投弹手视作后排法系优先目标')
+    console.log('✓ 5. 炼金投弹手同样纳入分身后排优先锁定')
+  } finally { dispose(g) }
+}
 console.log('前排遮挡／340px 四法师／3 秒分身输出对照', {before,after})

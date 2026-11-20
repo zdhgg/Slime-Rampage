@@ -1,4 +1,4 @@
-import { SHADOW_BASE_EVASION, SHADOW_MAX_EVASION } from '../ShadowSkills.js'
+import { SHADOW_ASSAULT_EVASION_CAP, SHADOW_BASE_EVASION, SHADOW_EVADE_PITY_CAP, SHADOW_EVADE_PITY_STEP, SHADOW_MAX_EVASION } from '../ShadowSkills.js'
 import { Entity } from '../core/Entity.js'
 import { getActiveReactions, getElement, getReaction, reactionForPair, rankElements } from '../ElementSystem.js'
 import { ENDLESS_FORMATION_BREAK_SPEED_MUL } from '../EndlessMode.js'
@@ -187,7 +187,6 @@ export class Player extends Entity {
     this.geneFuryPerMissing = 0 // 困兽基因：每缺失 1 点生命的伤害加成
     this.geneRerolls = 0 // 备选蓝图：本局选卡刷新次数
     this.geneExtraOptions = 0 // 扩容视界：选卡面板候选 +N
-    this.geneMagnetAll = 0 // 全域磁感：拾取半径扩展为全屏
     this._huntRushTimer = 0 // 狩猎亢奋：击杀攻速窗口剩余秒数
 
     // —— 本体异变与软体反馈（评审改造） ——
@@ -285,6 +284,18 @@ export class Player extends Entity {
     this.shadowAssaultClone = false
     this.evasionFlash = 0
     this.evasionCount = 0
+    this.shadowEvasionMisses = 0
+    this.shadowEvadeRushTimer = 0
+    this.shadowEvadeCritTimer = 0
+    this.shadowSpellCounterTimer = 0
+    this.shadowRiposteCritTimer = 0
+    this.shadowSoulSurgeTimer = 0
+    this.shadowAssaultBuffTimer = 0
+    this.shadowAssaultEvasionBonus = 0
+    this.shadowAssaultCritBonus = 0
+    this.shadowWardLevel = 0
+    this.shadowStrideLevel = 0
+    this.shadowEchoLifeBonus = 0
     this._dodgedAttacks = new WeakSet()
     this.shadowCleaveLevel = 0 // 暗影 T2：暴击触发短距横斩。
     this.genePetDamageMul = 1
@@ -405,7 +416,6 @@ export class Player extends Entity {
     this.geneFuryPerMissing = 0
     this.geneRerolls = 0
     this.geneExtraOptions = 0
-    this.geneMagnetAll = 0
     this._huntRushTimer = 0
     this.shadowCloneLord = false
     this.shadowAssaultClone = false
@@ -413,6 +423,18 @@ export class Player extends Entity {
     this._fireKick = 0
     this._gazeTimer = 0
     this.evasionCount = 0
+    this.shadowEvasionMisses = 0
+    this.shadowEvadeRushTimer = 0
+    this.shadowEvadeCritTimer = 0
+    this.shadowSpellCounterTimer = 0
+    this.shadowRiposteCritTimer = 0
+    this.shadowSoulSurgeTimer = 0
+    this.shadowAssaultBuffTimer = 0
+    this.shadowAssaultEvasionBonus = 0
+    this.shadowAssaultCritBonus = 0
+    this.shadowWardLevel = 0
+    this.shadowStrideLevel = 0
+    this.shadowEchoLifeBonus = 0
     this._dodgedAttacks = new WeakSet()
     this.shadowCleaveLevel = 0
     this.genePetDamageMul = 1
@@ -469,12 +491,12 @@ export class Player extends Entity {
   }
 
   /** 回复生命值 */
-  heal(amount = 1) {
+  heal(amount = 1, source = '圣疗治愈') {
     if (this.dead) return
     const prev = this.hp
     this.hp = Math.min(this.maxHp, this.hp + amount)
     if (this.hp > prev) {
-      this.game?.enemyManager?.addText(this.x, this.y - 18, `+${this.hp - prev} HP`, '圣疗治愈', '#2ecc71', 14)
+      this.game?.enemyManager?.addText(this.x, this.y - 18, `+${this.hp - prev} HP`, source, '#2ecc71', 14)
     }
   }
 
@@ -659,6 +681,16 @@ export class Player extends Entity {
    */
   gainExp(amount) {
     if (this.dead) return false // 死亡帧残差：不再结算经验/升级（防面板叠加、暂停锁失衡）
+    this.addExp(amount)
+    if (this.exp >= this.maxExp) {
+      this.settleLevelUp()
+      return true
+    }
+    return false
+  }
+
+  /** 结算经验收益，升级可延后到下一章开场结束。 */
+  addExp(amount) {
     const gained = Math.round(amount * this.expGainMul) // 经验基因倍率
     this.exp += gained
     // 涌泉基因：累计吸收经验达当前升级阈值比例时回血
@@ -671,11 +703,6 @@ export class Player extends Entity {
         this.heal(1)
       }
     }
-    if (this.exp >= this.maxExp) {
-      this.settleLevelUp()
-      return true
-    }
-    return false
   }
 
   /**
@@ -711,9 +738,24 @@ export class Player extends Entity {
   /**
    * 受击结算：无敌帧免疫 → 扣血 + 红闪 + 音效；hp 归零 → 死亡并触发游戏结束
    */
+  get rawEvasionChance() {
+    if (this.game?.startingStrain !== 'shadow') return 0
+    const domainBonus = this.game?.weaponSystem?.shadowCombat?.inDomain ? 0.08 : 0
+    return SHADOW_BASE_EVASION + this.shadowEvasionBonus + (this.geneShadowEvasionBonus || 0) + (this.shadowBossStep ? 0.1 : 0) + domainBonus
+  }
+
   get evasionChance() {
-    return this.game?.startingStrain === 'shadow'
-      ? Math.min(SHADOW_MAX_EVASION, SHADOW_BASE_EVASION + this.shadowEvasionBonus + (this.geneShadowEvasionBonus || 0) + (this.shadowBossStep ? 0.1 : 0)) : 0
+    if (this.game?.startingStrain !== 'shadow') return 0
+    const domainBonus = this.game?.weaponSystem?.shadowCombat?.inDomain ? 0.08 : 0
+    const passive = Math.min(SHADOW_MAX_EVASION + domainBonus, this.rawEvasionChance)
+    const assaultBonus = (this.shadowAssaultBuffTimer || 0) > 0 ? (this.shadowAssaultEvasionBonus || 0) : 0
+    return assaultBonus > 0 ? Math.min(SHADOW_ASSAULT_EVASION_CAP, passive + assaultBonus) : passive
+  }
+
+  get evasionOverflow() {
+    if (this.game?.startingStrain !== 'shadow') return 0
+    const domainBonus = this.game?.weaponSystem?.shadowCombat?.inDomain ? 0.08 : 0
+    return Math.max(0, this.rawEvasionChance - (SHADOW_MAX_EVASION + domainBonus))
   }
 
   hit(damage, attack = null) {
@@ -727,12 +769,16 @@ export class Player extends Entity {
       if (this.evasionFlash > 0) return false
       if (this._dodgedAttacks.has(attack)) return false
       this._dodgedAttacks.add(attack)
-      if (Math.random() < this.evasionChance) {
+      const effectiveEvasion = Math.min(0.85, this.evasionChance + Math.min(SHADOW_EVADE_PITY_CAP, (this.shadowEvasionMisses || 0) * SHADOW_EVADE_PITY_STEP))
+      if (Math.random() < effectiveEvasion) {
+        this.shadowEvasionMisses = 0
         this.evasionFlash = this.game?.bossTomes?.onEvade() ?? 0.2
         this.evasionCount++
+        this.game?.weaponSystem?.shadowCombat?.onEvade?.(attack)
         this.game.enemyManager.addText(this.x, this.y - 38, '闪避', null, '#d0baff', 16)
         return false
       }
+      this.shadowEvasionMisses = (this.shadowEvasionMisses || 0) + 1
     }
     if (this.devourDamageReductionTimer > 0 && this.devourDamageReduction > 0) {
       damage = reduceIncomingDamage(damage, this.devourDamageReduction, attack?.swarmTide)
@@ -753,7 +799,6 @@ export class Player extends Entity {
       this.gluttonGuard = Math.max(0, this.gluttonGuard - 1)
       damage = Math.max(0, damage - 1)
       if (this.gluttonGuard <= 0) this.gluttonGuardTimer = 0
-      this.game.weaponSystem._ring(this.x, this.y, '#d1efa0', this.radius + 14)
       gluttonHitCounterFired = true
       this.game.weaponSystem.gluttonCombat?.onHurt?.({ blocked: true })
       if (damage <= 0) {
@@ -783,10 +828,21 @@ export class Player extends Entity {
         return
       }
     }
+    const shadowCombat = this.game?.weaponSystem?.shadowCombat
+    const shadowShield = shadowCombat?.shield
+    if (shadowShield) {
+      damage = shadowShield.absorb(damage, attack)
+      if (damage <= 0) return false
+    }
+    if (shadowCombat) {
+      damage = shadowCombat.absorbPhysicalGuard(damage, attack)
+      if (damage <= 0) return false
+    }
     damage = this.game?.bossTomes?.absorb(damage, attack) ?? damage
     const shield = this.game?.weaponSystem?.spellCombat?.shield
     damage = shield ? shield.absorb(damage, attack) : damage
     if (damage <= 0) { this.invincible = .18; return false }
+    if (this.hp - damage <= 0 && this.game?.weaponSystem?.shadowCombat?.tryFatalSubstitute?.()) return false
     this.hp -= damage
     this.invincible = 0.5 * (this.geneIFramesMul || 1) // 0.5 秒无敌（饕餮原核可延长）：仍防贴脸每帧连击，但持续受压会稳定掉血——走位有收益
     this.flash = 0.25 // 受击红闪
@@ -839,6 +895,18 @@ export class Player extends Entity {
     this._leechHealCd = Math.max(0, this._leechHealCd - dt)
     this.flash = Math.max(0, this.flash - dt)
     this.evasionFlash = Math.max(0, this.evasionFlash - dt)
+    this.shadowEvadeRushTimer = Math.max(0, (this.shadowEvadeRushTimer || 0) - dt)
+    this.shadowEvadeCritTimer = Math.max(0, (this.shadowEvadeCritTimer || 0) - dt)
+    this.shadowSpellCounterTimer = Math.max(0, (this.shadowSpellCounterTimer || 0) - dt)
+    this.shadowRiposteCritTimer = Math.max(0, (this.shadowRiposteCritTimer || 0) - dt)
+    this.shadowSoulSurgeTimer = Math.max(0, (this.shadowSoulSurgeTimer || 0) - dt)
+    if (this.shadowAssaultBuffTimer > 0) {
+      this.shadowAssaultBuffTimer = Math.max(0, this.shadowAssaultBuffTimer - dt)
+      if (this.shadowAssaultBuffTimer <= 0) {
+        this.shadowAssaultEvasionBonus = 0
+        this.shadowAssaultCritBonus = 0
+      }
+    }
     this.volleyMoveTimer = Math.max(0, this.volleyMoveTimer - dt)
     if (this.stealthTimer > 0) this.stealthTimer -= dt
     if (this.killRushTimer > 0) this.killRushTimer -= dt
@@ -880,11 +948,21 @@ export class Player extends Entity {
       }
     }
 
+    const shadowCombat = this.game?.weaponSystem?.shadowCombat
+    const decoyEnemies = shadowCombat?.enabled ? this.game?.enemyManager?.enemies : null
     for (let i = this._decoys.length - 1; i >= 0; i--) {
       const decoy = this._decoys[i]
       decoy.life -= dt
       decoy.flash = Math.max(0, (decoy.flash || 0) - dt)
-      if (decoy.life <= 0) this._decoys.splice(i, 1)
+      const armed = decoy.echo && (decoy.maxLife - decoy.life) >= 0.2
+      const touched = armed && decoyEnemies?.some(e =>
+        e?.active && !e.devouring && e.hp > 0 &&
+        (e.x - decoy.x) ** 2 + (e.y - decoy.y) ** 2 <= (decoy.radius + (e.radius || 0) + 8) ** 2
+      )
+      if (decoy.life <= 0 || touched) {
+        this._decoys.splice(i, 1)
+        if (decoy.echo) shadowCombat?.burstKillEcho?.(decoy)
+      }
     }
 
     // 再生基因 / 再生核心：周期自动回复生命
@@ -997,6 +1075,10 @@ export class Player extends Entity {
       const adrenaline = this.adrenalineTimer > 0 ? this.adrenalineSpeed : 0
       const feast = (this.gluttonFeastTimer > 0 ? GLUTTON_FEAST_SPEED : 0) + (this.gluttonBerserkTimer > 0 ? 0.25 : 0)
       const originFlow = this.originMoveBuffTimer > 0 ? (this.originMoveBuff || 0) : 0
+      const shadowFlow = ((this.shadowEvadeRushTimer || 0) > 0 ? 0.18 : 0) +
+        ((this.shadowSpellCounterTimer || 0) > 0 ? 0.20 : 0) +
+        ((this.shadowSoulSurgeTimer || 0) > 0 ? 0.15 : 0) +
+        ((this.shadowAssaultBuffTimer || 0) > 0 ? 0.20 : 0)
       const terrainMul = this.game.mapFeatures?.speedMultiplierAt(this.x, this.y, 'player') || 1
       // 首领劣地（骑士王落点裂地）：与地形同一口径，取更低的一层，不改位置也不做碰撞
       const bossFieldMul = this.game.enemyManager?.playerFieldMultiplierAt?.(this.x, this.y) || 1
@@ -1004,7 +1086,7 @@ export class Player extends Entity {
         ? ENDLESS_FORMATION_BREAK_SPEED_MUL
         : 1
       const curSpeed = this.speed * (this.speedBuffTimer > 0 ? 1.25 : 1) *
-        (1 + rushBonus + adrenaline + feast + originFlow) * terrainMul * bossFieldMul * formationMul * (this.volleyMoveTimer > 0 ? 1.2 : 1) * (this.game?.bossTomes?.moveMultiplier || 1)
+        (1 + rushBonus + adrenaline + feast + originFlow + shadowFlow) * terrainMul * bossFieldMul * formationMul * (this.volleyMoveTimer > 0 ? 1.2 : 1) * (this.game?.bossTomes?.moveMultiplier || 1)
       this.x += dir.x * curSpeed * dt
       this.y += dir.y * curSpeed * dt
       // 点地移动：本帧位移越过落点时贴到目标并收掉目标点，
@@ -1062,7 +1144,9 @@ export class Player extends Entity {
   render(ctx) {
     const r = this.radius
     const t = this.elapsed
-    const isArenaOrigin = this.strainId === 'origin' && this.game?.gameplayId === 'arena'
+    const game = this.game
+    const isArena = game?.gameplayId === 'arena'
+    const isArenaOrigin = isArena && this.strainId === 'origin'
     const mut = this._mutation()
     const look = getSlimeFamilyArt(this.strainId)
     // Elemental wears its chosen elements as orbs and body tint; other strains ignore this.
@@ -1236,6 +1320,8 @@ export class Player extends Entity {
       hitJolt: Math.max(0, this.flash / 0.25),
       recoil: this.strainId === 'ricochet' ? this._fireKick : 0,
       coreGlow: this.strainId === 'elemental' ? Math.min(1, (this.game?.weaponSystem?.spellCombat?.castPulse || 0) / 0.25) : 0,
+      skillReady: isArena && game.running && !game.runFinished &&
+        game.runState !== 'expedition-intro' && !this.dead && game.strainSkillReady,
     }))
     // Evolution adds material and effects while retaining the selected character.
     if (mut.key !== 'base') {

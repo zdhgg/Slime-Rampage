@@ -390,44 +390,357 @@ function renderAcidBurst(ctx, burst) {
   }
 }
 
-/** 地面腐蚀光环（近战 360° 威慑半径）：极克制透明度，不压过敌方攻击红线。 */
+/** 闭合 C1 平滑有机膜轮廓：多频低幅蠕动（零临时数组分配）。 */
+function traceOrganicMembrane(ctx, cx, cy, rx, ry, t, seed = 0, amp = 0.036, segments = 28) {
+  const step = TAU / segments
+  const wobble = a => 1 + amp * (0.62 * Math.sin(a * 4 + t * 1.65 + seed) + 0.38 * Math.cos(a * 7 - t * 2.15 + seed * 1.7))
+  const aLast = (segments - 1) * step
+  const wLast = wobble(aLast)
+  const xLast = cx + Math.cos(aLast) * rx * wLast
+  const yLast = cy + Math.sin(aLast) * ry * wLast
+  const w0 = wobble(0)
+  let prevX = cx + rx * w0
+  let prevY = cy
+  ctx.beginPath()
+  ctx.moveTo((xLast + prevX) * 0.5, (yLast + prevY) * 0.5)
+  for (let i = 1; i <= segments; i++) {
+    const a = (i % segments) * step
+    const w = wobble(a)
+    const nx = cx + Math.cos(a) * rx * w
+    const ny = cy + Math.sin(a) * ry * w
+    ctx.quadraticCurveTo(prevX, prevY, (prevX + nx) * 0.5, (prevY + ny) * 0.5)
+    prevX = nx
+    prevY = ny
+  }
+  ctx.closePath()
+}
+
+/** 池内循环沸腾/破裂的小酸液气泡（纯时间确定性驱动，零堆内存分配）。 */
+function renderBioBubbles(ctx, radius, t, count, fillCol, rimCol, seed = 0) {
+  for (let i = 0; i < count; i++) {
+    const rate = 0.48 + (i % 3) * 0.14
+    const raw = t * rate + i * 0.31 + seed
+    const cycle = Math.floor(raw)
+    const u = raw - cycle
+    const a = (i / count) * TAU + Math.sin(cycle * 3.7 + i * 2.1 + seed) * 0.85
+    const dist = radius * (0.36 + 0.44 * (0.5 + 0.5 * Math.sin(cycle * 5.3 + i * 4.1 + seed)))
+    const bx = Math.cos(a) * dist
+    const by = Math.sin(a) * dist - u * 4.5
+    const baseR = Math.min(4.2, Math.max(2.0, radius * 0.032)) + (i % 2) * 0.85
+    if (u < 0.8) {
+      const grow = u / 0.8
+      const br = baseR * (0.35 + grow * 0.65)
+      const fade = Math.sin(grow * Math.PI)
+      ctx.globalAlpha = fade * 0.34
+      ctx.fillStyle = fillCol
+      ctx.beginPath(); ctx.arc(bx, by, br, 0, TAU); ctx.fill()
+      ctx.globalAlpha = fade * 0.72
+      ctx.strokeStyle = rimCol
+      ctx.lineWidth = 1.1
+      ctx.stroke()
+      ctx.globalAlpha = fade * 0.85
+      ctx.fillStyle = '#f8ffe6'
+      ctx.beginPath(); ctx.arc(bx - br * 0.34, by - br * 0.34, Math.max(0.7, br * 0.24), 0, TAU); ctx.fill()
+    } else {
+      const pop = (u - 0.8) / 0.2
+      const br = baseR * (1 + pop * 0.85)
+      ctx.globalAlpha = (1 - pop) * 0.52
+      ctx.strokeStyle = rimCol
+      ctx.lineWidth = 1.1
+      ctx.beginPath(); ctx.arc(bx, by, br, 0, TAU); ctx.stroke()
+    }
+  }
+}
+
+/** 沿有机蠕动轮廓绘制一小段贴合弧段（用于弯月面局部高光，零分配）。 */
+function traceOrganicArc(ctx, cx, cy, rx, ry, startA, endA, t, seed = 0, amp = 0.036, steps = 8) {
+  ctx.beginPath()
+  for (let i = 0; i <= steps; i++) {
+    const a = startA + ((endA - startA) * i) / steps
+    const w = 1 + amp * (0.62 * Math.sin(a * 4 + t * 1.65 + seed) + 0.38 * Math.cos(a * 7 - t * 2.15 + seed * 1.7))
+    const px = cx + Math.cos(a) * rx * w
+    const py = cy + Math.sin(a) * ry * w
+    if (i === 0) ctx.moveTo(px, py)
+    else ctx.lineTo(px, py)
+  }
+}
+
+/** 地面腐蚀光环（近战 360° 威慑半径）：轻盈通透的能量光环，压在实体与敌方红线预警之下。 */
 export function renderCorrodeAura(ctx, combat) {
   const p = combat.player
   const radius = combat.auraRadius()
   if (!(radius > 0)) return
   const t = p.elapsed || 0
   const isMire = combat.route === 'mire'
-  const pulse = 0.5 + 0.5 * Math.sin(t * 4.5)
+  const pulse = 0.5 + 0.5 * Math.sin(t * 4.2)
+  let tickFlash = 0
+  for (const fx of combat.auraPulses || []) {
+    tickFlash = Math.max(tickFlash, clamp01(fx.life / fx.maxLife))
+  }
+
+  const pal = isMire ? {
+    edgeFill: 'rgba(138, 224, 64, 0.14)',
+    edgeFade: 'rgba(138, 224, 64, 0.04)',
+    glow: 'rgba(176, 248, 86, 0.24)',
+    darkRim: 'rgba(34, 68, 20, 0.40)',
+    ring: '#cafc6e',
+    arc: '#f0ffc2',
+    innerDash: 'rgba(202, 248, 114, 0.28)',
+    pulse: '#e8ffb2',
+  } : {
+    edgeFill: 'rgba(132, 220, 74, 0.10)',
+    edgeFade: 'rgba(132, 220, 74, 0.025)',
+    glow: 'rgba(162, 242, 92, 0.18)',
+    darkRim: 'rgba(36, 68, 24, 0.34)',
+    ring: '#b2ee6e',
+    arc: '#e6ffb4',
+    innerDash: 'rgba(186, 238, 116, 0.22)',
+    pulse: '#dcffa4',
+  }
+
   ctx.save()
   ctx.translate(p.x, p.y)
-  const grad = ctx.createRadialGradient(0, 0, p.radius * 0.7, 0, 0, radius)
-  grad.addColorStop(0, isMire ? 'rgba(181, 214, 111, 0.16)' : 'rgba(145, 224, 102, 0.11)')
-  grad.addColorStop(0.78, isMire ? 'rgba(130, 194, 72, 0.11)' : 'rgba(115, 198, 84, 0.07)')
-  grad.addColorStop(1, 'rgba(115, 198, 84, 0)')
+
+  // 1. 极克制的外缘渐变底晕（中心完全清透，只在 72%~100% 边缘处淡出光晕，不显沉重泥沼感）
+  const grad = ctx.createRadialGradient(0, 0, radius * 0.55, 0, 0, radius)
+  grad.addColorStop(0, 'rgba(132, 220, 74, 0)')
+  grad.addColorStop(0.58, pal.edgeFade)
+  grad.addColorStop(0.95, pal.edgeFill)
+  grad.addColorStop(1, 'rgba(132, 220, 74, 0)')
   ctx.fillStyle = grad
   ctx.beginPath()
   ctx.arc(0, 0, radius, 0, TAU)
   ctx.fill()
 
-  ctx.globalAlpha = (isMire ? 0.34 : 0.22) + pulse * 0.08
-  ctx.strokeStyle = isMire ? '#c5eb7c' : '#9ee276'
-  ctx.lineWidth = isMire ? 1.8 : 1.3
-  ctx.setLineDash([7, 7])
-  ctx.lineDashOffset = -t * 24
+  // 2. 柔和外光晕 + 深色对比细边 + 锐利主光环（亮暗双层确保草地与浅色土路同样清晰）
+  ctx.globalAlpha = 0.72 + pulse * 0.14 + tickFlash * 0.2
+  ctx.strokeStyle = pal.glow
+  ctx.lineWidth = isMire ? 7.5 : 6
   ctx.beginPath()
   ctx.arc(0, 0, radius, 0, TAU)
   ctx.stroke()
+
+  ctx.globalAlpha = 0.82
+  ctx.strokeStyle = pal.darkRim
+  ctx.lineWidth = isMire ? 3.2 : 2.8
+  ctx.beginPath()
+  ctx.arc(0, 0, radius, 0, TAU)
+  ctx.stroke()
+
+  ctx.globalAlpha = (isMire ? 0.82 : 0.68) + pulse * 0.12 + tickFlash * 0.18
+  ctx.strokeStyle = pal.ring
+  ctx.lineWidth = isMire ? 1.9 : 1.6
+  ctx.beginPath()
+  ctx.arc(0, 0, radius, 0, TAU)
+  ctx.stroke()
+
+  // 3. 轻盈内圈细刻度虚线（强化“光环/力场”的精准边界感，几乎零重量感）
+  ctx.globalAlpha = 0.75
+  ctx.strokeStyle = pal.innerDash
+  ctx.lineWidth = 1.1
+  ctx.setLineDash([8, 10])
+  ctx.lineDashOffset = t * 18
+  ctx.beginPath()
+  ctx.arc(0, 0, radius * 0.88, 0, TAU)
+  ctx.stroke()
   ctx.setLineDash([])
 
+  // 4. 沿主光环顺时针流转的亮弧与微光点，带出灵动流动感
+  const arcCount = isMire ? 4 : 3
+  const arcLen = isMire ? 0.52 : 0.44
+  ctx.lineCap = 'round'
+  for (let i = 0; i < arcCount; i++) {
+    const a0 = t * 0.95 + (i / arcCount) * TAU
+    ctx.globalAlpha = (isMire ? 0.72 : 0.56) + pulse * 0.15
+    ctx.strokeStyle = pal.arc
+    ctx.lineWidth = isMire ? 2.4 : 2.0
+    ctx.beginPath()
+    ctx.arc(0, 0, radius, a0, a0 + arcLen)
+    ctx.stroke()
+
+    const dotA = a0 + arcLen + 0.1
+    ctx.globalAlpha = isMire ? 0.78 : 0.64
+    ctx.fillStyle = pal.arc
+    ctx.beginPath()
+    ctx.arc(Math.cos(dotA) * radius, Math.sin(dotA) * radius, 1.8, 0, TAU)
+    ctx.fill()
+  }
+
+  // 5. 跳伤触敌脉冲：利落外扩的细光波
   for (const fx of combat.auraPulses || []) {
     const k = clamp01(fx.life / fx.maxLife)
-    ctx.globalAlpha = k * 0.28
-    ctx.strokeStyle = isMire ? '#dff8a6' : '#c0ee9b'
-    ctx.lineWidth = 2
+    const rPulse = radius * (0.42 + (1 - k) * 0.58)
+    ctx.globalAlpha = k * 0.34
+    ctx.strokeStyle = pal.glow
+    ctx.lineWidth = 5 * k + 1
     ctx.beginPath()
-    ctx.arc(0, 0, radius * (0.45 + (1 - k) * 0.55), 0, TAU)
+    ctx.arc(0, 0, rPulse, 0, TAU)
+    ctx.stroke()
+
+    ctx.globalAlpha = k * 0.68
+    ctx.strokeStyle = pal.pulse
+    ctx.lineWidth = 1.6
+    ctx.beginPath()
+    ctx.arc(0, 0, rPulse, 0, TAU)
     ctx.stroke()
   }
+
+  ctx.restore()
+}
+
+/** 腐沼酸沼（地面层）：轻量半透明腐蚀池 + 细边与微量气泡，避免地面糊重。 */
+export function renderMires(ctx, combat) {
+  if (!combat.mires?.length) return
+  const t = combat.player?.elapsed || 0
+  for (const mire of combat.mires) {
+    const alpha = clamp01((mire.life / Math.max(0.01, mire.maxLife)) * 2.2)
+    const seed = mire.x * 0.03 + mire.y * 0.05
+    ctx.save()
+    ctx.translate(mire.x, mire.y)
+    ctx.globalAlpha = alpha
+
+    traceOrganicMembrane(ctx, 0, 0, mire.r, mire.r, t, seed, 0.032, 24)
+    const grad = ctx.createRadialGradient(0, 0, mire.r * 0.2, 0, 0, mire.r)
+    grad.addColorStop(0, 'rgba(116, 192, 54, 0.14)')
+    grad.addColorStop(0.75, 'rgba(148, 218, 72, 0.22)')
+    grad.addColorStop(1, 'rgba(176, 238, 92, 0.28)')
+    ctx.fillStyle = grad
+    ctx.fill()
+    ctx.strokeStyle = 'rgba(36, 70, 22, 0.45)'
+    ctx.lineWidth = 1.8
+    ctx.lineJoin = 'round'
+    ctx.stroke()
+
+    ctx.lineCap = 'round'
+    ctx.strokeStyle = 'rgba(226, 255, 160, 0.48)'
+    ctx.lineWidth = 1.3
+    traceOrganicArc(ctx, 0, 0, mire.r * 0.93, mire.r * 0.93, -2.5, -1.75, t, seed, 0.032, 8)
+    ctx.stroke()
+
+    renderBioBubbles(ctx, mire.r * 0.85, t, 3, '#b8ef6a', '#e8ffba', mire.x * 0.07)
+    ctx.restore()
+  }
+}
+
+/** 暴食胃铠（轻盈生物护膜）：无遮挡雾罩，用双层描边微光弧与菱形护甲晶核清晰表达层数。 */
+export function renderGluttonGuard(ctx, combat) {
+  const p = combat.player
+  if (!(p.gluttonGuard > 0 && p.gluttonGuardTimer > 0)) return
+  const t = p.elapsed || 0
+  const r = p.radius
+  const layers = Math.max(1, Math.min(8, Math.round(p.gluttonGuard)))
+  const cap = Math.max(layers, combat.guardMax || 2)
+  const isShell = combat.route === 'shell'
+  const pose = combat.pose
+  const pulseK = clamp01((combat.guardPulse || 0) / 0.24)
+  const lowRatio = p.gluttonGuardTimer < 0.75 ? 1 - clamp01(p.gluttonGuardTimer / 0.75) : 0
+  const flicker = lowRatio > 0 ? 0.58 + 0.42 * Math.sin(t * 24) : 1
+
+  const ox = pose ? Math.cos(pose.angle) * r * pose.offset : 0
+  const oy = (pose ? Math.sin(pose.angle) * r * pose.offset : 0) + r * 0.10
+  const swell = 1 + Math.sin(t * 3.4) * 0.02 + pulseK * 0.12
+  let stretchX = 1
+  let stretchY = 1
+  if (pose) {
+    const horizontal = Math.cos(pose.angle) ** 2
+    const poseSx = pose.sx * horizontal + pose.sy * (1 - horizontal)
+    const poseSy = pose.sy * horizontal + pose.sx * (1 - horizontal)
+    stretchX = 1 + (poseSx - 1) * 0.65
+    stretchY = 1 + (poseSy - 1) * 0.65
+  }
+  const rx = r * 1.25 * swell * stretchX
+  const ry = r * 0.96 * swell * stretchY
+
+  const pal = isShell ? {
+    track: 'rgba(245, 206, 104, 0.22)',
+    glow: 'rgba(245, 206, 104, 0.30)',
+    line: '#543714',
+    arc: '#f5cf64',
+    spec: '#fff7d0',
+  } : {
+    track: 'rgba(176, 240, 108, 0.20)',
+    glow: 'rgba(176, 240, 108, 0.26)',
+    line: '#284e20',
+    arc: '#c2f678',
+    spec: '#f2ffd4',
+  }
+
+  ctx.save()
+  ctx.translate(p.x + ox, p.y + oy)
+
+  // 1. 极淡槽位底环：满层上限多于当前层数时，一眼读出空缺槽位
+  ctx.globalAlpha = flicker
+  ctx.strokeStyle = pal.track
+  ctx.lineWidth = 1.4
+  ctx.beginPath()
+  ctx.ellipse(0, 0, rx, ry, 0, 0, TAU)
+  ctx.stroke()
+
+  // 2. 分段可数的轻盈护盾弧 + 菱形甲片节点（cap === 1 时闭合成对称完整护环）
+  const orbit = t * 0.52
+  const step = TAU / cap
+  const gap = cap === 1 ? 0 : Math.min(0.36, step * 0.30)
+  const span = step - gap
+
+  ctx.lineCap = 'round'
+  for (let i = 0; i < layers; i++) {
+    const start = (cap === 1 ? -Math.PI / 2 : -Math.PI / 2 + gap * 0.5) + orbit + i * step
+    const end = start + span
+
+    // 柔光外晕
+    ctx.globalAlpha = (0.78 + pulseK * 0.22) * flicker
+    ctx.strokeStyle = pal.glow
+    ctx.lineWidth = 5.4 + pulseK * 1.8
+    ctx.beginPath()
+    ctx.ellipse(0, 0, rx, ry, 0, start, end)
+    ctx.stroke()
+
+    // 深色外轮廓底边（保持手绘赛璐璐锐度）
+    ctx.globalAlpha = 0.88 * flicker
+    ctx.strokeStyle = pal.line
+    ctx.lineWidth = 3.5 + pulseK * 0.6
+    ctx.beginPath()
+    ctx.ellipse(0, 0, rx, ry, 0, start, end)
+    ctx.stroke()
+
+    // 主体亮盾弧
+    ctx.globalAlpha = 0.94 * flicker
+    ctx.strokeStyle = pal.arc
+    ctx.lineWidth = 2.0 + pulseK * 0.5
+    ctx.beginPath()
+    ctx.ellipse(0, 0, rx, ry, 0, start, end)
+    ctx.stroke()
+
+    // 中段高光丝
+    const hiPad = span * 0.22
+    if (span > hiPad * 2.2) {
+      ctx.globalAlpha = 0.85 * flicker
+      ctx.strokeStyle = pal.spec
+      ctx.lineWidth = 1.0
+      ctx.beginPath()
+      ctx.ellipse(0, 0, rx + 0.4, ry + 0.4, 0, start + hiPad, end - hiPad)
+      ctx.stroke()
+    }
+
+    // 每层护盾的菱形节点（与法术/暗影护盾形成家族统一的可读语言）
+    const mid = start + span * 0.5
+    const px = Math.cos(mid) * rx
+    const py = Math.sin(mid) * ry
+    const pip = 3.2 + pulseK * 0.8
+    ctx.globalAlpha = 0.96 * flicker
+    ctx.fillStyle = pal.spec
+    ctx.strokeStyle = pal.line
+    ctx.lineWidth = 1.2
+    ctx.beginPath()
+    ctx.moveTo(px, py - pip)
+    ctx.lineTo(px + pip * 0.82, py)
+    ctx.lineTo(px, py + pip)
+    ctx.lineTo(px - pip * 0.82, py)
+    ctx.closePath()
+    ctx.fill()
+    ctx.stroke()
+  }
+
   ctx.restore()
 }
 
@@ -459,42 +772,64 @@ export function renderBiteFeedback(ctx, combat) {
     ctx.stroke()
   }
 
-  // 酸刺反震扩散波
+  // 酸刺反震扩散波：锥形凝胶酸刺 + 深色轮廓 + 微震环
   for (const sp of combat.spikes || []) {
     const k = clamp01(sp.life / sp.maxLife)
     const progress = 1 - k
     const count = sp.count || 10
-    ctx.strokeStyle = sp.color || '#f1c76b'
-    ctx.lineWidth = sp.surge ? 2.4 : 1.7
-    ctx.globalAlpha = k * 0.85
+    const coreColor = sp.color || '#f1c76b'
+    ctx.globalAlpha = k * 0.28
+    ctx.strokeStyle = coreColor
+    ctx.lineWidth = sp.surge ? 2.4 : 1.6
+    ctx.beginPath()
+    ctx.arc(sp.x, sp.y, sp.radius * (0.36 + progress * 0.56), 0, TAU)
+    ctx.stroke()
+
+    ctx.lineJoin = 'round'
     for (let i = 0; i < count; i++) {
       const a = (i / count) * TAU + (sp.offset || 0)
-      const r0 = sp.radius * (0.28 + progress * 0.45)
-      const r1 = sp.radius * (0.58 + progress * 0.42)
+      const ca = Math.cos(a), sa = Math.sin(a)
+      const r0 = sp.radius * (0.28 + progress * 0.44)
+      const r1 = sp.radius * (0.62 + progress * 0.38)
+      const baseHalf = (sp.surge ? 3.2 : 2.3) * k + 0.6
+      const px = -sa * baseHalf, py = ca * baseHalf
+      ctx.globalAlpha = k * 0.9
+      ctx.fillStyle = coreColor
       ctx.beginPath()
-      ctx.moveTo(sp.x + Math.cos(a) * r0, sp.y + Math.sin(a) * r0)
-      ctx.lineTo(sp.x + Math.cos(a) * r1, sp.y + Math.sin(a) * r1)
+      ctx.moveTo(sp.x + ca * r0 + px, sp.y + sa * r0 + py)
+      ctx.lineTo(sp.x + ca * r1, sp.y + sa * r1)
+      ctx.lineTo(sp.x + ca * r0 - px, sp.y + sa * r0 - py)
+      ctx.quadraticCurveTo(sp.x + ca * (r0 - 3), sp.y + sa * (r0 - 3), sp.x + ca * r0 + px, sp.y + sa * r0 + py)
+      ctx.closePath()
+      ctx.fill()
+      ctx.strokeStyle = '#334d1d'
+      ctx.lineWidth = 1.2
       ctx.stroke()
     }
   }
 
-  // 多层胃铠：按当前层数分段绘制可数软壳弧，有几层就有几段弧。
-  if (p.gluttonGuard > 0 && p.gluttonGuardTimer > 0) {
-    const layers = Math.max(1, Math.min(8, Math.round(p.gluttonGuard)))
-    const cap = Math.max(layers, combat.guardMax || 2)
-    const radius = p.radius + 4 + combat.guardPulse * 8
-    const step = TAU / cap
-    const gap = Math.min(0.24, step * 0.28)
-    ctx.strokeStyle = combat.route === 'shell' ? '#f3cf7b' : '#d1efa0'
-    ctx.lineWidth = 2.6
-    ctx.lineCap = 'round'
-    ctx.globalAlpha = Math.min(0.82, 0.35 + p.gluttonGuardTimer * 0.35)
-    for (let i = 0; i < layers; i++) {
-      const start = -Math.PI / 2 + i * step + gap / 2
-      ctx.beginPath()
-      ctx.arc(p.x, p.y, radius, start, start + step - gap)
-      ctx.stroke()
-    }
+  // 胃铠碎裂：崩散的轻盈护甲晶屑
+  for (const sh of combat.guardShatters || []) {
+    const k = clamp01(sh.life / sh.maxLife)
+    const s = sh.size * 0.72 * (0.55 + k * 0.45)
+    ctx.save()
+    ctx.translate(sh.x, sh.y)
+    ctx.rotate(sh.angle)
+    ctx.globalAlpha = k * 0.92
+    ctx.fillStyle = sh.shell ? '#f2ca62' : '#b6f074'
+    ctx.strokeStyle = sh.shell ? '#543714' : '#2a5022'
+    ctx.lineWidth = 1.35
+    ctx.lineJoin = 'round'
+    ctx.beginPath()
+    ctx.moveTo(-s * 1.1, -s * 0.35)
+    ctx.quadraticCurveTo(0, -s * 0.9, s * 1.15, -s * 0.15)
+    ctx.quadraticCurveTo(0, s * 0.45, -s * 1.1, -s * 0.35)
+    ctx.closePath()
+    ctx.fill()
+    ctx.stroke()
+    ctx.fillStyle = sh.shell ? '#fff6cb' : '#f2ffd0'
+    ctx.beginPath(); ctx.arc(-s * 0.2, -s * 0.35, Math.max(0.6, s * 0.22), 0, TAU); ctx.fill()
+    ctx.restore()
   }
 
   for (const burst of combat.acidBursts) renderAcidBurst(ctx, burst)

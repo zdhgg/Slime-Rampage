@@ -75,7 +75,8 @@ export function spec(ctx, x, y, rot, s = 1, a = .92) {
  * Flat-plus cel body.
  *  1. shade fill            2. base = copy offset toward the light (shade
  *  crescent remains bottom-right)   3. tint hook   4. light patches
- *  5. inner hook   6. optional rim crescent   7. specular   8. outline
+ *  5. inner hook   6. optional rim crescent   7. ready highlight
+ *  8. specular     9. outline
  */
 export function cel(ctx, shape, pal, o = {}) {
   const b = shapeOf(shape)
@@ -98,6 +99,23 @@ export function cel(ctx, shape, pal, o = {}) {
     ctx.rect(-400, -400, 800, 800); ctx.clip('evenodd')
     ctx.fillStyle = pal.rim; ctx.fillRect(-400, -400, 800, 800)
     ctx.restore()
+  }
+  if (o.skillReady) {
+    // Clip the highlight to the gel so the dark contour and character palette stay readable.
+    const light = ctx.createLinearGradient(0, -55, 0, 44)
+    light.addColorStop(0, '#ffe19b')
+    light.addColorStop(.5, '#ffd084')
+    light.addColorStop(1, 'rgba(255, 176, 81, 0)')
+    b(ctx)
+    ctx.save()
+    ctx.globalAlpha *= .3
+    ctx.fillStyle = light
+    ctx.fill()
+    ctx.restore()
+    ctx.strokeStyle = light
+    ctx.lineWidth = lw(6)
+    ctx.lineJoin = 'round'
+    ctx.stroke()
   }
   if (o.spec) spec(ctx, o.spec[0], o.spec[1], o.spec[2] || -.45, o.spec[3] || 1, o.spec[4] || .92)
   ctx.restore()

@@ -1,11 +1,12 @@
 import { CHECKPOINT_VERSION } from './SaveProtocol.js'
 import { DIFFICULTY_IDS, getExpeditionStages } from './RunRules.js'
 import { STRAIN_IDS } from './Strains.js'
+import { ELEMENTS } from './ElementSystem.js'
 
-const omitted = new Set(['__proto__', 'prototype', 'constructor', 'game', 'weapon', 'player', 'input',
+const omitted = new Set(['__proto__', 'prototype', 'constructor', 'game', 'weapon', 'player', 'combat', 'input',
   'canvas', 'ctx', 'renderer', 'sound', 'enemies', '_pool', '_grid', '_projectiles', '_particles',
   '_texts', 'shots', 'fields', 'pendingRings', 'delayed', 'jobs', 'targets', 'huntTarget',
-  'swing', 'assault', 'flash', '_trail', '_aura', '_decoys', 'echoQueue', 'domains', 'marks',
+  'swing', 'assault', 'flash', '_trail', '_aura', '_decoys', 'echoQueue', 'domains', 'cleaves', 'echoes', 'waves', 'marks',
   'pounce', 'vortex', 'vortices', 'aimTarget', 'impacts', 'morsels', 'acidBursts', 'pounceEchoes', 'slams', 'spikes', 'auraPulses', 'mires'])
 
 function encode(value, ancestors = new Set()) {
@@ -41,6 +42,15 @@ function decode(value) {
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value)
 const positive = value => Number.isFinite(value) && value > 0
 const count = value => Number.isFinite(value) && value >= 0
+const elementId = value => typeof value === 'string' && Object.hasOwn(ELEMENTS, value)
+
+function validEntranceCore(core) {
+  if (core == null) return true // 既有章节存档不含此字段。
+  if (!object(core) || !elementId(core.type)) return false
+  const choices = core.coreChoices
+  return choices === null || (Array.isArray(choices) && choices.length === 2
+    && choices[0] === core.type && elementId(choices[1]) && choices[1] !== core.type)
+}
 
 function validEncoding(value, depth = 0) {
   if (depth > 32) return false
@@ -77,6 +87,7 @@ export function isRunCheckpoint(saved) {
       && Number.isInteger(player.level) && player.level >= 1 && object(saved.components.weaponSystem)
       && object(saved.metrics) && ['kills', 'elites', 'completed', 'failed', 'wave'].every(key => count(saved.metrics[key]))
       && object(saved.metrics.completedByType)
+      && validEntranceCore(saved.entranceCore)
   }
   if (saved.gameplay === 'tower-defense') {
     return Number.isInteger(saved.stage) && saved.stage >= 1 && saved.stage <= 99 && typeof saved.endless === 'boolean'
@@ -94,6 +105,7 @@ const engineFields = ['elapsed', 'genes', 'startingStrain', 'startingElement', '
   '_originSourceSeen', 'originCoreDropState', 'originCombo', 'skillLevels', 'bossSkillIds', 'bossSkillLevels',
   'strainDevourBonus', 'devourThreshold', '_mapSeed', '_runRandomState', '_spellCoreSeen']
 const components = ['player', 'weaponSystem', 'weaponSystem.gluttonCombat', 'weaponSystem.shadowCombat',
+  'weaponSystem.shadowCombat.shield',
   'weaponSystem.ricochetCombat', 'weaponSystem.petCombat', 'weaponSystem.spellCombat',
   'weaponSystem.spellCombat.shield', 'weaponSystem.spellCombat.lightning', 'weaponSystem.originCombat', 'weaponSystem.originSourceCombat',
   'weaponSystem.originOverload', 'bossTomes']
@@ -117,6 +129,7 @@ export function captureExpeditionCheckpoint(engine) {
   return {
     version: CHECKPOINT_VERSION, gameplay: 'arena', selection: { ...engine.runSelection },
     stage: engine.expeditionStage, label: `主战场远征 · 第 ${engine.expeditionStage} 章入口`,
+    entranceCore: engine.gemManager.expeditionEntranceCore,
     engine: capture(Object.fromEntries(engineFields.map(key => [key, engine[key]]))),
     components: Object.fromEntries(components.filter(path => at(engine, path)).map(path => [path, capture(at(engine, path))])),
     metrics: { kills: engine.weaponSystem.kills, elites: engine.weaponSystem.eliteKills,
@@ -135,6 +148,10 @@ export function restoreExpeditionCheckpoint(engine, saved) {
   // Enter the stage before restoring cooldowns/builds: transitions clear transient combat state.
   engine._enterExpeditionStage(saved.stage, true)
   for (const path of components) if (saved.components[path] && at(engine, path)) restoreFields(at(engine, path), saved.components[path])
+  // 旧存档的全屏磁感使用独立标记，已保存的半径尚未计入翻倍。
+  if (saved.components.player.geneMagnetAll === 1 && positive(saved.components.player.pickupRadius)) {
+    engine.player.pickupRadius *= 2
+  }
   engine.player._refreshElements()
   engine.player.dead = false
   engine.worldEvents.completed = saved.metrics.completed
@@ -144,6 +161,7 @@ export function restoreExpeditionCheckpoint(engine, saved) {
   engine._expeditionBaseline = { kills: saved.metrics.kills, elites: saved.metrics.elites,
     events: saved.metrics.completed, eventsByType: { ...saved.metrics.completedByType } }
   engine._placePlayerAtMapSpawn()
+  engine.gemManager.placeExpeditionEntranceCore(saved.entranceCore)
   engine._pauseLock = 0
   engine._pushStats()
   engine._pushCooldown()

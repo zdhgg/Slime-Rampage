@@ -140,6 +140,7 @@ export class Enemy extends Entity {
     this.damage = type === 'golem' ? 2 : 1 // 攻击伤害（魔像重击 2 点 / 其余 1 点）
     this.attackCd = Math.random() * 0.6 // 攻击冷却（秒），随机错峰开局
     this.objectiveTarget = null // 守巢章节的指定近战兵会改为攻击巢心
+    this.nestAggroTime = 0
 
     // —— 吞噬系统（评审改造：残血可吞噬，吞噬是核心爽点） ——
     this.devourable = false // 残血（<25%）且非 Boss → 可被史莱姆吞噬
@@ -266,6 +267,8 @@ export class Enemy extends Entity {
       }
     }
     const tomeHp = this.hp
+    // 有伤害的命中会引走攻巢敌人，护盾挡住伤害也算命中。
+    if (damage > 0 && this.active && this.objectiveTarget === 'nest') this.game?.mapFeatures?.drawNestAggro?.(this)
     if (this.shieldHits > 0 && damage > 0) {
       this.shieldHits-- // 护盾吸收本次伤害
       damage = 0
@@ -345,6 +348,7 @@ export class Enemy extends Entity {
    */
   _tickStatus(dt) {
     this.flash = Math.max(0, this.flash - dt)
+    if (this.nestAggroTime > 0) this.nestAggroTime = Math.max(0, this.nestAggroTime - dt)
     this.routTime = Math.max(0, this.routTime - dt)
     if (this.freeze > 0) this.freeze -= dt
     this.gluttonStagger = Math.max(0, (this.gluttonStagger || 0) - dt)
@@ -433,6 +437,7 @@ export class Enemy extends Entity {
     damage = this.outgoingDamage(damage)
     if (target.isMapObjective) target.hit?.(damage, this)
     else if (target.isPet) return this.game.weaponSystem.petCombat.hit(target, damage)
+    else if (target.isShadowClone) return this.game.weaponSystem?.shadowCombat?.clones?.hitByEnemy(target, damage)
     else if (target.isDecoy) player.hitDecoy(target, damage)
     else return player.hit(damage, { enemyAttack: true, swarmTide: !!this.swarmTide })
   }
@@ -759,6 +764,23 @@ export class Enemy extends Entity {
     const assets = AssetManager.getInstance()
     const hasArt = hasEnemyArt(artId)
     const phase = this._walkT + this._artSeed // 装饰相位加个体偏移，同屏不再齐步
+
+    // 只标记仍在冲向巢心的敌人，拉走目标后立即熄灭。
+    if (this.objectiveTarget === 'nest' && this.nestAggroTime === 0 && this.game.mapFeatures?.nestDefenseActive) {
+      const y = this.y - r - 16
+      ctx.save()
+      ctx.fillStyle = '#ffbe81'
+      ctx.strokeStyle = '#40271c'
+      ctx.lineWidth = 1.5
+      ctx.beginPath()
+      ctx.moveTo(this.x - 6, y - 3)
+      ctx.lineTo(this.x + 6, y - 3)
+      ctx.lineTo(this.x, y + 4)
+      ctx.closePath()
+      ctx.fill()
+      ctx.stroke()
+      ctx.restore()
+    }
 
     // 地面软阴影（悬浮单位更淡更散）
     const floating = this.type === 'mage' || this.type === 'priest' || this.type === 'wraith'

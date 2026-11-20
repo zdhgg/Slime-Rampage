@@ -176,6 +176,7 @@ const origin = {
     leaf(ctx, 4, -62, 46, 18, -.72 + sw, PAL.leaf)
     cel(ctx, originDome, PAL.origin, {
       c: [0, 20], lights: [[-40, -16, 28, 13, -.35]], spec: [-52, -14, -.4],
+      skillReady: st.skillReady,
       inner: c => {
         if (!fine()) return
         c.strokeStyle = 'rgba(255,255,255,.55)'; c.lineWidth = 1.6
@@ -248,10 +249,11 @@ function gluttonBigMouth(ctx, pl, gape = 1, t = 0) {
 }
 const glutton = {
   id: 'glutton', shadowRx: 104,
-  body(ctx) {
+  body(ctx, st = {}) {
     cel(ctx, gluttonBean, PAL.glutton, {
       c: [0, 22], off: [-8, -9], sc: .95,
       lights: [[-64, -2, 22, 10, -.3], [-46, -40, 8, 4.5, -.4], [34, -40, 8, 4.5, -.4]], spec: [-76, 4, -.5],
+      skillReady: st.skillReady,
     })
   },
   face(ctx, st) {
@@ -322,6 +324,7 @@ const ricochet = {
     const g = K.small ? 1.2 : 1, L = K.small ? 3 : 0
     cel(ctx, ricochetBall, pl, {
       c: [0, 20], lights: [[-30, -8, 26, 13, -.45]], spec: [-40, -12, -.5],
+      skillReady: st.skillReady,
       inner: c => {
         c.beginPath(); c.moveTo(-70, 52); c.quadraticCurveTo(0, 74, 70, 52); c.lineTo(70, 62); c.quadraticCurveTo(0, 84, -70, 62); c.closePath()
         c.fillStyle = 'rgba(235,252,255,.55)'; c.fill()
@@ -373,6 +376,7 @@ const elemental = {
     const pl = PAL.elemental, [e1, e2] = elementPair(st)
     cel(ctx, elementalHat, pl, {
       c: [0, 24],
+      skillReady: st.skillReady,
       tint: c => elemTint(c, e1, e2, -84, 84, .5 + (st.coreGlow || 0) * .2),
       lights: [[-38, 24, 20, 13, -.4], [0, -66, 4, 14, .4]], spec: [-48, 20, -.5],
       inner: c => {
@@ -463,7 +467,10 @@ const shadow = {
         ctx.restore()
       }
     }
-    cel(ctx, shadowLean, PAL.shadow, { c: [0, 16], off: [-7, -7], lights: [[30, -18, 18, 9, -.5]], spec: [44, -20, .5, .9, .55], rimOff: [-.8, 1] })
+    cel(ctx, shadowLean, PAL.shadow, {
+      c: [0, 16], off: [-7, -7], lights: [[30, -18, 18, 9, -.5]], spec: [44, -20, .5, .9, .55], rimOff: [-.8, 1],
+      skillReady: st.skillReady,
+    })
     if (fine()) {
       // faint violet ember at the tail tip so the whip stays readable on dark ground
       const tipX = -128 + shadowSway.a * 9, tipY = -98 + shadowSway.b * 7
@@ -499,7 +506,10 @@ const summoner = {
       const b = c => ell(c, x, y + bob, r, r * .94, 0)
       cel(ctx, b, PAL[k], { c: [x, y + bob], off: [-2.5, -3], sc: .9, spec: [x - r * .34, y + bob - r * .3, -.5, r / 22] })
     })
-    cel(ctx, motherBody, PAL.summoner, { c: [0, 20], lights: [[-34, -12, 20, 13, -.4]], spec: [-42, -18, -.5] })
+    cel(ctx, motherBody, PAL.summoner, {
+      c: [0, 20], lights: [[-34, -12, 20, 13, -.4]], spec: [-42, -18, -.5],
+      skillReady: st.skillReady,
+    })
   },
   face(ctx, st) {
     const pl = PAL.summoner, e = faceMode(st.expr), y0 = 14

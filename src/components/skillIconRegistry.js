@@ -1,5 +1,5 @@
 import {
-  Activity, Aperture, Asterisk, Atom, AudioLines, BatteryCharging, BetweenHorizontalStart, Biohazard, Blend, Bomb, Boxes, Brain, Cable, CircleDot, CircleGauge, CircleHelp, Cloud, CloudFog, CloudSnow, Crosshair, Crown, Diamond, Dna, Droplets, FireExtinguisher, Flame, Flower2, Focus, Gauge, Gem, GitMerge, HeartHandshake, HeartPulse, Hexagon, Infinity, Layers2, Link2, Magnet, Maximize2, MoveRight, MoveUpRight, Network, Orbit, PanelsTopLeft, Radar, Radio, RadioTower, RefreshCcw, RefreshCw, Repeat2, RotateCw, Route, Shell, Shield, ShieldAlert, ShieldCheck, ShieldOff, ShieldPlus, Siren, Skull, Snowflake, Sparkles, Split, Sprout, Sun, Swords, Target, TimerReset, Trophy, UsersRound, WandSparkles, Waves, Waypoints, Wind, Zap
+  Activity, Aperture, Asterisk, Atom, AudioLines, BatteryCharging, BetweenHorizontalStart, Biohazard, Blend, Bomb, Boxes, Brain, Cable, CircleDot, CircleGauge, CircleHelp, Cloud, CloudFog, CloudSnow, Crosshair, Crown, Diamond, Dna, Droplets, Eclipse, FireExtinguisher, Flame, Flower2, Focus, Gauge, Gem, GitMerge, HeartHandshake, HeartPulse, Hexagon, Infinity, Layers2, Link2, Magnet, Maximize2, MoveRight, MoveUpRight, Network, Orbit, PanelsTopLeft, Radar, Radio, RadioTower, RefreshCcw, RefreshCw, Repeat2, RotateCw, Route, Scissors, Shell, Shield, ShieldAlert, ShieldCheck, ShieldOff, ShieldPlus, Siren, Skull, Snowflake, Sparkles, Split, Sprout, Sun, Swords, Target, TimerReset, Trophy, UsersRound, WandSparkles, Waves, Waypoints, Wind, Zap
 } from 'lucide-vue-next'
 
 export const RICOCHET_ROUTE_COLORS = Object.freeze({
@@ -50,9 +50,9 @@ export const SYMBIOSIS_ICON_ROUTES = Object.freeze({
 export const SYMBIOSIS_ICON_COLORS = Object.freeze({ hunt: '#8edacb', spore: '#c3a4dc', guard: '#edc479', common: '#d8c7e8' })
 
 export const SHADOW_ICON_ROUTES = Object.freeze({
-  shadow_hunt_mark: 'hunt', shadow_hunt_pursuit: 'hunt', shadow_hunt_reap: 'hunt', shadow_hunt_refund: 'hunt', shadow_hunt_ultimate: 'hunt',
-  ass_echo: 'swarm', ass_legion: 'swarm', shadow_swarm_assault: 'swarm', shadow_swarm_reap: 'swarm', ass_capstone: 'swarm',
-  ass_cleave: 'blade', shadow_blade_arc: 'blade', shadow_blade_echo: 'blade', shadow_blade_ultimate: 'blade',
+  shadow_hunt_mark: 'hunt', shadow_hunt_pursuit: 'hunt', shadow_hunt_reap: 'hunt', shadow_hunt_refund: 'hunt', shadow_hunt_spellbreak: 'hunt', shadow_hunt_ultimate: 'hunt',
+  ass_echo: 'swarm', ass_legion: 'swarm', shadow_swarm_assault: 'swarm', shadow_swarm_reap: 'swarm', shadow_swarm_crit: 'swarm', shadow_swarm_bulwark: 'swarm', ass_capstone: 'swarm',
+  ass_cleave: 'blade', shadow_blade_arc: 'blade', shadow_blade_echo: 'blade', shadow_blade_riposte: 'blade', shadow_blade_rend: 'blade', shadow_blade_ultimate: 'blade',
 })
 
 export const SHADOW_ICON_COLORS = Object.freeze({
@@ -89,6 +89,7 @@ export const SKILL_ICON_GLYPHS = Object.freeze({
   diamond: Diamond,
   dna: Dna,
   droplets: Droplets,
+  eclipse: Eclipse,
   fire_extinguisher: FireExtinguisher,
   fire: Flame,
   flower2: Flower2,
@@ -117,6 +118,7 @@ export const SKILL_ICON_GLYPHS = Object.freeze({
   repeat2: Repeat2,
   rotate_cw: RotateCw,
   route: Route,
+  scissors: Scissors,
   shell: Shell,
   shield: Shield,
   shield_alert: ShieldAlert,
@@ -168,6 +170,7 @@ export const SKILL_ICON_KEYS = Object.freeze({
   ass_stride: 'move_right',
   ass_sub_insight: 'multishot',
   ass_sub_rush: 'movement',
+  ass_ward: 'shield_plus',
   boss_assassin_mark: 'multishot',
   boss_assassin_voidstep: 'move_up_right',
   boss_elemental_grimoire: 'atom',
@@ -354,14 +357,20 @@ export const SKILL_ICON_KEYS = Object.freeze({
   route_symbiosis_spore: 'circle_dot',
   shadow_blade_arc: 'aperture',
   shadow_blade_echo: 'waves',
+  shadow_blade_rend: 'scissors',
+  shadow_blade_riposte: 'repeat2',
   shadow_blade_ultimate: 'dna',
+  shadow_endless_eclipse: 'eclipse',
   shadow_hunt_mark: 'focus',
   shadow_hunt_pursuit: 'route',
   shadow_hunt_reap: 'cooldown',
   shadow_hunt_refund: 'radar',
+  shadow_hunt_spellbreak: 'shield_off',
   shadow_hunt_ultimate: 'move_up_right',
   shadow_strike: 'swords',
   shadow_swarm_assault: 'layers2',
+  shadow_swarm_bulwark: 'shield_check',
+  shadow_swarm_crit: 'lightning',
   shadow_swarm_reap: 'battery_charging',
   shape_fire: 'fire',
   shape_lightning: 'lightning',
@@ -516,6 +525,7 @@ export const SHADOW_ICON_MAP = iconMap([
   'ass_cleave',
   'ass_decoy',
   'ass_capstone',
+  'ass_ward',
   'ass_afterimage',
   'ass_echo',
   'ass_legion',
@@ -525,12 +535,18 @@ export const SHADOW_ICON_MAP = iconMap([
   'shadow_hunt_pursuit',
   'shadow_hunt_reap',
   'shadow_hunt_refund',
+  'shadow_hunt_spellbreak',
   'shadow_hunt_ultimate',
   'shadow_swarm_assault',
   'shadow_swarm_reap',
+  'shadow_swarm_crit',
+  'shadow_swarm_bulwark',
   'shadow_blade_arc',
   'shadow_blade_echo',
+  'shadow_blade_riposte',
+  'shadow_blade_rend',
   'shadow_blade_ultimate',
+  'shadow_endless_eclipse',
   'com_vital',
   'com_swift',
   'com_magnet',

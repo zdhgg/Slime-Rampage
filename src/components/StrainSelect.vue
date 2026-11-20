@@ -16,7 +16,7 @@ const roster = ref(null)
 const skillSummary = computed(() => selected.value.id === 'glutton'
   ? `开启约 ${GLUTTON_VORTEX_PULL_RADIUS}px 引力漩涡将外围敌群拽入怀中并立刻获得 1 层胃铠，闭颚重咬造成 ${GLUTTON_VORTEX_DAMAGE} 倍攻击伤害（首领 ${GLUTTON_BOSS_VORTEX_DAMAGE} 倍）并吞噬可吞目标。`
   : selected.value.id === 'shadow'
-    ? '沿移动方向穿行，首个目标必暴；分身优先突袭后排射手，遇首领集中夹击。有效暴击后有 60% 概率生影，基础最多 2 个、持续 4 秒。'
+    ? '高机动近战刺客（基础移速 +12%）：空格沿方向智能穿行破弹并天生起点留影，首目标必暴、落地 2 秒 +20% 移速并随机增益闪避与暴击（命中缩减回血与格挡冷却）。普攻每 3 刀挥出影波且可斩碎贴脸弹幕；常驻影刃格挡减免物理伤害、影织魔盾防法术，场上有分身时可触发 40 秒一次的致命代死换位。'
     : selected.value.id === 'elemental'
       ? '开局近身冲击解围；第一次融合后，空格进化为当前双元素的融合爆发。'
     : skill.value?.desc)

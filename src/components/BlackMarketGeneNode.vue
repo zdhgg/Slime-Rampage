@@ -6,6 +6,7 @@ import {
 const props = defineProps({
   gene: { type: Object, required: true },
   icon: { type: [Object, Function], required: true },
+  busy: Boolean,
 })
 const emit = defineEmits(['buy'])
 </script>
@@ -77,7 +78,7 @@ const emit = defineEmits(['buy'])
         <button
           v-else
           class="gene-buy"
-          :disabled="!gene.canBuy"
+          :disabled="busy || !gene.canBuy"
           :aria-label="`${gene.affordable ? (gene.level > 0 ? '升级' : '解锁') : '战力点不足'}：${gene.name}，${gene.cost} 战力点`"
           :aria-describedby="gene.reason ? `gene-reason-${gene.id}` : undefined"
           @click="emit('buy', gene.id)"

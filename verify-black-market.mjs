@@ -1,12 +1,28 @@
 import assert from 'node:assert/strict'
-import { createArena, dispose } from './test-support/arena-fixture.mjs'
-import { applyGenes, getChosenOrigin, getGenePurchaseState } from './src/game/GenePool.js'
+import { createArena, dispose, settleSwing, SKILL_DATABASE, spawn, strike } from './test-support/arena-fixture.mjs'
+import { applyGenes, getChosenOrigin, getGene, getGenePurchaseState } from './src/game/GenePool.js'
 import { getGenePresentation } from './src/components/blackMarketPresentation.js'
+import { sanitizeSave } from './src/game/SaveManager.js'
 
 let checks = 0
 const check = (name, test) => {
   try { test(); console.log(`✓ ${++checks}. ${name}`) } finally { }
 }
+const near = (actual, expected) => assert.ok(Math.abs(actual - expected) < 1e-8, `${actual} != ${expected}`)
+
+check('无账本档案按冻结价格估算，旧币折算只做一次，已记录的实付优先', () => {
+  const recent = { version: 6, drops: 23, records: {}, genes: { giant: 2, gorged_origin: 1, glass: 1, split: 1, unknown: 99 } }
+  const restored = sanitizeSave(recent)
+  assert.equal(restored.geneInvestment, 4200)
+  assert.equal(restored.drops, 23)
+  assert.deepEqual(restored.genes, recent.genes)
+  assert.equal(sanitizeSave({ ...recent, geneInvestment: 4100 }).geneInvestment, 4100)
+  const legacy = sanitizeSave({ version: 4, drops: 30, records: {}, genes: { giant: 2, split: 1 } })
+  assert.equal(legacy.drops, 200)
+  assert.equal(legacy.geneInvestment, 400)
+  assert.deepEqual(sanitizeSave(legacy), legacy)
+  assert.equal(sanitizeSave({ ...recent, genes: {}, geneInvestment: 4100 }).geneInvestment, 0)
+})
 
 check('新通用原核遵守依赖和终点互斥', () => {
   const genes = { giant: 2, leech: 1 }
@@ -29,6 +45,43 @@ check('通用火力基因接入伤害、攻速与暴击（近战远程同源）'
     assert.ok(game.weaponSystem.critMul > 3.4)
     assert.equal(game.weaponSystem.genePierces, 1)
   } finally { dispose(game) }
+})
+
+check('兵工原核让弹射主弹多穿一敌，但不增加咬击与影刃命中数', () => {
+  function resolveAttack(strain, hasOrigin) {
+    const game = createArena(strain)
+    try {
+      game.setGenes(hasOrigin ? { arsenal_origin: 1 } : {})
+      game.applyStartingStrain(strain)
+      const weapon = game.weaponSystem
+      weapon.critChance = 0
+      const distances = strain === 'ricochet' ? [100, 210, 320] : [40, 58, 76, 94, 230]
+      const enemies = distances.map(x => spawn(game, { x }))
+      if (strain === 'glutton') {
+        strike(game, enemies[0])
+      } else if (strain === 'shadow') {
+        const combat = weapon.shadowCombat
+        assert.ok(combat.stab(enemies[0]))
+        settleSwing(combat)
+      } else {
+        weapon.projectileCount = 1
+        weapon.fire(enemies[0])
+        const projectile = weapon._projectiles[0]
+        projectile.x = game.player.x + 400
+        game.enemyManager._buildGrid()
+        weapon.ricochetCombat.resolve(projectile)
+      }
+      return enemies.map(enemy => enemy.maxHp - enemy.hp)
+    } finally { dispose(game) }
+  }
+  assert.deepEqual(resolveAttack('ricochet', false).map(damage => damage > 0), [true, false, false])
+  assert.deepEqual(resolveAttack('ricochet', true).map(damage => damage > 0), [true, true, false])
+  for (const strain of ['glutton', 'shadow']) {
+    const base = resolveAttack(strain, false)
+    assert.ok(base[0] > 0)
+    assert.equal(base.at(-1), 0)
+    resolveAttack(strain, true).forEach((damage, index) => near(damage, base[index] * 1.15))
+  }
 })
 
 check('噬血基因按击杀计数回血且遵守回复间隔', () => {
@@ -69,6 +122,42 @@ check('扩张基因接入近战触及、法术半径与拾取范围', () => {
     shadow.setGenes({ expand: 3, swift: 1 })
     assert.ok(shadow.weaponSystem.shadowCombat.reach > base)
   } finally { dispose(shadow) }
+})
+
+check('扩张基因延长弹射主弹、主动弹和派生弹航程，不改变弹跳或分裂参数', () => {
+  function fireRicochet(rank) {
+    const game = createArena('ricochet')
+    try {
+      game.setGenes({ expand: rank })
+      game.applyStartingStrain('ricochet')
+      const weapon = game.weaponSystem, combat = weapon.ricochetCombat
+      const target = spawn(game, { x: 100 }), next = spawn(game, { x: 180 }), extra = spawn(game, { x: 240 })
+      game.skillLevels.rico_split = 2
+      game.skillLevels.rico_bounce = 2
+      weapon.projectileCount = 1
+      weapon.fire(target)
+      const main = weapon._projectiles[0]
+      main.hitTargets.add(target)
+      combat.split(target, main)
+      const split = weapon._projectiles.slice(1)
+      assert.deepEqual(split.map(shot => shot.target), [next, extra])
+      const echo = combat.spawnPrismSplit(main, next)
+      assert.equal(echo?.target, extra)
+      weapon.fire(target, { ricochetActive: true, ultimate: true })
+      const active = weapon._projectiles.at(-1)
+      return {
+        flight: [main, active, ...split, echo].map(shot => shot.life),
+        behavior: [main, active, ...split, echo].map(shot => {
+          const { bounceRange, bounces, splitCount } = shot.ricochet
+          return { speed: shot.speed, bounceRange, bounces, splitCount }
+        }),
+      }
+    } finally { dispose(game) }
+  }
+  const base = fireRicochet(0), expanded = fireRicochet(3)
+  assert.deepEqual(base.flight, [2.5, 5, 1.2, 1.2, 2.5])
+  expanded.flight.forEach((life, index) => near(life, base.flight[index] * 1.24))
+  assert.deepEqual(expanded.behavior, base.behavior)
 })
 
 check('违禁品互斥且附带副作用', () => {
@@ -117,7 +206,7 @@ check('新血肉基因：反震、经验回血与免死茧接入运行时', () =
     game.setGenes({ giant: 4, thorns: 2, regen: 1, siphon: 3, leech: 1, cocoon: 1 })
     const p = game.player
     assert.equal(p.thornsPulse, true)
-    assert.equal(p.thornsDamage, 4) // 2×Lv2，不覆盖暴食甲壳的更高值
+    assert.equal(p.thornsDamage, 4)
     assert.equal(p.geneSiphonRate, 0.25)
     p.hp = 1
     p._siphonProgress = p.maxExp // 一次拾取越线即触发回血
@@ -131,6 +220,30 @@ check('新血肉基因：反震、经验回血与免死茧接入运行时', () =
     p.invincible = 0; p.hit(99, { enemyAttack: true }) // 每局仅一次
     assert.equal(p.dead, true)
   } finally { dispose(game) }
+})
+
+check('暴食胃铠完全挡伤只触发自身反击，扣血时才额外触发刺膜', () => {
+  function takeHit(hasThorns, blocked) {
+    const game = createArena('glutton')
+    try {
+      game.setGenes(hasThorns ? { thorns: 1 } : {})
+      game.applyStartingStrain('glutton')
+      const player = game.player
+      player.invincible = 0
+      if (blocked) {
+        player.gluttonGuard = 1
+        player.gluttonGuardTimer = 1
+      }
+      const enemy = spawn(game, { x: 60 })
+      player.hit(1)
+      assert.equal(player.maxHp - player.hp, blocked ? 0 : 1)
+      return enemy.maxHp - enemy.hp
+    } finally { dispose(game) }
+  }
+  const guardCounter = takeHit(false, true)
+  assert.ok(guardCounter > 0)
+  near(takeHit(true, true), guardCounter)
+  near(takeHit(true, false), takeHit(false, false) + 2)
 })
 
 check('新军火基因：狩猎窗口攻速与困兽残血增伤', () => {
@@ -155,15 +268,14 @@ check('新军火基因：狩猎窗口攻速与困兽残血增伤', () => {
   } finally { dispose(game) }
 })
 
-check('新杂货基因：刷新次数、候选扩容与全屏磁感', () => {
+check('新杂货基因：刷新次数与候选扩容', () => {
   const game = createArena('origin')
   try {
-    game.setGenes({ swift: 1, blueprint: 2, expand: 1, magnet: 1, lore: 2, horizon: 1 })
+    game.setGenes({ swift: 1, blueprint: 2, lore: 2, horizon: 1 })
     const p = game.player
     assert.equal(p.geneRerolls, 2)
     assert.equal(p.geneExtraOptions, 1)
     assert.equal(game._skillOptionCount(), 4)
-    assert.equal(p.geneMagnetAll, 1)
     game._skillPanelRerollable = true
     game.onLevelUp = (opts) => { game._rerolled = opts }
     assert.equal(game.rerollSkillOptions(), true)
@@ -172,6 +284,33 @@ check('新杂货基因：刷新次数、候选扩容与全屏磁感', () => {
     game._skillPanelRerollable = false // 里程碑/路线面板不可刷新
     assert.equal(game.rerollSkillOptions(), false)
     assert.equal(p.geneRerolls, 1)
+  } finally { dispose(game) }
+})
+
+check('全域磁感翻倍并叠加引力细胞，元素核心使用独立半径', () => {
+  const game = createArena('origin')
+  try {
+    game.setGenes({ swift: 1, expand: 1, magnet: 1 })
+    game.reset()
+    const { player, gemManager } = game
+    const { x, y } = player
+    const updateMagnets = () => { for (let i = 0; i < 3; i++) gemManager.update(0) }
+    near(player.pickupRadius, 345)
+    const exp = gemManager.spawn(x + 310, y, 1)
+    const tome = gemManager.spawn(x, y + 310, 0, 'tome')
+    const core = gemManager.spawn(x + 130, y, 0, 'fire')
+    const upgradeRange = gemManager.spawn(x + 385, y, 1)
+    const outside = gemManager.spawn(x + 450, y, 1)
+    updateMagnets()
+    assert.deepEqual([exp.state, tome.state, core.state, upgradeRange.state, outside.state],
+      ['magnet', 'magnet', 'idle', 'idle', 'idle'])
+
+    const card = SKILL_DATABASE.common.find(skill => skill.id === 'com_magnet')
+    assert.equal(card.stats(0, game), '拾取半径 345 → 431')
+    assert.equal(game.applySkill(card), true)
+    near(player.pickupRadius, 431.25)
+    updateMagnets()
+    assert.deepEqual([core.state, upgradeRange.state, outside.state], ['idle', 'magnet', 'idle'])
   } finally { dispose(game) }
 })
 
@@ -201,6 +340,17 @@ check('黑市预览展示通用数值收益', () => {
   assert.match(leech.preview.next, /击杀/)
   const stim = getGenePresentation({ id: 'stim', maxLevel: 1, desc: '燃血' }, 0)
   assert.match(stim.description, /攻击间隔/)
+  assert.deepEqual(getGenePresentation(getGene('magnet'), 0).preview,
+    { label: '吸附半径', current: '×1', next: '×2' })
+  const thorns = getGene('thorns')
+  assert.deepEqual(getGenePresentation(thorns, 0).preview, { label: '受击反震', current: '未解锁', next: '2 点' })
+  assert.deepEqual(getGenePresentation(thorns, 3).preview, { label: '受击反震', current: '6 点', next: '8 点' })
+  const hunter = getGenePresentation(getGene('hunter'), 0)
+  assert.equal(hunter.preview.next, '+2.5% · +0.15x')
+  assert.match(hunter.note, /暗影每溢出 1 个百分点/)
+  const arsenal = getGenePresentation(getGene('arsenal_origin'), 0)
+  assert.match(arsenal.description, /飞弹额外穿透/)
+  assert.match(arsenal.note, /近战不增加命中目标数/)
 })
 
 console.log(`\n黑市基因适配验证通过：${checks} 组检查`)

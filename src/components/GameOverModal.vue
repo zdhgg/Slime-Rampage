@@ -233,7 +233,7 @@ const pointsText = computed(() => `${Math.floor(props.info?.earnedDrops || 0)}`)
           {{ info.mode === 'expedition' ? `章节 ${best.stage || 1}/${totalStages}` : `波次 ${best.wave}` }} ·
           击杀 {{ best.kills }} · {{ bestTimeText }}
         </div>
-        <div class="gameover-hint">{{ victory ? '新的威胁等级正等待挑战。' : extracted ? '这批战力点已完整入账，可以整备后再次深入。' : info.defeatReason === 'nest-destroyed' ? '净化兵突破了防线，优先拦截奔向巢心的近战单位。' : info.defeatReason === 'beacon-timeout' ? '未能在时限内摧毁迁跃信标，王城增援已经抵达。' : '调整构筑或规则，再次迎战勇者。' }}</div>
+        <div class="gameover-hint">{{ victory ? '新的威胁等级正等待挑战。' : extracted ? '这批战力点已完整入账，可以整备后再次深入。' : info.defeatReason === 'nest-destroyed' ? '净化兵突破了防线，优先拦截奔向巢心的近战单位。' : info.defeatReason === 'beacon-timeout' ? '进入蓝圈即可激活信标。留在圈内，直到封锁进度填满。' : '调整构筑或规则，再次迎战勇者。' }}</div>
       </div>
       <footer class="gameover-footer">
         <div class="result-actions">

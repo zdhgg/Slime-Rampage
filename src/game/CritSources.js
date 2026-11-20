@@ -7,8 +7,11 @@ export function setCritSource(game, key, values) {
   }
   ws._critSources[key] = values
   const sources = Object.values(ws._critSources)
-  ws.critChance = Math.min(1, Math.max(ws._critBase.chance, ...sources.map(s => s.chanceFloor || 0)) +
-    sources.reduce((sum, s) => sum + (s.chance || 0), 0))
+  const rawChance = Math.max(ws._critBase.chance, ...sources.map(s => s.chanceFloor || 0)) +
+    sources.reduce((sum, s) => sum + (s.chance || 0), 0)
+  ws.rawCritChance = rawChance
+  ws.critChance = Math.min(1, rawChance)
+  const overflowMul = game.startingStrain === 'shadow' ? Math.max(0, rawChance - 1) * 2 : 0
   ws.critMul = Math.max(ws._critBase.multiplier, ...sources.map(s => s.multiplierFloor || 0)) +
-    sources.reduce((sum, s) => sum + (s.multiplier || 0), 0)
+    sources.reduce((sum, s) => sum + (s.multiplier || 0), 0) + overflowMul
 }

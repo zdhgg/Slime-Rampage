@@ -10,6 +10,8 @@ function lineDistance(x, y, cx, cy, angle) {
   return Math.abs(-Math.sin(angle) * dx + Math.cos(angle) * dy)
 }
 
+const SPELL_MECHANICS = new Set(['beacon-triad', 'purifier-annulus', 'ash-cross', 'seal-quadrants', 'royal-chess'])
+
 /** 十二章远征首领：复用职业普攻与美术，只替换为章节专属强招。 */
 export class ExpeditionBoss extends Boss {
   constructor({ encounter, ...options }) {
@@ -35,12 +37,14 @@ export class ExpeditionBoss extends Boss {
 
   get combatInfo() {
     const attack = this.attackPresentation
+    const casting = attack.stage === 'telegraph'
     return {
       phase: this.phase,
       phaseName: this.phase === 2 ? this.encounter.phaseName : '章节首领',
       state: this.stateLabel,
       special: attack.name,
-      castProgress: attack.stage === 'telegraph' ? attack.progress : 0,
+      casting,
+      castProgress: casting ? attack.progress : 0,
       vulnerable: this.active && this.hp > 0 && this.vulnerableTimer > 0,
     }
   }
@@ -149,6 +153,8 @@ export class ExpeditionBoss extends Boss {
   _executeSpecial() {
     const p = this.game.player
     const mechanic = this.specialPattern
+    const spellAttack = SPELL_MECHANICS.has(mechanic)
+    const attackToken = () => (this.skillData.attackEvent ||= { enemyAttack: true, spellAttack, isBoss: true })
     const pb = Math.min(3, this.patternBonus || 0)
     // 强招命中 3/4 点（原 2/3）：章节机制都有明确预警与走位解，命中代价应构成威胁
     const damage = this.phase === 2 ? 4 : 3
@@ -157,7 +163,7 @@ export class ExpeditionBoss extends Boss {
       const angles = [this.lockedAngle - 0.46, this.lockedAngle + 0.46]
       const nearCenter = (p.x - this.targetX) ** 2 + (p.y - this.targetY) ** 2 < 380 ** 2
       if (nearCenter && angles.some((angle) => lineDistance(p.x, p.y, this.targetX, this.targetY, angle) < 42)) {
-        p.hit(damage, this.skillData.attackEvent ||= { enemyAttack: true })
+        p.hit(damage, attackToken())
       }
       for (const angle of angles) {
         this._bullet(this.targetX, this.targetY, angle, 'archer', 430)
@@ -165,7 +171,7 @@ export class ExpeditionBoss extends Boss {
       }
     } else if (mechanic === 'beacon-triad') {
       const points = this.skillData.points || []
-      if (points.some((point) => (p.x - point.x) ** 2 + (p.y - point.y) ** 2 < 78 ** 2)) p.hit(damage, this.skillData.attackEvent ||= { enemyAttack: true })
+      if (points.some((point) => (p.x - point.x) ** 2 + (p.y - point.y) ** 2 < 78 ** 2)) p.hit(damage, attackToken())
       for (const point of points) this._radial(point.x, point.y, (this.phase === 2 ? 8 : 6) + pb, 260, Math.PI / 6)
       if (points.length) {
         const destination = points.reduce((best, point) => {
@@ -182,7 +188,7 @@ export class ExpeditionBoss extends Boss {
       }
     } else if (mechanic === 'purifier-annulus') {
       const distance = Math.hypot(p.x - this.x, p.y - this.y)
-      if (distance < this.skillData.inner || distance > this.skillData.outer) p.hit(damage, this.skillData.attackEvent ||= { enemyAttack: true })
+      if (distance < this.skillData.inner || distance > this.skillData.outer) p.hit(damage, attackToken())
       this._radial(this.x, this.y, (this.phase === 2 ? 14 : 10) + pb * 2, 285, this._patternIndex++ * 0.17)
     } else if (mechanic === 'shield-wall') {
       const gap = this.skillData.gap ?? 1
@@ -204,7 +210,7 @@ export class ExpeditionBoss extends Boss {
       const dy = p.y - this.targetY
       const lx = Math.cos(angle) * dx + Math.sin(angle) * dy
       const ly = -Math.sin(angle) * dx + Math.cos(angle) * dy
-      if (Math.hypot(dx, dy) < 360 && (Math.abs(lx) < 44 || Math.abs(ly) < 44)) p.hit(damage, this.skillData.attackEvent ||= { enemyAttack: true })
+      if (Math.hypot(dx, dy) < 360 && (Math.abs(lx) < 44 || Math.abs(ly) < 44)) p.hit(damage, attackToken())
       for (let i = 0; i < 4; i++) this._bullet(this.targetX, this.targetY, angle + i * Math.PI / 2, 'mage', 330)
     } else if (mechanic === 'tomb-spiral') {
       const count = this.phase === 2 ? 6 : 4
@@ -218,13 +224,13 @@ export class ExpeditionBoss extends Boss {
       }
       this._radial(this.x, this.y, (this.phase === 2 ? 15 : 11) + pb * 2, 225, this._patternIndex++ * 0.37)
     } else if (mechanic === 'seal-quadrants') {
-      if (this._quadrant(p.x, p.y) !== this.skillData.safeQuadrant) p.hit(damage, this.skillData.attackEvent ||= { enemyAttack: true })
+      if (this._quadrant(p.x, p.y) !== this.skillData.safeQuadrant) p.hit(damage, attackToken())
       for (let i = 0; i < 4; i++) this._bullet(this.x, this.y, i * Math.PI / 2, 'mage', 300)
     } else if (mechanic === 'throne-edict') {
       const playerAngle = Math.atan2(p.y - this.y, p.x - this.x)
       const distance = Math.hypot(p.x - this.x, p.y - this.y)
       if (distance < 430 && Math.abs(angleDelta(playerAngle, this.lockedAngle)) < Math.PI * 0.72) {
-        p.hit(damage, this.skillData.attackEvent ||= { enemyAttack: true })
+        p.hit(damage, attackToken())
       }
       const rear = this.lockedAngle + Math.PI
       for (let i = -5; i <= 5; i++) {
@@ -245,7 +251,7 @@ export class ExpeditionBoss extends Boss {
         )
       }
     } else if (mechanic === 'royal-chess') {
-      if (this._tileParity(p.x, p.y, this.skillData.tile) !== this.skillData.safeParity) p.hit(damage, this.skillData.attackEvent ||= { enemyAttack: true })
+      if (this._tileParity(p.x, p.y, this.skillData.tile) !== this.skillData.safeParity) p.hit(damage, attackToken())
       const tile = this.skillData.tile
       const baseX = Math.floor(this.targetX / tile) * tile
       const baseY = Math.floor(this.targetY / tile) * tile

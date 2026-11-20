@@ -4,7 +4,7 @@ import { SKILL_DATABASE, BOSS_SKILL_DATABASE, SPEC_INFO, rollSkills } from './sr
 import { RICOCHET_SKILLS, RICOCHET_BOSS_SKILLS, RICOCHET_ROUTES } from './src/game/RicochetRules.js'
 import { GLUTTON_ROUTE_SKILLS, GLUTTON_ENDLESS_SKILL, GLUTTON_ROUTES } from './src/game/GluttonBuild.js'
 import { SYMBIOSIS_ROUTE_SKILLS, SYMBIOSIS_ROUTES } from './src/game/SymbiosisBuild.js'
-import { SHADOW_ROUTE_SKILLS, SHADOW_ROUTES } from './src/game/ShadowBuild.js'
+import { SHADOW_ROUTE_SKILLS, SHADOW_ENDLESS_SKILL, SHADOW_ROUTES } from './src/game/ShadowBuild.js'
 import { ELEMENTAL_ROUTE_SKILLS, ELEMENTAL_ROUTES } from './src/game/ElementalBuild.js'
 import { ELEMENTAL_SKILLS, SPELL_ELEMENT_IDS, SPELL_FUSIONS, spellCoreOptions, spellMilestoneReward, getSpellFusion } from './src/game/SpellRules.js'
 import { ENDLESS_SKILLS } from './src/game/EndlessSkills.js'
@@ -13,7 +13,7 @@ import { resolveSkillIcon, skillIconKey, routeIconId, SKILL_ICON_KEYS, SKILL_ICO
 
 const treeSkills = Object.values(SKILL_DATABASE).flatMap(tree => Array.isArray(tree) ? tree : [...tree.primary, ...tree.secondary])
 const authored = [...treeSkills, ...Object.values(BOSS_SKILL_DATABASE).flat(), ...RICOCHET_SKILLS, ...RICOCHET_BOSS_SKILLS,
-  ...GLUTTON_ROUTE_SKILLS, GLUTTON_ENDLESS_SKILL, ...SYMBIOSIS_ROUTE_SKILLS, ...SHADOW_ROUTE_SKILLS, ...ELEMENTAL_SKILLS, ...ELEMENTAL_ROUTE_SKILLS, ...ENDLESS_SKILLS]
+  ...GLUTTON_ROUTE_SKILLS, GLUTTON_ENDLESS_SKILL, ...SYMBIOSIS_ROUTE_SKILLS, ...SHADOW_ROUTE_SKILLS, SHADOW_ENDLESS_SKILL, ...ELEMENTAL_SKILLS, ...ELEMENTAL_ROUTE_SKILLS, ...ENDLESS_SKILLS]
 const covered = new Set()
 function check(skill) {
   const visual = resolveSkillIcon(skill)

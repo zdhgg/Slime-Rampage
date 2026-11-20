@@ -30,8 +30,17 @@ import {
 import { getExpeditionStages } from '../game/RunRules.js'
 import { STRAINS } from '../game/Strains.js'
 import StrainSelect from './StrainSelect.vue'
+import SlimeFamilyPortrait from './SlimeFamilyPortrait.vue'
 import AboutGame from './AboutGame.vue'
-import { RUNNER_SUBMODES } from '../game/gameplay/runner/RunnerRules.js'
+import {
+  RUNNER_HEAT_PACTS,
+  RUNNER_HEAT_PACT_IDS,
+  RUNNER_STARTER_CHIPS,
+  RUNNER_STARTER_CHIP_IDS,
+  RUNNER_STRAINS,
+  RUNNER_STRAIN_IDS,
+  RUNNER_SUBMODES,
+} from '../game/gameplay/runner/RunnerRules.js'
 import arenaCover from '../assets/playstyles/forest-ruins.webp'
 import runnerCover from '../assets/playstyles/citadel-run.webp'
 import towerCover from '../assets/playstyles/nest-defense.webp'
@@ -55,10 +64,48 @@ const props = defineProps({
 })
 
 const runnerSubmodesList = Object.values(RUNNER_SUBMODES)
+const runnerConfig = ref({
+  submode: 'marathon',
+  strainId: 'origin',
+  chipId: 'magnet_engine',
+  pacts: [],
+})
+
+const selectedRunnerSubmode = computed(() => RUNNER_SUBMODES[runnerConfig.value.submode] || RUNNER_SUBMODES.marathon)
+const selectedRunnerStrain = computed(() => RUNNER_STRAINS[runnerConfig.value.strainId] || RUNNER_STRAINS.origin)
+const selectedRunnerChip = computed(() => RUNNER_STARTER_CHIPS[runnerConfig.value.chipId] || null)
+const runnerScoreMultiplier = computed(() => {
+  const chipMul = 1 + (selectedRunnerChip.value?.scoreBonus || 0)
+  let pactBonus = 0
+  for (const id of runnerConfig.value.pacts) {
+    pactBonus += RUNNER_HEAT_PACTS[id]?.rewardBonus || 0
+  }
+  return (chipMul * (1 + pactBonus)).toFixed(2)
+})
+
+function openRunnerConfig(submodeId) {
+  runnerConfig.value.submode = submodeId
+  emit('ui-sound', 'select')
+  view.value = 'runner-config'
+  nextTick(() => menuRoot.value?.scrollTo({ top: 0 }))
+}
+
+function toggleRunnerPact(id) {
+  emit('ui-sound', 'click')
+  const list = runnerConfig.value.pacts
+  const idx = list.indexOf(id)
+  if (idx >= 0) list.splice(idx, 1)
+  else list.push(id)
+}
+
+function launchRunner() {
+  emit('ui-sound', 'confirm')
+  emit('runner', { ...runnerConfig.value, pacts: [...runnerConfig.value.pacts] })
+}
 
 function startRunnerWithSubmode(submodeId) {
   emit('ui-sound', 'confirm')
-  emit('runner', submodeId)
+  emit('runner', { ...runnerConfig.value, submode: submodeId, pacts: [...runnerConfig.value.pacts] })
 }
 
 function runnerActionLabel(submode) {
@@ -374,6 +421,7 @@ function showModeSelection() {
 function onMenuEscape() {
   if (view.value === 'about') window.location.hash = '/'
   else if (view.value === 'config') showArenaTypes()
+  else if (view.value === 'runner-config') { view.value = 'runner-types'; emit('ui-sound', 'click') }
   else if (view.value === 'arena-types') showPlaystyleSelection('arena')
   else if (view.value === 'runner-types') showPlaystyleSelection('runner')
 }
@@ -395,12 +443,12 @@ watch(
     ref="menuRoot"
     class="start-overlay"
     :class="{
-      'config-active': view === 'config',
-      'hub-night': view === 'playstyles' || view === 'arena-types' || view === 'runner-types' || view === 'config',
+      'config-active': view === 'config' || view === 'runner-config',
+      'hub-night': view === 'playstyles' || view === 'arena-types' || view === 'runner-types' || view === 'config' || view === 'runner-config',
     }"
     @keydown.esc="onMenuEscape"
   >
-    <main class="start-shell" :class="{ 'config-shell': view === 'config' }">
+    <main class="start-shell" :class="{ 'config-shell': view === 'config' || view === 'runner-config' }">
       <header class="start-header">
         <h1 class="game-brand">
           <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true">
@@ -590,7 +638,7 @@ watch(
             :key="sub.id"
             class="runner-mode-card"
             :class="{ featured: sub.id === 'marathon' }"
-            @click="startRunnerWithSubmode(sub.id)"
+            @click="openRunnerConfig(sub.id)"
           >
             <div class="runner-card-top">
               <component :is="RUNNER_MODE_ICONS[sub.id]" class="runner-mode-icon" :size="22" :stroke-width="1.7" aria-hidden="true" />
@@ -599,7 +647,118 @@ watch(
             <h3>{{ sub.name }}</h3>
             <p class="runner-card-kicker">{{ sub.kicker }}</p>
             <p class="runner-card-desc">{{ sub.description }}</p>
-            <span class="runner-card-action">{{ runnerActionLabel(sub) }} <ArrowRight :size="15" :stroke-width="1.9" aria-hidden="true" /></span>
+            <span class="runner-card-action">配置整备出发 <ArrowRight :size="15" :stroke-width="1.9" aria-hidden="true" /></span>
+          </button>
+        </div>
+      </section>
+
+      <section v-else-if="view === 'runner-config'" class="config-view" aria-labelledby="runner-config-title">
+        <div class="config-content">
+          <div class="config-intro">
+            <div class="config-heading">
+              <button class="back-link" title="返回突围模式选择" aria-label="返回突围模式选择" @click="view = 'runner-types'; emit('ui-sound', 'click')">
+                <ArrowLeft :size="17" :stroke-width="1.8" aria-hidden="true" />
+              </button>
+              <div class="config-mode-copy">
+                <div class="config-kicker"><p>突围整备室</p><span aria-hidden="true">/</span><h2 id="runner-config-title">{{ selectedRunnerSubmode.name }}</h2></div>
+                <p class="runner-config-sub">{{ selectedRunnerSubmode.description }}</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="config-flow">
+            <!-- 1. 史莱姆突围底盘 -->
+            <section class="config-step" aria-labelledby="runner-strain-heading">
+              <header class="step-heading">
+                <b id="runner-strain-heading">史莱姆突围底盘</b>
+                <span>{{ selectedRunnerStrain.passiveName }}：{{ selectedRunnerStrain.passiveDesc }}</span>
+              </header>
+              <div class="runner-strain-grid">
+                <button
+                  v-for="id in RUNNER_STRAIN_IDS"
+                  :key="id"
+                  type="button"
+                  class="runner-loadout-card"
+                  :class="{ selected: runnerConfig.strainId === id }"
+                  :style="{ '--card-accent': RUNNER_STRAINS[id].color }"
+                  @click="runnerConfig.strainId = id; emit('ui-sound', 'select')"
+                >
+                  <span class="strain-mini-portrait"><SlimeFamilyPortrait :strain="id" compact /></span>
+                  <div class="loadout-card-body">
+                    <div class="loadout-card-head">
+                      <b>{{ RUNNER_STRAINS[id].name }}</b>
+                      <span>{{ RUNNER_STRAINS[id].roleTag }}</span>
+                    </div>
+                    <small>{{ RUNNER_STRAINS[id].hp }} 生命 · {{ RUNNER_STRAINS[id].maxShield }} 护盾 · 暴走：{{ RUNNER_STRAINS[id].feverName }}</small>
+                  </div>
+                </button>
+              </div>
+            </section>
+
+            <!-- 2. 先锋芯片 -->
+            <section class="config-step" aria-labelledby="runner-chip-heading">
+              <header class="step-heading">
+                <b id="runner-chip-heading">先锋芯片</b>
+                <span>选择 1 枚开局核心辅助芯片</span>
+              </header>
+              <div class="runner-chip-grid">
+                <button
+                  v-for="id in RUNNER_STARTER_CHIP_IDS"
+                  :key="id"
+                  type="button"
+                  class="runner-loadout-card"
+                  :class="{ selected: runnerConfig.chipId === id }"
+                  :style="{ '--card-accent': RUNNER_STARTER_CHIPS[id].color }"
+                  @click="runnerConfig.chipId = id; emit('ui-sound', 'select')"
+                >
+                  <span class="chip-emoji">{{ RUNNER_STARTER_CHIPS[id].icon }}</span>
+                  <div class="loadout-card-body">
+                    <b>{{ RUNNER_STARTER_CHIPS[id].name }}</b>
+                    <small>{{ RUNNER_STARTER_CHIPS[id].description }}</small>
+                  </div>
+                </button>
+              </div>
+            </section>
+
+            <!-- 3. 热度契约 -->
+            <section class="config-step" aria-labelledby="runner-pact-heading">
+              <header class="step-heading">
+                <b id="runner-pact-heading">热度契约（可选挑战）</b>
+                <span>每勾选 1 项使本局积分与黑市战力点 +25%</span>
+              </header>
+              <div class="runner-chip-grid">
+                <button
+                  v-for="id in RUNNER_HEAT_PACT_IDS"
+                  :key="id"
+                  type="button"
+                  class="runner-loadout-card pact-card"
+                  :class="{ selected: runnerConfig.pacts.includes(id) }"
+                  :style="{ '--card-accent': RUNNER_HEAT_PACTS[id].color }"
+                  @click="toggleRunnerPact(id)"
+                >
+                  <span class="chip-emoji">{{ RUNNER_HEAT_PACTS[id].icon }}</span>
+                  <div class="loadout-card-body">
+                    <b>{{ RUNNER_HEAT_PACTS[id].name }}</b>
+                    <small>{{ RUNNER_HEAT_PACTS[id].description }}</small>
+                  </div>
+                </button>
+              </div>
+            </section>
+          </div>
+        </div>
+
+        <div class="config-actions">
+          <p class="config-summary">
+            <b>{{ selectedRunnerSubmode.name }}</b>
+            <span>{{ selectedRunnerStrain.name }}</span>
+            <i aria-hidden="true">·</i>
+            <span>{{ selectedRunnerChip?.name }}</span>
+            <i aria-hidden="true">·</i>
+            <span class="summary-strain">积分倍率 ×{{ runnerScoreMultiplier }}</span>
+          </p>
+          <button class="primary-action" @click="launchRunner">
+            开始突围
+            <ArrowRight :size="16" :stroke-width="1.9" aria-hidden="true" />
           </button>
         </div>
       </section>
@@ -2172,6 +2331,40 @@ button.selected .option-copy i {
   .resume-copy { order: 2; flex-basis: calc(100% - 60px); }
   .resume-actions { order: 3; width: 100%; margin-left: 0; }
   .resume-primary { flex: 1; }
+}
+
+.runner-config-sub { margin: 4px 0 0; font-size: 13px; color: var(--hub-text-muted); }
+.runner-strain-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.runner-chip-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.runner-loadout-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 2px solid #e2e8f0;
+  background: rgba(255, 255, 255, 0.88);
+  color: var(--hub-text);
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.14s ease, border-color 0.14s ease, box-shadow 0.14s ease;
+}
+.runner-loadout-card:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--card-accent) 60%, #ffffff); }
+.runner-loadout-card.selected {
+  border-color: var(--card-accent);
+  background: #ffffff;
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--card-accent) 22%, transparent);
+}
+.strain-mini-portrait { width: 42px; height: 42px; flex: none; display: grid; place-items: center; }
+.chip-emoji { font-size: 24px; width: 38px; height: 38px; display: grid; place-items: center; border-radius: 10px; background: color-mix(in srgb, var(--card-accent) 16%, #ffffff); flex: none; }
+.loadout-card-body { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.loadout-card-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.loadout-card-head span { font-size: 10px; font-weight: 700; color: color-mix(in srgb, var(--card-accent) 60%, #0f172a); background: color-mix(in srgb, var(--card-accent) 16%, #ffffff); padding: 1px 6px; border-radius: 999px; }
+.loadout-card-body b { font-size: 13.5px; font-weight: 800; }
+.loadout-card-body small { font-size: 11px; line-height: 1.3; color: var(--hub-text-muted); }
+
+@media (max-width: 820px) {
+  .runner-strain-grid, .runner-chip-grid { grid-template-columns: 1fr; }
 }
 
 @media (prefers-reduced-motion: reduce) {

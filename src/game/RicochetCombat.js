@@ -180,7 +180,8 @@ export class RicochetCombat {
   }
   spawn(config, behavior, excluded = null) {
     if (this.weapon._projectiles.length >= RICOCHET_RULES.projectileLimit) return null
-    const p = new Projectile({ ...config, critChance: this.weapon.critChance })
+    const life = config.life * (this.weapon.geneRangeMul || 1)
+    const p = new Projectile({ ...config, life, critChance: this.weapon.critChance })
     p.prevX = p.x; p.prevY = p.y
     p.hitTargets = new Set(excluded || [])
     p.ricochet = { hits: 0, turns: 0, lastHit: null, initialDamage: p.damage, baseSpeed: p.speed,

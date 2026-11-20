@@ -5,6 +5,8 @@ const TAU = Math.PI * 2
 const NEST_DURABILITY = { easy: 120, normal: 105, hard: 90, hell: 78 }
 const NEST_RAIDER_CHANCE = { easy: 0.2, normal: 0.28, hard: 0.34, hell: 0.4 }
 const NEST_RAIDER_TYPES = new Set(['knight', 'hound', 'golem', 'berserker'])
+const NEST_AGGRO_RADIUS = 180
+const NEST_AGGRO_DURATION = 4
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value))
 
@@ -72,6 +74,7 @@ export class MapFeatureManager extends Entity {
     const maxHp = NEST_DURABILITY[difficulty] || NEST_DURABILITY.normal
     this.nest = this.nest || this._createNest(true)
     Object.assign(this.nest, {
+      ...this._position(this.nest),
       active: true,
       preview: false,
       secured: false,
@@ -95,6 +98,12 @@ export class MapFeatureManager extends Entity {
     return !!this.nest?.active
   }
 
+  get nestMarker() {
+    if (!this.nestDefenseActive) return null
+    const { x, y } = this.nest
+    return { x, y, label: '巢心', color: '#b4e28e', radius: NEST_AGGRO_RADIUS }
+  }
+
   get nestInfo() {
     const nest = this.nest
     if (!nest || (!nest.active && !nest.secured)) return null
@@ -114,7 +123,17 @@ export class MapFeatureManager extends Entity {
 
   getEnemyTarget(enemy) {
     if (!this.nestDefenseActive || enemy?.objectiveTarget !== 'nest') return null
+    const player = this.game.player
+    if (!player.dead) {
+      const distanceSq = (player.x - enemy.x) ** 2 + (player.y - enemy.y) ** 2
+      if (distanceSq <= NEST_AGGRO_RADIUS ** 2) this.drawNestAggro(enemy)
+      if (enemy.nestAggroTime > 0) return null
+    }
     return this.nest
+  }
+
+  drawNestAggro(enemy) {
+    if (this.nestDefenseActive && enemy.objectiveTarget === 'nest') enemy.nestAggroTime = NEST_AGGRO_DURATION
   }
 
   getDefenseSpawnPoint() {

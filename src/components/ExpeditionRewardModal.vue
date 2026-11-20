@@ -1,25 +1,21 @@
 <script setup>
-import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
 import SkillIcon from './SkillIcon.vue'
 import LevelUpModal from './LevelUpModal.vue'
 import { useCardFocus } from './useCardFocus.js'
 const props = defineProps({ info: { type: Object, required: true } })
 const emit = defineEmits(['select'])
 const panel = ref(null)
-const supply = computed(() => props.info.phase === 'supply')
-const ordinary = computed(() => ['study', 'compensation'].includes(props.info.phase))
-const cards = computed(() => supply.value ? props.info.rewards.filter(card => !card.disabled) : props.info.options || [])
+const compensation = computed(() => props.info.phase === 'compensation')
 let readyAt = 0, previousFocus
 function choose(card) {
   if (!card || card.disabled || performance.now() < readyAt) return
   readyAt = performance.now() + 180
   emit('select', card.id)
 }
-const { selectedCard } = useCardFocus(cards, choose, () => !ordinary.value)
-const hasMemory = computed(() => (props.info.options || []).some(card => card.isOriginMemory))
-const title = computed(() => supply.value ? '选择章间整备' : props.info.phase === 'study' ? '基因研习' : props.info.phase === 'compensation' ? '秘典满级补偿' : hasMemory.value ? '首领源质 · 吸收与重构' : '选择 BOSS 秘典')
-const icons = { rest: '✚', tome: '▣', blood: '◆' }
-watch(() => props.info.phase, async () => { readyAt = performance.now() + 180; await nextTick(); panel.value?.focus({ preventScroll: true }) })
+const { selectedCard } = useCardFocus(() => props.info.options, choose, () => !compensation.value)
+const hasMemory = computed(() => props.info.options.some(card => card.isOriginMemory))
+const title = computed(() => compensation.value ? '秘典满级补偿' : hasMemory.value ? '首领源质 · 吸收与重构' : '选择 BOSS 秘典')
 onMounted(() => { previousFocus = document.activeElement; panel.value?.focus({ preventScroll: true }) })
 onBeforeUnmount(() => { if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true }) })
 function trap(event) {
@@ -33,22 +29,11 @@ function trap(event) {
   <div class="reward-overlay" @keydown.tab.prevent="trap">
     <section ref="panel" class="reward-panel" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="reward-title">
       <header class="reward-heading">
-        <div>
-          <p class="reward-kicker">{{ info.chapter ? `第 ${info.stage} 章 · ${info.stageTitle} 完成` : '首领战利品' }}</p>
-          <h2 id="reward-title">{{ title }}</h2>
-          <p class="reward-source">{{ supply ? `下一章 · ${info.nextTitle} / ${info.nextRegion}` : ordinary ? (info.phase === 'study' ? '选择普通强化，完成后进入下一章' : '秘典已满级，获得一次普通技能选择') : `已击败 ${info.source} · 选择一项专属成长` }}</p>
-        </div>
-        <ol v-if="info.chapter" class="reward-steps" aria-label="通关结算步骤"><li :class="{ current: !info.summary }">01 秘典</li><li :class="{ current: !!info.summary }">02 整备</li></ol>
+        <p class="reward-kicker">{{ info.chapter ? `第 ${info.stage} 章 · ${info.stageTitle} 完成` : '首领战利品' }}</p>
+        <h2 id="reward-title">{{ title }}</h2>
+        <p class="reward-source">{{ compensation ? '秘典已满级，获得一次普通技能选择' : `已击败 ${info.source} · 选择一项专属成长` }}</p>
       </header>
-      <p v-if="info.summary" class="reward-summary" role="status"><span>已获得</span>{{ info.summary }}</p>
-      <LevelUpModal v-if="ordinary" embedded :key="info.phase" :options="info.options" :level="info.level" :role-spec="info.roleSpec" :can-use-elements="info.canUseElements" :reward-title="info.phase === 'study' ? '选择一项普通强化' : '秘典已满级 · 选择一项普通强化'" @select="choose" />
-      <div v-else-if="supply" class="reward-options supply-options">
-        <button v-for="(reward, index) in info.rewards" :key="reward.id" :disabled="reward.disabled" :class="[reward.id, { selected: selectedCard?.id === reward.id }]" @click="choose(reward)">
-          <div class="card-top"><span class="supply-icon" aria-hidden="true">{{ icons[reward.id] }}</span><kbd>{{ index + 1 }}</kbd></div>
-          <h3>{{ reward.name }}</h3><p>{{ reward.description }}</p><strong class="card-stats">{{ reward.preview }}</strong>
-          <span class="card-action">{{ reward.disabled ? '无法选择' : reward.id === 'tome' ? '查看技能选择 →' : '确认整备，进入下一章 →' }}</span>
-        </button>
-      </div>
+      <LevelUpModal v-if="compensation" embedded :options="info.options" :level="info.level" :role-spec="info.roleSpec" :can-use-elements="info.canUseElements" reward-title="秘典已满级 · 选择一项普通强化" @select="choose" />
       <div v-else class="reward-options tome-options">
         <button v-for="(card, index) in info.options" :key="card.id" :class="{ selected: selectedCard?.id === card.id, 'is-memory': card.isOriginMemory }" :style="{ '--tome-color': card.color }" @click="choose(card)">
           <div class="card-top"><span class="card-kind">{{ card.isOriginMemory ? '源质记忆' : card.level ? '升级秘典' : '新秘典' }}</span><kbd>{{ index + 1 }}</kbd></div>
@@ -60,7 +45,7 @@ function trap(event) {
           <strong class="card-stats">{{ card.stats }}</strong><span class="card-action">{{ card.level ? `Lv.${card.level} → Lv.${card.level + 1}` : '获得 Lv.1' }}<span>选择 →</span></span>
         </button>
       </div>
-      <p class="reward-footer">{{ ordinary ? '本次选择不增加玩家等级' : supply ? '整备完成后进入下一章' : '最高 Lv.3 · 每次随机三选一 · 不占用普通升级次数' }}<span v-if="!ordinary">方向键或数字键切换 · Enter 确认</span></p>
+      <p class="reward-footer">{{ compensation ? '本次选择不增加玩家等级' : '最高 Lv.3 · 每次随机三选一 · 不占用普通升级次数' }}<span v-if="!compensation">方向键或数字键切换 · Enter 确认</span></p>
     </section>
   </div>
 </template>
@@ -96,10 +81,6 @@ function trap(event) {
 }
 
 .reward-heading {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 24px;
   margin-bottom: 22px;
 }
 
@@ -138,58 +119,6 @@ h2 {
   color: #c2d0bf;
   font-size: 13.5px;
   line-height: 1.55;
-}
-
-.reward-steps {
-  display: flex;
-  flex-shrink: 0;
-  align-items: center;
-  gap: 6px;
-  margin: 2px 0 0;
-  padding: 4px 6px;
-  list-style: none;
-  border-radius: 999px;
-  background: rgba(10, 18, 14, 0.72);
-  border: 1px solid rgba(225, 211, 170, 0.22);
-}
-
-.reward-steps li {
-  padding: 4px 12px;
-  border-radius: 999px;
-  font-size: 11.5px;
-  font-weight: 700;
-  color: var(--art-muted, #a9b6a4);
-}
-
-.reward-steps .current {
-  color: #0e1914;
-  background: linear-gradient(135deg, #f7df94, #d7b86e);
-  box-shadow: 0 2px 10px rgba(215, 184, 110, 0.3);
-}
-
-.reward-summary {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-  margin: 0 0 20px;
-  padding: 11px 15px;
-  border: 1px solid rgba(140, 255, 200, 0.22);
-  border-left: 3px solid #7ee8b2;
-  border-radius: 0 10px 10px 0;
-  color: var(--art-text, #f3ead5);
-  background: rgba(23, 40, 32, 0.85);
-  font-size: 13px;
-  line-height: 1.55;
-}
-
-.reward-summary span {
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: rgba(126, 232, 178, 0.14);
-  color: #8eecc0;
-  font-size: 11px;
-  font-weight: 700;
 }
 
 .reward-options {
@@ -400,33 +329,6 @@ h3 {
   box-shadow: 0 3px 12px rgba(215, 184, 110, 0.35);
 }
 
-/* 章间整备（休整 / 研习 / 血统沸腾） */
-.supply-options button {
-  min-height: 230px;
-}
-
-.supply-options button.rest { --tome-color: #7ee8b2; }
-.supply-options button.tome { --tome-color: #6cc8f5; }
-.supply-options button.blood { --tome-color: #f07b6e; }
-
-.supply-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 42px;
-  height: 42px;
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--tome-color) 16%, rgba(10, 18, 14, 0.8));
-  border: 1px solid color-mix(in srgb, var(--tome-color) 40%, transparent);
-  color: var(--tome-color);
-  font-size: 21px;
-  box-shadow: 0 0 14px color-mix(in srgb, var(--tome-color) 22%, transparent);
-}
-
-.supply-options button:not(:disabled) .card-action {
-  color: color-mix(in srgb, var(--tome-color) 75%, #f7df94 25%);
-}
-
 /* 源质记忆卡（原生黏液吸收首领源质）：更醒目的生态光条与身份徽章 */
 .tome-options button.is-memory {
   border-color: color-mix(in srgb, var(--tome-color) 62%, #f7df94 38%);
@@ -493,7 +395,7 @@ h3 {
 @media (max-width: 720px) {
   .reward-overlay { padding: 12px; }
   .reward-panel { padding: 18px 14px 16px; max-height: calc(100dvh - 24px); }
-  .reward-heading { align-items: flex-start; flex-direction: column; gap: 12px; margin-bottom: 16px; }
+  .reward-heading { margin-bottom: 16px; }
   h2 { font-size: 22px; }
   .reward-options { grid-template-columns: 1fr; gap: 12px; }
   .reward-options button { padding: 16px; }
@@ -508,7 +410,6 @@ h3 {
   .tome-options p.card-source { text-align: left; }
   .tome-options p { margin-bottom: 10px; }
   .tome-ranks { grid-column: 2; margin-bottom: 12px; }
-  .supply-options button { min-height: 168px; }
   .reward-footer span { display: none; }
 }
 </style>

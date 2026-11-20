@@ -31,7 +31,8 @@ try {
   assert.ok(registered.ok(), await registered.text())
   await context.request.post('/api/account/tutorial')
   await page.goto('/')
-  await page.locator('.account-welcome').waitFor()
+  // 0.12.0 起 playstyles 视图不再渲染 account-welcome，等待入口网格即可。
+  await page.locator('.playstyle-grid').waitFor()
   await page.locator('[data-playstyle="arena"]').click()
   await page.locator('[data-mode="expedition"]').click()
   await page.locator('[data-strain="glutton"]').click()

@@ -31,11 +31,13 @@ export function slimeFamilyFaceState(t, expression = {}) {
 
 /** Game flags -> current body state. Bite suppresses the design mouth entirely —
  * the real jaw is drawn by the game's own GluttonBiteVisual on top. */
-export function slimeFamilyBodyState(t, { bite = 0, swallowing = 0, elements = [], hitJolt = 0, recoil = 0, coreGlow = 0 } = {}) {
+export function slimeFamilyBodyState(t, {
+  bite = 0, swallowing = 0, elements = [], hitJolt = 0, recoil = 0, coreGlow = 0, skillReady = false,
+} = {}) {
   return {
     expr: 'idle', t,
     el: Array.isArray(elements) ? elements : [],
-    recoil, coreGlow,
+    recoil, coreGlow, skillReady,
     noMouth: bite ? 1 : 0,
     gulp: swallowing ? 1 : 0,
     hitJolt,

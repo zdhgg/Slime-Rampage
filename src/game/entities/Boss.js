@@ -247,6 +247,7 @@ export class Boss extends Enemy {
   get combatInfo() {
     const cfg = BOSS_CFG[this.type]
     const attack = this.attackPresentation
+    const casting = attack.stage === 'telegraph'
     return {
       phase: this.phase,
       phaseName: this.phase === 2 ? cfg.phaseName : '王级交锋',
@@ -254,7 +255,8 @@ export class Boss extends Enemy {
       special: this.specialPattern === 'final-quiz'
         ? `${cfg.special} · ${this._quiz?.label || '审判'}`
         : this.isCompositeBoss ? `${cfg.special} · ${attack.name}` : attack.name,
-      castProgress: attack.stage === 'telegraph' ? attack.progress : 0,
+      casting,
+      castProgress: casting ? attack.progress : 0,
       vulnerable: this.active && this.hp > 0 && this.vulnerableTimer > 0,
     }
   }
@@ -478,7 +480,7 @@ export class Boss extends Enemy {
   }
 
   _startSpecial() {
-    this._specialAttackEvent = { enemyAttack: true }
+    this._specialAttackEvent = { enemyAttack: true, spellAttack: false, isBoss: true }
     const claimCast = this.game.enemyManager.claimBossCast
     if (claimCast && !claimCast.call(this.game.enemyManager, this)) {
       this.specialCd = 0.35
@@ -502,6 +504,7 @@ export class Boss extends Enemy {
       && this._specialCount % 4 === 0
     if (quizTurn) {
       this.specialPattern = 'final-quiz'
+      this._specialAttackEvent.spellAttack = true
       this._chainTotal = 1
       this._quiz = this._buildQuiz()
       this._specialGeometry = Object.freeze({ pattern: 'final-quiz', phase: this.phase, chain: 0, telegraph: QUIZ_TELEGRAPH })
@@ -524,6 +527,7 @@ export class Boss extends Enemy {
     } else {
       this.specialPattern = this.type
     }
+    this._specialAttackEvent.spellAttack = this.specialPattern === 'boss-mage'
     this.specialState = 'telegraph'
     // 难度只增强招式内容与冷却，不缩短预警时间；几何统一由 bossSpecialGeometry 给出，
     // 绘制与命中读同一份快照（含连段抬升的道宽/道远/弹数/扇角）。
@@ -651,7 +655,7 @@ export class Boss extends Enemy {
         // 答错只扣血，不给破绽（不能靠乱答换输出窗口）
         this.specialTimer = 1
         this.vulnerableTimer = 0
-        p.hit(QUIZ_PENALTY, this._specialAttackEvent ||= { enemyAttack: true })
+        p.hit(QUIZ_PENALTY, this._specialAttackEvent ||= { enemyAttack: true, spellAttack: true, isBoss: true })
         this.game.enemyManager?.addText?.(this.x, this.y - this.radius - 26, '答错', '无破绽', '#ff7466', 15)
       }
       this._quiz = null
@@ -673,7 +677,7 @@ export class Boss extends Enemy {
       const p = this.game.player
       const burst = geo?.burst ?? { radius: 102, count: 12, bulletSpeed: 285 }
       if ((p.x - this.targetX) ** 2 + (p.y - this.targetY) ** 2 <= burst.radius * burst.radius) {
-        p.hit(2, this._specialAttackEvent ||= { enemyAttack: true })
+        p.hit(2, this._specialAttackEvent ||= { enemyAttack: true, spellAttack: true, isBoss: true })
       }
       for (let i = 0; i < burst.count; i++) {
         this.game.enemyManager.spawnBullet(
@@ -697,7 +701,7 @@ export class Boss extends Enemy {
     if (trib && !this._volleyHit) {
       for (const pt of trib.points) {
         if ((p.x - pt.x) ** 2 + (p.y - pt.y) ** 2 <= trib.radius * trib.radius) {
-          p.hit(2, this._specialAttackEvent ||= { enemyAttack: true })
+          p.hit(2, this._specialAttackEvent ||= { enemyAttack: true, isBoss: true })
           this._volleyHit = true
           break
         }
@@ -729,7 +733,7 @@ export class Boss extends Enemy {
     const hitRadius = this._specialGeometry?.lane?.halfWidth ?? (this.radius + p.radius + 12)
     if (!this.dashHit && (p.x - this.x) ** 2 + (p.y - this.y) ** 2 <= hitRadius * hitRadius) {
       // 冲锋命中 4 点（原 3）：BOSS 威胁补强后，撞中一次的代价配得上 0.72s 的预警
-      p.hit(4 + Math.floor(this.patternBonus / 2) + chain + (this._duelRage ? 1 : 0), this._specialAttackEvent ||= { enemyAttack: true })
+      p.hit(4 + Math.floor(this.patternBonus / 2) + chain + (this._duelRage ? 1 : 0), this._specialAttackEvent ||= { enemyAttack: true, isBoss: true })
       this.dashHit = true
     }
     if (this.specialTimer <= 0) {
@@ -843,7 +847,7 @@ export class Boss extends Enemy {
     let diff = Math.atan2(dy, dx) - this.lockedAngle
     diff = Math.atan2(Math.sin(diff), Math.cos(diff))
     if (Math.abs(diff) > halfAngle) return
-    if (!p.hit(2, { enemyAttack: true })) return
+    if (!p.hit(2, { enemyAttack: true, isBoss: true })) return
     // 击退：沿远离 BOSS 方向推开（出圈有 0.8s 宽限兜底，不会直接被灼烧判死）
     if (!p.dead && dist > 0) {
       const push = 130
@@ -918,7 +922,7 @@ export class Boss extends Enemy {
         this.attackCd -= dt
         if (this.attackCd <= 0) {
           this.attackCd = this.attackInterval
-          player.hit(this.damage, { enemyAttack: true })
+          player.hit(this.damage, { enemyAttack: true, isBoss: true })
         }
       }
       return

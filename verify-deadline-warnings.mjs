@@ -45,24 +45,49 @@ engine.player.invincible = 9999
 
 // 跳过第 1 章：直接进第 2 章（信标时限章）
 engine._enterExpeditionStage(2)
-assert.equal(engine._expeditionDefinition.deadline, 90)
+const deadline = engine._expeditionDefinition.deadline
+assert.equal(deadline, 180)
 engine.expeditionIntroTime = 99
 engine.update(0.05) // intro → active
 assert.equal(engine.runState, 'active')
 assert.equal(soundCalls.includes('wave'), true, '时限章激活应响一次号角')
 
 const startEvent = runStateEvents.find((e) => e.kind === 'deadline-start')
-assert.equal(startEvent?.seconds, 90, '激活时宣告 90 秒总时限')
-assert.equal(startEvent?.brief, '摧毁迁跃信标，切断王城增援')
+assert.equal(startEvent?.seconds, 180, '激活时宣告 3 分钟总时限')
+assert.match(startEvent?.brief, /进入蓝圈激活信标/)
+
+const events = engine.worldEvents
+const beacon = events.current
+const spawn = { x: engine.player.x, y: engine.player.y }
+const moveTo = ({ x, y }) => Object.assign(engine.player, { x, y })
+assert.equal(events.objectiveInfo.chapterTimed, true)
+assert.equal(events.objectiveInfo.inside, false)
+events.update(45)
+assert.equal(beacon.state, 'available', '寻找信标使用章节时限')
+moveTo(beacon)
+events.update(0.3)
+assert.equal(events.objectiveInfo.inside, true)
+assert.ok(events.objectiveInfo.progress > 0)
+events.update(0.4)
+assert.equal(beacon.state, 'active')
+assert.equal(events.objectiveInfo.goal, 9)
+events.update(2)
+const progress = beacon.progress
+moveTo(spawn)
+events.update(1)
+assert.equal(events.objectiveInfo.inside, false)
+assert.ok(beacon.progress < progress)
+events.update(23)
+assert.equal(beacon.state, 'active', '守点也使用章节时限')
 
 // 推进到剩余 61 秒：不应有任何警告
 runStateEvents.length = 0
-engine.expeditionStageElapsed = 29
+engine.expeditionStageElapsed = deadline - 61
 engine.update(0.05)
 assert.equal(runStateEvents.filter((e) => e.kind === 'deadline-warning').length, 0)
 
 // 跨过 60s 里程碑
-engine.expeditionStageElapsed = 30.01
+engine.expeditionStageElapsed = deadline - 60 + .01
 engine.update(0.05)
 assert.deepEqual(runStateEvents.filter((e) => e.kind === 'deadline-warning').map((e) => e.seconds), [60])
 assert.equal(soundCalls.filter((c) => c === 'alert').length, 1, '60s 里程碑响一次警示音')
@@ -73,7 +98,7 @@ engine.update(0.05)
 assert.equal(runStateEvents.filter((e) => e.kind === 'deadline-warning').length, 1)
 
 // 跨过 30s 里程碑
-engine.expeditionStageElapsed = 60.01
+engine.expeditionStageElapsed = deadline - 30 + .01
 engine.update(0.05)
 assert.deepEqual(runStateEvents.filter((e) => e.kind === 'deadline-warning').map((e) => e.seconds), [60, 30])
 assert.equal(soundCalls.filter((c) => c === 'alert').length, 2)
@@ -81,15 +106,15 @@ assert.equal(soundCalls.filter((c) => c === 'alert').length, 2)
 // 末 10 秒：deadline-final 一次 + 逐秒滴答
 runStateEvents.length = 0
 soundCalls.length = 0
-engine.expeditionStageElapsed = 80.01 // remaining 9.99 → ceil 10
+engine.expeditionStageElapsed = deadline - 10 + .01
 engine.update(0.05)
 assert.equal(runStateEvents.filter((e) => e.kind === 'deadline-final').length, 1)
 assert.deepEqual(soundCalls.filter((c) => c.startsWith('tick:')), ['tick:10'])
 
 // 逐秒递减：0.6s + 0.5s 推进跨过 9s 边界
-engine.update(0.6) // elapsed 80.66 → remaining 9.34 → ceil 10（同秒不重复）
+engine.update(0.6) // 剩余 9.34 秒，仍显示 10（同秒不重复）
 assert.deepEqual(soundCalls.filter((c) => c.startsWith('tick:')), ['tick:10'])
-engine.update(0.5) // elapsed 81.16 → remaining 8.84 → ceil 9
+engine.update(0.5) // 剩余 8.84 秒，显示 9
 assert.deepEqual(soundCalls.filter((c) => c.startsWith('tick:')), ['tick:10', 'tick:9'])
 
 // 逐秒推进到最后一秒：每次 +1s 跨过一秒边界，沿途 8..1 每秒一响
@@ -98,10 +123,23 @@ const ticks = soundCalls.filter((c) => c.startsWith('tick:')).map((c) => Number(
 assert.deepEqual(ticks, [10, 9, 8, 7, 6, 5, 4, 3, 2, 1], '末段应逐秒滴答 10→1')
 
 // 超时仍判负
-engine.expeditionStageElapsed = 90.01
+engine.expeditionStageElapsed = deadline + .01
 engine.update(0.05)
 assert.equal(engine.runState, 'defeat')
 assert.equal(engine.defeatReason, 'beacon-timeout')
 assert.equal(soundCalls.filter((c) => c.startsWith('tick:')).length, 10, '超时后不再滴答')
 
-console.log('✓ 章节时限提醒：激活宣告 + 60/30s 里程碑 + 末 10s 逐秒滴答时序全部正确')
+// 信标封锁后即进入守将战，越过同一个时限也不会判任务失败。
+engine.reset()
+engine._enterExpeditionStage(2)
+engine.expeditionIntroTime = 99
+engine.update(0)
+moveTo(events.current)
+events.update(0.7)
+events.update(events.current.goal)
+engine.expeditionStageElapsed = deadline - 0.01
+engine.update(0.05)
+assert.equal(engine.runState, 'expedition-guardian')
+assert.equal(runStateEvents.at(-1).beaconSealed, true)
+assert.equal(engine.runFinished, false)
+console.log('✓ 第二章 3 分钟共用时限、进出圈指引数据、封锁转守将战及末段警报全部正确')

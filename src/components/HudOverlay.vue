@@ -6,10 +6,10 @@
  * 数据源约定：stats 由引擎 onStats 以 ~2Hz 整树替换（shallowRef 快照），
  * cooldown 由 onCooldown 以 ~10Hz 推送（连续条平滑数据源）。
  */
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import SkillIcon from './SkillIcon.vue'
 import { routeIconId } from './skillIconRegistry.js'
-import { Pause, Play, Volume2, VolumeX } from 'lucide-vue-next'
+import { Check, Pause, Play, Volume2, VolumeX } from 'lucide-vue-next'
 import { SPEC_INFO, getSpecInfo } from '../game/SkillPool.js'
 import { ORIGIN_ROUTES, ORIGIN_MARKS } from '../game/OriginBuild.js'
 import { formatRunClock } from '../game/RunRules.js'
@@ -32,11 +32,15 @@ const emit = defineEmits(['toggle-mute', 'toggle-pause', 'toggle-resume', 'activ
 const touchControls = ref(false)
 let coarsePointerMedia = null
 const syncTouchControls = () => { touchControls.value = !!coarsePointerMedia?.matches }
-// 技能块键帽文案：面板由样式末段 @media (pointer: coarse) 挪到右下角，所以判定也用
-// 「主指针」——touchControls 走的是 any-pointer，触屏笔记本插着鼠标时会把 SPACE 误改成「点按」。
+// 键帽跟随主指针，触屏笔记本接入鼠标时仍提示 SPACE。
 const touchSkillKey = ref(false)
 let coarsePrimaryMedia = null
 const syncTouchSkillKey = () => { touchSkillKey.value = !!coarsePrimaryMedia?.matches }
+// 构筑栏在窄屏会折行，下面的面板跟随顶部 HUD 的实际高度。
+const topHud = ref(null)
+const topHudHeight = ref(0)
+let topHudObserver = null
+let bossPhaseTimer
 onMounted(() => {
   coarsePointerMedia = window.matchMedia?.('(any-pointer: coarse)') || null
   syncTouchControls()
@@ -44,12 +48,20 @@ onMounted(() => {
   coarsePrimaryMedia = window.matchMedia?.('(pointer: coarse)') || null
   syncTouchSkillKey()
   coarsePrimaryMedia?.addEventListener?.('change', syncTouchSkillKey)
+  if (typeof ResizeObserver !== 'undefined') {
+    topHudObserver = new ResizeObserver(([entry]) => {
+      topHudHeight.value = Math.ceil(entry.contentRect.height)
+    })
+    topHudObserver.observe(topHud.value)
+  }
 })
 onUnmounted(() => {
   coarsePointerMedia?.removeEventListener?.('change', syncTouchControls)
   coarsePointerMedia = null
   coarsePrimaryMedia?.removeEventListener?.('change', syncTouchSkillKey)
   coarsePrimaryMedia = null
+  topHudObserver?.disconnect()
+  clearTimeout(bossPhaseTimer)
 })
 const WEAPON_MUTATIONS = new Set(['gluttony', 'gatling', 'elemental', 'assassin'])
 const isWeaponEvolution = computed(() => WEAPON_MUTATIONS.has(props.evolution?.mutation))
@@ -72,7 +84,7 @@ const runStatusText = computed(() => {
   if (run.mode === 'expedition') {
     if (run.state === 'expedition-intro') return '章节部署'
     // 带时限的章节（如第二章信标）实时显示剩余时间；超时会直接判负。
-    if (run.stageDeadline && run.state === 'active') {
+    if (run.stageDeadline && run.state === 'active' && !props.stats.objective?.chapterTimed) {
       return `第 ${run.stage || 1} / ${run.totalStages || 6} 章 · 剩余 ${formatRunClock(Math.ceil(run.stageRemaining || 0))}`
     }
     return `第 ${run.stage || 1} / ${run.totalStages || 6} 章`
@@ -119,15 +131,11 @@ const expeditionPercent = computed(() => {
 const expeditionMetric = computed(() => {
   const objective = props.stats.run?.objective
   if (!objective) return ''
-  if (objective.type === 'defend') {
-    const defense = objective.defense
-    return `${Math.floor(objective.progress)} / ${objective.total}s · 巢心 ${Math.ceil(defense?.hp || 0)}`
+  if (objective.type === 'defend' || objective.type === 'survive') {
+    return `剩余 ${formatRunClock(Math.ceil(objective.total - objective.progress))}`
   }
-  if (objective.type === 'survive') return `${Math.floor(objective.progress)} / ${objective.total}s`
-  if (objective.type === 'mixed') {
-    return `击杀 ${objective.kills}/${objective.total / 2} · 事件 ${objective.events}/${objective.eventTarget}`
-  }
-  return `${Math.floor(objective.progress)} / ${objective.total}`
+  const label = objective.type === 'elites' ? '精英' : objective.type === 'event' ? '信标' : '击杀'
+  return `${label} ${Math.min(Math.floor(objective.progress), objective.total)} / ${objective.total}`
 })
 const defensePercent = computed(() => {
   const defense = props.stats.run?.objective?.defense
@@ -138,11 +146,31 @@ const defensePercent = computed(() => {
 const expPercent = computed(() =>
   props.stats.maxExp > 0 ? Math.min(100, (props.stats.exp / props.stats.maxExp) * 100) : 0
 )
-const bossPercent = computed(() =>
-  props.stats.boss?.maxHp > 0 ? Math.max(0, (props.stats.boss.hp / props.stats.boss.maxHp) * 100) : 0
-)
 const bossMemberPercent = (member) =>
   member?.maxHp > 0 ? Math.max(0, Math.min(100, (member.hp / member.maxHp) * 100)) : 0
+const bossPercent = computed(() => bossMemberPercent(props.stats.boss))
+const bossCast = computed(() => {
+  const cast = props.cooldown.bossCast
+  return cast?.encounter === props.stats.boss?.name ? cast : null
+})
+const bossPhaseCue = ref('')
+watch(() => props.stats.boss, (boss, previousBoss) => {
+  if (!boss || boss.name !== previousBoss?.name) {
+    clearTimeout(bossPhaseTimer)
+    bossPhaseCue.value = ''
+    return
+  }
+  const previousMembers = previousBoss.members
+  const changed = boss.members.find(member =>
+    previousMembers.some(previous => previous.id === member.id && previous.name === member.name && previous.phase < member.phase)
+  )
+  if (!changed) return
+  bossPhaseCue.value = boss.total > 1
+    ? `阶段 ${changed.phase} · ${changed.name}`
+    : `进入阶段 ${changed.phase}`
+  clearTimeout(bossPhaseTimer)
+  bossPhaseTimer = setTimeout(() => { bossPhaseCue.value = '' }, 2200)
+})
 const objectivePercent = computed(() => {
   const objective = props.stats.objective
   if (!objective?.total) return 0
@@ -158,34 +186,20 @@ const formationBreakPercent = computed(() => {
   return max > 0 ? Math.max(0, Math.min(100, (props.cooldown.formationBreak / max) * 100)) : 0
 })
 
-/** 空格 角色主动技能：冷却条进度（所有角色均有主动技能） */
+/** 暗影追击在主技能冷却期间也能释放。 */
+const shadowFollowup = computed(() => !!props.cooldown.shadow?.followup)
+const skillReady = computed(() => props.cooldown.skillReady)
+const skillSeconds = computed(() => Math.ceil(props.cooldown.skillCd))
+const skillStatus = computed(() => props.cooldown.skillCd > 0
+  ? `冷却 ${Math.max(0.1, props.cooldown.skillCd).toFixed(1)} 秒`
+  : '就绪')
+const skillLabel = computed(() => `${props.cooldown.skillName}，${skillStatus.value}${shadowFollowup.value ? '，影袭追击就绪' : ''}`)
 const skillPercent = computed(() => {
-  if (props.cooldown.shadow?.followup) return 100
   const max = props.cooldown.skillMax || 0
-  return max > 0 ? Math.max(0, 100 - (props.cooldown.skillCd / max) * 100) : 0
+  return max > 0 ? Math.max(0, Math.min(100, (1 - props.cooldown.skillCd / max) * 100)) : 0
 })
-const skillReady = computed(() => !!props.cooldown.shadow?.followup || props.cooldown.skillCd <= 0.02)
-const skillLabel = computed(() => props.cooldown.shadow?.followup
-  ? '影袭追击'
-  : props.cooldown.skillCd <= 0.02
-    ? props.cooldown.skillName
-    : `${props.cooldown.skillCd.toFixed(1)}s`)
 const hasStrainSkill = computed(() => !!props.cooldown.skillId && (props.cooldown.skillMax || 0) > 0)
-const hasBuildBar = computed(() => !!(
-  props.stats.ricochet ||
-  (props.stats.glutton?.has && props.stats.glutton?.route) ||
-  props.stats.symbiosis ||
-  props.stats.shadow ||
-  props.stats.originRoute ||
-  props.stats.bossTomes?.length ||
-  props.stats.spells
-))
-/**
- * 技能块的两个瞬时反馈（引擎置位、逐帧递减，这里只布尔化）：
- *  - readyFlash：冷却归零那一帧弹一下 —— 唯一能在「不看角落」时被余光捕捉到的信号
- *  - castPulse：按下成功时轻微下压 —— 闭合「亮 → 用掉 → 暗 → 亮」
- * 静态的就绪强化在 CSS（.ready），不消耗这里的状态。
- */
+// 顶部响应冷却归零，底部响应施放成功；两个脉冲沿用引擎的计时。
 const skillReadyFlash = computed(() => (props.cooldown.skillReadyFlash || 0) > 0)
 const skillCastPulse = computed(() => (props.cooldown.skillCastPulse || 0) > 0)
 const objectiveArrow = computed(() => {
@@ -204,6 +218,55 @@ const objectiveMetric = computed(() => {
   if (objective.type === 'hunt') return `${Math.floor(objective.progress)} / ${objective.total}`
   if (objective.type === 'beacon') return `${objective.progress.toFixed(1)} / ${objective.total}s`
   return `${Math.ceil(objective.timeLeft)}s`
+})
+const requiredEvent = computed(() => {
+  const run = props.stats.run
+  const mission = run?.objective
+  if (run?.state !== 'active' || !mission?.event || mission.events >= (mission.eventTarget || mission.target)) return null
+  return mission.event
+})
+const chapterEventGuide = computed(() => {
+  const event = requiredEvent.value
+  if (!event) return null
+  const beacon = event.type === 'beacon'
+  const name = beacon ? '信标' : '黏液池'
+  const objective = props.stats.objective
+  if (objective?.type !== event.type || objective.state === 'failed') {
+    return {
+      title: `等待${name}出现`,
+      metric: event.retryIn === null ? '' : formatRunClock(Math.ceil(event.retryIn)),
+    }
+  }
+  if (objective.state === 'available') {
+    return objective.inside
+      ? { title: `正在激活${name}`, hint: '留在圈内即可自动激活', showProgress: true }
+      : { title: `前往${name}`, hint: `沿箭头移动，进入${beacon ? '蓝' : '绿'}圈自动激活`, metric: `${objectiveArrow.value} ${objectiveMetric.value}` }
+  }
+  if (!beacon) {
+    return {
+      title: '躲避追猎',
+      hint: '继续走位，离开绿圈也会推进',
+      metric: `剩余 ${formatRunClock(Math.ceil(objective.goal - objective.progress))}`,
+      showProgress: true,
+    }
+  }
+  if (objective.state === 'active') {
+    const progress = `${objective.progress.toFixed(1)} / ${objective.goal} 秒`
+    return {
+      title: objective.inside ? '守住信标圈' : '返回信标圈',
+      hint: objective.inside ? '在蓝圈内躲避攻击，直到进度填满' : `沿 ${objectiveArrow.value} 返回蓝圈，离圈时进度会回退`,
+      metric: progress,
+      showProgress: true,
+    }
+  }
+  return null
+})
+const chapterEventTimer = computed(() => {
+  const objective = props.stats.objective
+  if (!requiredEvent.value || !objective || objective.chapterTimed) return null
+  if (objective.state === 'available') return { label: '激活限时', remaining: objective.timeLeft }
+  if (objective.state === 'active' && objective.type === 'beacon') return { label: '封锁限时', remaining: objective.timeLeft }
+  return null
 })
 
 /** 元素当前等级（stats.elements 为 [{id, lv}]） */
@@ -296,29 +359,31 @@ const originMemoryChip = (slot) => ({
 <template>
   <div
     class="hud"
-    :style="stats.spells?.palette ? { '--fusion-main': stats.spells.palette.main, '--fusion-accent': stats.spells.palette.accent } : undefined"
+    :style="[
+      { '--hud-top-height': topHudHeight + 'px' },
+      stats.spells?.palette && { '--fusion-main': stats.spells.palette.main, '--fusion-accent': stats.spells.palette.accent },
+    ]"
     :class="{
       'has-boss': stats.boss,
-      'has-boss-formation': stats.boss?.formation,
-      'has-bounty': stats.run?.bounty,
       'has-shadow': !!cooldown.shadow,
       'has-glutton': !!cooldown.glutton,
-      'has-build': hasBuildBar,
       'has-spells': !!stats.spells,
+      'has-strain-skill': hasStrainSkill,
       'hud--runner': variant === 'runner',
     }"
   >
     <div class="hud-title">
       史莱姆大暴走<span>SLIME RAMPAGE</span>
     </div>
-    <div class="hud-level">
+    <div ref="topHud" class="hud-level">
       <div class="hud-vitals">
         <div class="hud-level-txt">Lv.{{ stats.level }}</div>
         <div class="hud-level-bar">
           <i :style="{ width: expPercent + '%' }"></i>
         </div>
-        <div class="hud-hp">
-          <span v-for="i in stats.maxHp" :key="i" class="hp-dot" :class="{ lost: i > stats.hp }"></span>
+        <div class="hud-hp" role="img" :aria-label="`生命 ${stats.hp} / ${stats.maxHp}`">
+          <span v-for="i in stats.maxHp" :key="i" class="hp-dot" :class="{ lost: stats.hp <= i - 1 }"
+            :style="{ '--hp-fill': `${Math.max(0, Math.min(1, stats.hp - i + 1)) * 100}%` }"></span>
         </div>
         <div v-if="stats.run?.mode === 'expedition'" class="hud-wave expedition">
           第 {{ stats.run.stage }} 章<i>{{ stats.run.chapterTitle }}</i>
@@ -329,6 +394,24 @@ const originMemoryChip = (slot) => ({
           <span>{{ stats.run?.modeName }} · {{ stats.run?.difficultyName }}</span>
           <b>{{ runStatusText }}</b>
         </div>
+      </div>
+      <div v-if="hasStrainSkill" class="hud-skill-cue" role="status">
+        <span
+          v-if="!paused && buttonsVisible && stats.run?.state !== 'expedition-intro'"
+          class="hud-skill-badge"
+          :class="{ ready: skillReady, 'is-ready-flash': skillReady && (skillReadyFlash || shadowFollowup) }"
+        >
+          <span
+            class="hud-skill-dial"
+            :style="{ '--skill-progress': skillReady ? '100%' : skillPercent + '%' }"
+            aria-hidden="true"
+          >
+            <Check v-if="skillReady" :size="16" :stroke-width="2.5" />
+            <span v-else class="hud-skill-seconds">{{ skillSeconds }}<small>s</small></span>
+          </span>
+          <strong>{{ shadowFollowup ? '影袭追击' : cooldown.skillName }}</strong>
+          <small class="hud-skill-state">{{ skillReady ? '就绪' : '冷却' }}</small>
+        </span>
       </div>
       <div class="hud-build">
         <div v-if="stats.ricochet" class="hud-ricochet" :title="stats.ricochet.note">
@@ -502,21 +585,39 @@ const originMemoryChip = (slot) => ({
       </div>
     </div>
     <div
-      v-if="stats.run?.mode === 'expedition' && stats.run.state !== 'expedition-intro' && !stats.boss"
+      v-if="stats.run?.mode === 'expedition' && stats.run.state === 'active' && !stats.boss"
       class="expedition-hud"
     >
       <div class="expedition-head">
         <span>第 {{ stats.run.stage }} 章 · {{ stats.run.region }}</span>
-        <b>{{ expeditionMetric }}</b>
+        <b v-if="!chapterEventGuide && stats.run.objective?.type !== 'mixed'">{{ expeditionMetric }}</b>
+      </div>
+      <div v-if="stats.run.objective?.type === 'mixed'" class="expedition-counts">
+        <span>击杀 <b>{{ Math.min(stats.run.objective.kills, stats.run.objective.target) }} / {{ stats.run.objective.target }}</b></span>
+        <span>{{ stats.run.objective.event?.title }} <b>{{ Math.min(stats.run.objective.events, stats.run.objective.eventTarget) }} / {{ stats.run.objective.eventTarget }}</b></span>
       </div>
       <div v-if="deadlineUrgency" class="expedition-deadline" :class="deadlineUrgency">
         <span>章节时限</span>
         <i><em :style="{ width: deadlinePercent + '%' }"></em></i>
-        <b>{{ Math.ceil(stageRemaining) }}s</b>
+        <b>{{ formatRunClock(Math.ceil(stageRemaining)) }}</b>
       </div>
-      <strong>{{ stats.run.objective?.title }}</strong>
-      <i>{{ stats.run.objective?.brief }}</i>
-      <div class="expedition-track"><em :style="{ width: expeditionPercent + '%' }"></em></div>
+      <template v-if="chapterEventGuide">
+        <div v-if="chapterEventTimer" class="chapter-event-timer">
+          <span>{{ chapterEventTimer.label }}</span><b>{{ formatRunClock(Math.ceil(chapterEventTimer.remaining)) }}</b>
+        </div>
+        <div class="chapter-event-title">
+          <strong>{{ chapterEventGuide.title }}</strong>
+          <b v-if="chapterEventGuide.metric">{{ chapterEventGuide.metric }}</b>
+        </div>
+        <p v-if="chapterEventGuide.hint" class="chapter-event-hint">{{ chapterEventGuide.hint }}</p>
+        <div v-if="chapterEventGuide.showProgress" class="expedition-track chapter-event-track" :style="{ '--event-progress': stats.objective?.color }"><em :style="{ width: objectivePercent + '%' }"></em></div>
+      </template>
+      <template v-else>
+        <strong>{{ stats.run.objective?.title }}</strong>
+        <i v-if="stats.run.objective?.type === 'defend'">靠近或命中带标记的敌人，将它们引开</i>
+        <i v-else-if="stats.run.objective?.type === 'elites'">击杀带金色光环的精英</i>
+        <div class="expedition-track"><em :style="{ width: expeditionPercent + '%' }"></em></div>
+      </template>
       <div v-if="stats.run.objective?.type === 'defend'" class="nest-defense">
         <span>巢心耐久</span>
         <i><em :style="{ width: defensePercent + '%' }"></em></i>
@@ -526,19 +627,33 @@ const originMemoryChip = (slot) => ({
     <div class="hud-hint">
       <template v-if="touchControls">左侧拖动移动</template><template v-else>WASD / 方向键或点按地面移动</template><template v-if="stats.spells"> · 法术自动施放</template><template v-else-if="stats.canUseElements"> · 元素核心靠近后自动吸收</template><template v-if="hasStrainSkill"> · {{ touchSkillKey ? '点按' : '空格' }} {{ cooldown.skillName }}<template v-if="cooldown.skillName === '影袭'">（沿移动方向）</template><template v-else-if="cooldown.skillName === '深渊吸噬'">（聚怪重咬）</template></template> · Esc 暂停
     </div>
-    <div class="hud-stats">
-      <span>攻击 <b>{{ stats.dmg }}</b></span>
-      <span>击杀 <b>{{ stats.kills }}</b></span>
-      <span>分数 <b>{{ (stats.score || 0).toLocaleString('en-US') }}</b></span>
-      <!-- 吞噬线：只有暴食角色能吞噬（stats.canDevour），其余角色整项隐藏 -->
-      <span v-if="stats.canDevour"
-        >吞噬线
-        <b title="普通怪 / 精英怪的投降血线"
-          >{{ Math.max(8, Math.round((stats.devourThreshold - stats.strainDevourBonus - 0.13) * 100)) }}/{{
+    <div class="hud-bottom-right">
+      <dl class="hud-stats" aria-label="战斗数据">
+        <div><dt>攻击</dt><dd>{{ stats.dmg }}</dd></div>
+        <div><dt>击杀</dt><dd>{{ stats.kills }}</dd></div>
+        <div><dt>分数</dt><dd>{{ (stats.score || 0).toLocaleString('en-US') }}</dd></div>
+        <div v-if="stats.canDevour">
+          <dt>吞噬线</dt>
+          <dd title="普通怪 / 精英怪的投降血线">{{ Math.max(8, Math.round((stats.devourThreshold - stats.strainDevourBonus - 0.13) * 100)) }}/{{
             Math.round((stats.devourThreshold + stats.strainDevourBonus + 0.13) * 100)
-          }}%</b
-        ></span
+          }}%</dd>
+        </div>
+      </dl>
+      <div
+        v-if="hasStrainSkill"
+        class="hud-action hud-action--skill"
+        :class="{ ready: skillReady, 'is-cast-pulse': skillCastPulse }"
+        :aria-label="skillLabel"
+        :title="cooldown.skillDesc"
+        role="button"
+        tabindex="0"
+        @click="emit('activate-skill')"
+        @keydown.enter.prevent="emit('activate-skill')"
+        @keydown.space.prevent="!$event.repeat && emit('activate-skill')"
       >
+        <b class="hud-action-name"><SkillIcon :skill="cooldown.skillId" size="inline" />{{ cooldown.skillName }}</b>
+        <span class="hud-action-key">{{ touchSkillKey ? '点按' : 'SPACE' }}</span>
+      </div>
     </div>
     <div v-if="cooldown.formationBreak > 0" class="formation-break-hud">
       <div>
@@ -569,10 +684,26 @@ const originMemoryChip = (slot) => ({
         </div>
       </div>
     </div>
-    <div v-if="cooldown.shadow" class="shadow-status" :title="`暴击率 ${Math.round(cooldown.shadow.crit * 100)}% · 暴击后分身概率 ${Math.round(cooldown.shadow.chance * 100)}% · 分身攻击 ${Math.round(cooldown.shadow.power * 100)}% · 持续 ${cooldown.shadow.duration} 秒`">
+    <div v-if="cooldown.shadow" class="shadow-status" :title="`暴击率 ${Math.round(cooldown.shadow.crit * 100)}%（暴伤 ${Number((cooldown.shadow.critMul || 3).toFixed(2))}x）· 暴击生影 ${Math.round(cooldown.shadow.chance * 100)}% · 分身攻击 ${Math.round(cooldown.shadow.power * 100)}% · 持续 ${cooldown.shadow.duration} 秒（可挡普通弹并就近分流近战）· 影刃格挡（物理未闪避 −1 伤并震退近敌，7 秒重聚，三连波/影袭命中 −1.2s）：${cooldown.shadow.guard?.charges > 0 ? '就绪' : `${(cooldown.shadow.guard?.remaining || 0).toFixed(1)}s`} · 影织魔盾仅挡法术，充能 ×${Number((cooldown.shadow.shield?.haste || 1).toFixed(2))} · 替身移影${cooldown.shadow.substituteCd > 0 ? `冷却 ${cooldown.shadow.substituteCd.toFixed(1)}s` : cooldown.shadow.substituteReady ? '待命（致命换位保命）' : '需场上存在分身'} · 影魄满 ${cooldown.shadow.soul?.threshold || 16} 点受伤回 1 血（冷却 ${cooldown.shadow.soul?.healCooldown || 12} 秒，首领交锋点数 ×2），满血反哺魔盾或涌动`">
       <span>闪避 <b>{{ Math.round(cooldown.shadow.evasion * 100) }}%</b></span>
       <span>分身 <b>{{ cooldown.shadow.count }}/{{ cooldown.shadow.cap }}</b></span>
-      <small>暴击后生影 {{ Math.round(cooldown.shadow.chance * 100) }}%</small>
+      <span>暴击 <b>{{ Math.round(cooldown.shadow.crit * 100) }}%</b></span>
+      <span v-if="cooldown.shadow.guard">格挡 <b>{{ cooldown.shadow.guard.charges > 0 ? `${cooldown.shadow.guard.charges}/${cooldown.shadow.guard.capacity}` : `${cooldown.shadow.guard.remaining.toFixed(1)}s` }}</b></span>
+      <span v-if="cooldown.shadow.shield">魔盾 <b>{{ cooldown.shadow.shield.charges }}/{{ cooldown.shadow.shield.capacity }}</b></span>
+      <span v-if="cooldown.shadow.soul" class="shadow-soul-stat">影魄 <b>{{ cooldown.shadow.soul.points }}/{{ cooldown.shadow.soul.threshold }}</b></span>
+      <span>替身 <b>{{ cooldown.shadow.substituteCd > 0 ? `${Math.ceil(cooldown.shadow.substituteCd)}s` : cooldown.shadow.substituteReady ? '待命' : '无影' }}</b></span>
+      <small v-if="cooldown.shadow.shield && cooldown.shadow.shield.charges < cooldown.shadow.shield.capacity">
+        充能 {{ cooldown.shadow.shield.remaining.toFixed(1) }}s · {{ cooldown.shadow.soul?.healCd > 0 ? `回血 ${cooldown.shadow.soul.healCd.toFixed(1)}s` : cooldown.shadow.assaultBuff?.timer > 0 ? `影遁 ${cooldown.shadow.assaultBuff.timer.toFixed(1)}s` : cooldown.shadow.counterReady ? '反制必暴就绪' : `生影 ${Math.round(cooldown.shadow.chance * 100)}%` }}
+      </small>
+      <small v-else>
+        {{ cooldown.shadow.assaultBuff?.timer > 0 ? `影遁 ${cooldown.shadow.assaultBuff.timer.toFixed(1)}s` : cooldown.shadow.counterReady ? '噬法反制必暴' : cooldown.shadow.soul?.surge > 0 ? `影魄涌动 ${cooldown.shadow.soul.surge.toFixed(1)}s` : `生影 ${Math.round(cooldown.shadow.chance * 100)}%` }} · {{ cooldown.shadow.soul?.healCd > 0 ? `回血 ${cooldown.shadow.soul.healCd.toFixed(1)}s` : '影魄就绪' }}
+      </small>
+      <div v-if="cooldown.shadow.shield && cooldown.shadow.shield.charges < cooldown.shadow.shield.capacity" class="shadow-shield-bar">
+        <em :style="{ width: `${Math.round(cooldown.shadow.shield.progress * 100)}%` }"></em>
+      </div>
+      <div v-if="cooldown.shadow.soul" class="shadow-soul-bar">
+        <em :style="{ width: `${Math.round(cooldown.shadow.soul.progress * 100)}%` }"></em>
+      </div>
     </div>
     <div
       v-if="cooldown.glutton"
@@ -584,94 +715,88 @@ const originMemoryChip = (slot) => ({
       <i class="glutton-status__track"><em :style="{ width: Math.min(100, Math.round(((stats.boss ? cooldown.glutton.bossProgress / Math.max(1, cooldown.glutton.bossProgressPer) : cooldown.glutton.satiety / Math.max(1, cooldown.glutton.satietyMax))) * 100)) + '%' }"></em></i>
       <small>光环 {{ cooldown.glutton.auraRadius }}px · 反伤 {{ cooldown.glutton.counterCd > 0 ? cooldown.glutton.counterCd.toFixed(1) + 's' : '就绪' }}</small>
     </div>
-    <!-- 空格 角色专属主动技能：全角色统一走冷却动作条 -->
 <div v-if="cooldown.spellShield" class="spell-shield-status" :class="{ broken: cooldown.spellShield.points <= 0 }" :title="`法术护盾吸收敌人攻击，破盾后 ${cooldown.spellShield.cooldown} 秒自动重建`" aria-label="法术护盾状态">
             <span><SkillIcon skill="spell_shield" size="inline" /> 法术护盾</span><b>{{ Number(cooldown.spellShield.points.toFixed(1)) }}/{{ cooldown.spellShield.capacity }}</b>
             <small>{{ cooldown.spellShield.points > 0 ? '保护中' : `重建 ${Math.ceil(cooldown.spellShield.remaining)} 秒` }}</small>
             <i v-if="cooldown.spellShield.points <= 0"><em :style="{ width: `${100 * (1 - cooldown.spellShield.remaining / cooldown.spellShield.cooldown)}%` }"></em></i>
           </div>
-    <div v-if="hasStrainSkill" role="button" tabindex="0" @click="emit('activate-skill')" @keydown.enter.prevent="emit('activate-skill')" @keydown.space.prevent="!$event.repeat && emit('activate-skill')" :aria-label="skillLabel" :title="cooldown.skillDesc" class="hud-action hud-action--skill" :class="{ ready: skillReady, 'is-ready-flash': skillReadyFlash, 'is-cast-pulse': skillCastPulse }">
-      <div class="hud-action-label">
-        <span>{{ touchSkillKey ? '点按' : 'SPACE' }}</span>
-        <b><SkillIcon :skill="cooldown.skillId" size="inline" /> {{ skillLabel }}</b>
-      </div>
-      <i><em :style="{ width: skillPercent + '%' }"></em></i>
-    </div>
-    <div
-      v-if="stats.boss"
-      class="boss-hud"
-      :class="{
-        enraged: stats.boss.enraged,
-        vulnerable: stats.boss.vulnerable,
-        squad: stats.boss.total > 1,
-      }"
-    >
-      <div class="boss-meta">
-        <span>
-          {{ stats.boss.total > 1 ? `${stats.boss.count}/${stats.boss.total} 首领` : `阶段 ${stats.boss.phase}` }}
-          · {{ stats.boss.state }}
-        </span>
-        <b>{{ stats.boss.name }}</b>
-        <i>{{ Math.max(0, Math.ceil(stats.boss.hp)) }} / {{ stats.boss.maxHp }}</i>
-      </div>
-      <div class="boss-track"><em :style="{ width: bossPercent + '%' }"></em></div>
-      <div v-if="stats.boss.total > 1" class="boss-members">
-        <div
-          v-for="member in stats.boss.members"
-          :key="member.id"
-          :class="{ casting: member.casting, enraged: member.enraged, protected: member.protected }"
+    <div v-if="stats.boss || stats.run?.bounty || (stats.objective && !chapterEventGuide)" class="hud-side-panels">
+      <div v-if="stats.boss || stats.run?.bounty" class="hud-left-panels">
+        <section
+          v-if="stats.boss"
+          class="boss-hud"
+          aria-label="首领"
+          :class="{ enraged: stats.boss.enraged, vulnerable: stats.boss.vulnerable }"
         >
-          <span>{{ member.name }}</span>
-          <i><em :style="{ width: bossMemberPercent(member) + '%' }"></em></i>
-          <b>{{ Math.max(0, Math.ceil(member.hp)) }}</b>
+          <div class="boss-meta">
+            <b>{{ stats.boss.name }}</b>
+            <span v-if="bossPhaseCue" class="boss-phase-cue" role="status">{{ bossPhaseCue }}</span>
+            <span v-else-if="stats.boss.vulnerable" class="boss-vulnerability">破绽</span>
+          </div>
+          <div
+            class="boss-track"
+            role="progressbar"
+            :aria-label="stats.boss.name + '生命'"
+            :aria-valuenow="Math.round(bossPercent)"
+            :aria-valuetext="Math.ceil(stats.boss.hp) + ' / ' + stats.boss.maxHp"
+          >
+            <em :style="{ width: bossPercent + '%' }"></em>
+          </div>
+          <div v-if="bossCast" class="boss-telegraph">
+            <span class="boss-cast-name">{{ bossCast.skill }}<template v-if="bossCast.caster"> · {{ bossCast.caster }}</template></span>
+            <div class="boss-cast-track"><em :style="{ width: Math.round(cooldown.cast * 100) + '%' }"></em></div>
+          </div>
+          <div v-if="stats.boss.total > 1" class="boss-members">
+            <div
+              v-for="member in stats.boss.members"
+              :key="member.id"
+              :class="{ casting: member.casting, enraged: member.enraged, protected: member.protected }"
+            >
+              <span>{{ member.name }}</span>
+              <i role="progressbar" :aria-label="member.name + '生命'" :aria-valuenow="Math.round(bossMemberPercent(member))"><em :style="{ width: bossMemberPercent(member) + '%' }"></em></i>
+            </div>
+            <small v-if="stats.boss.pending > 0">增援待命 ×{{ stats.boss.pending }}</small>
+          </div>
+          <div
+            v-if="stats.boss.formation"
+            class="boss-formation"
+            :class="[stats.boss.formation.id, { broken: stats.boss.formation.broken }]"
+          >
+            <span><i>{{ stats.boss.formation.mark }}</i>{{ stats.boss.formation.name }}</span>
+            <b>{{ stats.boss.formation.status }}</b>
+          </div>
+        </section>
+        <div v-if="stats.run?.bounty" class="endless-bounty-hud">
+          <div class="bounty-kicker">
+            <span>深层悬赏 · {{ stats.run.bounty.mark }}</span>
+            <i>{{ Math.ceil(stats.run.bounty.timeLeft) }}s</i>
+          </div>
+          <div class="bounty-title">
+            <b>{{ stats.run.bounty.name }}</b>
+            <em>{{ stats.run.bounty.progress }} / {{ stats.run.bounty.target }}</em>
+          </div>
+          <div class="bounty-track"><i :style="{ width: bountyPercent + '%' }"></i></div>
+          <div class="bounty-reward">奖励 · {{ stats.run.bounty.reward }}</div>
         </div>
-        <small v-if="stats.boss.pending > 0">增援待命 ×{{ stats.boss.pending }}</small>
       </div>
       <div
-        v-if="stats.boss.formation"
-        class="boss-formation"
-        :class="[stats.boss.formation.id, { broken: stats.boss.formation.broken }]"
+        v-if="stats.objective && !chapterEventGuide"
+        class="objective-hud"
+        :class="[stats.objective.state, { expedition: stats.run?.mode === 'expedition' }]"
+        :style="{ '--objective-color': stats.objective.color }"
       >
-        <span><i>{{ stats.boss.formation.mark }}</i>{{ stats.boss.formation.name }}</span>
-        <b>{{ stats.boss.formation.status }}</b>
+        <div class="objective-kicker">
+          <span>地图事件</span>
+          <i>{{ Math.ceil(stats.objective.timeLeft) }}s</i>
+        </div>
+        <div class="objective-title">
+          <b>{{ stats.objective.title }}</b>
+          <em>{{ objectiveArrow }} {{ objectiveMetric }}</em>
+        </div>
+        <div class="objective-label">{{ stats.objective.label }}</div>
+        <div class="objective-track"><i :style="{ width: objectivePercent + '%' }"></i></div>
+        <div class="objective-reward">奖励 · {{ stats.objective.reward }}</div>
       </div>
-      <div class="boss-intent">
-        <span>{{ stats.boss.activeName }} · {{ stats.boss.phaseName }}</span>
-        <b>{{ stats.boss.vulnerable ? '破绽 · 伤害提升' : stats.boss.special }}</b>
-      </div>
-      <div class="boss-cast-track" :class="{ active: cooldown.cast > 0 }">
-        <em :style="{ width: Math.round(cooldown.cast * 100) + '%' }"></em>
-      </div>
-    </div>
-    <div
-      v-if="stats.objective"
-      class="objective-hud"
-      :class="[stats.objective.state, { expedition: stats.run?.mode === 'expedition' }]"
-      :style="{ '--objective-color': stats.objective.color }"
-    >
-      <div class="objective-kicker">
-        <span>地图事件</span>
-        <i>{{ Math.ceil(stats.objective.timeLeft) }}s</i>
-      </div>
-      <div class="objective-title">
-        <b>{{ stats.objective.title }}</b>
-        <em>{{ objectiveArrow }} {{ objectiveMetric }}</em>
-      </div>
-      <div class="objective-label">{{ stats.objective.label }}</div>
-      <div class="objective-track"><i :style="{ width: objectivePercent + '%' }"></i></div>
-      <div class="objective-reward">奖励 · {{ stats.objective.reward }}</div>
-    </div>
-    <div v-if="stats.run?.bounty" class="endless-bounty-hud">
-      <div class="bounty-kicker">
-        <span>深层悬赏 · {{ stats.run.bounty.mark }}</span>
-        <i>{{ Math.ceil(stats.run.bounty.timeLeft) }}s</i>
-      </div>
-      <div class="bounty-title">
-        <b>{{ stats.run.bounty.name }}</b>
-        <em>{{ stats.run.bounty.progress }} / {{ stats.run.bounty.target }}</em>
-      </div>
-      <div class="bounty-track"><i :style="{ width: bountyPercent + '%' }"></i></div>
-      <div class="bounty-reward">奖励 · {{ stats.run.bounty.reward }}</div>
     </div>
     <!-- 右上角按钮组：静音 + 暂停（HUD 层 pointer-events:none，按钮单独可点击） -->
     <div v-if="buttonsVisible" class="hud-btns">
@@ -703,7 +828,7 @@ const originMemoryChip = (slot) => ({
         <i aria-hidden="true"></i>
         <h2>{{ stats.run.chapterTitle }}</h2>
         <p>{{ stats.run.region }} · {{ stats.run.chapterBrief }}</p>
-        <p v-if="stats.run.stageDeadline" class="chapter-deadline">⏱ 限时 {{ stats.run.stageDeadline }} 秒 · 超时任务失败</p>
+        <p v-if="stats.run.stageDeadline" class="chapter-deadline">限时 {{ formatRunClock(stats.run.stageDeadline) }} · 超时任务失败</p>
       </section>
     </div>
 
@@ -755,16 +880,16 @@ const originMemoryChip = (slot) => ({
 .has-spells .spell-shield-status { color: var(--fusion-main); }
 .has-spells .spell-shield-status em { background: var(--fusion-main); }
 .has-spells .hud-spell-build p b { color: var(--fusion-main); }
-.has-spells .hud-action--skill .hud-action-label b,
-.has-spells .hud-action--skill.ready .hud-action-label b { color: var(--fusion-main); }
-.has-spells .hud-action--skill.ready { border-color: var(--fusion-accent); }
-.has-spells .hud-action--skill > i > em { background: linear-gradient(90deg, var(--fusion-accent), var(--fusion-main)); }
 .hud-spell-slots small { max-width: 160px; white-space: normal; }
 @media (max-width: 520px) { .hud-spell-slots > span { padding: 3px 5px; min-height: 26px; }.hud-spell-slots b { font-size: 10px; }.hud-spell-slots small { max-width: 70px; }.hud-spell-slots .spell-slot-empty small { max-width: 65px; line-height: 1.25; }.hud-spell-build p { flex-wrap: wrap; gap: 3px 7px; } }
-.shadow-status { position: absolute; left: 24px; bottom: 78px; width: 168px; box-sizing: border-box; display: flex; flex-wrap: wrap; align-items: center; gap: 5px 12px; padding: 7px 10px; border: 1px solid #bea0ce38; border-radius: 8px; background: #211b29e8; color: #dcc9e7; font-size: 12px; }
+.shadow-status { position: absolute; left: 24px; bottom: 78px; width: 184px; box-sizing: border-box; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 7px 10px; border: 1px solid #bea0ce38; border-radius: 8px; background: #211b29e8; color: #dcc9e7; font-size: 11px; }
 .shadow-status b { color: #f3e6fa; font-variant-numeric: tabular-nums; }
 .shadow-status small { width: 100%; color: #bba9c5; font-size: 10px; }
-.hud.has-shadow .formation-break-hud,
+.shadow-shield-bar { width: 100%; height: 3px; border-radius: 2px; background: #362c44; overflow: hidden; }
+.shadow-shield-bar em { display: block; height: 100%; background: linear-gradient(90deg, #9c88ff, #78e8ff); }
+.shadow-soul-bar { width: 100%; height: 3px; border-radius: 2px; background: #362c44; overflow: hidden; }
+.shadow-soul-bar em { display: block; height: 100%; background: linear-gradient(90deg, #4ade80, #c084fc); transition: width 0.12s linear; }
+.hud.has-shadow .formation-break-hud { bottom: 186px; }
 .hud.has-glutton .formation-break-hud { bottom: 138px; }
 .glutton-status { position: absolute; left: 24px; bottom: 78px; width: 176px; box-sizing: border-box; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 7px 10px; border: 1px solid rgba(181, 214, 111, 0.34); border-radius: 8px; background: rgba(22, 28, 17, 0.9); color: #dcebc8; font-size: 12px; }
 .glutton-status b { color: #f1ffd6; font-variant-numeric: tabular-nums; }
@@ -772,10 +897,17 @@ const originMemoryChip = (slot) => ({
 .glutton-status__track { display: block; width: 100%; height: 4px; overflow: hidden; border-radius: 2px; background: rgba(255, 255, 255, 0.12); }
 .glutton-status__track em { display: block; height: 100%; background: linear-gradient(90deg, #62a94b, #c8f37d); transition: width 0.12s linear; }
 .hud {
+  --hud-top-inset: 14px;
+  --hud-top-bottom: calc(var(--hud-top-inset) + var(--hud-top-height));
   position: absolute;
   inset: 0;
   pointer-events: none; /* 关键：UI 层不拦截游戏输入 */
   color: var(--art-text, #f3ead5);
+}
+
+.hud.has-strain-skill {
+  --hud-skill-cue-height: 38px;
+  --hud-skill-cue-offset: calc(var(--hud-skill-cue-height) + 7px);
 }
 
 /* Runner 试玩模式：隐藏全部 Arena 专属信息（等级/生命/波次/提示/统计/Boss/事件/
@@ -784,13 +916,10 @@ const originMemoryChip = (slot) => ({
 .hud--runner .hud-level,
 .hud--runner .expedition-hud,
 .hud--runner .hud-hint,
-.hud--runner .hud-stats,
-.hud--runner .hud-action,
+.hud--runner .hud-bottom-right,
 .hud--runner .formation-break-hud,
 .hud--runner .glutton-status,
-.hud--runner .boss-hud,
-.hud--runner .objective-hud,
-.hud--runner .endless-bounty-hud,
+.hud--runner .hud-side-panels,
 .hud--runner .chapter-intro,
 .hud--runner .combo-toast,
 .hud--runner .deadline-countdown {
@@ -815,20 +944,12 @@ const originMemoryChip = (slot) => ({
 .hud-run-status,
 .boss-hud,
 .objective-hud,
-.hud-action,
-.hud-stats,
 .hud-elements,
 .hud-reactions {
   border-color: var(--art-edge, rgba(225, 211, 170, 0.34));
   background-color: var(--art-surface, rgba(19, 27, 23, 0.88));
   box-shadow: inset 0 1px 0 rgba(255, 246, 214, 0.06), 0 8px 22px rgba(0, 0, 0, 0.2);
 }
-.hud-action.ready,
-.hud-action:hover,
-.hud-action:focus-visible {
-  border-color: var(--art-edge-strong, rgba(255, 231, 164, 0.72));
-}
-
 .hud-title span {
   display: block;
   margin-top: 6px;
@@ -840,7 +961,7 @@ const originMemoryChip = (slot) => ({
 
 .hud-level {
   position: absolute;
-  top: 14px;
+  top: var(--hud-top-inset);
   left: 50%;
   display: flex;
   flex-direction: column;
@@ -863,6 +984,102 @@ const originMemoryChip = (slot) => ({
 .hud-vitals {
   gap: 12px;
   min-height: 25px;
+}
+
+.hud-skill-cue {
+  display: grid;
+  place-items: center;
+  min-height: var(--hud-skill-cue-height);
+}
+
+.hud-skill-badge {
+  --skill-dial-fill: #eabb68;
+  --skill-dial-face: #192a24;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: var(--hud-skill-cue-height);
+  padding: 0 11px 0 4px;
+  border: 1px solid #677c71;
+  border-radius: 999px;
+  background: #273a32;
+  color: #bbd1c6;
+  font-size: 13px;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px #223a2c33;
+}
+
+.hud-skill-badge.ready {
+  --skill-dial-fill: #f5d17c;
+  --skill-dial-face: #254936;
+  border-color: #ad975d;
+  background: #1d4132;
+  color: #ffe19b;
+}
+
+.hud-skill-dial {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  color: #ffe19b;
+  background: conic-gradient(var(--skill-dial-fill) var(--skill-progress), #54665c 0);
+}
+
+.hud-skill-dial::before {
+  position: absolute;
+  inset: 3px;
+  border-radius: inherit;
+  background: var(--skill-dial-face);
+  content: '';
+}
+
+.hud-skill-dial > * { position: relative; }
+
+.hud-skill-seconds {
+  font-size: 12px;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.hud-skill-seconds small {
+  margin-inline-start: 1px;
+  font-size: 8px;
+}
+
+.hud-skill-state {
+  padding-inline-start: 7px;
+  border-inline-start: 1px solid currentColor;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.hud-skill-badge.is-ready-flash {
+  animation: skillReadyFlash 0.34s ease-out;
+}
+
+.hud-skill-badge.ready .hud-skill-dial {
+  animation: skillReadyGlow 2.4s ease-in-out 0.34s infinite;
+}
+
+@keyframes skillReadyFlash {
+  18%, 42% {
+    transform: scale(1.12);
+    background-color: #3b5234;
+    border-color: #ffe8a4;
+    box-shadow: 0 0 0 4px #ffe5a1, 0 0 22px 6px #ffd574a8, 0 2px 8px #223a2c33;
+  }
+}
+
+@keyframes skillReadyGlow {
+  50% {
+    filter: brightness(1.14);
+    box-shadow: 0 0 0 2px #f5d17c55, 0 0 9px #f5d17c8c;
+  }
 }
 
 .hud-build {
@@ -894,7 +1111,7 @@ const originMemoryChip = (slot) => ({
   transition: width 0.3s ease;
 }
 
-/* 生命点：心形圆点，损失时变暗 */
+/* 每个圆点表示 1 点生命，支持部分填充。 */
 .hud-hp {
   display: flex;
   gap: 5px;
@@ -902,16 +1119,25 @@ const originMemoryChip = (slot) => ({
 }
 
 .hp-dot {
+  position: relative;
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  background: radial-gradient(circle at 35% 30%, #ff9d9d, #e04444);
+  background: radial-gradient(circle at 35% 30%, rgba(255, 157, 157, 0.22), rgba(224, 68, 68, 0.22));
   box-shadow: 0 0 6px rgba(224, 68, 68, 0.5);
-  transition: opacity 0.3s ease;
+}
+
+.hp-dot::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(circle at 35% 30%, #ff9d9d, #e04444);
+  clip-path: inset(0 calc(100% - var(--hp-fill)) 0 0);
+  transition: clip-path 0.3s ease;
 }
 
 .hp-dot.lost {
-  opacity: 0.22;
   box-shadow: none;
 }
 
@@ -1029,6 +1255,42 @@ const originMemoryChip = (slot) => ({
   color: rgba(255, 255, 255, 0.58);
   font-size: 10px;
   font-style: normal;
+}
+
+.chapter-event-title,
+.chapter-event-timer,
+.expedition-counts {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.chapter-event-title b,
+.chapter-event-timer b,
+.expedition-counts b {
+  color: #28596a;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.chapter-event-hint {
+  margin: 3px 0 0;
+  color: var(--adventure-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.chapter-event-timer,
+.expedition-counts {
+  margin: 4px 0 6px;
+  font-size: 10px;
+  color: var(--adventure-muted);
+}
+
+.expedition-track.chapter-event-track em {
+  background: var(--event-progress, #397b94);
 }
 
 /* 章节时限条：目标面板内常驻倒计时（条随剩余时间收缩，按紧急度换色） */
@@ -1475,7 +1737,7 @@ const originMemoryChip = (slot) => ({
 /* 元素组合激活提示（屏幕中央上方短暂浮现） */
 .combo-toast {
   position: absolute;
-  top: 94px;
+  top: max(calc(94px + var(--hud-skill-cue-offset, 0px)), calc(var(--hud-top-bottom) + 8px));
   left: 50%;
   transform: translateX(-50%);
   z-index: 12;
@@ -1490,10 +1752,6 @@ const originMemoryChip = (slot) => ({
   backdrop-filter: blur(4px);
   pointer-events: none;
   animation: toast-in 0.3s ease;
-}
-
-.hud.has-boss .combo-toast {
-  top: 166px;
 }
 
 .combo-toast.success {
@@ -1672,6 +1930,7 @@ const originMemoryChip = (slot) => ({
   bottom: 22px;
   left: 50%;
   transform: translateX(-50%);
+  max-width: calc(100% - 560px);
   padding: 8px 18px;
   border-radius: 999px;
   font-size: 13px;
@@ -1680,29 +1939,38 @@ const originMemoryChip = (slot) => ({
   backdrop-filter: blur(4px);
 }
 
-.hud-stats {
+.hud-bottom-right {
   position: absolute;
   bottom: 22px;
   right: 24px;
-  display: flex;
-  gap: 14px;
-  padding: 7px 11px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 7px;
-  font-size: 11.5px;
-  color: rgba(255, 255, 255, 0.66);
-  background: rgba(6, 10, 7, 0.64);
-  backdrop-filter: blur(4px);
+  width: max-content;
+  border: 1px solid var(--adventure-line);
+  border-radius: 8px;
+  background: var(--adventure-paper);
+  color: var(--adventure-muted);
+  box-shadow: 0 3px 12px #223a2c20;
 }
 
-.hud-stats span {
-  white-space: nowrap;
+.hud-stats {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(42px, auto);
+  gap: 5px 12px;
+  padding: 7px 10px;
+  line-height: 1.3;
 }
 
-.hud-stats b {
-  margin-left: 3px;
-  color: rgba(255, 255, 255, 0.9);
+.hud-stats dt {
+  font-size: 10px;
+}
+
+.hud-stats dd {
+  margin-top: 1px;
+  color: var(--adventure-ink);
+  font-size: 13px;
+  font-weight: 720;
   font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
 }
 
 .pet-status {
@@ -1786,15 +2054,56 @@ const originMemoryChip = (slot) => ({
   pointer-events: auto;
   cursor: pointer;
   touch-action: manipulation;
-  position: absolute;
-  bottom: 22px;
-  left: 24px;
-  width: 148px;
-  padding: 7px 10px 8px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 7px;
-  background: rgba(6, 10, 7, 0.68);
-  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-height: 35px;
+  padding: 6px 9px;
+  border-top: 1px solid var(--adventure-line);
+  border-radius: 0 0 7px 7px;
+  background: #f0f3ee;
+  white-space: nowrap;
+}
+
+.hud-action:focus-visible {
+  outline: 2px solid var(--adventure-focus);
+  outline-offset: -3px;
+}
+
+.hud-action:hover { background: #e8eee8; }
+.hud-action.ready { background: #e6eef4; color: var(--adventure-slate); }
+.hud-action.ready:hover { background: #dce8ef; }
+
+.hud-action-name {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 12px;
+}
+
+.has-spells .hud-action-name {
+  color: color-mix(in srgb, var(--fusion-main) 38%, var(--adventure-ink));
+}
+
+.hud-action-name .skill-glyph {
+  --glyph-frame: 18px;
+  --glyph-size: 17px;
+  color: inherit;
+}
+
+.hud-action-key {
+  padding: 1px 5px;
+  border: 1px solid var(--adventure-line);
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.hud-action.ready .hud-action-key {
+  border-color: var(--adventure-slate);
+  background: var(--adventure-slate);
+  color: #fff;
 }
 
 .formation-break-hud {
@@ -1843,120 +2152,6 @@ const originMemoryChip = (slot) => ({
   font-size: 8px;
 }
 
-.hud-action:focus-visible { outline: 2px solid #8ae8f7; outline-offset: 3px; }
-
-.hud-action-label {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 6px;
-}
-
-.hud-action-label > span {
-  padding: 1px 5px;
-  border: 1px solid rgba(255, 255, 255, 0.22);
-  border-radius: 4px;
-  font-size: 9px;
-  font-weight: 800;
-  color: rgba(255, 255, 255, 0.62);
-}
-
-.hud-action-label b {
-  font-size: 11px;
-  color: rgba(255, 255, 255, 0.68);
-  font-variant-numeric: tabular-nums;
-}
-
-/* 细进度条共用结构（冲刺条 / Boss 血条）：外观差异只在填充色与高度 */
-.hud-action > i,
-.boss-track {
-  display: block;
-  height: 3px;
-  overflow: hidden;
-  border-radius: 2px;
-  background: rgba(255, 255, 255, 0.1);
-}
-
-.hud-action > i em,
-.boss-track em {
-  display: block;
-  height: 100%;
-  background: #8ae84a;
-  transition: width 0.12s linear;
-}
-
-.hud-action.ready {
-  border-color: rgba(138, 232, 74, 0.38);
-}
-
-.hud-action.ready .hud-action-label b {
-  color: #d2ff8a;
-}
-
-/* 角色主动技能条 */
-.hud-action--skill > i em {
-  background: linear-gradient(90deg, #4fc3d9, #a29bfe);
-}
-
-/* 就绪（静态强化）：
-   原来只有 42% 的淡紫边 + 满格 3px 细条，而「冷却中」是 34% 的淡金边——两者亮度
-   几乎一样，余光里分不出来，只剩「3.2s → 黏液震荡」这行字要读。这里把边框、键帽、
-   文字、进度条一起抬到同一条「亮」的线上：不读字、不盯角落也能看出可放。 */
-.hud-action--skill.ready {
-  border-color: rgba(162, 155, 254, 0.9);
-  background-color: rgba(18, 14, 30, 0.78);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 246, 214, 0.06),
-    0 0 14px rgba(162, 155, 254, 0.42),
-    0 8px 22px rgba(0, 0, 0, 0.2);
-}
-
-.hud-action--skill.ready .hud-action-label > span {
-  border-color: rgba(201, 194, 255, 0.9);
-  background: rgba(162, 155, 254, 0.22);
-  color: #fff;
-}
-
-.hud-action--skill.ready .hud-action-label b {
-  /* 11px 的字别再叠辉光了：光晕只会把笔画糊粗、反而更难读。
-     「亮」由边框、键帽、进度条三处承担，文字只负责纯白对比。 */
-  color: #fff;
-}
-
-/* 只提亮填充、不加高度：改高度会让整块面板随就绪/冷却来回抖 1px */
-.hud-action--skill.ready > i em {
-  background: linear-gradient(90deg, #7ef0ff, #c9c2ff);
-  box-shadow: 0 0 6px rgba(201, 194, 255, 0.85);
-}
-
-.hud-action--skill.ready:hover {
-  border-color: #d8d3ff;
-}
-
-/* 就绪弹：冷却归零那一帧弹一下，随后回落到上面的稳态。
-   故意做成一次性而非常驻呼吸——黏液震荡 6.5s 冷却、就绪态占比过半，常驻动效会变成
-   噪声并和暴食的 chargePulse 抢注意力；而「动」本身才是余光的强信号。 */
-.hud-action--skill.is-ready-flash {
-  animation: skillReadyFlash 0.42s cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-@keyframes skillReadyFlash {
-  /* 峰值只推「外圈光环 + 轻微放大」，不整块提亮：整块 brightness 在暗场景里
-     会变成一次发白的闪烁，峰值那一两帧字也糊了；光环则保留可读性又够显眼。 */
-  0% {
-    transform: scale(1);
-    box-shadow: inset 0 1px 0 rgba(255, 246, 214, 0.06), 0 0 14px rgba(162, 155, 254, 0.42), 0 8px 22px rgba(0, 0, 0, 0.2);
-  }
-  35% {
-    transform: scale(1.07);
-    box-shadow: inset 0 1px 0 rgba(255, 246, 214, 0.06), 0 0 0 3px rgba(201, 194, 255, 0.6), 0 0 30px rgba(162, 155, 254, 0.95), 0 8px 22px rgba(0, 0, 0, 0.2);
-  }
-  100% {
-    transform: scale(1);
-    box-shadow: inset 0 1px 0 rgba(255, 246, 214, 0.06), 0 0 14px rgba(162, 155, 254, 0.42), 0 8px 22px rgba(0, 0, 0, 0.2);
-  }
-}
-
 /* 施放回弹：按下成功的确认（轻微下压 0.18s），闭合「亮 → 用掉 → 暗 → 亮」 */
 .hud-action--skill.is-cast-pulse {
   animation: skillCastPulse 0.18s ease-out;
@@ -1968,79 +2163,87 @@ const originMemoryChip = (slot) => ({
   100% { transform: scale(1); }
 }
 
-.boss-hud {
+.hud-side-panels {
   position: absolute;
-  top: 90px;
-  left: 50%;
-  width: min(440px, calc(100vw - 48px));
-  transform: translateX(-50%);
-  padding: 8px 12px 10px;
-  border: 1px solid rgba(255, 209, 102, 0.28);
-  border-radius: 7px;
-  background: rgba(10, 9, 7, 0.76);
-  backdrop-filter: blur(5px);
+  inset: 78px 24px auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
 }
 
-@media (min-width: 901px) {
-  .hud.has-build .boss-hud {
-    top: 114px;
-  }
+.hud-left-panels {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+}
+
+.boss-hud {
+  box-sizing: border-box;
+  width: min(246px, calc(100vw - 28px));
+  padding: 7px 10px 8px;
+  border: 1px solid var(--adventure-line);
+  border-radius: 7px;
+  color: var(--adventure-ink);
 }
 
 .boss-meta {
-  display: grid;
-  grid-template-columns: minmax(112px, auto) 1fr 68px;
+  display: flex;
   align-items: baseline;
-  gap: 8px;
-  margin-bottom: 7px;
+  justify-content: space-between;
+  gap: 7px;
+  margin-bottom: 5px;
 }
 
-.boss-meta span,
-.boss-meta i {
+.boss-meta b,
+.boss-cast-name,
+.boss-phase-cue {
+  min-width: 0;
   overflow: hidden;
-  font-size: 10px;
-  font-style: normal;
-  color: rgba(255, 255, 255, 0.58);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .boss-meta b {
-  overflow: hidden;
   font-size: 13px;
-  color: #f2dfaa;
-  text-align: center;
-  text-overflow: ellipsis;
+  line-height: 1.25;
+}
+
+.boss-phase-cue,
+.boss-vulnerability {
+  flex-shrink: 0;
+  max-width: 52%;
+  color: var(--adventure-gold);
+  font-size: 10px;
+  font-weight: 650;
   white-space: nowrap;
 }
 
-.boss-meta i {
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
-
 .boss-track {
-  height: 6px;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 3px;
 }
-
 .boss-track em {
+  display: block;
+  height: 100%;
   background: #d6a642;
+  transition: width 0.12s linear;
 }
 
 .boss-members {
   display: grid;
-  gap: 3px;
+  gap: 4px;
   margin-top: 6px;
 }
 
 .boss-members > div {
   display: grid;
-  grid-template-columns: 112px 1fr 30px;
+  grid-template-columns: minmax(0, 1fr) 64px;
   align-items: center;
   gap: 7px;
   min-height: 12px;
   color: rgba(255, 255, 255, 0.5);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .boss-members > div > span {
@@ -2062,12 +2265,6 @@ const originMemoryChip = (slot) => ({
   transition: width 0.12s linear;
 }
 
-.boss-members > div > b {
-  text-align: right;
-  font-size: 9px;
-  font-variant-numeric: tabular-nums;
-}
-
 .boss-members > div.casting {
   color: #ffe3a2;
 }
@@ -2086,7 +2283,7 @@ const originMemoryChip = (slot) => ({
 
 .boss-members > div.protected > span::after {
   content: ' · 受护';
-  color: rgba(244, 216, 138, 0.68);
+  color: var(--adventure-gold);
 }
 
 .boss-members > div.protected > i > em {
@@ -2094,8 +2291,8 @@ const originMemoryChip = (slot) => ({
 }
 
 .boss-members > small {
-  color: rgba(255, 209, 102, 0.58);
-  font-size: 8px;
+  color: var(--adventure-muted);
+  font-size: 10px;
   text-align: right;
 }
 
@@ -2103,13 +2300,13 @@ const originMemoryChip = (slot) => ({
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
   min-height: 18px;
   margin-top: 5px;
   padding-top: 5px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  color: rgba(255, 255, 255, 0.62);
-  font-size: 9px;
+  border-top: 1px solid var(--adventure-line);
+  color: var(--adventure-muted);
+  font-size: 10px;
 }
 
 .boss-formation > span {
@@ -2128,20 +2325,16 @@ const originMemoryChip = (slot) => ({
   margin-right: 6px;
   place-items: center;
   border: 1px solid rgba(234, 210, 141, 0.42);
-  color: #f5dfa0;
+  color: var(--adventure-gold);
   font-size: 8px;
   font-style: normal;
   font-weight: 800;
 }
 
 .boss-formation > b {
-  overflow: hidden;
-  color: rgba(255, 255, 255, 0.52);
-  font-size: 9px;
   font-weight: 600;
   text-align: right;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.35;
 }
 
 .boss-formation.blood_oath > span,
@@ -2162,19 +2355,15 @@ const originMemoryChip = (slot) => ({
   border-color: rgba(169, 220, 141, 0.42);
 }
 
-.boss-intent {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  height: 16px;
-  margin-top: 5px;
-  color: rgba(255, 255, 255, 0.56);
-  font-size: 9px;
+.boss-telegraph {
+  display: grid;
+  gap: 4px;
+  margin-top: 6px;
 }
 
-.boss-intent b {
-  color: rgba(255, 209, 102, 0.82);
-  font-size: 10px;
+.boss-cast-name {
+  color: var(--adventure-danger);
+  font-size: 11px;
   font-weight: 700;
 }
 
@@ -2190,7 +2379,6 @@ const originMemoryChip = (slot) => ({
 
 .boss-cast-track {
   height: 3px;
-  background: rgba(255, 255, 255, 0.07);
 }
 
 .boss-cast-track em,
@@ -2243,13 +2431,7 @@ const originMemoryChip = (slot) => ({
 }
 
 .boss-cast-track em {
-  width: 0;
   background: #ff7466;
-  transition: width 0.12s linear; /* 与 10Hz 冷却通道步进对齐，视觉连续 */
-}
-
-.boss-cast-track:not(.active) em {
-  opacity: 0;
 }
 
 .boss-hud.enraged {
@@ -2260,20 +2442,15 @@ const originMemoryChip = (slot) => ({
   background: #df5749;
 }
 
-.boss-hud.vulnerable {
-  border-color: rgba(255, 227, 162, 0.68);
-}
-
-.boss-hud.vulnerable .boss-intent b {
-  color: #ffe3a2;
+.boss-hud.vulnerable .boss-track em {
+  background: #af831f;
 }
 
 .objective-hud {
   --objective-color: #d6a642;
-  position: absolute;
-  top: 78px;
-  right: 24px;
-  width: 264px;
+  box-sizing: border-box;
+  width: min(290px, calc(100vw - 28px));
+  margin-left: auto;
   padding: 11px 12px 10px;
   border: 1px solid color-mix(in srgb, var(--objective-color) 42%, transparent);
   border-radius: 7px;
@@ -2348,10 +2525,8 @@ const originMemoryChip = (slot) => ({
 }
 
 .endless-bounty-hud {
-  position: absolute;
-  top: 78px;
-  left: 24px;
-  width: 264px;
+  box-sizing: border-box;
+  width: min(290px, calc(100vw - 28px));
   padding: 11px 12px 10px;
   border: 1px solid rgba(190, 154, 104, 0.46);
   border-radius: 7px;
@@ -2456,6 +2631,18 @@ const originMemoryChip = (slot) => ({
 }
 
 @media (max-width: 1400px) and (min-width: 901px) {
+  .hud-side-panels {
+    inset: 59px 16px auto;
+  }
+
+  .boss-hud {
+    width: 150px;
+  }
+
+  .boss-members > div {
+    grid-template-columns: minmax(0, 1fr) 36px;
+  }
+
   .hud-title {
     top: 16px;
     left: 16px;
@@ -2500,8 +2687,14 @@ const originMemoryChip = (slot) => ({
 }
 
 @media (max-width: 900px) {
+  .hud {
+    --hud-top-inset: 56px;
+    --hud-panel-top: 170px;
+    --hud-panel-offset: max(var(--hud-skill-cue-offset, 0px), calc(var(--hud-top-bottom) + 8px - var(--hud-panel-top)));
+  }
+
   .spell-shield-status { left: 14px; bottom: 70px; }
-  .shadow-status { left: 14px; bottom: 70px; width: 148px; }
+  .shadow-status { left: 14px; bottom: 70px; width: 164px; }
   .glutton-status { left: 14px; bottom: 70px; width: 162px; }
   .pet-status { left: 14px; bottom: 74px; width: min(210px, calc(100vw - 28px)); }
   .pet-status.squad { width: min(390px, calc(100vw - 28px)); gap: 12px; }
@@ -2509,17 +2702,13 @@ const originMemoryChip = (slot) => ({
   .pet-status.squad .pet-status__meta small { display: none; }
   .combo-toast {
     top: auto;
-    bottom: 90px;
+    bottom: 146px;
     box-sizing: border-box;
     width: max-content;
     max-width: calc(100vw - 32px);
     padding: 9px 18px;
     text-align: center;
     white-space: normal;
-  }
-
-  .hud.has-boss .combo-toast {
-    top: auto;
   }
 
   .hud-title span,
@@ -2535,7 +2724,6 @@ const originMemoryChip = (slot) => ({
   }
 
   .hud-level {
-    top: 56px;
     width: calc(100% - 24px);
     gap: 7px;
   }
@@ -2548,6 +2736,10 @@ const originMemoryChip = (slot) => ({
 
   .hud-vitals {
     gap: 7px 9px;
+  }
+
+  .expedition-hud {
+    translate: 0 var(--hud-panel-offset);
   }
 
   .hud-level-bar {
@@ -2570,80 +2762,43 @@ const originMemoryChip = (slot) => ({
     font-size: 56px;
   }
 
+  .hud-side-panels {
+    inset: calc(var(--hud-top-bottom) + 8px) 14px auto;
+    display: grid;
+  }
+
+  .hud:not(.has-boss) .hud-side-panels {
+    top: calc(222px + var(--hud-panel-offset));
+  }
+
   .boss-hud {
-    top: 170px;
+    width: min(220px, calc(60vw - 8px));
   }
 
   .expedition-hud {
-    top: 170px;
+    top: var(--hud-panel-top);
     left: 14px;
     box-sizing: border-box;
     width: calc(100vw - 28px);
   }
 
-  .objective-hud.expedition {
-    top: 264px;
-  }
-
-  .objective-hud {
-    top: 222px;
-    right: 14px;
-    width: min(264px, calc(100vw - 28px));
-  }
-
+  .objective-hud,
   .endless-bounty-hud {
-    top: 222px;
-    left: 14px;
     width: min(264px, calc(100vw - 28px));
   }
 
-  .hud.has-bounty .objective-hud {
-    top: 328px;
+  .hud:not(.has-boss) .objective-hud.expedition {
+    margin-top: 42px;
   }
 
-  .hud.has-boss .endless-bounty-hud {
-    top: 304px;
-  }
-
-  .hud.has-boss .objective-hud,
-  .hud.has-boss .objective-hud.expedition {
-    top: 304px;
-  }
-
-  .hud.has-boss-formation .endless-bounty-hud,
-  .hud.has-boss-formation .objective-hud {
-    top: 336px;
-  }
-
-  .hud.has-boss.has-bounty .objective-hud,
-  .hud.has-boss.has-bounty .objective-hud.expedition {
-    top: 410px;
-  }
-
-  .hud.has-boss-formation.has-bounty .objective-hud,
-  .hud.has-boss-formation.has-bounty .objective-hud.expedition {
-    top: 442px;
-  }
-
-  .hud-action {
+  .hud-bottom-right {
     bottom: 14px;
-    left: 14px;
+    right: 14px;
   }
 
   .formation-break-hud {
     bottom: 66px;
     left: 14px;
-  }
-
-  .hud-stats {
-    right: 14px;
-    bottom: 14px;
-    gap: 8px;
-  }
-
-  .hud-stats span:nth-child(3),
-  .hud-stats span:nth-child(4) {
-    display: none;
   }
 
   .hud-btns {
@@ -2657,8 +2812,8 @@ const originMemoryChip = (slot) => ({
   .chapter-intro section {
     animation: none;
   }
-  /* 就绪/施放脉冲只是装饰提醒：关掉动效，静态强化（.ready）仍然说明可放 */
-  .hud-action--skill.is-ready-flash,
+  .hud-skill-badge.is-ready-flash,
+  .hud-skill-badge.ready .hud-skill-dial,
   .hud-action--skill.is-cast-pulse {
     animation: none;
   }
@@ -2674,18 +2829,44 @@ const originMemoryChip = (slot) => ({
   .hud-memory .memory-label { display: none; }
 }
 
-/* 触屏：技能键移到右下，左下整块留给虚拟摇杆（摇杆由引擎在画布左半屏接管）。
-   统计面板上移，避免与技能键叠在一起。 */
-@media (pointer: coarse) {
-  .hud-action {
-    left: auto;
-    right: 14px;
-    bottom: 14px;
+@media (max-width: 900px), (pointer: coarse) {
+  .hud-bottom-right {
+    width: min(176px, calc(50vw - 28px));
   }
 
   .hud-stats {
-    right: 14px;
-    bottom: 92px;
+    grid-auto-flow: row;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 8px;
+  }
+
+  .hud-stats > :last-child:nth-child(3) {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 6px;
+  }
+}
+
+@media (max-width: 600px) {
+  .pet-status.squad { bottom: 140px; }
+}
+
+@media (max-width: 520px) {
+  .spell-shield-status,
+  .shadow-status,
+  .glutton-status,
+  .pet-status:not(.squad) {
+    max-width: calc(50vw - 8px);
+  }
+
+  .spell-shield-status { flex-wrap: wrap; }
+}
+
+@media (pointer: coarse) {
+  .hud-action {
+    min-height: 48px;
   }
 }
 
@@ -2709,14 +2890,12 @@ const originMemoryChip = (slot) => ({
   border-radius: 8px;
   background: var(--adventure-paper);
 }
-.hud-level-txt, .hud-action.ready .hud-action-label b { color: var(--adventure-green); text-shadow: none; }
-.hud-wave, .hud-wave i, .hud-run-status b, .boss-meta b, .boss-intent b { color: var(--adventure-gold); }
+.hud-level-txt { color: var(--adventure-green); text-shadow: none; }
+.hud-wave, .hud-wave i, .hud-run-status b { color: var(--adventure-gold); }
 .hud-wave { background: #f7f0dd; }
 .hud-run-status,
 .expedition-hud,
-.hud-stats,
 .hud-hint,
-.hud-action,
 .boss-hud {
   border-color: var(--adventure-line);
   background: var(--adventure-paper);
@@ -2725,30 +2904,13 @@ const originMemoryChip = (slot) => ({
 }
 .hud-hint { border: 1px solid var(--adventure-line); }
 .expedition-head, .expedition-hud i, .expedition-deadline,
-.boss-meta span, .boss-meta i, .boss-members > div, .boss-intent,
-.hud-action-label > span, .hud-action-label b { color: var(--adventure-muted); }
+.boss-members > div { color: var(--adventure-muted); }
+.boss-meta b { color: var(--adventure-ink); }
 .expedition-head b, .expedition-deadline b { color: var(--adventure-green); }
-.expedition-hud strong, .hud-stats b { color: var(--adventure-ink); }
+.expedition-hud strong { color: var(--adventure-ink); }
 .hud-level-bar, .boss-track, .boss-cast-track, .boss-members > div > i,
-.expedition-track, .expedition-deadline i, .hud-action > i { background: #dae4db; }
+.expedition-track, .expedition-deadline i { background: #dae4db; }
 .hud-level-bar i { background: linear-gradient(90deg, #387755, #6da874); }
-.hud-action-label > span { border-color: var(--adventure-line); }
-.hud-action:focus-visible { outline-color: var(--adventure-focus); }
-.hud-action--skill.ready, .hud-action--skill.ready:hover {
-  border-color: #8ba7bc;
-  background: #e6eef4;
-  box-shadow: 0 3px 12px #223a2c25;
-}
-.hud-action--skill.ready .hud-action-label > span {
-  border-color: var(--adventure-slate);
-  background: var(--adventure-slate);
-  color: #fff;
-}
-.hud-action--skill.ready .hud-action-label b { color: var(--adventure-slate); }
-.hud-action--skill.ready > i em { background: #477b94; box-shadow: none; }
-.has-spells .hud-action--skill.ready .hud-action-label b {
-  color: color-mix(in srgb, var(--fusion-main) 38%, var(--adventure-ink));
-}
 .hud-run-status.finale b, .hud-run-status.deadline-danger b, .hud-run-status.deadline-critical b,
 .expedition-deadline.deadline-danger b, .expedition-deadline.deadline-critical b { color: var(--adventure-danger); }
 .hud-run-status.deadline-warn b, .expedition-deadline.deadline-warn b { color: var(--adventure-gold); }

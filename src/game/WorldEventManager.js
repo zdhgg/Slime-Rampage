@@ -243,6 +243,22 @@ export class WorldEventManager extends Entity {
     this._lockedType = EVENTS[type] ? type : null
   }
 
+  get chapterEventInfo() {
+    const def = EVENTS[this._lockedType]
+    if (!def) return null
+    const event = this.current
+    const retryIn = event?.state === 'failed' ? event.linger + NEXT_EVENT_DELAY : !event ? this.nextIn : null
+    return { type: this._lockedType, title: def.title, retryIn: Number.isFinite(retryIn) ? Math.max(0, retryIn) : null }
+  }
+
+  get chapterEventMarker() {
+    const event = this.current
+    if (!event || !this.game.hasPendingExpeditionEvent || event.type !== this._lockedType) return null
+    // 黏液池激活后只需走位生存，继续标记池子会误导玩家回圈。
+    if (event.state !== 'available' && !(event.state === 'active' && event.type === 'beacon')) return null
+    return { x: event.x, y: event.y, label: event.type === 'beacon' ? '信标' : '黏液池', color: event.def.color, radius: EVENT_RADIUS }
+  }
+
   get objectiveInfo() {
     const e = this.current
     if (!e) return null
@@ -270,7 +286,12 @@ export class WorldEventManager extends Entity {
       state: e.state,
       progress,
       total,
-      timeLeft: Math.max(0, e.timeLeft),
+      goal: e.goal,
+      inside: distance <= EVENT_RADIUS,
+      chapterTimed: e.chapterTimed,
+      timeLeft: Math.max(0, e.chapterTimed
+        ? this.game._expeditionDefinition.deadline - this.game.expeditionStageElapsed
+        : e.timeLeft),
       distance,
       x: e.x,
       y: e.y,
@@ -303,10 +324,12 @@ export class WorldEventManager extends Entity {
       return
     }
 
-    e.timeLeft -= dt
-    if (e.timeLeft <= 0) {
-      this._fail(e.state === 'available' ? '事件目标已转移' : '未能在期限内完成')
-      return
+    if (!e.chapterTimed) {
+      e.timeLeft -= dt
+      if (e.timeLeft <= 0) {
+        this._fail(e.state === 'available' ? '事件目标已转移' : '未能在期限内完成')
+        return
+      }
     }
 
     const p = this.game.player
@@ -374,6 +397,8 @@ export class WorldEventManager extends Entity {
     const def = EVENTS[type]
     const pos = this._pickPosition()
     const tuning = type === 'beacon' ? beaconTuning(this.game) : null
+    const chapterTimed = type === this._lockedType && this.game.runSelection?.mode === 'expedition'
+      && this.game._expeditionDefinition?.deadline > 0
     this.current = {
       token: `world-event-${++this._serial}`,
       type,
@@ -384,6 +409,7 @@ export class WorldEventManager extends Entity {
       activation: 0,
       progress: 0,
       goal: def.goal,
+      chapterTimed,
       timeLeft: 44,
       spawnTimer: 0,
       linger: 0,
@@ -586,7 +612,7 @@ export class WorldEventManager extends Entity {
     ctx.textAlign = 'center'
     ctx.textBaseline = 'alphabetic'
     ctx.fillStyle = '#f3f4ed'
-    ctx.fillText(e.def.title, 0, -EVENT_RADIUS - 16)
+    if (!this.chapterEventMarker) ctx.fillText(e.def.title, 0, -EVENT_RADIUS - 16)
     ctx.restore()
   }
 }

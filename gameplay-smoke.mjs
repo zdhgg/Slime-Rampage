@@ -42,6 +42,8 @@ const { ArenaGameplay } = await import('./src/game/gameplay/ArenaGameplay.js')
 const { RunnerGameplay } = await import('./src/game/gameplay/RunnerGameplay.js')
 const { RunnerDirector } = await import('./src/game/gameplay/runner/RunnerDirector.js')
 const {
+  RUNNER_BOSS_RELIC_IDS,
+  RUNNER_BOSSES,
   RUNNER_COLLISION_DEPTH,
   RUNNER_DURATION,
   RUNNER_ENTITY_TYPES,
@@ -50,16 +52,29 @@ const {
   RUNNER_FEVER_SHARDS_PER_CHARGE,
   RUNNER_FORK_CLEAR_DEPTH,
   RUNNER_FORK_SELECT_DEPTH,
+  RUNNER_HEAT_PACT_IDS,
+  RUNNER_HEAT_PACTS,
   RUNNER_MAX_GROUND_FIRES,
   RUNNER_MAX_HP,
   RUNNER_MAX_SHIELD,
+  RUNNER_REROLL_CREDIT_COST,
   RUNNER_ROUTE_IDS,
   RUNNER_ROUTES,
+  RUNNER_SCORE_MILESTONES,
+  RUNNER_STARTER_CHIP_IDS,
+  RUNNER_STARTER_CHIPS,
+  RUNNER_STRAIN_IDS,
+  RUNNER_STRAINS,
+  RUNNER_STYLE_RANKS,
   RUNNER_TACTICAL_ITEMS,
+  RUNNER_WEAPON_CORE_IDS,
   RUNNER_WEAPON_CORES,
+  getRunnerBossSchedule,
+  getRunnerCollapseSchedule,
   getRunnerForkTimes,
   getRunnerRoute,
   getRunnerRouteByLane,
+  getRunnerStyleRank,
 } = await import('./src/game/gameplay/runner/RunnerRules.js')
 const { createGameplay } = await import('./src/game/gameplay/GameplayFactory.js')
 
@@ -126,8 +141,16 @@ for (let seed = 1; seed <= 60; seed++) {
 }
 const mutationChoices = directorA.createWeaponChoice()
 assert.equal(mutationChoices.length, 3)
-assert.deepEqual(new Set(mutationChoices.map((choice) => choice.weaponCore)), new Set(Object.keys(RUNNER_WEAPON_CORES)))
+assert.deepEqual(new Set(mutationChoices.map((choice) => choice.weaponCore)), new Set(['pierce', 'burst', 'corrosion']))
 assert.deepEqual(mutationChoices.map((choice) => choice.lane).sort(), [0, 1, 2])
+const seenDraftCores = new Set()
+for (let s = 1; s <= 25; s++) {
+  const d = new RunnerDirector(s * 104729)
+  for (const card of d.createDraftOptions({ level: 1, weaponCore: null, modules: [], kinetics: [], relics: [] }, false)) {
+    seenDraftCores.add(card.itemId)
+  }
+}
+assert.deepEqual(seenDraftCores, new Set(RUNNER_WEAPON_CORE_IDS), 'XP 选卡池必须可刷出全部 5 个核心')
 console.log('✓ Runner director is deterministic and dynamically redistributes lane roles')
 
 const runner = engine.configureGameplay('runner')
@@ -695,13 +718,38 @@ assert.equal(endlessHud.remaining, null)
 
 // A simple telegraph-aware bot should survive most full runs across many seeds.
 const simulationSound = new Proxy({}, { get: () => () => {} })
+const resolveBotDraft = (simulation) => {
+  while (simulation.pendingDraft) {
+    const opts = simulation.pendingDraft.options
+    const pick =
+      opts.find((o) => o.category === 'core' && !simulation.weaponCore) ||
+      opts.find((o) => o.category === 'element' && !simulation.secondaryElement) ||
+      opts.find((o) => o.category === 'relic') ||
+      opts.find((o) => o.category === 'module') ||
+      opts.find((o) => o.category === 'kinetic') ||
+      opts.find((o) => o.category === 'core') ||
+      opts[0]
+    if (!pick || !simulation.selectDraftOption(pick.id)) break
+  }
+}
+
 const chooseSimulationLane = (simulation) => {
+  resolveBotDraft(simulation)
   const castingMage = simulation.entities.find(
-    (entity) => entity.active && entity.behavior === 'mage' && entity.attacking
+    (entity) => entity.active && (entity.behavior === 'mage' || entity.partRole === 'pulse_hammer') && entity.attacking && entity.safeLane != null
   )
   if (castingMage?.safeLane != null) return castingMage.safeLane
 
   const risk = [0, 0, 0]
+  if (simulation.laneCollapse) {
+    risk[simulation.laneCollapse.lane] += simulation.laneCollapse.phase === 'active' ? 120 : 28
+  }
+  for (const t of simulation.terrains || []) {
+    if (t.depthStart <= 0.88 && t.depthEnd >= 0.72) {
+      if (t.type === 'accel') risk[t.lane] -= 1.5
+      else if (t.type === 'mire') risk[t.lane] += 6
+    }
+  }
   for (const projectile of simulation.enemyProjectiles) {
     if (projectile.active && projectile.depth > 0.62) risk[projectile.lane] += 20 + projectile.depth * 10
   }
@@ -757,6 +805,7 @@ for (let seed = 1; seed <= SIM_SEED_COUNT; seed++) {
     simulation.targetLane = chooseSimulationLane(simulation)
     const rowIdBefore = simulation.director._nextRowId
     simulation.updateWorld(1 / 30)
+    resolveBotDraft(simulation)
     if (simulation.director._nextRowId !== rowIdBefore) {
       rows += simulation.director._nextRowId - rowIdBefore
       lastRowAt = simulation.elapsedTime
@@ -966,6 +1015,7 @@ for (let i = 0; i < 60; i++) {
   runner.entities.push(barrel)
   runner._defeatEntity(barrel)
 }
+resolveBotDraft(runner)
 assert.ok(
   runner.groundFires.length <= RUNNER_MAX_GROUND_FIRES,
   `连续引爆后 ground fire 数量必须受上限约束，实际 ${runner.groundFires.length}`
@@ -1020,6 +1070,7 @@ console.log('✓ Runner ground fires stay bounded and drain to empty')
     soak.targetLane = chooseSimulationLane(soak)
     const rowIdBefore = soak.director._nextRowId
     soak.updateWorld(soakFrame)
+    resolveBotDraft(soak)
     if (soak.director._nextRowId !== rowIdBefore) {
       soakRows += soak.director._nextRowId - rowIdBefore
       soakLastRowAt = soak.elapsedTime
@@ -1095,9 +1146,9 @@ console.log('✓ Runner 180s soak drains every buff and keeps arrays bounded')
 // Phase B 之前记录下来的 Director encounter 基线（前 3 行）。
 // 用于证明新增的路线/岔口不会无意义地扰动既有 encounter 随机序列。
 const DIRECTOR_BASELINE = {
-  1001: '0:attack/gate|1:fever_shard/gate|2:archer/enemy;0:fever_shard/gate|1:archer/enemy|2:attack/gate;0:swarm/enemy|0:swarm/enemy|0:swarm/enemy|1:gate_magnet/gate|2:barrel/obstacle',
+  1001: '0:attack/gate|1:fever_shard/gate|2:archer/enemy;0:fever_shard/gate|1:archer/enemy|2:attack/gate;0:swarm/enemy|0:swarm/enemy|0:swarm/enemy|1:gate_magnet/gate|2:crystal_ice/obstacle',
   2026: '0:attack/gate|1:fever_shard/gate|2:scout/enemy;0:fever_shard/gate|1:archer/enemy|2:attack/gate;0:attack/gate|1:archer/enemy|2:fever_shard/gate',
-  4242: '0:gate_magnet/gate|1:barrel/obstacle|2:swarm/enemy|2:swarm/enemy|2:swarm/enemy;0:fever_shard/gate|1:archer/enemy|2:attack/gate;0:gate_magnet/gate|1:swarm/enemy|1:swarm/enemy|1:swarm/enemy|2:barrel/obstacle',
+  4242: '0:gate_magnet/gate|1:crystal_ice/obstacle|2:swarm/enemy|2:swarm/enemy|2:swarm/enemy;0:fever_shard/gate|1:archer/enemy|2:attack/gate;0:gate_magnet/gate|1:swarm/enemy|1:swarm/enemy|1:swarm/enemy|2:crystal_ice/obstacle',
 }
 
 const directorRowSignature = (director) => {
@@ -1168,6 +1219,7 @@ const simulateRunner = (seed, submode, policy, maxSeconds) => {
     sim.hp = sim.maxHp
     policy(sim)
     sim.updateWorld(1 / ROUTE_FPS)
+    resolveBotDraft(sim)
     for (const entity of sim.entities) {
       if (seen.has(entity.id)) continue
       seen.add(entity.id)
@@ -1206,13 +1258,15 @@ const chooseLaneAwareOfChoices = (sim) => {
 }
 const policyLaneAware = () => (sim) => { sim.targetLane = chooseLaneAwareOfChoices(sim) }
 
-// Test B — 岔口按预定时刻表出现，且不与武器节点同刻。
+// Test B — 岔口按预定时刻表出现，且不与折叠/Boss 节点重叠。
 const blitzForkTimes = getRunnerForkTimes('blitz')
-assert.deepEqual(blitzForkTimes, [20, 50], '60s blitz 应在 20s / 50s 各出现一次岔口')
+assert.deepEqual(blitzForkTimes, [20, 40], '60s blitz 应在 20s / 40s 各出现一次岔口')
+const blitzCollapseTimes = getRunnerCollapseSchedule('blitz')
+const blitzBossTimes = getRunnerBossSchedule('blitz').map((b) => b.time)
 for (const t of blitzForkTimes) {
   assert.ok(!Object.values(RUNNER_TACTICAL_ITEMS).some((i) => i.duration === t))
-  for (const node of [10, 25, 42]) {
-    assert.ok(Math.abs(node - t) >= 5, `岔口 ${t}s 不得与武器节点 ${node}s 靠得太近`)
+  for (const node of [...blitzCollapseTimes, ...blitzBossTimes]) {
+    assert.ok(Math.abs(node - t) >= 5, `岔口 ${t}s 不得与塌陷/Boss 节点 ${node}s 靠得太近`)
   }
 }
 const forkWindowRun = simulateRunner(1001, 'blitz', policyFree, 60)
@@ -1254,6 +1308,7 @@ console.log('✓ Phase B / Test C: lanes 0/1/2 resolve to blockade / armory / ru
   let fork = null
   for (let frame = 0; frame < 60 * 26 && !fork; frame++) {
     sim.updateWorld(1 / 60)
+    resolveBotDraft(sim)
     fork = sim.entities.find((e) => e.kind === 'fork' && e.active) || null
   }
   assert.ok(fork, '应能在 26s 内拿到一个岔口实体')
@@ -1261,6 +1316,7 @@ console.log('✓ Phase B / Test C: lanes 0/1/2 resolve to blockade / armory / ru
   for (let frame = 0; frame < 40; frame++) {
     fork.depth = RUNNER_FORK_SELECT_DEPTH
     sim.updateWorld(1 / 60)
+    resolveBotDraft(sim)
   }
   assert.equal(sim.routeLog.filter((e) => e.forkId === fork.forkId).length, 1, '一个岔口只能 resolve 一次')
   const lockedRoute = sim.currentRouteId
@@ -1501,6 +1557,7 @@ console.log('✓ Phase B.1 / Test E: weapon choice survives magnet, resolves, an
       sim.targetLane = chooseSimulationLane(sim)
       const rowIdBefore = sim.director._nextRowId
       sim.updateWorld(1 / 30)
+      resolveBotDraft(sim)
       if (sim.director._nextRowId !== rowIdBefore) {
         rows += sim.director._nextRowId - rowIdBefore
         lastRowAt = sim.elapsedTime
@@ -1528,6 +1585,7 @@ console.log('✓ Phase B.1 / Test F: previously frozen seeds now play a full uni
   let violated = 0
   for (let frame = 0; frame < 60 * 30; frame++) {
     runner.updateWorld(1 / 60)
+    resolveBotDraft(runner)
     if (runner.weaponChoicePending && !runner.entities.some((e) => e.active && e.kind === 'mutation')) {
       violated += 1
     }
@@ -1572,11 +1630,12 @@ const measureRouteProfile = (routeId, seedCount = ROUTE_SEEDS) => {
     let rows = 0, enemies = 0, elites = 0, gates = 0, tactical = 0, buildGates = 0
     let lastRowAt = 0, lastCharges = 0, lastShield = 0, bonus = 0, lastRoutes = 0
     for (let frame = 0; frame < sim.duration * 30 + 2 && sim.state === 'active'; frame++) {
-      // 固定走该路线；其余行为与既有 bot 完全一致，不改战斗策略
-      const approaching = sim.entities.some((e) => e.active && e.kind === 'fork' && !e.resolved)
+      // 固定走该路线；仅在岔口逼近判定线时锁道，其余行为与既有 bot 完全一致
+      const approaching = sim.entities.some((e) => e.active && e.kind === 'fork' && !e.resolved && e.depth >= 0.42)
       sim.targetLane = approaching ? routeLane : chooseSimulationLane(sim)
       const rowIdBefore = sim.director._nextRowId
       sim.updateWorld(1 / 30)
+      resolveBotDraft(sim)
       if (sim.director._nextRowId !== rowIdBefore) { rows++; lastRowAt = sim.elapsedTime }
       // 路线红利：只统计「锁定路线那一帧」新增的暴走充能与护盾，
       // 否则普通 fever_shard / shield 奖励门会被混进来，红利幅度就不可比了。
@@ -1710,6 +1769,7 @@ console.log('✓ Phase C / Test F: the three routes form distinct profiles with 
       const approaching = sim.entities.some((e) => e.active && e.kind === 'fork' && !e.resolved)
       sim.targetLane = approaching ? lane : chooseSimulationLane(sim)
       sim.updateWorld(1 / 30)
+      resolveBotDraft(sim)
     }
     const out = { routeLog: sim.routeLog.map((e) => ({ ...e })), score: sim.score, kills: sim.kills, state: sim.state }
     sim.destroy()
@@ -1796,6 +1856,215 @@ assert.equal(result.distance, 0)
 assert.equal(engine.running, false)
 runner.renderWorld(ctx2d)
 console.log('✓ Runner victory, result payload and renderer complete the loop across submodes')
+
+// ---------------------------------------------------------------------------
+// Phase 1-3 Refactor Regression Suite
+// ---------------------------------------------------------------------------
+
+// R1: Pre-run loadout (6 strains, 3 starter chips, 3 toggleable heat pacts, score multipliers)
+{
+  const eLoadout = new RunnerGameplay()
+  eLoadout.attach({
+    width: 1280, height: 720, ctx: ctx2d,
+    input: { state: { left: false, right: false } },
+    sound: simulationSound, finishGameplay() {},
+  })
+  for (const strainId of RUNNER_STRAIN_IDS) {
+    eLoadout.reset(5050, { submode: 'blitz', strainId })
+    assert.equal(eLoadout.strainId, strainId)
+    assert.equal(eLoadout.hp, RUNNER_STRAINS[strainId].hp)
+  }
+  // elemental starts with 1 shield + Lv.1 secondary element
+  eLoadout.reset(5050, { submode: 'blitz', strainId: 'elemental' })
+  assert.equal(eLoadout.shield, 1, '元素史莱姆开局应自带 1 层护盾')
+  assert.ok(eLoadout.secondaryElement && eLoadout.elementLevel === 1, '元素史莱姆开局应自带 1 级元素')
+
+  // mystery_pioneer starts with Lv.1 random core
+  eLoadout.reset(5050, { submode: 'blitz', strainId: 'origin', chipId: 'mystery_pioneer', pacts: RUNNER_HEAT_PACT_IDS })
+  assert.ok(RUNNER_WEAPON_CORE_IDS.includes(eLoadout.weaponCore) && eLoadout.weaponLevel === 1, '神秘先锋应随机觉醒 Lv.1 武器核心')
+  assert.ok(eLoadout.totalScoreMultiplier > 1.5, '三热誓约应显著抬升局内得分倍率')
+  assert.ok(eLoadout.pactModifiers.speedMul > 1 && eLoadout.pactModifiers.hpMul > 1 && eLoadout.pactModifiers.telegraphMul < 1)
+
+  // shadow strain slash on dodge + glutton acid ram + summoner clone lane swap
+  eLoadout.reset(5051, { submode: 'blitz', strainId: 'shadow' })
+  eLoadout.state = 'active'; eLoadout.countdown = 0; eLoadout._encounterTimer = 999; eLoadout._fireCooldown = 999
+  eLoadout.changeLane(-1)
+  for (let i = 0; i < 15; i++) eLoadout.updateWorld(1 / 60)
+  const prey = { ...RUNNER_ENTITY_TYPES.scout, id: 601, lane: 0, depth: 0.5, previousDepth: 0.5, baseSpeed: 0.1, speed: 0.1, hp: 50, maxHp: 50, active: true }
+  eLoadout.entities.push(prey)
+  assert.equal(eLoadout._registerPerfectDodge(0, 0.9), true)
+  assert.ok(prey.hp < 50, '暗影史莱姆闪避应释放残影斩打击对应车道敌群')
+
+  eLoadout.reset(5052, { submode: 'blitz', strainId: 'glutton' })
+  eLoadout.state = 'active'; eLoadout.countdown = 0; eLoadout._encounterTimer = 999; eLoadout.hp = 6
+  const lowScout = { ...RUNNER_ENTITY_TYPES.scout, id: 602, lane: 1, depth: 0.9, previousDepth: 0.87, baseSpeed: 0.15, speed: 0.15, hp: 1, maxHp: 10, damage: 2, active: true, kind: 'enemy' }
+  eLoadout.entities.push(lowScout)
+  eLoadout.updateWorld(1 / 60)
+  assert.equal(eLoadout.hp, 6, '暴食史莱姆撞击残血小怪不得掉血')
+  assert.equal(eLoadout.kills, 1, '暴食吞噬应正常计入击杀')
+
+  eLoadout.reset(5053, { submode: 'blitz', strainId: 'summoner' })
+  eLoadout.state = 'active'; eLoadout.countdown = 0
+  eLoadout.changeLane(-1)
+  assert.equal(eLoadout.droneLane, 1, '召唤师史莱姆换道应重定位永久浮游随从车道')
+  eLoadout.destroy()
+  console.log('✓ Phase R1: 6 strains, 3 starter chips, 3 heat pacts and loadout passives verified')
+}
+
+// R2: XP Draft Modal pause / reroll (free + bountyCredits) / chain level-up / Engine resume
+{
+  engine.resetGameplaySession(7070, { submode: 'marathon', strainId: 'origin' })
+  runner.state = 'active'; runner.countdown = 0
+  engine.start()
+  let observedDraft = null
+  engine.onRunnerDraft = (draft) => { observedDraft = draft }
+  runner.freeRerolls = 1
+  runner.bountyCredits = RUNNER_REROLL_CREDIT_COST + 400
+  runner._gainXp(runner.xpToNext + 80) // triggers chain level-up (level 2 + level 3)
+  assert.ok(runner.pendingDraft && observedDraft, '经验满槽必须弹出三选一强化卡片并触发 onRunnerDraft')
+  assert.equal(engine.running, false, '打开选卡面板时引擎必须暂停')
+  assert.equal(engine._pauseLock, 1)
+  const frozenElapsed = runner.elapsedTime
+  runner.updateWorld(1.0)
+  assert.equal(runner.elapsedTime, frozenElapsed, 'pendingDraft 期间 updateWorld 不得继续推进时间')
+
+  // First reroll consumes freeRerolls
+  assert.equal(engine.rerollRunnerDraft(), true)
+  assert.equal(runner.freeRerolls, 0)
+  assert.equal(runner.bountyCredits, RUNNER_REROLL_CREDIT_COST + 400)
+
+  // Second reroll consumes bountyCredits (RUNNER_REROLL_CREDIT_COST)
+  assert.equal(engine.rerollRunnerDraft(), true)
+  assert.equal(runner.bountyCredits, 400)
+
+  // Selecting first option leads to chained draft (still paused until overflow XP resolves)
+  assert.equal(engine.selectRunnerDraft(runner.pendingDraft.options[0].id), true)
+  assert.ok(runner.pendingDraft, '溢出经验应连续弹出下一级三选一面板')
+  assert.equal(runner.level, 2)
+  assert.equal(engine.selectRunnerDraft(runner.pendingDraft.options[0].id), true)
+  assert.equal(runner.pendingDraft, null, '所有升级选完后 pendingDraft 应清空')
+  assert.equal(engine._pauseLock, 0, '选卡完成后必须释放暂停锁并恢复引擎')
+  assert.equal(engine.running, true)
+  engine.onRunnerDraft = null
+  engine.stop()
+  console.log('✓ Phase R2: XP draft pause, free/credit rerolls, chained upgrades and Engine resume verified')
+}
+
+// R3: Chargeable Supply Gates (Lv.1 -> Lv.3) + Terrain Strips + Collapse + Hazards
+{
+  prepareRunner(8080, 'marathon')
+  runner.autoDraftOnXp = false
+  // Chargeable gate upgrades Lv.1 -> Lv.2 -> Lv.3 under player fire without shattering
+  const cGate = { ...RUNNER_ENTITY_TYPES.guard, id: 9701, rowId: 901, lane: 1, depth: 0.4, previousDepth: 0.4, speed: 0, hp: 6, maxHp: 6, active: true, chargeable: true, chargeLevel: 1, chargeProgress: 0 }
+  runner.entities.push(cGate)
+  runner.attackDamage = 5
+  runner._fireCooldown = 0
+  for (let i = 0; i < 3; i++) {
+    const b = runner._createBullet(1)
+    runner._chargeGate(cGate, b)
+  }
+  assert.equal(cGate.chargeLevel, 3, '连续射击蓄力门应从 Lv.1 升至 MAX Lv.3')
+  assert.equal(cGate.active, true, '蓄力门不得被子弹击碎')
+  runner._applyReward(cGate, { x: 640, y: 500 })
+  assert.equal(runner.shield, 2, 'Lv.3 蓄力防护门应提供强化护盾 (+2)')
+  assert.ok(runner.feverShards >= 1, 'Lv.3 蓄力门应额外赠送暴走印记')
+
+  // Terrains: accel, mire, launchpad
+  runner.terrains.push({ id: 9901, type: 'accel', lane: 1, depth: 0.78, length: 0.25, speed: 0, active: true })
+  runner.updateWorld(1 / 60)
+  assert.equal(runner.onAccelStrip, true, '踩上极速加速带应激活射速增益')
+  runner.terrains.length = 0
+  runner.terrains.push({ id: 9902, type: 'launchpad', lane: 1, depth: 0.78, length: 0.25, speed: 0, triggered: false, active: true })
+  runner.updateWorld(1 / 60)
+  assert.ok(runner.jumpTimer > 0.8, '踩上跳跃跳板应高高跃起延长浮空')
+  runner.jumpTimer = 0
+
+  // Collapse warning -> active penalty & encounter funneling
+  runner.shield = 0
+  runner.laneCollapse = { lane: 0, phase: 'active', timer: 4, maxTimer: 6 }
+  runner.lanePosition = 0; runner.currentLane = 0; runner.targetLane = 0
+  const hpBeforeCollapse = runner.hp
+  runner._checkCollapsePenalty()
+  assert.equal(runner.hp, hpBeforeCollapse - 1, '停留在塌陷车道应受到跌落伤害并强制切回邻道')
+  assert.equal(runner.currentLane, 1)
+  runner.laneCollapse = null
+  const funneled = runner.director.createEncounter(25, 0, 'marathon', null, { collapsedLane: 0 })
+  assert.ok(funneled.every((e) => e.lane !== 0), '塌陷期间生成的所有实体必须自动导流至存活双道')
+
+  // switch_gate flip, crystal_ice/volt, twin_assassin shift, gunship aerial weakpoint, roller_mine jump dodge
+  const baseFields = { freezeTimer: 0, slowTimer: 0, slowRatio: 0, corrosionStacks: 0, focusStacks: 0, baseSpeed: 0.17, speed: 0.17, hitFlash: 0, active: true }
+  const sGate = { ...RUNNER_ENTITY_TYPES.switch_gate, ...baseFields, id: 9702, lane: 1, depth: 0.5, previousDepth: 0.5, hp: 3, maxHp: 3, switchFlipped: false }
+  const crystalIce = { ...RUNNER_ENTITY_TYPES.crystal_ice, ...baseFields, id: 9703, lane: 2, depth: 0.5, previousDepth: 0.5, hp: 2, maxHp: 2 }
+  const assassin = { ...RUNNER_ENTITY_TYPES.twin_assassin, ...baseFields, id: 9704, lane: 0, depth: 0.45, previousDepth: 0.44, hp: 100, maxHp: 100, shiftAt: 0.44, shiftDelay: 0.2, shiftTelegraph: 0, shiftTargetLane: null, hasShifted: false }
+  const gunship = { ...RUNNER_ENTITY_TYPES.gunship, ...baseFields, id: 9705, lane: 2, depth: 0.35, previousDepth: 0.35, hp: 100, maxHp: 100 }
+  runner.entities.push(sGate, crystalIce, assassin, gunship)
+  runner._hitEntity(sGate, { core: 'pierce', coreLevel: 1, damageMultiplier: 10, provenance: 'primary' })
+  assert.equal(sGate.switchFlipped, true, '打爆可翻转脉冲闸应翻转为友方护盾门')
+  assert.equal(sGate.kind, 'gate')
+
+  runner.attackDamage = 5
+  const groundRes = runner._hitEntity(gunship, { core: 'pierce', coreLevel: 1, damageMultiplier: 1, provenance: 'primary' })
+  runner.secondaryElement = 'lightning'; runner.elementLevel = 1
+  const airRes = runner._hitEntity(gunship, { core: 'pierce', coreLevel: 1, damageMultiplier: 1, provenance: 'primary' })
+  assert.ok(airRes.damage > groundRes.damage * 2, `空域炮艇应惧怕雷电/浮空弱点打击：${groundRes.damage} -> ${airRes.damage}`)
+
+  runner._hitEntity(crystalIce, { core: 'pierce', coreLevel: 1, damageMultiplier: 10, provenance: 'primary' })
+  assert.ok(gunship.freezeTimer > 0 && assassin.freezeTimer > 0, '击碎极寒棱晶应全屏冰冻邻道敌人')
+  assassin.freezeTimer = 0
+
+  runner._updateAssassin(assassin, 0.05)
+  assert.ok(assassin.shiftTelegraph > 0 && assassin.shiftTargetLane === 1, '双子刺客进入深度后应发出变道预警')
+  runner._updateAssassin(assassin, 0.25)
+  assert.equal(assassin.lane, 1, '预警结束双子刺客应完成跨道切入')
+
+  const mine = { ...RUNNER_ENTITY_TYPES.roller_mine, id: 9706, lane: 1, depth: RUNNER_COLLISION_DEPTH, previousDepth: RUNNER_COLLISION_DEPTH, hp: 999, maxHp: 999, active: true }
+  const hpPreJump = runner.hp
+  runner.jumpTimer = 0.3
+  runner._takeDamage(mine)
+  assert.equal(runner.hp, hpPreJump, '跳跃期间跨越贴地滚雷应触发 JUMP DODGE 且不受伤')
+  console.log('✓ Phase R3: chargeable gates, terrain strips, collapse funneling and new hazards verified')
+}
+
+// R4: 3-Part Stage Boss Armor Lock + Boss Relic Draft + C->SSS Style + Shield Combo Protection
+{
+  prepareRunner(9090, 'marathon')
+  runner.autoDraftOnXp = true
+  const bossParts = runner.director.createBossEncounter('fortress_warden', 76, 'marathon', 1)
+  runner.entities.push(...bossParts)
+  const leftWing = bossParts.find((p) => p.partRole === 'missile_pod')
+  const rightWing = bossParts.find((p) => p.partRole === 'pulse_hammer')
+  const core = bossParts.find((p) => p.partRole === 'core_reactor')
+  runner._updateBossActions(0.05)
+  assert.equal(core.armor, core.baseArmor, '双翼健在时核心应维持最高减伤')
+  runner._defeatEntity(leftWing)
+  resolveBotDraft(runner)
+  runner._updateBossActions(0.05)
+  assert.ok(core.armor > 0 && core.armor < core.baseArmor, '击破左翼后核心护甲应阶梯下降')
+  runner._defeatEntity(rightWing)
+  resolveBotDraft(runner)
+  runner._updateBossActions(0.05)
+  assert.equal(core.armor, 0, '双翼全破后核心护甲应完全瓦解')
+
+  runner._defeatEntity(core)
+  assert.equal(runner.bossDefeatedCount, 1, '击破全首领部件应累计首领击败数')
+  assert.equal(runner.pendingDraft?.isBossRelic, true, '击破阶段首领必须掉落 Boss 遗物选卡')
+  const relicOpt = runner.pendingDraft.options.find((o) => o.category === 'relic') || runner.pendingDraft.options[0]
+  assert.ok(runner.selectDraftOption(relicOpt.id), '应可正常选取 Boss 遗物')
+  assert.ok(runner.relics.length === 1, '选取遗物后应计入遗物栏')
+  resolveBotDraft(runner)
+
+  // Style rank + shield combo keep + score milestones
+  runner.shield = 2
+  runner.combo = 12
+  runner.stylePoints = 155
+  assert.equal(getRunnerStyleRank(runner.stylePoints).id, 'SSS')
+  runner._takeDamage({ lane: 1, depth: RUNNER_COLLISION_DEPTH, damage: 1 })
+  assert.equal(runner.combo, 6, '护盾完全吸伤应折半保留连击而不是清零')
+  const creditsBeforeMilestone = runner.bountyCredits
+  runner._addScore(RUNNER_SCORE_MILESTONES[0] + 100)
+  assert.ok(runner.nextMilestoneIndex >= 1 && runner.bountyCredits > creditsBeforeMilestone, '跨过分数里程碑应发放悬赏信用点')
+  console.log('✓ Phase R4: 3-part Boss armor break, Boss Relic draft, SSS Style & shield combo retention verified')
+}
 
 const oldRunner = runner
 const restored = engine.configureGameplay('arena')

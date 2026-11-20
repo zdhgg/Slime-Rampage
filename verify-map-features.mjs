@@ -69,7 +69,7 @@ assert.equal(engine.player.x, engine.worldWidth * 0.5)
 assert.equal(engine.player.y, engine.worldHeight * 0.5)
 assert.equal(engine.mapFeatures.nest.preview, true)
 
-// 2. 净化兵攻击巢心，守住后才进入章节首领战。
+// 2. 靠近或命中净化兵可以拉离巢心，守住后进入章节首领战。
 activateChapter()
 assert.equal(engine._expeditionProgress().definition.type, 'defend')
 assert.equal(engine.mapFeatures.nestDefenseActive, true)
@@ -77,13 +77,39 @@ assert.equal(engine.mapFeatures.nestInfo.maxHp, 120)
 engine.mapFeatures.update(0)
 const nest = engine.mapFeatures.nest
 const hpBefore = nest.hp
-const raider = engine.enemyManager.spawnAt(nest.x + nest.radius + 14, nest.y, 'knight', {
+const interceptX = nest.x + nest.radius + 14
+const raider = engine.enemyManager.spawnAt(interceptX, nest.y, 'knight', {
   objectiveTarget: 'nest',
 })
+engine.player.x = interceptX + 20
+engine.player.invincible = 0
+const playerHp = engine.player.hp
 raider.attackCd = 0
 raider.update(0.016)
+assert.ok(engine.player.hp < playerHp, '靠近拦截后，敌人改打玩家')
+assert.equal(nest.hp, hpBefore)
+
+engine.player.x = interceptX + 300
+raider.attackCd = 0
+raider.update(.1)
+assert.ok(raider.x > interceptX, '短暂拉开距离后仍会追击玩家')
+assert.equal(nest.hp, hpBefore)
+
+raider.x = interceptX
+raider.attackCd = 0
+raider.update(4)
 assert.ok(nest.hp < hpBefore)
-assert.equal(engine.player.hp, engine.player.maxHp)
+
+const hpAfterAttack = nest.hp
+raider.shieldHits = 1
+raider.hit(0)
+assert.equal(engine.mapFeatures.getEnemyTarget(raider), nest, '零伤害效果不会引怪')
+raider.hit(1)
+assert.equal(raider.shieldHits, 0)
+assert.equal(engine.mapFeatures.getEnemyTarget(raider), null, '远程命中即使被盾挡也能引怪')
+raider.update(.1)
+assert.ok(raider.x > interceptX)
+assert.equal(nest.hp, hpAfterAttack)
 
 engine.expeditionStageElapsed = 90
 engine.update(0)

@@ -62,6 +62,8 @@ try {
   const runnerFinish = await api(`/api/runs/${runnerTicket}/finish`, { cookie: alice.cookie, body: { run: runnerRun } })
   assert.equal(runnerFinish.status, 200, JSON.stringify(runnerFinish.data))
   assert.equal(runnerFinish.data.accountData.records['runner:blitz'].plays, 1)
+  assert.equal(runnerFinish.data.result.earnedDrops, 20)
+  assert.equal(runnerFinish.data.catalog.slots[0].data.drops, 20)
   assert.equal(runnerFinish.data.leaderboard.entries[0].username, 'Alice')
   const repeated = await api(`/api/runs/${runnerTicket}/finish`, { cookie: alice.cookie, body: { run: runnerRun } })
   assert.equal(repeated.data.result.runId, runnerFinish.data.result.runId)

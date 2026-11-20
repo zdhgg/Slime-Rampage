@@ -81,6 +81,7 @@ export class WeaponSystem extends Entity {
     // 基础暴击 10%：让玩家开局就能看到金色暴击数字（反馈教学），
     // 「暴击腺体」技能覆盖提升至 15/30/45%
     this.critChance = 0.1
+    this.rawCritChance = 0.1
     this.freezeChance = 0 // 冰冻
     this.burnChance = 0 // 燃烧
     this.poisonChance = 0 // 染毒
@@ -183,7 +184,8 @@ export class WeaponSystem extends Entity {
     // 狩猎亢奋（黑市）：击杀窗口内攻速提升，近战远程共用同一攻击周期
     const huntMul = this.player?._huntRushTimer > 0 ? this.geneHuntHaste || 1 : 1
     const biteHaste = this.gluttonCombat?.enabled ? this.gluttonCombat.biteHasteMultiplier() : 1
-    return this.fireInterval * (this.berserkBuffTimer > 0 ? 0.6 : 1) * formationMul * huntMul / ((this.game?.bossTomes?.biteHaste || 1) * biteHaste)
+    const shadowHaste = this.shadowCombat?.enabled ? this.shadowCombat.bladeHasteMultiplier() : 1
+    return this.fireInterval * (this.berserkBuffTimer > 0 ? 0.6 : 1) * formationMul * huntMul / ((this.game?.bossTomes?.biteHaste || 1) * biteHaste * shadowHaste)
   }
 
   /** 重置武器属性与弹幕（游戏重开时由引擎调用） */
@@ -198,6 +200,7 @@ export class WeaponSystem extends Entity {
     this.projectileSpeed = 520
     this.splitChance = this.baseSplitChance // 基因基础分裂保留，技能叠加清零
     this.critChance = 0.1 // 基础暴击保留（技能覆盖值清零）
+    this.rawCritChance = 0.1
     this.freezeChance = 0
     this.burnChance = 0
     this.poisonChance = 0
@@ -838,6 +841,10 @@ export class WeaponSystem extends Entity {
    */
   _spawnElementCore(x, y, type, meta = null) {
     if (!this.game.canUseElements || this.spellCombat.enabled) return null
+    if (meta?.chapterGuardian && this.game.runSelection.mode === 'expedition') {
+      this.game.gemManager.queueGuardianCore(type, meta.coreChoices)
+      return null
+    }
     return this.game.gemManager.spawn(x, y, 0, type, meta)
   }
 
@@ -909,7 +916,7 @@ export class WeaponSystem extends Entity {
         const index = (Math.random() * 4) | 0
         const choices = this.game.startingStrain === 'origin'
           ? [els[index], els[(index + 1 + ((Math.random() * 3) | 0)) % 4]] : null
-        this._spawnElementCore(e.x, e.y, els[index], choices ? { coreChoices: choices } : null)
+        this._spawnElementCore(e.x, e.y, els[index], { coreChoices: choices, chapterGuardian })
       }
       if (!this.spellCombat.enabled && !chapterGuardian && (!squadMember || squadLast)) {
         this.game.gemManager.spawn(e.x, e.y, 0, 'tome')
@@ -1506,6 +1513,10 @@ export class WeaponSystem extends Entity {
     ctx.arc(12, 0, 2.5, 0, TAU)
     ctx.fill()
     ctx.restore()
+  }
+
+  renderGround(ctx) {
+    this.gluttonCombat.renderGround(ctx)
   }
 
   render(ctx) {

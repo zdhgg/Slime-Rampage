@@ -37,7 +37,12 @@ export function renderShadowCombat(ctx, c) {
     ctx.restore()
     ctx.save(); ctx.globalAlpha = fade * 0.6; ctx.strokeStyle = '#cba5d9'; ctx.lineWidth = 1.5
     ctx.beginPath(); ctx.moveTo(clone.x - 12, clone.y + clone.radius + 7)
-    ctx.lineTo(clone.x - 12 + 24 * clone.life / clone.maxLife, clone.y + clone.radius + 7); ctx.stroke(); ctx.restore()
+    ctx.lineTo(clone.x - 12 + 24 * clone.life / clone.maxLife, clone.y + clone.radius + 7); ctx.stroke()
+    for (let bi = 0; bi < (clone.freeBlocks || 0); bi++) {
+      ctx.fillStyle = '#93f2ff'
+      ctx.beginPath(); ctx.arc(clone.x - 8 + bi * 5, clone.y - clone.radius - 5, 1.9, 0, Math.PI * 2); ctx.fill()
+    }
+    ctx.restore()
     if (clone.attack || clone.rush || clone.flash > 0) {
       const reach = clone.rush ? 72 : clone.attack ? 35 + 65 * (1 - clone.attack.time / 0.15) : 100
       blade(ctx, clone.x, clone.y, clone.angle, clone.radius, reach, 7, fade * 0.8)
@@ -58,6 +63,41 @@ export function renderShadowCombat(ctx, c) {
       ctx.save(); ctx.translate(p.x + sign * 14, p.y - 3); ctx.globalAlpha = p.evasionFlash * 1.2
       paintSlimeFamilySilhouette(ctx, 'shadow', p.radius, { fill: '#c6a6dc' }); ctx.restore()
     }
+  }
+  const shield = c.shield
+  if (shield && (shield.charges > 0 || shield.flash > 0)) {
+    const r = p.radius + 9 + Math.sin(c.time * 5) * 1.2
+    ctx.save()
+    ctx.strokeStyle = shield.flash > 0 ? '#93f2ff' : '#a78bfa'
+    ctx.lineWidth = shield.flash > 0 ? 2.4 : 1.7
+    ctx.globalAlpha = shield.flash > 0 ? Math.min(0.9, 0.35 + shield.flash * 1.6) : 0.42
+    ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.stroke()
+    for (let i = 0; i < shield.charges; i++) {
+      const a = c.time * 2.2 + (i * Math.PI * 2) / Math.max(1, shield.charges)
+      const px = p.x + Math.cos(a) * (r + 3), py = p.y + Math.sin(a) * (r + 3)
+      ctx.fillStyle = '#c4b5fd'; ctx.globalAlpha = 0.9
+      ctx.beginPath(); ctx.moveTo(px, py - 3.2); ctx.lineTo(px + 2.8, py); ctx.lineTo(px, py + 3.2); ctx.lineTo(px - 2.8, py); ctx.closePath(); ctx.fill()
+    }
+    ctx.restore()
+  }
+  if ((c.guardCharges || 0) > 0 || (c.guardFlash || 0) > 0) {
+    const gr = p.radius + 6.5
+    ctx.save()
+    ctx.translate(p.x, p.y)
+    ctx.rotate(p.facing || 0)
+    ctx.strokeStyle = (c.guardFlash || 0) > 0 ? '#f8fafc' : '#cbd5e1'
+    ctx.lineWidth = (c.guardFlash || 0) > 0 ? 2.6 : 1.9
+    ctx.globalAlpha = (c.guardFlash || 0) > 0 ? Math.min(0.95, 0.4 + c.guardFlash * 1.5) : 0.62
+    ctx.beginPath(); ctx.arc(0, 0, gr, -0.78, 0.78); ctx.stroke()
+    ctx.restore()
+  }
+  if (p.shadowSpellCounterTimer > 0 || p.shadowEvadeCritTimer > 0 || p.shadowAssaultBuffTimer > 0) {
+    ctx.save()
+    ctx.strokeStyle = p.shadowSpellCounterTimer > 0 ? '#78e8ff' : p.shadowAssaultBuffTimer > 0 ? '#d8b4fe' : '#e0b8ff'
+    ctx.lineWidth = p.shadowAssaultBuffTimer > 0 ? 1.9 : 1.6; ctx.globalAlpha = 0.55
+    ctx.setLineDash([4, 4])
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.radius + 5, 0, Math.PI * 2); ctx.stroke()
+    ctx.restore()
   }
   // The marker follows the same bounded path as F; it remains quiet outside a cast.
   if ((!a && p.strainSkillCd <= 0) || a?.phase === 'windup') {
@@ -95,9 +135,32 @@ export function renderShadowCombat(ctx, c) {
     blade(ctx, f.x, f.y, f.angle, p.radius, p.radius + (f.reach - p.radius) * f.life / 0.13, 9, f.life / 0.13)
   }
   if (a) blade(ctx, p.x, p.y, a.angle, p.radius, p.radius + (a.phase === 'travel' ? 42 : 16), 11)
+  for (const wave of (c.waves || [])) {
+    const t = 1 - Math.max(0, Math.min(1, wave.life / 0.22))
+    ctx.save(); ctx.translate(wave.x, wave.y); ctx.rotate(wave.angle); ctx.globalAlpha = (1 - t) * 0.85
+    const rx = wave.reach * (0.35 + t * 0.65)
+    ctx.strokeStyle = '#d8b4fe'; ctx.lineWidth = 3
+    ctx.beginPath(); ctx.arc(rx - 18, 0, wave.width * 1.15, -Math.PI * 0.42, Math.PI * 0.42); ctx.stroke()
+    ctx.strokeStyle = '#ffe4ec'; ctx.lineWidth = 1.4
+    ctx.beginPath(); ctx.arc(rx - 14, 0, wave.width * 0.9, -Math.PI * 0.36, Math.PI * 0.36); ctx.stroke()
+    ctx.restore()
+  }
   for (const cut of c.cleaves) {
-    ctx.save(); ctx.translate(cut.x, cut.y); ctx.rotate(cut.angle); ctx.globalAlpha = cut.life / 0.2
-    ctx.fillStyle = 'rgba(113, 49, 80, 0.28)'; ctx.strokeStyle = '#ed9bae'; ctx.lineWidth = 1.5
+    const k = Math.max(0, Math.min(1, cut.life / (cut.nova ? 0.26 : cut.hunt ? 0.22 : 0.2)))
+    ctx.save(); ctx.translate(cut.x, cut.y); ctx.globalAlpha = k
+    if (cut.nova) {
+      const r = cut.reach * (0.45 + (1 - k) * 0.55)
+      ctx.strokeStyle = '#e879f9'; ctx.lineWidth = 3.2 * k + 1
+      ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.stroke()
+      ctx.strokeStyle = '#fdf4ff'; ctx.lineWidth = 1.4
+      ctx.beginPath(); ctx.arc(0, 0, r * 0.78, -Math.PI * 0.65, Math.PI * 0.65); ctx.stroke()
+      ctx.restore()
+      continue
+    }
+    ctx.rotate(cut.angle)
+    ctx.fillStyle = cut.hunt ? 'rgba(56, 189, 248, 0.28)' : cut.swarm ? 'rgba(167, 139, 250, 0.28)' : cut.echo ? 'rgba(168, 85, 247, 0.26)' : 'rgba(113, 49, 80, 0.28)'
+    ctx.strokeStyle = cut.hunt ? '#84d6e8' : cut.swarm ? '#c39be6' : cut.echo ? '#d8b4fe' : cut.riposte ? '#fda4af' : '#ed9bae'
+    ctx.lineWidth = 1.5
     ctx.beginPath(); ctx.moveTo(-cut.reach, 0)
     ctx.quadraticCurveTo(0, -cut.width, cut.reach, 0)
     ctx.quadraticCurveTo(0, cut.width, -cut.reach, 0); ctx.fill(); ctx.stroke()

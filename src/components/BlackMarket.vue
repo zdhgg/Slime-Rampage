@@ -1,19 +1,22 @@
 <script setup>
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   BookOpen, Coins, Crosshair, Diamond, Dices, Droplets, Egg, Expand, Eye,
   FlaskConical, Flame, Gauge, Gem, HeartPulse, Layers, Magnet, Maximize2,
-  Package, RefreshCw, Shield, Sword, Syringe, Target, TestTube, Waves, Wind, X, Zap,
+  Package, RefreshCw, RotateCcw, Shield, Sword, Syringe, Target, TestTube, Waves, Wind, X, Zap,
 } from 'lucide-vue-next'
 import { GENES, GENE_BRANCHES, getChosenOrigin, getGenePurchaseState } from '../game/GenePool.js'
+import { hasPurchasedGenes } from '../game/BlackMarketRefund.js'
 import { getGenePresentation } from './blackMarketPresentation.js'
 import BlackMarketGeneNode from './BlackMarketGeneNode.vue'
 
 const props = defineProps({
   drops: { type: Number, required: true },
   genes: { type: Object, required: true },
+  refundPoints: Number,
+  busy: Boolean,
 })
-const emit = defineEmits(['buy', 'close'])
+const emit = defineEmits(['buy', 'reset', 'close'])
 
 const BRANCH_ICONS = { flesh: HeartPulse, arms: Crosshair, supply: Package, contraband: FlaskConical }
 const GENE_ICONS = {
@@ -25,6 +28,7 @@ const GENE_ICONS = {
   stim: Syringe, serum: TestTube, greed: Eye, glass: Gem, dicer: Dices,
 }
 const chosenOrigin = computed(() => getChosenOrigin(props.genes))
+const hasInvestment = computed(() => hasPurchasedGenes(props.genes))
 const activeBranch = ref(chosenOrigin.value?.branch || GENE_BRANCHES[0].id)
 const marketBody = ref(null)
 const marketPanel = ref(null)
@@ -81,6 +85,10 @@ onMounted(() => {
   closeButton.value?.focus({ preventScroll: true })
 })
 
+watch(hasInvestment, invested => {
+  if (!invested) closeButton.value?.focus({ preventScroll: true })
+}, { flush: 'post' })
+
 onUnmounted(() => {
   nextTick(() => {
     const target = previousFocus?.isConnected ? previousFocus : document.querySelector('.market-link')
@@ -98,6 +106,10 @@ onUnmounted(() => {
           <h2 id="market-title">地下城黑市</h2>
         </div>
         <div class="market-actions">
+          <button v-if="Number.isSafeInteger(refundPoints)" type="button" class="market-reset" :disabled="busy || !hasInvestment"
+            :title="hasInvestment ? '免费返还当前档案已投入的战力点' : '当前档案尚未投入战力点'" @click="emit('reset')">
+            <RotateCcw :size="16" :stroke-width="1.7" aria-hidden="true" />重置加点
+          </button>
           <div class="market-wallet" aria-live="polite" aria-atomic="true">
             <Coins :size="18" :stroke-width="1.7" aria-hidden="true" />
             <span>战力点</span><b>{{ drops }}</b>
@@ -160,6 +172,7 @@ onUnmounted(() => {
               :key="gene.id"
               :gene="gene"
               :icon="GENE_ICONS[gene.id]"
+              :busy="busy"
               @buy="emit('buy', $event)"
             />
           </section>
@@ -186,6 +199,7 @@ onUnmounted(() => {
               :key="gene.id"
               :gene="gene"
               :icon="GENE_ICONS[gene.id]"
+              :busy="busy"
               @buy="emit('buy', $event)"
             />
           </div>
@@ -231,6 +245,9 @@ onUnmounted(() => {
 .market-kicker { display: block; margin-bottom: 5px; color: var(--muted); font-size: 12px; }
 .market-header h2 { margin: 0; color: var(--adventure-ink); font-size: 26px; line-height: 1.25; }
 .market-actions { display: flex; align-items: center; gap: 10px; }
+.market-reset { display: inline-flex; align-items: center; gap: 6px; min-height: 42px; padding: 0 11px; border: 1px solid var(--adventure-line); border-radius: 7px; background: transparent; color: var(--secondary); font: inherit; font-size: 13px; white-space: nowrap; cursor: pointer; }
+.market-reset:hover:not(:disabled) { background: var(--adventure-leaf); color: var(--adventure-ink); }
+.market-reset:disabled { color: var(--muted); cursor: not-allowed; }
 .market-wallet { display: flex; align-items: center; gap: 9px; min-height: 42px; padding: 0 14px; border: 1px solid #d8c8a8; border-radius: 7px; color: var(--gold); background: #f6eedc; }
 .market-wallet span { color: var(--adventure-gold); font-size: 12px; }
 .market-wallet b { font-size: 20px; font-variant-numeric: tabular-nums; }
@@ -238,7 +255,7 @@ onUnmounted(() => {
 .market-close:hover { color: var(--adventure-ink); background: #dce9de; }
 .market-close, .branch-tabs button { transition: background-color 120ms ease, border-color 120ms ease; }
 .market-close:active { transform: scale(0.98); }
-.market-close:focus-visible, .branch-tabs button:focus-visible { outline: 2px solid var(--gold); outline-offset: 3px; }
+.market-reset:focus-visible, .market-close:focus-visible, .branch-tabs button:focus-visible { outline: 2px solid var(--gold); outline-offset: 3px; }
 
 .origin-status { display: flex; flex: none; align-items: center; gap: 9px; margin: 0 26px; padding: 10px 0; border-block: 1px solid var(--border); color: var(--muted); font-size: 12px; line-height: 1.5; }
 .origin-status > svg { flex: none; }
@@ -295,6 +312,7 @@ onUnmounted(() => {
   .market-wallet { gap: 6px; padding-inline: 9px; min-height: 40px; }
   .market-wallet span { display: none; }
   .market-wallet b { font-size: 18px; }
+  .market-reset { min-height: 40px; padding-inline: 8px; }
   .market-close { width: 40px; height: 40px; }
   .origin-status { margin-inline: 15px; gap: 6px 8px; padding-block: 10px; }
   .branch-tabs { grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 10px 15px 0; gap: 5px; }

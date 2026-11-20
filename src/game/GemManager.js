@@ -45,6 +45,7 @@ export class GemManager extends Entity {
     this._mergeTimer = MERGE_INTERVAL // 合并轮计时（阶段十三）
     this._heldGem = null // 首融确认中持住的宝石（阶段十六）
     this._nearCore = null // 当前进入自动吸收提示范围的最近元素核心
+    this._pendingGuardianCore = null
   }
 
   /** 当前场上宝石数量（HUD 显示用） */
@@ -62,6 +63,34 @@ export class GemManager extends Entity {
     this._gems.push(gem)
     if (isElementCore(gem)) this._trimElementCores()
     return gem
+  }
+
+  queueGuardianCore(type, coreChoices) {
+    this._pendingGuardianCore = { type, coreChoices }
+  }
+
+  settleExpeditionDrops() {
+    for (const gem of this._gems) {
+      if (gem.type === 'exp' && !gem.merged) this.player.addExp(gem.value)
+    }
+    this._gems = this._gems.filter(gem => gem.type === 'tome')
+    this._heldGem = null
+    this._nearCore = null
+  }
+
+  placeExpeditionEntranceCore(core = this._pendingGuardianCore) {
+    this._pendingGuardianCore = null
+    if (!core) return
+    const { x, y } = this.player
+    // 入口横向留出一小步，核心可见且玩家站在出生点时不会触发磁吸。
+    const distance = CORE_MAGNET_RADIUS + 28
+    const gem = this.spawn(x + distance, y, 0, core.type, core)
+    gem.expeditionEntrance = true
+  }
+
+  get expeditionEntranceCore() {
+    const gem = this._gems.find(gem => gem.expeditionEntrance)
+    return gem ? { type: gem.type, coreChoices: gem.coreChoices } : null
   }
 
   /**
@@ -106,6 +135,7 @@ export class GemManager extends Entity {
     this._mergeTimer = MERGE_INTERVAL
     this._heldGem = null
     this._nearCore = null
+    this._pendingGuardianCore = null
   }
 
   _removeGem(gem) {
@@ -302,10 +332,7 @@ export class GemManager extends Entity {
     }
     const px = this.player.x
     const py = this.player.y
-    // 全域磁感（黑市）：拾取半径视为全屏——半径平方取世界对角线即可覆盖任意距离
-    const pickupR = this.player.geneMagnetAll
-      ? Math.hypot(this.game.worldWidth || 4000, this.game.worldHeight || 4000)
-      : this.player.pickupRadius
+    const pickupR = this.player.pickupRadius
     const pickupR2 = pickupR * pickupR
     const absorbRadius = this.player.radius
     this._pickupSoundCd = Math.max(0, (this._pickupSoundCd || 0) - dt)

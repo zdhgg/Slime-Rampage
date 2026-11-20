@@ -332,13 +332,23 @@ assert.equal(engine.canDevour, false)
 assert.equal(engine.player.strainSkillCd, 0)
 console.log('✓ 史莱姆角色：origin 自由构筑 + 四角色绑定技能树/独占吞噬/F 技能（属性与身份同步叠加且重开归位）')
 
-// 章节远征：六类目标、逐关首领、关间补给、技能选择与最终统帅必须形成完整状态闭环。
+// 章节远征：六类目标、逐关首领、秘典选择与最终统帅必须形成完整状态闭环。
 const rewards = []
 let offeredSkills = null
 settlement = null
 engine.onExpeditionReward = (payload) => rewards.push(payload)
 engine.onLevelUp = (options) => {
   offeredSkills = options
+}
+// 章节状态机同步推进，跳过路线选定的演出计时。
+const playEvolution = engine.evolutionEvent
+engine.evolutionEvent = () => {}
+const resolveLevelUps = () => {
+  while (offeredSkills) {
+    const skill = offeredSkills.find(option => !option.locked)
+    offeredSkills = null
+    assert.equal(engine.applySkill(skill), true)
+  }
 }
 engine.configureRun({ mode: 'expedition', difficulty: 'normal' })
 engine.reset()
@@ -357,6 +367,7 @@ const finishStageIntro = (expectedState = 'active') => {
   engine.update(0)
   assert.equal(engine.runState, expectedState)
   assert.equal(em.wave, 1)
+  resolveLevelUps()
 }
 
 finishStageIntro()
@@ -366,15 +377,17 @@ em.update(0.02)
 assert.equal(em.wave, 1, '远征停留超过一个导演周期也不得延续到第 2 波')
 const stageOneEscort = em.spawnAt(engine.player.x + 180, engine.player.y, 'knight')
 
-/** 过关推进：先进入 0.6s 残敌溃散演出，跳满计时后落进补给结算 */
+/** 残敌溃散后，确认秘典直接进入下一章。 */
 const finishStageClearing = () => {
   assert.equal(engine.runState, 'stage-clearing', '过关先进入残敌溃散演出')
+  resolveLevelUps()
   engine._stageClearT = 10
   engine.update(0.001)
   assert.equal(engine.runState, 'stage-reward')
   assert.equal(engine._chapterSettlement.phase, 'boss')
-  engine.resolveExpeditionReward(engine._chapterSettlement.options[0].id)
-  assert.equal(engine._chapterSettlement.phase, 'supply')
+  assert.equal(engine.resolveExpeditionReward(engine._chapterSettlement.options[0].id), true)
+  assert.equal(rewards.at(-1), null)
+  assert.equal(engine.runState, 'expedition-intro')
 }
 
 const defeatStageGuardian = () => {
@@ -391,10 +404,8 @@ engine.update(0)
 assert.ok(em.enemies.includes(stageOneEscort), '章节首领登场时残余小兵应留在战场')
 assert.ok(em.enemies.includes(em._boss), '章节首领应加入现有敌群而不是替换敌群')
 defeatStageGuardian()
-finishStageClearing()
-assert.equal(rewards.at(-1).nextStage, 2)
 engine.player.hp = 1
-engine.resolveExpeditionReward('rest')
+finishStageClearing()
 assert.equal(engine.expeditionStage, 2)
 assert.equal(engine.player.hp, engine.player.maxHp)
 finishStageIntro()
@@ -419,18 +430,13 @@ assert.equal(engine.worldEvents.completedByType.beacon, 1)
 assert.equal(engine._expeditionProgress().events, 1)
 
 // 离开信标掉落点再推进一帧：避免测试里顺手吃经验触发升级面板，
-// 把「过关清场 → 补给」的断言卡在暂停锁上。
+// 把「过关清场 → 秘典」的断言卡在暂停锁上。
 engine.player.x = Math.min(engine.worldWidth - 60, stageTwoBeacon.x + 400)
 engine.player.y = stageTwoBeacon.y
 engine.update(0)
 defeatStageGuardian()
 finishStageClearing()
-const hpBeforeBlood = engine.player.maxHp
-const dmgBeforeBlood = engine.weaponSystem.damage
-engine.resolveExpeditionReward('blood')
 assert.equal(engine.expeditionStage, 3)
-assert.equal(engine.player.maxHp, hpBeforeBlood - 1)
-assert.equal(engine.weaponSystem.damage, dmgBeforeBlood * 1.2)
 finishStageIntro()
 assert.equal(em.enemies.filter((enemy) => enemy.isElite).length, 7)
 
@@ -438,7 +444,6 @@ engine.weaponSystem.eliteKills += 7
 engine.update(0)
 defeatStageGuardian()
 finishStageClearing()
-engine.resolveExpeditionReward('rest')
 assert.equal(engine.expeditionStage, 4)
 assert.equal(engine._mapThemeId, 'blight')
 assert.equal(engine._mapVariant, 'slime-nest-sieged')
@@ -447,7 +452,6 @@ engine.expeditionStageElapsed = 90
 engine.update(0)
 defeatStageGuardian()
 finishStageClearing()
-engine.resolveExpeditionReward('rest')
 assert.equal(engine.expeditionStage, 5)
 finishStageIntro()
 assert.equal(engine.worldEvents.current.type, 'surge')
@@ -458,11 +462,6 @@ engine.worldEvents.completedByType.surge++
 engine.update(0)
 defeatStageGuardian()
 finishStageClearing()
-engine.resolveExpeditionReward('tome')
-assert.ok(engine._chapterSettlement.options.length > 0)
-assert.equal(engine._chapterSettlement.phase, 'study')
-assert.equal(engine.expeditionStage, 5)
-engine.resolveExpeditionReward(engine._chapterSettlement.options[0].id)
 // 普通难度为 8 章：第 6/7 章是「被藏起的圣物」「燃尽的圣殿」，第 8 章才揭开王庭真相
 assert.equal(engine.expeditionStage, 6)
 assert.equal(engine._mapThemeId, 'royal')
@@ -476,7 +475,6 @@ engine.worldEvents.completedByType.surge++
 engine.update(0)
 defeatStageGuardian()
 finishStageClearing()
-engine.resolveExpeditionReward('rest')
 assert.equal(engine.expeditionStage, 7)
 assert.equal(engine._mapVariant, 'sanctum')
 finishStageIntro()
@@ -486,7 +484,6 @@ engine.weaponSystem.eliteKills += 9
 engine.update(0)
 defeatStageGuardian()
 finishStageClearing()
-engine.resolveExpeditionReward('rest')
 assert.equal(engine.expeditionStage, 8)
 assert.equal(engine._mapThemeId, 'royal')
 assert.equal(engine._mapVariant, 'shattered-court')
@@ -501,7 +498,8 @@ assert.equal(settlement.mode, 'expedition')
 assert.equal(settlement.stage, 8)
 assert.equal(settlement.totalStages, 8)
 assert.equal(settlement.epilogue.text, '原来一路进犯的……是我们。')
-console.log('✓ 王庭逆袭完成八章独立目标、章节过场、逐章首领、补给与王庭真相闭环')
+console.log('✓ 王庭逆袭完成八章独立目标、章节过场、逐章首领、秘典与王庭真相闭环')
+engine.evolutionEvent = playEvolution
 
 // 第二章章节时限：未完成信标时到点判负，不能靠持续刷怪无限拖关。
 engine.configureRun({ mode: 'expedition', difficulty: 'normal' })
@@ -511,10 +509,9 @@ engine.weaponSystem.kills += 60
 engine.update(0)
 defeatStageGuardian()
 finishStageClearing()
-engine.resolveExpeditionReward('rest')
 assert.equal(engine.expeditionStage, 2)
 finishStageIntro()
-assert.equal(engine._expeditionDefinition.deadline, 90, '第二关带 90 秒章节时限')
+assert.equal(engine._expeditionDefinition.deadline, 180, '第二关带 3 分钟章节时限')
 
 // 失败重试锁定：清掉当前信标后，未指定类型的重新生成仍必须是 beacon
 engine.worldEvents.cancelForEncounter()
@@ -524,12 +521,13 @@ assert.equal(retriedBeacon.type, 'beacon', '信标失败重试仍生成信标而
 // HUD 快照：章节剩余时间随 active 实时输出
 let deadlineStats = null
 engine.onStats = (stats) => { deadlineStats = stats }
-engine.expeditionStageElapsed = 30
+engine.expeditionStageElapsed = 120
 engine._pushStats()
-assert.equal(deadlineStats.run.stageDeadline, 90)
+assert.equal(deadlineStats.run.stageDeadline, 180)
 assert.equal(deadlineStats.run.stageRemaining, 60)
+assert.equal(deadlineStats.objective.timeLeft, 60, '信标和章节共用同一倒计时')
 
-engine.expeditionStageElapsed = 89.9
+engine.expeditionStageElapsed = 179.9
 engine.update(0.2)
 assert.equal(engine.runState, 'defeat')
 assert.equal(engine.runFinished, true)

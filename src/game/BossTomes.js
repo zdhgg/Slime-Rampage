@@ -1,5 +1,10 @@
 /** Six starting identities, four bounded tomes each. Rank values are totals. */
 export const BOSS_TOME_MAX_LEVEL = 3
+export const RICOCHET_RECHARGE_RANKS = [
+  { skillReduction: 8, healAmount: 1, healCooldown: 30 },
+  { skillReduction: 15, healAmount: 1.5, healCooldown: 25 },
+  { skillReduction: 15, healAmount: 2, healCooldown: 20 },
+]
 const meta = {
   origin: ['原生', 'origin', '#8cffc8'], glutton: ['暴食', 'gluttony', '#ffb36b'],
   ricochet: ['弹射', 'gatling', '#83cbd9'], elemental: ['元素', 'elemental', '#b6a4ff'],
@@ -26,7 +31,9 @@ export const BOSS_TOMES = {
   ricochet: [
     tome('ricochet', 'boss_rico_chamber', '扩容弹仓', '▣', '扩大普通齐射；弹数投资也参与路线主动的压缩伤害。', ['齐射弹数 +1', '额外使普通攻击间隔−8%', '齐射弹数总加成 +1 → +2']),
     tome('ricochet', 'boss_rico_stabilizer', '稳压原核', '◈', '提高单弹质量，满级后强化主弹首次命中。', ['单弹伤害 +12% · 弹速 +10%', '伤害12% → 20% · 弹速10% → 15%', '主弹首次命中伤害额外 +15%']),
-    tome('ricochet', 'boss_rico_recharge', '冷凝弹腺', '❄️', '缩短当前空格技能冷却；主动命中可有限治疗。', ['空格冷却−8%', '冷却缩减8% → 15%', '主动命中且受伤时回血1点 · 治疗冷却20秒']),
+    tome('ricochet', 'boss_rico_recharge', '冷凝弹腺', '❄️', '缩短空格技能冷却。生命未满时，空格技能对敌人造成伤害可回血。',
+      RICOCHET_RECHARGE_RANKS.map(({ skillReduction, healAmount, healCooldown }) =>
+        `空格冷却 −${skillReduction}% · 回血 ${healAmount} 点 · 治疗冷却 ${healCooldown} 秒`)),
     tome('ricochet', 'boss_rico_echo', '回响弹壳', '↻', '每轮普通攻击独立判定一次有限追击，追击不会递归触发。', ['15%概率追加一轮40%威力追击', '概率15% → 20% · 威力40% → 50%', '连续4轮未触发后，第5轮必定追击']),
   ],
   elemental: [
@@ -39,7 +46,7 @@ export const BOSS_TOMES = {
     tome('shadow', 'boss_assassin_mark', '处决印记', '🎯', '本体直接攻击收割残血目标；满级后传斩另一名敌人。', ['对生命≤40%的敌人，本体直接伤害 +25%', '残血增伤25% → 40%', '收割后传斩150范围内另一敌人：1倍基础攻击 · 冷却1秒']),
     tome('shadow', 'boss_shadow_pact', '影契缚身', '👥', '强化分身攻击，满级后新生分身首次普攻更强。', ['分身攻击伤害 +12%', '分身增伤12% → 20%', '新生分身首次普攻伤害额外 +50%（刷新寿命不重置）']),
     tome('shadow', 'boss_assassin_voidstep', '虚空步', '🌑', '缩短影袭冷却，满级后储存一次短时普攻必暴。', ['影袭冷却−8%', '影袭冷却缩减8% → 15%', '影袭结束后3秒内，下一次本体普攻必暴']),
-    tome('shadow', 'boss_shadow_cloak', '长夜披风', '🌘', '闪避后的虚化窗口更长，满级后提高撤离速度。', ['闪避虚化0.2 → 0.3秒', '虚化0.3 → 0.4秒', '闪避后额外移速 +20% · 持续2秒']),
+    tome('shadow', 'boss_shadow_cloak', '长夜披风', '🌘', '闪避后的虚化窗口更长，满级后提高撤离速度并强化暗影魔盾充能。', ['闪避虚化0.2 → 0.3秒', '虚化0.3 → 0.4秒', '闪避后额外移速 +20% · 持续2秒 · 闪避额外加速魔盾充能 1 秒']),
   ],
   summoner: [
     tome('summoner', 'boss_pet_unity', '群心契约', '🐾', '增强伙伴普通攻击，并强化每次鼓舞后的首次攻击。', ['伙伴普通攻击伤害 +12%', '伙伴普攻增伤12% → 20%', '每次鼓舞时存活伙伴的首次普攻额外 +40%']),
