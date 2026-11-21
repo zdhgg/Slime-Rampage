@@ -20,6 +20,15 @@ const MODE_BRIEFINGS = {
     signal: '封锁倒计时：12:00',
     tone: 'siege',
   },
+  timed20: {
+    code: '封锁协议 20',
+    location: '王城外围封锁区 · 深度围剿',
+    title: '王庭调集全境战力合围巢界',
+    story: '二十分钟的彻底封锁即将降临。第 20 波后王庭将投入三王与四王编队轮番围剿，只有熬过整轮合围的史莱姆才有资格面对终焉防线。',
+    objective: '坚守二十分钟，随后击败王国终焉防线。',
+    signal: '封锁倒计时：20:00',
+    tone: 'siege',
+  },
   endless: {
     code: '灾变记录 ∞',
     location: '灾变裂口 · 无撤离时刻',

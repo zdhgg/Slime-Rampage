@@ -43,6 +43,7 @@ const pick = (card) => {
       <div v-if="!reviewing" class="route-grid">
         <button v-for="(r, idx) in options" :key="r.id" class="route-card" :class="[{ locked: r.locked, 'is-selected': selectedIndex === idx }]" :style="{ '--route-color': r.color }" :disabled="r.locked" @mouseenter="selectedIndex = idx" @click="pick(r)">
           <kbd>{{ idx + 1 }}</kbd><strong><SkillIcon :skill="{ id: routeIconId('symbiosis', r.route), spec: 'symbiosis', route: r.route }" />{{ r.name }}</strong>
+          <small v-if="r.roleBadge" class="route-role-badge">{{ r.roleBadge }}</small>
           <span>{{ r.desc }}</span><b>{{ r.bonus }}</b>
           <span class="route-ultimate"><b>终极 · {{ r.ultimateName }}</b>{{ r.ultimateDesc }}</span>
           <small v-if="r.locked">🔒 {{ r.requirement }}</small>
@@ -50,7 +51,7 @@ const pick = (card) => {
         </button>
       </div>
       <div v-else class="route-review">
-        <div class="review-route" :style="{ '--route-color': chosen.color }"><strong><SkillIcon :skill="{ id: routeIconId('symbiosis', chosen.route), spec: 'symbiosis', route: chosen.route }" />{{ chosen.name }}</strong><span>{{ chosen.bonus }}</span><b>终极：{{ chosen.ultimateName }}</b><span>{{ chosen.ultimateDesc }}</span></div>
+        <div class="review-route" :style="{ '--route-color': chosen.color }"><strong><SkillIcon :skill="{ id: routeIconId('symbiosis', chosen.route), spec: 'symbiosis', route: chosen.route }" />{{ chosen.name }}</strong><small v-if="chosen.roleBadge">{{ chosen.roleBadge }}</small><span>{{ chosen.bonus }}</span><b>终极：{{ chosen.ultimateName }}</b><span>{{ chosen.ultimateDesc }}</span></div>
         <div class="review-actions">
           <button v-for="(action, idx) in source" :key="action.id" :class="{ 'is-selected': selectedIndex === idx, confirm: idx === 0 }" @mouseenter="selectedIndex = idx" @click="pick(action)"><kbd>{{ idx + 1 }}</kbd>{{ action.icon }} {{ action.name }}</button>
         </div>
@@ -63,5 +64,17 @@ const pick = (card) => {
 <style scoped src="./routeChoiceTheme.css"></style>
 <style scoped>
 .symbiosis-route-overlay { --strain-accent: #edc479; }
+.route-role-badge {
+  display: inline-block;
+  margin-bottom: 6px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--route-color, #edc479) 45%, transparent);
+  background: color-mix(in srgb, var(--route-color, #edc479) 14%, rgba(12, 22, 17, 0.72));
+  color: var(--route-color, #edc479);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+}
 </style>
 

@@ -27,15 +27,15 @@ export const ORIGIN_SOURCE_RULES = Object.freeze({
   /** 源质技能只对普通敌人击退；首领免疫位移。 */
   bossKnockback: 0,
   /** 被动超载统一乘区：源质技能倍率换算到「超载口径」的基准系数。 */
-  passiveDamageScale: 3.25,
+  passiveDamageScale: 6.2,
 })
 
 /** 被动超载（OriginOverload 控制器）的触发参数。 */
 export const ORIGIN_OVERLOAD_RULES = Object.freeze({
   /** 基础自动超载冷却（秒）。 */
-  cooldown: 6,
+  cooldown: 4.8,
   /** 异源共振路线的超载冷却（秒）。 */
-  resonanceCooldown: 5.5,
+  resonanceCooldown: 4.2,
   /** 启动表现时长：预约→确认释放之间的窗口，不扣能量。 */
   windup: 0.25,
   /** 无有效目标时重新判断的间隔（秒）。 */
@@ -55,19 +55,19 @@ export const ORIGIN_INNATE_SKILL = Object.freeze({
   color: '#8cffc8',
   exec: 'orbit',
   innate: true,
-  castRange: 400,
+  castRange: 420,
   tags: ['原生', '被动超载'],
-  desc: '身体中的原质核心分离出三枚液态原质球，环绕后追踪近距离敌人，命中产生小型液态爆裂。',
+  desc: '身体中的原质核心分离出四枚液态原质球，环绕后追踪近距离敌人，命中产生液态爆裂。',
   trigger: '被动超载自动释放：原质球追踪并爆裂',
 })
 /** 原质环流数值（单档，不受记忆等级影响；成长来自路线/棱镜/秘典乘区）。 */
 export const ORIGIN_ORBIT_STATS = Object.freeze({
-  orbs: 3,
-  duration: 1.8,
-  damageMul: 1.0,
-  splash: 0.35,
-  splashRadius: 36,
-  slow: 0.8,
+  orbs: 4,
+  duration: 2.0,
+  damageMul: 1.35,
+  splash: 0.45,
+  splashRadius: 44,
+  slow: 0.85,
 })
 
 /**
@@ -87,17 +87,17 @@ export const ORIGIN_SOURCE_SKILLS = Object.freeze([
     iconKey: 'waves',
     color: '#5ad1c8',
     exec: 'breach',
-    castRange: 500,
+    castRange: 520,
     tags: ['源质记忆', '骑士王', '直线突破'],
     desc: '身体先压成一枚凝胶弹芯，再向最近敌人推出一道高速液态冲击波：沿途击退并撕开一道缺口。',
     trigger: '超载时自动释放：向最近敌人推出直线凝胶冲击波',
     levels: [
-      { damageMul: 1.6, width: 56, distance: 540, knock: 70, text: '一道凝胶冲击波，沿途击退' },
-      { damageMul: 2.0, width: 72, distance: 640, knock: 90, text: '波体更宽更长，击退更强' },
+      { damageMul: 1.9, width: 60, distance: 560, knock: 72, text: '一道凝胶冲击波，沿途击退' },
+      { damageMul: 2.4, width: 76, distance: 660, knock: 92, text: '波体更宽更长，击退更强' },
       {
-        damageMul: 2.3, width: 84, distance: 700, knock: 105,
-        burst: { damageMul: 0.45, radius: 96 },
-        text: '末端追加一次较弱的液态爆发',
+        damageMul: 2.8, width: 88, distance: 720, knock: 108,
+        burst: { damageMul: 0.55, radius: 104 },
+        text: '末端追加一次液态爆发',
       },
     ],
   },
@@ -112,17 +112,17 @@ export const ORIGIN_SOURCE_SKILLS = Object.freeze([
     iconKey: 'aperture',
     color: '#a29bfe',
     exec: 'collapse',
-    castRange: 520,
+    castRange: 540,
     tags: ['源质记忆', '大法师', '延迟爆发'],
     desc: '在敌人最密集处凝出一枚凝胶化的奥术原核，先向内坍缩，再向外炸开成一圈液态冲击。',
     trigger: '超载时自动释放：在敌人密集处生成坍缩原核',
     levels: [
-      { damageMul: 2.4, radius: 112, delay: 0.5, text: '单次坍缩，范围爆发' },
-      { damageMul: 2.9, radius: 132, delay: 0.5, text: '范围与伤害提高' },
+      { damageMul: 2.8, radius: 118, delay: 0.46, text: '单次坍缩，范围爆发' },
+      { damageMul: 3.4, radius: 138, delay: 0.46, text: '范围与伤害提高' },
       {
-        damageMul: 3.2, radius: 148, delay: 0.48,
-        extra: { damageMul: 0.4, radius: 168, delay: 0.3 },
-        text: '坍缩后追加一次较弱的扩散冲击',
+        damageMul: 3.9, radius: 154, delay: 0.44,
+        extra: { damageMul: 0.5, radius: 176, delay: 0.28 },
+        text: '坍缩后追加一次扩散冲击',
       },
     ],
   },
@@ -142,18 +142,18 @@ export const ORIGIN_SOURCE_SKILLS = Object.freeze([
     desc: '体表凝出数枚凝胶棘刺弹射而出，各自追猎不同目标，命中后炸开一小片黏液。',
     trigger: '超载时自动释放：向不同目标射出追踪棘刺',
     levels: [
-      { count: 3, damageMul: 1.7, splash: 0.3, splashRadius: 34, speed: 520, pierces: 0, text: '发射 3 枚追踪棘刺' },
-      { count: 4, damageMul: 2.0, splash: 0.32, splashRadius: 38, speed: 560, pierces: 0, text: '数量与伤害提高' },
-      { count: 5, damageMul: 2.2, splash: 0.35, splashRadius: 42, speed: 620, pierces: 1, text: '最多 5 枚，并提高追踪与穿透' },
+      { count: 4, damageMul: 2.0, splash: 0.35, splashRadius: 38, speed: 540, pierces: 0, text: '发射 4 枚追踪棘刺' },
+      { count: 5, damageMul: 2.4, splash: 0.38, splashRadius: 42, speed: 580, pierces: 0, text: '数量与伤害提高' },
+      { count: 6, damageMul: 2.8, splash: 0.42, splashRadius: 46, speed: 640, pierces: 1, text: '最多 6 枚，并提高追踪与穿透' },
     ],
   },
 ])
 
 export const ORIGIN_BASIC_WAVE = Object.freeze({
   id: 'native_wave', name: '原质冲波', cardId: 'origin_discovery', basic: true, icon: '🌊', iconKey: 'waves',
-  color: '#5ad1c8', exec: 'breach', castRange: 500, source: '原生能力',
+  color: '#5ad1c8', exec: 'breach', castRange: 520, source: '原生能力',
   desc: '向敌人推出一道原质冲击波。',
-  levels: [{ damageMul: 1.2, width: 48, distance: 500, knock: 40 }],
+  levels: [{ damageMul: 1.75, width: 58, distance: 520, knock: 48 }],
 })
 export const ORIGIN_SOURCE_BY_ID = Object.freeze(
   Object.fromEntries([...ORIGIN_SOURCE_SKILLS, ORIGIN_BASIC_WAVE].map(skill => [skill.id, skill]))
@@ -301,10 +301,10 @@ export function learnOriginMemory(game, memoryId) {
 
 /** 一次超载的乘区预算硬上限（不含 passiveDamageScale 基准系数）。 */
 export const ORIGIN_OVERLOAD_BUDGET = Object.freeze({
-  /** 一次超载：路线 × 棱镜 × 调谐 × 同化/共振 合计伤害乘区 ≤ 1.8。 */
-  damageCap: 1.8,
-  /** 一次超载：范围乘区合计 ≤ 1.35。 */
-  areaCap: 1.35,
+  /** 一次超载：路线 × 棱镜 × 调谐 × 同化/共振 合计伤害乘区 ≤ 2.4。 */
+  damageCap: 2.4,
+  /** 一次超载：范围乘区合计 ≤ 1.45。 */
+  areaCap: 1.45,
 })
 
 /**
@@ -344,7 +344,7 @@ export function originSourceCastMods(game, snapshot = null) {
   } else if (route === 'resonance') {
     // 共振核心+超载爆发的回路增伤作用于源质技能（合计封顶 30%）；
     // 单次伤害整体 ×0.9 在封顶后结算，换更高超载频率的代价始终成立。
-    damage *= 1 + Math.min(0.3, growth.circuitDamage * circuits)
+    damage *= 1 + Math.min(0.45, growth.circuitDamage * circuits)
     if (circuits >= ORIGIN_RULES.resonanceMaxCircuits) {
       echo = true
       consumeCircuits = true
@@ -412,7 +412,7 @@ export function originMemoryCard(game, def) {
     isBossSkill: false,
     tags: [...def.tags, '超载释放'],
     stats: originMemoryStats(def, level),
-    buildNote: '首领源质不占普通升级次数；掌握额外能力后本体飞弹伤害为65%，输出转向超载连招。',
+    buildNote: '首领源质不占普通升级次数；掌握额外能力后本体飞弹伤害为88%，输出转向超载连招。',
   }
 }
 

@@ -1,3 +1,6 @@
+import { PET_ROSTER_BY_ID } from './PetRoster.js'
+import { unlockedSquadSlots } from './SymbiosisBuild.js'
+
 /** Six starting identities, four bounded tomes each. Rank values are totals. */
 export const BOSS_TOME_MAX_LEVEL = 3
 export const RICOCHET_RECHARGE_RANKS = [
@@ -49,17 +52,30 @@ export const BOSS_TOMES = {
     tome('shadow', 'boss_shadow_cloak', '长夜披风', '🌘', '闪避后的虚化窗口更长，满级后提高撤离速度并强化暗影魔盾充能。', ['闪避虚化0.2 → 0.3秒', '虚化0.3 → 0.4秒', '闪避后额外移速 +20% · 持续2秒 · 闪避额外加速魔盾充能 1 秒']),
   ],
   summoner: [
-    tome('summoner', 'boss_pet_unity', '群心契约', '🐾', '增强伙伴普通攻击，并强化每次鼓舞后的首次攻击。', ['伙伴普通攻击伤害 +12%', '伙伴普攻增伤12% → 20%', '每次鼓舞时存活伙伴的首次普攻额外 +40%']),
-    tome('summoner', 'boss_pet_command', '疾令契约', '⚑', '加快鼓舞循环，满级后协同伙伴的支援技能。', ['鼓舞冷却−8%', '鼓舞冷却缩减8% → 15%', '成功鼓舞时，伙伴支援技能剩余冷却−2秒']),
-    tome('summoner', 'boss_pet_vitality', '生命纽带', '♥', '提高本体生命上限，满级后鼓舞获得短时护盾。', ['本体生命上限 +1（补齐新增生命）', '生命上限总加成 +1 → +2', '鼓舞后护盾1点 · 持续3秒 · 独立冷却12秒']),
-    tome('summoner', 'boss_pet_roster', '万灵契约', '♧', '随机招募未拥有的伙伴并培养全队；满员时招募转为一次伙伴治疗。', ['招募1名未拥有伙伴 · 伙伴生命 +10%', '再招募1名 · 伙伴生命总加成10% → 20%', '再招募1名 · 伙伴生命总加成30% · 复苏后2秒承伤−25%']),
+    tome('summoner', 'boss_pet_unity', '群心契约', '🐾', '全面强化本体与全体伙伴伤害，满级后鼓舞赋予以战养战暴击爆发。', [
+      '本体与伙伴伤害 +12%',
+      '本体与伙伴增伤 12% → 20%',
+      '鼓舞开启后 4 秒内全队及本体暴击率 +20%',
+    ]),
+    tome('summoner', 'boss_pet_command', '疾令契约', '⚑', '加快鼓舞循环节奏，满级后开启鼓舞时减缩全队特技冷却。', [
+      '鼓舞冷却 −8%',
+      '鼓舞冷却缩减 8% → 15%',
+      '成功鼓舞时，所有存活伙伴主动特技剩余冷却 −1 秒',
+    ]),
+    tome('summoner', 'boss_pet_vitality', '灵盾纽带', '♥', '提高本体生命上限并周期铸造真实灵盾，满级后护盾触发震荡波。', [
+      '本体生命上限 +1 · 每 14 秒获 1 点真实护盾（持续 4 秒）',
+      '生命上限总加成 +2 · 护盾周期缩至 10 秒',
+      '灵盾挡伤/触发或释放鼓舞时，冲击周围 160px 敌群（1.5× 伤害＋轻推）',
+    ]),
+    tome('summoner', 'boss_pet_roster', '万灵契约', '♧', '强化全队生命韧性；未满编开启 3 选 1 伙伴选秀，满编 4 人晋升 🌟 星辰形态。', [
+      '伙伴生命 +12% · 未满 4 人触发 3 选 1 选秀，满编则随机晋升 1 位 🌟 星辰形态',
+      '伙伴生命总加成 +24% · 再触发 1 次选秀或 🌟 星辰晋升',
+      '伙伴生命总加成 +36% · 复苏后 2 秒承伤 −25% · 再触发 1 次选秀或 🌟 星辰晋升',
+    ]),
   ],
 }
 export const BOSS_TOME_BY_ID = Object.fromEntries(Object.values(BOSS_TOMES).flat().map(s => [s.id, s]))
 export const tomeLevel = (game, id) => Math.max(0, Math.min(3, game?.bossSkillLevels?.[id] || 0))
-export const PARTNER_TOME_CHOICES = [
-  ['pet_partner', '疾风芽芽'], ['pet_dew_partner', '甘露啵啵'], ['pet_spore_partner', '孢云菇菇'],
-]
 export function rollBossTomes(game, count = 3, random = Math.random) {
   const strain = game.startingStrain || game.player?.strainId || 'origin'
   const pool = (BOSS_TOMES[strain] || []).filter(s => tomeLevel(game, s.id) < 3).slice()
@@ -72,11 +88,20 @@ export function rollBossTomes(game, count = 3, random = Math.random) {
     const s = pool.splice(index, 1)[0], level = tomeLevel(game, s.id)
     const card = { ...s, level, stats: s.ranks[level], buildNote: '随机职业秘典 · 可升级至 Lv.3 · 不占用普通升级次数' }
     if (s.id === 'boss_pet_roster') {
-      const candidates = PARTNER_TOME_CHOICES.filter(([id]) => !(game.skillLevels?.[id] > 0))
-      const recruit = candidates[Math.min(candidates.length - 1, Math.floor(random() * candidates.length))]
-      card.partnerSkillId = recruit?.[0] || null
-      card.recruitName = recruit?.[1] || null
-      card.stats += recruit ? ` · 本次招募：${recruit[1]}` : ' · 已满员：全体伙伴恢复25%生命'
+      const petCombat = game.weaponSystem?.petCombat
+      const roster = petCombat?.squadTypes || ['guardian']
+      if (roster.length < 4 && unlockedSquadSlots(game) < 4) {
+        card.draftGrant = true
+        card.stats += ' · 本次立即开启 3 选 1 伙伴选秀'
+      } else {
+        const candidates = roster.filter(type => !petCombat?.starPets?.has(type))
+        const starType = candidates.length
+          ? candidates[Math.min(candidates.length - 1, Math.floor(random() * candidates.length))]
+          : null
+        card.starPetType = starType
+        card.starPetName = starType ? (PET_ROSTER_BY_ID[starType]?.name || starType) : null
+        card.stats += card.starPetName ? ` · 本次晋升：🌟 ${card.starPetName}` : ' · 全队星辰圆满：全体恢复满血'
+      }
     }
     cards.push(card)
   }

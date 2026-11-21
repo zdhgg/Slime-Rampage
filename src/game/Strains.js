@@ -29,8 +29,8 @@ import { disableGluttonResource, resetGluttonResource } from './GluttonResource.
 export const STRAINS = {
   summoner: {
     id: 'summoner', name: '共生史莱姆', icon: '🐾', roleSpec: 'symbiosis',
-    bodyProjectileDamageMul: 0.55,
-    desc: '开局携带近战护卫岩甲团团；升级与 BOSS 秘典随机招募疾风、甘露和孢云伙伴，同时探索追猎、孢潮、守望三条路线。第 6 波／远征第 3 章后确认路线，后续路线进阶与伙伴契约继续随机出现。每种伙伴一只，最多四只，倒地 8 秒后恢复。空格释放共生鼓舞，提高全体伙伴的攻击力、攻速和移速；本体飞弹伤害降低 45%。',
+    bodyProjectileDamageMul: 0.72,
+    desc: '开局携带岩甲团团，随等级从 8 名各具绝活的伙伴池中阶梯选秀组成 4 人小队并激活职能羁绊；本体可使用猎人战术技削弱敌群、误导聚怪与治疗伙伴，并在第 6 波／远征第 3 章后选择【万兽统领 / 借灵游侠 / 双生协奏】三条主副分工迥异的路线。',
     tint: 'rgba(237,196,121,0.25)', deco: null,
   },
   origin: {
@@ -72,7 +72,7 @@ export const STRAINS = {
     id: 'elemental',
     name: '元素史莱姆',
     icon: '🔮',
-    desc: '开局使用原质飞弹，自带 1 点法术护盾，破盾后 8 秒重建。Lv.2 选择首系法术；随后随机发现元素与本系强化，可走单系极化、双系融合或多系轮转。第 6 波／远征第 3 章确认路线，中后期不再更改，互斥终极随机出现。暴击率 +8%，生命 −1。',
+    desc: '开局使用原质飞弹并自带 1 层法术护盾，破盾后 7 秒重建（主动技推进 2 秒）。Lv.2 开启四系专精并自带各系引擎雏形，随后可兼修至多 2 门带战术联动的他系基础法术；第 6 波／远征第 3 章选定专精分支升华并逐步解锁终极奥义。暴击率 +8%，生命 −1。',
     roleSpec: 'elemental',
     critChance: 0.08,
     maxHp: -1,

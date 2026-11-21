@@ -12,7 +12,7 @@ const pendingDelete = ref('')
 const closeButton = ref(null)
 const occupiedCount = computed(() => props.slots.filter(Boolean).length)
 
-const MODE_NAMES = { expedition: '远征', timed: '限时', endless: '无尽' }
+const MODE_NAMES = { expedition: '远征', timed: '限时', timed20: '限时20分', endless: '无尽' }
 const DIFFICULTY_NAMES = { normal: '普通', hard: '困难', nightmare: '噩梦', hell: '地狱' }
 
 function geneLevels(slot) {

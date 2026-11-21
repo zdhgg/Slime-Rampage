@@ -14,10 +14,11 @@ import {
 import {
   DIFFICULTY_IDS,
   MODE_IDS,
-  RUN_DURATION,
   getExpeditionStages,
+  getTimedDuration,
   isDifficultyUnlocked,
   isModeUnlocked,
+  isTimedMode,
   normalizeRunSelection,
   scoreToPoints,
 } from '../src/game/RunRules.js'
@@ -137,7 +138,7 @@ function sanitizeSubmission(raw, ticket) {
   if (clean.mode === 'endless' && clean.result === 'victory') {
     throw new HttpError(422, 'implausible_run', '无尽模式不存在通关结算')
   }
-  if (clean.mode === 'timed' && clean.result === 'victory' && clean.time < RUN_DURATION - 5) {
+  if (isTimedMode(clean.mode) && clean.result === 'victory' && clean.time < getTimedDuration(clean.mode) - 5) {
     throw new HttpError(422, 'implausible_run', '限时模式通关时间不足')
   }
   if (

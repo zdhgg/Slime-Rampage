@@ -12,7 +12,7 @@ import { routeIconId } from './skillIconRegistry.js'
 import { Check, Pause, Play, Volume2, VolumeX } from 'lucide-vue-next'
 import { SPEC_INFO, getSpecInfo } from '../game/SkillPool.js'
 import { ORIGIN_ROUTES, ORIGIN_MARKS } from '../game/OriginBuild.js'
-import { formatRunClock } from '../game/RunRules.js'
+import { formatRunClock, isTimedMode } from '../game/RunRules.js'
 import { DIGEST_EFFECTS } from '../game/ElementSystem.js'
 
 const props = defineProps({
@@ -77,7 +77,7 @@ const ELEMENTS = [
 const runStatusText = computed(() => {
   const run = props.stats.run
   if (!run) return ''
-  if (run.mode === 'timed') {
+  if (isTimedMode(run.mode)) {
     if (run.state === 'finale') return `终局 ${formatRunClock(run.finaleTime)}`
     return `剩余 ${formatRunClock(Math.ceil(run.remaining || 0))}`
   }
@@ -424,7 +424,7 @@ const originMemoryChip = (slot) => ({
         </div>
         <div v-if="stats.symbiosis" class="hud-symbiosis-build" :style="{ '--symbiosis-color': stats.symbiosis.color }" :title="stats.symbiosis.note">
           <SkillIcon :skill="{ id: routeIconId('symbiosis', stats.symbiosis.route), spec: 'symbiosis', route: stats.symbiosis.route }" size="inline" />
-          <span><b>{{ stats.symbiosis.name }}</b><small v-if="stats.symbiosis.route">投入 {{ stats.symbiosis.investment }}/4 · {{ stats.symbiosis.ultimate ? `终极：${stats.symbiosis.ultimateName}` : stats.symbiosis.ultimateReady ? '终极已进入随机池' : '终极进度未达标' }}</small><small v-else>随机组队 · {{ stats.symbiosis.normalChoices < 5 ? `还需选卡 ${5 - stats.symbiosis.normalChoices} 次` : stats.symbiosis.routeReady ? '下次选卡确认路线' : '等待第 6 波／第 3 章' }}</small></span>
+          <span><b>{{ stats.symbiosis.name }}</b><small v-if="stats.symbiosis.route">{{ stats.symbiosis.roleBadge }} · 投入 {{ stats.symbiosis.investment }}/4 · {{ stats.symbiosis.ultimate ? `终极：${stats.symbiosis.ultimateName}` : stats.symbiosis.ultimateReady ? '终极已进入随机池' : '终极进度未达标' }}{{ stats.symbiosis.synergies?.length ? ` · 羁绊：${stats.symbiosis.synergies.join('／')}` : '' }}{{ stats.symbiosis.playerShield > 0 ? ` · 灵盾 ${stats.symbiosis.playerShield}` : '' }}</small><small v-else>8 选 4 小队（{{ stats.symbiosis.squadCount }}/4 · {{ stats.symbiosis.nextDraftHint }}）· {{ stats.symbiosis.normalChoices < 5 ? `还需选卡 ${5 - stats.symbiosis.normalChoices} 次` : stats.symbiosis.routeReady ? '下次选卡确认路线' : '等待第 6 波／第 3 章' }}{{ stats.symbiosis.synergies?.length ? ` · ${stats.symbiosis.synergies.join('／')}` : '' }}</small></span>
         </div>
         <div v-if="stats.shadow" class="hud-shadow-build" :style="{ '--shadow-color': stats.shadow.routeColor || '#bdacd0' }" :title="stats.shadow.route ? `${stats.shadow.routeName} · ${stats.shadow.routeInvestment}/4 · ${stats.shadow.ultimateName || '互斥终极未获得'}` : '暗影路线探索与锁定进度'">
           <SkillIcon :skill="{ id: routeIconId('assassin', stats.shadow.route), spec: 'assassin', route: stats.shadow.route }" size="inline" />
@@ -434,19 +434,17 @@ const originMemoryChip = (slot) => ({
             <small v-else>入口 {{ stats.shadow.entryCount }}/3 · {{ stats.shadow.normalChoices < 5 ? `还需选卡 ${5 - stats.shadow.normalChoices} 次` : stats.shadow.routeReady ? '下次选卡确认路线' : '等待第 6 波／第 3 章' }}</small>
           </span>
         </div>
-        <div v-if="stats.spells" class="hud-spell-build" :title="`当前配色：${stats.spells.palette?.name || '基础元素'}`">
-          <div v-if="stats.spells.route" class="hud-element-route" :style="{ '--element-route-color': stats.spells.routeColor }">
-            <b><SkillIcon :skill="{ id: routeIconId('elemental', stats.spells.route), spec: 'elemental', route: stats.spells.route }" size="inline" /> {{ stats.spells.routeName }}</b><small>投入 {{ stats.spells.routeInvestment }}/4 · {{ stats.spells.routeUltimate ? `终极：${stats.spells.activeName}` : stats.spells.routeInvestment >= 4 ? '终极等待战局门槛与随机出现' : '路线进阶继续成长' }}</small>
+        <div v-if="stats.spells" class="hud-spell-build" :title="stats.spells.buildNote || '元素专精构筑'">
+          <div v-if="stats.spells.route" class="hud-element-route" :style="{ '--element-route-color': stats.spells.branchColor || stats.spells.schoolColor }">
+            <b><SkillIcon :skill="{ id: routeIconId('elemental', stats.spells.route), spec: 'elemental', route: stats.spells.route }" size="inline" /> {{ stats.spells.branchName || stats.spells.routeName }}</b><small>投入 {{ stats.spells.routeInvestment }}/4 · {{ stats.spells.ultimateName ? `终极：${stats.spells.ultimateName}` : stats.spells.routeInvestment >= 4 ? '终极等待门槛与随机池' : '分支进阶持续成长' }}</small>
           </div>
-          <div v-else class="hud-element-route exploring"><b>{{ stats.spells.buildMode === 'cycle' ? '万象轮转探索中' : stats.spells.buildMode === 'fusion' ? '双系融合探索中' : '单系极化探索中' }}</b><small>{{ stats.spells.normalChoices < 5 ? `还需选卡 ${5 - stats.spells.normalChoices} 次` : '等待第 6 波／第 3 章确认路线' }}</small></div>
+          <div v-else class="hud-element-route exploring"><b>{{ stats.spells.school ? `${stats.spells.schoolName}探索中` : 'Lv.2 四系定专精' }}</b><small>{{ stats.spells.normalChoices < (stats.spells.choicesBeforeBranch || 5) ? `选卡 ${stats.spells.normalChoices}/${stats.spells.choicesBeforeBranch || 5}` : '等待第 6 波／第 3 章升华' }}</small></div>
           <div class="hud-spell-slots">
-            <span v-for="el in stats.spells.elements" :key="el.id" :style="{ '--spell-color': el.color }" :title="`${el.desc} 自动施法间隔 ${el.interval.toFixed(2)} 秒 · ${el.enhancements || '基础法术'} · 核心改造 ${el.rank}/3`"><SkillIcon :skill="{ id: el.id, spec: 'elemental', element: el.id }" size="inline" /><b>{{ el.spell }}</b><small v-if="el.enhancements">{{ el.enhancements }}</small><small v-else-if="el.rank">改造 {{ el.rank }}</small></span>
-            <span v-if="stats.spells.elements.length === 0" class="spell-slot-empty">◇<b>原质飞弹</b><small>Lv.2 发现首系</small></span>
-            <span v-if="stats.spells.route === 'cycle' && stats.spells.elements.length < 3" class="spell-slot-empty">◇<small>继续发现第三系</small></span>
+            <span v-if="stats.spells.school" :style="{ '--spell-color': stats.spells.schoolColor }" :title="stats.spells.buildNote"><SkillIcon :skill="{ id: stats.spells.school === 'ice' ? 'water' : stats.spells.school, spec: 'elemental', element: stats.spells.school }" size="inline" /><b>{{ stats.spells.schoolName }}</b><small v-if="stats.spells.hotStreak">连击 {{ stats.spells.hotStreak }}/2</small><small v-else>{{ stats.spells.activeName }}</small></span>
+            <span v-else class="spell-slot-empty">◇<b>原质飞弹</b><small>Lv.2 选四系专精</small></span>
+            <span v-for="(cname, cidx) in (stats.spells.cantripNames || [])" :key="cidx" :style="{ '--spell-color': '#b6a4ff' }"><b>{{ cname }}</b><small>兼修</small></span>
           </div>
-          <p v-if="stats.spells.fusion" :title="stats.spells.fusion.desc"><b>{{ stats.spells.fusion.name }}</b><span>核心 {{ stats.spells.cores }} · {{ stats.spells.activeRank >= 3 ? '融合术已进化' : '融合反应持续成长' }}</span></p>
-          <p v-else><span>{{ stats.spells.buildMode === 'cycle' ? '多系法术按顺序轮转施放' : '基础法术自动施放 · 空格原质释放' }}</span></p>
-
+          <p v-if="stats.spells.school"><span>兼修 {{ (stats.spells.crossCantrips || []).length }}/{{ stats.spells.maxCantrips || 2 }}<template v-if="stats.spells.scholarBonusPct > 0">（主系 +{{ stats.spells.scholarBonusPct }}%）</template></span></p>
         </div>
         <!-- 元素指示：点亮已吸收的元素并显示等级（评审 Day 2：💧2 ⚡3）
              第三批角色化：暴食/弹射/暗影不使用元素，整组圆点隐藏（灰显占位会误导） -->
@@ -498,47 +496,61 @@ const originMemoryChip = (slot) => ({
           <b v-if="digestRatio >= 1">{{ stats.elements.length ? '爆发就绪' : '待吸收元素' }}</b>
           <b v-else>{{ Math.round(digestRatio * 100) }}%</b>
         </div>
-        <!-- 异源能量：按一次超载费用显示，额外能量单独显示 -->
+        <!-- 异源能量：按一次超载费用显示，额外能量单独显示，支持充能/启动/冷却流光态 -->
         <div
           v-if="stats.strainId === 'origin'"
           class="hud-primal"
-          :class="{ ready: primalReady, full: (stats.origin?.energy ?? stats.primal?.value ?? 0) >= (stats.origin?.max ?? stats.primal?.max ?? 100) }"
+          :class="{
+            ready: primalReady,
+            windup: stats.origin?.passive?.state === 'windup',
+            cooling: stats.origin?.passive?.state === 'cooldown',
+            full: (stats.origin?.energy ?? stats.primal?.value ?? 0) >= (stats.origin?.max ?? stats.primal?.max ?? 100),
+          }"
           :title="primalTitle"
         >
-          <span>🫧 超载<span v-if="primalReserve"> +{{ primalReserve }}</span></span>
+          <span class="primal-label">🫧 超载<em v-if="primalReserve" class="primal-reserve">+{{ primalReserve }}</em></span>
           <i><em :style="{ width: Math.round(primalRatio * 100) + '%' }"></em></i>
           <b>{{ primalStatus }}</b>
         </div>
-        <div v-if="stats.strainId === 'origin' && stats.origin?.combo?.inject?.primary" class="hud-specs">
-          <span class="spec-chip secondary" title="主技能注入第 1 位元素、协同注入第 2 位、第三技能注入第 3 位；同一目标集齐组合元素即触发连招">
-            {{ ELEMENTS.find(item => item.id === stats.origin.combo.inject.primary)?.icon }} 超载注入
-            <template v-if="stats.origin.combo.reactionName"> · {{ stats.origin.combo.reactionName }}</template>
-          </span>
-        </div>
-        <div v-if="stats.strainId === 'origin' && stats.origin?.combo?.tripleUnlocked" class="hud-specs">
-          <span class="spec-chip secondary" title="每第三次成功超载追加一项不同协同技能">
-            ✨ 三重超载 {{ stats.origin.combo.tripleCount }}/3
-          </span>
-        </div>
-        <!-- 原生路线/印记/碎片：不显示职业主副专精，只显示液态变异方向 -->
-        <div v-if="stats.strainId === 'origin' && (originRouteInfo || originMarkInfo || originFragments.length)" class="hud-specs">
-          <span v-if="originRouteInfo" class="spec-chip primary" :title="originRouteInfo.desc" :style="{ '--spec-color': originRouteInfo.color }">
+        <!-- 原生路线/印记/碎片/注入/三重超载统一紧凑玻璃胶囊组 -->
+        <div
+          v-if="stats.strainId === 'origin' && (originRouteInfo || originMarkInfo || originFragments.length || stats.origin?.combo?.inject?.primary || stats.origin?.combo?.tripleUnlocked)"
+          class="hud-specs hud-origin-chips"
+        >
+          <span v-if="originRouteInfo" class="origin-chip route" :title="originRouteInfo.desc" :style="{ '--spec-color': originRouteInfo.color }">
             <SkillIcon :skill="`spec_origin_route_${originRouteInfo.id}`" size="inline" /> {{ originRouteInfo.name }}
           </span>
-          <span v-for="frag in originFragments" :key="frag.id" class="spec-chip secondary" :title="frag.title" :style="{ '--spec-color': frag.color }">
+          <span v-for="frag in originFragments" :key="frag.id" class="origin-chip" :title="frag.title" :style="{ '--spec-color': frag.color }">
             <SkillIcon :skill="frag.skillId" size="inline" /> {{ frag.name }}
           </span>
-          <span v-if="originMarkInfo" class="spec-chip secondary" :title="originMarkInfo.desc" :style="{ '--spec-color': originMarkInfo.color }">
+          <span v-if="originMarkInfo" class="origin-chip mark" :title="originMarkInfo.desc" :style="{ '--spec-color': originMarkInfo.color }">
             <SkillIcon :skill="`spec_origin_mark_${originMarkInfo.id}`" size="inline" /> {{ originMarkInfo.name }}
           </span>
-          <span v-if="originMutation && originMutation.max > 0 && originMutation.stacks > 0" class="spec-chip secondary" :title="`同化层数 ${originMutation.stacks}/${originMutation.max}`">
+          <span v-if="originMutation && originMutation.max > 0 && originMutation.stacks > 0" class="origin-chip meter" :style="{ '--spec-color': '#b8e86a' }" :title="`同化层数 ${originMutation.stacks}/${originMutation.max}`">
             🧬 {{ originMutation.stacks }}/{{ originMutation.max }}
           </span>
-          <span v-if="stats.origin?.circuits > 0" class="spec-chip secondary" :title="`共振回路 ${stats.origin.circuits}/3`">
+          <span v-if="stats.origin?.circuits > 0" class="origin-chip meter" :style="{ '--spec-color': '#ffd166' }" :title="`共振回路 ${stats.origin.circuits}/3`">
             ⚡ {{ stats.origin.circuits }}/3
           </span>
+          <span
+            v-if="stats.origin?.combo?.inject?.primary"
+            class="origin-chip inject"
+            :style="{ '--spec-color': '#7ce8c8' }"
+            title="主技能注入第 1 位元素、协同注入第 2 位、第三技能注入第 3 位；同一目标集齐组合元素即触发连招"
+          >
+            {{ ELEMENTS.find(item => item.id === stats.origin.combo.inject.primary)?.icon }} 注入
+            <template v-if="stats.origin.combo.reactionName"> · {{ stats.origin.combo.reactionName }}</template>
+          </span>
+          <span
+            v-if="stats.origin?.combo?.tripleUnlocked"
+            class="origin-chip triple"
+            :style="{ '--spec-color': '#ffd166' }"
+            title="每第三次成功超载追加一项不同协同技能"
+          >
+            ✨ 三重 {{ stats.origin.combo.tripleCount }}/3
+          </span>
         </div>
-        <!-- 源质记忆（原生黏液独占）：吸收的 BOSS 源质技能 + 下一次超载释放预告 -->
+        <!-- 源质记忆（原生黏液独占）：吸收的 BOSS 源质技能 + 主/协标识 + 释放脉冲高亮 -->
         <div
           v-if="stats.strainId === 'origin' && originMemory"
           class="hud-memory"
@@ -553,6 +565,7 @@ const originMemoryChip = (slot) => ({
               class="memory-slot"
               :class="{
                 next: slot.next,
+                equipped: stats.origin?.combo?.equipped?.includes(slot.id),
                 casting: (originMemory.lastId === slot.id && originMemory.lastAge < 1.4) || (originMemory.auxiliaryId === slot.id && originMemory.auxiliaryAge < 1.4),
               }"
               :style="{ '--memory-color': slot.color }"
@@ -561,6 +574,8 @@ const originMemoryChip = (slot) => ({
               <SkillIcon :skill="originMemoryChip(slot)" size="inline" />
               <b>{{ slot.name }}</b>
               <em>Lv.{{ slot.level }}</em>
+              <i v-if="slot.next" class="slot-role main">主</i>
+              <i v-else-if="stats.origin?.combo?.equipped?.includes(slot.id)" class="slot-role aux">协</i>
             </span>
             <span class="memory-next" :title="`超载后自动释放：${originMemory.nextName}`">
               主技能：<b>{{ originMemory.nextName }}</b> · 协同随机
@@ -665,21 +680,24 @@ const originMemoryChip = (slot) => ({
     </div>
     <div v-if="cooldown.pets?.length" class="pet-status" :class="{ squad: cooldown.pets.length > 2 }" aria-label="共生伙伴状态">
       <div v-if="cooldown.petRally" class="pet-status__boost" :title="`伙伴攻击力 +${Math.round(cooldown.petRally.damage * 100)}% · 攻速 +${Math.round(cooldown.petRally.haste * 100)}% · 移速 +${Math.round(cooldown.petRally.move * 100)}%`">
-        <span>共生鼓舞</span><b>{{ cooldown.petRally.remaining.toFixed(1) }}s</b>
+        <span>{{ cooldown.petRally.name || '共生鼓舞' }}</span><b>{{ cooldown.petRally.remaining.toFixed(1) }}s</b>
         <i><em :style="{ width: (cooldown.petRally.remaining / cooldown.petRally.duration) * 100 + '%' }"></em></i>
       </div>
-      <div v-for="pet in cooldown.pets" :key="pet.id" class="pet-status__row" :class="[pet.id, { resting: pet.down > 0, boosted: pet.boosted }]">
+      <div v-if="cooldown.pets[0]?.synergies?.length" class="pet-status__synergies">
+        <span>小队羁绊</span><b>{{ cooldown.pets[0].synergies.join(' · ') }}</b>
+      </div>
+      <div v-for="pet in cooldown.pets" :key="pet.id" class="pet-status__row" :class="[pet.id, { resting: pet.down > 0, boosted: pet.boosted, star: pet.star }]">
         <span class="pet-status__crest" aria-hidden="true"></span>
         <div class="pet-status__body" :title="pet.state">
           <div class="pet-status__meta">
-            <span>{{ pet.name }}</span>
+            <span>{{ pet.star ? '★ ' : '' }}{{ pet.name }}</span>
             <small>{{ pet.role }}</small>
-            <b>{{ pet.down > 0 ? Math.ceil(pet.down) + 's 恢复' : pet.hp + '/' + pet.maxHp }}</b>
+            <b>{{ pet.down > 0 ? Math.ceil(pet.down) + 's 恢复' : pet.hp + '/' + pet.maxHp + (pet.shield > 0 ? ` +${pet.shield}盾` : '') }}</b>
           </div>
           <i class="pet-status__track"><em :style="{ width: (pet.hp / pet.maxHp) * 100 + '%' }"></em></i>
           <div class="pet-status__support" :title="pet.supportDesc" :class="{ active: pet.down <= 0 && (pet.supporting || pet.supportActive > 0) }">
             <span>{{ pet.supportName }}</span>
-            <b>{{ pet.down > 0 ? '暂歇' : pet.supporting ? '施放中' : pet.supportActive > 0 && (pet.id === 'guardian' || pet.id === 'spore' || pet.id === 'hunter') ? pet.supportActive.toFixed(1) + 's' : pet.supportCd > 0 ? Math.ceil(pet.supportCd) + 's' : '就绪' }}</b>
+            <b>{{ pet.down > 0 ? '暂歇' : pet.supporting ? '施放中' : pet.supportActive > 0 && ['guardian', 'spore', 'hunter', 'spark', 'bramble', 'frost'].includes(pet.id) ? pet.supportActive.toFixed(1) + 's' : pet.supportCd > 0 ? Math.ceil(pet.supportCd) + 's' : '就绪' }}</b>
           </div>
         </div>
       </div>
@@ -715,8 +733,8 @@ const originMemoryChip = (slot) => ({
       <i class="glutton-status__track"><em :style="{ width: Math.min(100, Math.round(((stats.boss ? cooldown.glutton.bossProgress / Math.max(1, cooldown.glutton.bossProgressPer) : cooldown.glutton.satiety / Math.max(1, cooldown.glutton.satietyMax))) * 100)) + '%' }"></em></i>
       <small>光环 {{ cooldown.glutton.auraRadius }}px · 反伤 {{ cooldown.glutton.counterCd > 0 ? cooldown.glutton.counterCd.toFixed(1) + 's' : '就绪' }}</small>
     </div>
-<div v-if="cooldown.spellShield" class="spell-shield-status" :class="{ broken: cooldown.spellShield.points <= 0 }" :title="`法术护盾吸收敌人攻击，破盾后 ${cooldown.spellShield.cooldown} 秒自动重建`" aria-label="法术护盾状态">
-            <span><SkillIcon skill="spell_shield" size="inline" /> 法术护盾</span><b>{{ Number(cooldown.spellShield.points.toFixed(1)) }}/{{ cooldown.spellShield.capacity }}</b>
+<div v-if="cooldown.spellShield" class="spell-shield-status" :class="{ broken: cooldown.spellShield.points <= 0 }" :title="`${cooldown.spellShield.label || '法术护盾'}吸收敌人攻击，破盾后 ${cooldown.spellShield.cooldown} 秒自动重建`" aria-label="法术护盾状态">
+            <span><SkillIcon skill="spell_shield" size="inline" /> {{ cooldown.spellShield.label || '法术护盾' }}</span><b>{{ Number(cooldown.spellShield.points.toFixed(1)) }}/{{ cooldown.spellShield.capacity }}</b>
             <small>{{ cooldown.spellShield.points > 0 ? '保护中' : `重建 ${Math.ceil(cooldown.spellShield.remaining)} 秒` }}</small>
             <i v-if="cooldown.spellShield.points <= 0"><em :style="{ width: `${100 * (1 - cooldown.spellShield.remaining / cooldown.spellShield.cooldown)}%` }"></em></i>
           </div>
@@ -746,7 +764,7 @@ const originMemoryChip = (slot) => ({
             <span class="boss-cast-name">{{ bossCast.skill }}<template v-if="bossCast.caster"> · {{ bossCast.caster }}</template></span>
             <div class="boss-cast-track"><em :style="{ width: Math.round(cooldown.cast * 100) + '%' }"></em></div>
           </div>
-          <div v-if="stats.boss.total > 1" class="boss-members">
+          <div v-if="stats.boss.total > 1" class="boss-members" :class="{ quad: stats.boss.members.length >= 4 }">
             <div
               v-for="member in stats.boss.members"
               :key="member.id"
@@ -868,11 +886,11 @@ const originMemoryChip = (slot) => ({
 .hud-shadow-build b { display:block; color:var(--shadow-color); font-size:12px; }
 .hud-shadow-build small { display:block; margin-top:2px; color:rgba(233,232,244,.66); font-size:10px; }
 
-.hud-spell-build { display: flex; flex-direction: column; gap: 5px; }.hud-spell-slots { display: flex; gap: 6px; }
-.hud-element-route { display:flex; flex-direction:column; gap:2px; padding:4px 7px; border-left:2px solid var(--element-route-color,#b6a4ff); background:color-mix(in srgb,var(--element-route-color,#b6a4ff) 8%,transparent); }.hud-element-route b { color:var(--element-route-color,#d4caff); font-size:10px; }.hud-element-route small { color:#a39aac; font-size:9px; }.hud-element-route.exploring { --element-route-color:#aaa0c4; }
-.hud-spell-slots > span { display: flex; gap: 5px; align-items: center; min-height: 30px; padding: 3px 8px; border: 1px solid #494351; border-radius: 5px; background: rgb(18 17 23 / .8); color: var(--spell-color, #82798e); }
-.hud-spell-slots i { font-style: normal; font-size: 14px; }.hud-spell-slots b { font-size: 11px; font-weight: 600; }.hud-spell-slots small { color: #a39aac; font-size: 9px; }.hud-spell-slots .spell-slot-empty { border-style: dashed; }
-.hud-spell-build p { display: flex; gap: 8px; margin: 0; font-size: 10px; color: #98909f; }.hud-spell-build p b { font-weight: 600; color: #c8b9df; }
+.hud-spell-build { display: flex; flex-direction: column; gap: 5px; }.hud-spell-slots { display: flex; flex-wrap: wrap; gap: 6px; }
+.hud-element-route { display:flex; flex-direction:column; gap:2px; padding:5px 9px; border-radius:6px; border:1px solid color-mix(in srgb,var(--element-route-color,#b6a4ff) 42%,transparent); border-left:3px solid var(--element-route-color,#b6a4ff); background:rgba(14,16,24,.84); }.hud-element-route b { color:var(--element-route-color,#e6dcff); font-size:11px; }.hud-element-route small { color:rgba(232,229,245,.78); font-size:10px; }.hud-element-route.exploring { --element-route-color:#b6a4ff; }
+.hud-spell-slots > span { display: flex; gap: 5px; align-items: center; min-height: 30px; padding: 3px 8px; border: 1px solid #494351; border-radius: 5px; background: rgb(18 17 23 / .86); color: var(--spell-color, #82798e); }
+.hud-spell-slots i { font-style: normal; font-size: 14px; }.hud-spell-slots b { font-size: 11px; font-weight: 600; }.hud-spell-slots small { color: #d1cadc; font-size: 9px; }.hud-spell-slots .spell-slot-empty { border-style: dashed; }
+.hud-spell-build p { display: inline-flex; width: fit-content; gap: 8px; margin: 0; padding: 3px 8px; border-radius: 5px; background: rgba(14,16,24,.8); font-size: 10px; color: #dcd6e8; }.hud-spell-build p b { font-weight: 600; color: #ece4ff; }
 .spell-shield-status { position: absolute; left: 24px; bottom: 78px; display: flex; align-items: center; gap: 6px; padding: 6px 9px; border: 1px solid #494351; border-radius: 5px; background: rgb(18 17 23 / .85); font-size: 10px; color: #c8b9df; }
 .spell-shield-status b { font-size: 11px; }.spell-shield-status small { color: #a7a0b2; font-size: 9px; }
 .spell-shield-status.broken { color: #8d8497; }.spell-shield-status i { width: 42px; height: 3px; background: #38303e; border-radius: 2px; overflow: hidden; }
@@ -1592,52 +1610,124 @@ const originMemoryChip = (slot) => ({
 }
 
 .hud-primal {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
+  padding: 3px 10px 3px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(140, 255, 200, 0.24);
+  background: linear-gradient(90deg, rgba(16, 36, 36, 0.72), rgba(14, 24, 28, 0.65));
   font-size: 10.5px;
-  color: rgba(140, 255, 200, 0.86);
-  letter-spacing: 1px;
+  color: rgba(154, 255, 212, 0.92);
+  letter-spacing: 0.6px;
   white-space: nowrap;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.hud-primal .primal-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 800;
+}
+
+.hud-primal .primal-reserve {
+  font-style: normal;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: rgba(140, 255, 200, 0.16);
+  color: #b7ffe0;
+  font-size: 9.5px;
+  font-weight: 800;
 }
 
 .hud-primal i {
   display: block;
-  width: 76px;
-  height: 5px;
+  width: 84px;
+  height: 6px;
   border-radius: 999px;
   overflow: hidden;
   background: rgba(255, 255, 255, 0.12);
   /* 5 格 × 20：分段刻度线 */
-  outline: 1px solid rgba(140, 255, 200, 0.18);
-  background-image: repeating-linear-gradient(90deg, transparent 0 14px, rgba(0, 0, 0, 0.55) 14px 15px);
-  background-size: 15px 100%;
+  outline: 1px solid rgba(140, 255, 200, 0.22);
+  background-image: repeating-linear-gradient(90deg, transparent 0 16px, rgba(0, 0, 0, 0.5) 16px 17px);
+  background-size: 17px 100%;
 }
 
 .hud-primal em {
   display: block;
   height: 100%;
   border-radius: 999px;
-  background: linear-gradient(90deg, #4dd0e1, #8cffc8);
-  transition: width 0.2s ease;
+  background: linear-gradient(90deg, #38bdf8, #5ad1c8, #8cffc8);
+  transition: width 0.18s ease;
 }
 
 .hud-primal b {
-  font-size: 10px;
-  font-weight: 700;
-  color: rgba(255, 255, 255, 0.68);
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 9.5px;
+  font-weight: 800;
+  color: rgba(232, 250, 244, 0.85);
 }
 
 .hud-primal.ready {
-  color: #8cffc8;
+  color: #b5ffe0;
+  border-color: rgba(140, 255, 200, 0.52);
+  box-shadow: 0 0 12px rgba(90, 209, 200, 0.28);
 }
 
 .hud-primal.ready em {
   background: linear-gradient(90deg, #8cffc8, #ffd166);
 }
 
+.hud-primal.ready b {
+  background: rgba(140, 255, 200, 0.22);
+  color: #ecfff7;
+}
+
+.hud-primal.windup {
+  border-color: #ffd166;
+  box-shadow: 0 0 14px rgba(255, 209, 102, 0.45);
+}
+
+.hud-primal.cooling {
+  border-color: rgba(140, 255, 200, 0.16);
+}
+
 .hud-primal.full {
   animation: digestPulse 1s ease-in-out infinite alternate;
+}
+
+.hud-origin-chips {
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.origin-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+  cursor: help;
+  color: #ecfff7;
+  background: color-mix(in srgb, var(--spec-color, #5ad1c8) 18%, rgba(12, 22, 26, 0.78));
+  border: 1px solid color-mix(in srgb, var(--spec-color, #5ad1c8) 52%, transparent);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--spec-color, #5ad1c8) 16%, transparent);
+}
+
+.origin-chip.route {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--spec-color, #5ad1c8) 36%, rgba(12, 22, 26, 0.86)), color-mix(in srgb, var(--spec-color, #5ad1c8) 18%, rgba(12, 22, 26, 0.86)));
+  border-color: color-mix(in srgb, var(--spec-color, #5ad1c8) 76%, transparent);
+}
+
+.origin-chip.triple {
+  color: #fff1b8;
 }
 
 @keyframes digestPulse {
@@ -1697,13 +1787,14 @@ const originMemoryChip = (slot) => ({
 .hud-memory .memory-slot {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  padding: 1px 8px 1px 4px;
-  border: 1px solid color-mix(in srgb, var(--memory-color) 45%, transparent);
+  gap: 4px;
+  padding: 2px 8px 2px 5px;
+  border: 1px solid color-mix(in srgb, var(--memory-color) 42%, transparent);
   border-radius: 999px;
-  color: #dfeae2;
-  background: color-mix(in srgb, var(--memory-color) 12%, rgba(0, 0, 0, 0.35));
+  color: #e4f4ec;
+  background: color-mix(in srgb, var(--memory-color) 14%, rgba(10, 20, 22, 0.72));
   white-space: nowrap;
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
 }
 
 .hud-memory .memory-slot b { font-weight: 700; }
@@ -1715,23 +1806,66 @@ const originMemoryChip = (slot) => ({
   font-weight: 800;
 }
 
+.hud-memory .memory-slot .slot-role {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-style: normal;
+  font-size: 9px;
+  font-weight: 900;
+  padding: 0 4px;
+  border-radius: 4px;
+  line-height: 1.4;
+}
+
+.hud-memory .memory-slot .slot-role.main {
+  background: var(--memory-color);
+  color: #0b1e1c;
+}
+
+.hud-memory .memory-slot .slot-role.aux {
+  background: rgba(255, 255, 255, 0.14);
+  color: #d7efe6;
+}
+
 .hud-memory .memory-slot.next {
   border-color: var(--memory-color);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--memory-color) 55%, transparent);
+  background: color-mix(in srgb, var(--memory-color) 22%, rgba(10, 22, 24, 0.82));
+  box-shadow: 0 0 10px color-mix(in srgb, var(--memory-color) 50%, transparent);
 }
 
 .hud-memory .memory-slot.casting {
-  animation: memory-cast 0.5s ease-out 2;
+  animation: memory-cast 0.48s ease-out 2;
 }
 
-.hud-memory .memory-next { color: #a7b8ad; font-size: 10.5px; }
+.hud-memory .memory-next {
+  color: #b4c8be;
+  font-size: 10.5px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+}
 .hud-memory .memory-next b { color: #ffe08a; font-weight: 800; }
-.hud-memory.empty { color: #7f8f88; font-size: 10.5px; }
+.hud-memory.empty {
+  color: #93b0a6;
+  font-size: 10.5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(140, 255, 200, 0.07);
+  border: 1px solid rgba(140, 255, 200, 0.18);
+}
 .hud-memory .memory-empty { letter-spacing: 0.4px; }
 
 @keyframes memory-cast {
-  0% { background: color-mix(in srgb, var(--memory-color) 55%, rgba(0, 0, 0, 0.35)); }
-  100% { background: color-mix(in srgb, var(--memory-color) 12%, rgba(0, 0, 0, 0.35)); }
+  0% {
+    background: color-mix(in srgb, var(--memory-color) 62%, rgba(10, 22, 24, 0.5));
+    box-shadow: 0 0 16px color-mix(in srgb, var(--memory-color) 80%, transparent);
+    transform: scale(1.04);
+  }
+  100% {
+    background: color-mix(in srgb, var(--memory-color) 16%, rgba(10, 22, 24, 0.72));
+    transform: scale(1);
+  }
 }
 
 /* 元素组合激活提示（屏幕中央上方短暂浮现） */
@@ -1989,6 +2123,13 @@ const originMemoryChip = (slot) => ({
 .pet-status__row.hunter { --pet-color: #83d3bd; }
 .pet-status__row.dew { --pet-color: #8fd7e8; }
 .pet-status__row.spore { --pet-color: #c3a4dc; }
+.pet-status__row.spark { --pet-color: #f6e56d; }
+.pet-status__row.ember { --pet-color: #ff8c5a; }
+.pet-status__row.bramble { --pet-color: #74d680; }
+.pet-status__row.frost { --pet-color: #9ad9ff; }
+.pet-status__synergies { display: flex; grid-column: 1 / -1; justify-content: space-between; gap: 6px; font-size: 9px; color: rgba(242, 245, 231, 0.72); border-bottom: 1px solid rgba(237, 196, 121, 0.16); padding-bottom: 4px; margin-bottom: 2px; }
+.pet-status__synergies b { color: #ffe4a1; font-weight: 500; text-align: right; }
+.pet-status__row.star .pet-status__crest { box-shadow: 0 0 0 1px #ffd166, inset 0 2px 3px rgba(255, 255, 255, 0.35); }
 .pet-status__row + .pet-status__row { margin-top: 9px; }
 .pet-status.squad { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 18px; width: 440px; }
 .pet-status.squad .pet-status__row { margin-top: 0; }
@@ -2038,6 +2179,39 @@ const originMemoryChip = (slot) => ({
 }
 .spore .pet-status__crest::before { top: -5px; left: -3px; width: 29px; height: 14px; border-radius: 15px 15px 7px 7px; background: #8c6eaa; border: 1px solid #59466f; }
 .spore .pet-status__crest::after { display: none; }
+.spark .pet-status__crest {
+  background:
+    radial-gradient(ellipse 2px 3px at 9px 15px, #2e2610 95%, transparent 100%),
+    radial-gradient(ellipse 2px 3px at 17px 15px, #2e2610 95%, transparent 100%),
+    linear-gradient(135deg, #fff9b8, #f6e56d 70%, #c2a52d);
+}
+.spark .pet-status__crest::before { top: -6px; left: 5px; width: 4px; height: 8px; transform: rotate(-18deg); border-radius: 2px; background: #fff9b8; }
+.spark .pet-status__crest::after { top: -6px; right: 5px; width: 4px; height: 8px; transform: rotate(18deg); border-radius: 2px; background: #fff9b8; }
+.ember .pet-status__crest {
+  background:
+    radial-gradient(ellipse 2px 3px at 9px 15px, #36170f 95%, transparent 100%),
+    radial-gradient(ellipse 2px 3px at 17px 15px, #36170f 95%, transparent 100%),
+    linear-gradient(135deg, #ffd6b0, #ff8c5a 68%, #a33b1d);
+}
+.ember .pet-status__crest::before { top: -6px; left: 7px; width: 10px; height: 9px; border-radius: 9px 9px 2px 2px; background: #ffbe6b; }
+.ember .pet-status__crest::after { display: none; }
+.bramble .pet-status__crest {
+  background:
+    radial-gradient(ellipse 2px 3px at 9px 15px, #17331d 95%, transparent 100%),
+    radial-gradient(ellipse 2px 3px at 17px 15px, #17331d 95%, transparent 100%),
+    linear-gradient(135deg, #d3ffcf, #74d680 70%, #2b6f3c);
+}
+.bramble .pet-status__crest::before { top: -4px; left: 4px; width: 16px; height: 6px; border-radius: 4px; background: #429450; }
+.bramble .pet-status__crest::after { display: none; }
+.frost .pet-status__crest {
+  border-radius: 6px 6px 8px 8px;
+  background:
+    radial-gradient(ellipse 2px 3px at 9px 15px, #1a3548 95%, transparent 100%),
+    radial-gradient(ellipse 2px 3px at 17px 15px, #1a3548 95%, transparent 100%),
+    linear-gradient(135deg, #eaf7ff, #9ad9ff 68%, #4787b3);
+}
+.frost .pet-status__crest::before { top: -6px; left: 9px; width: 6px; height: 7px; transform: rotate(45deg); background: #eaf7ff; }
+.frost .pet-status__crest::after { display: none; }
 .pet-status__body { flex: 1; min-width: 0; }
 .pet-status__meta { display: flex; align-items: baseline; justify-content: space-between; gap: 7px; margin-bottom: 6px; color: var(--pet-color); font-size: 11px; }
 .pet-status__meta span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
@@ -2773,6 +2947,20 @@ const originMemoryChip = (slot) => ({
 
   .boss-hud {
     width: min(220px, calc(60vw - 8px));
+  }
+
+  .boss-members.quad {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 4px 8px;
+  }
+
+  .boss-members.quad > div {
+    grid-template-columns: minmax(0, 1fr) 30px;
+    gap: 4px;
+  }
+
+  .boss-members.quad > small {
+    grid-column: 1 / -1;
   }
 
   .expedition-hud {

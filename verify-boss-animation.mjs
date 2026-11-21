@@ -76,7 +76,7 @@ for (const fps of [15, 30, 60, 120]) for (const encounter of encounters) for (co
     clean(b)
     assert.equal(b.attackPresentation.stage, 'phase')
     b.phaseShift = 0; b._startSpecial()
-    b.hit(b.maxHp * 2); clean(b)
+    b.hit(b.maxHp * 2, { bypassAntiBurst: true }); clean(b)
     assert.equal(b.attackPresentation.stage, 'dead')
     const deadClock = b._animClock
     b.update(1); assert.equal(b._animClock, deadClock)

@@ -18,7 +18,7 @@ const skillSummary = computed(() => selected.value.id === 'glutton'
   : selected.value.id === 'shadow'
     ? '高机动近战刺客（基础移速 +12%）：空格沿方向智能穿行破弹并天生起点留影，首目标必暴、落地 2 秒 +20% 移速并随机增益闪避与暴击（命中缩减回血与格挡冷却）。普攻每 3 刀挥出影波且可斩碎贴脸弹幕；常驻影刃格挡减免物理伤害、影织魔盾防法术，场上有分身时可触发 40 秒一次的致命代死换位。'
     : selected.value.id === 'elemental'
-      ? '开局近身冲击解围；第一次融合后，空格进化为当前双元素的融合爆发。'
+      ? 'Lv.1 原质释放击退近敌；Lv.2 选定火／冰／电／毒专精后，空格即刻进化为主系大招（召唤地狱火／冰霜新星·极寒彗星／风暴守护者／灾厄狂欢），并可通过专精终极再次蜕变。'
     : skill.value?.desc)
 
 // Arrow keys move focus and selection together, while Tab remains native.
@@ -91,7 +91,7 @@ function navigate(event, currentIndex) {
             </div>
           </div>
 
-          <p v-if="selected.id === 'elemental'" class="spell-growth-note">Lv.2 发现首系 → 前期随机探索 → 第 6 波／第 3 章确认单系、双系或多系路线 → 终极随机出现</p>
+          <p v-if="selected.id === 'elemental'" class="spell-growth-note">Lv.2 四系定专精（火/冰/电/毒）→ 可兼修至多 2 门他系基础 → 第 6 波／第 3 章分支升华 → 终极奥义</p>
 
           <details :key="`${selected.id}-rules`" class="strain-rules">
             <summary>完整血统机制 <ChevronDown :size="13" aria-hidden="true" /></summary>

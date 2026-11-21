@@ -12,9 +12,11 @@ import { WeaponSystem } from './WeaponSystem.js'
 import { GemManager } from './GemManager.js'
 import { SoundManager } from './SoundManager.js'
 import { rollSkills, rollBossSkills, getSpecInfo, SKILL_DATABASE } from './SkillPool.js'
-import { RICOCHET_ROUTES, RICOCHET_SKILL_BY_ID, ricochetSkillAvailable, ricochetRouteReady } from './RicochetRules.js'
+import { RICOCHET_ROUTES, RICOCHET_SKILL_BY_ID, prismDamageScaleForCount, ricochetSkillAvailable, ricochetRouteReady } from './RicochetRules.js'
 import { GLUTTON_ROUTES, GLUTTON_SKILL_BY_ID, gluttonSkillAvailable, gluttonRouteReady } from './GluttonBuild.js'
-import { SYMBIOSIS_ROUTES, SYMBIOSIS_SKILL_BY_ID, symbiosisSkillAvailable, symbiosisRouteReady } from './SymbiosisBuild.js'
+import { SYMBIOSIS_ROUTES, SYMBIOSIS_SKILL_BY_ID, SYMBIOSIS_ENDLESS_SKILL, symbiosisDraftReady, symbiosisSkillAvailable, symbiosisRouteReady } from './SymbiosisBuild.js'
+import { ELEMENTAL_SCHOOLS } from './ElementalSchools.js'
+import { ELEMENTAL_SKILL_BY_ID } from './ElementalUpgrades.js'
 import { ELEMENTAL_ROUTES, ELEMENTAL_ROUTE_SKILL_BY_ID, elementalSkillAvailable, elementalRouteReady } from './ElementalBuild.js'
 import { SHADOW_ROUTES, SHADOW_ROUTE_SKILL_BY_ID, getShadowSkill, shadowSkillAvailable, shadowRouteReady } from './ShadowBuild.js'
 import { syncShadowStrideBonuses } from './ShadowSkills.js'
@@ -53,16 +55,18 @@ import {
   tickGluttonResource,
 } from './GluttonResource.js'
 import {
-  EVENT_LOCK_AT,
-  FINAL_WARNING_AT,
-  RUN_DURATION,
   computeScore,
   getEndlessDisasterTier,
+  getEventLockAt,
   getExpeditionBoss,
   getExpeditionStage,
   getExpeditionStages,
+  getFinalWarningAt,
   getProgressionStage,
   getRunProfile,
+  getTimedDuration,
+  isExtendedTimedMode,
+  isTimedMode,
   normalizeRunSelection,
   scoreToPoints,
 } from './RunRules.js'
@@ -544,9 +548,9 @@ export class GameEngine {
     }
   }
 
-  /** 成功破解无尽首领阵型后刷新短时追击窗口，不产生额外素材。 */
+  /** 成功破解无尽或 20 分钟限时首领阵型后刷新短时追击窗口，不产生额外素材。 */
   triggerEndlessFormationBreak(info = {}) {
-    if (this.runSelection?.mode !== 'endless' || this.runFinished) return false
+    if (!['endless', 'timed20'].includes(this.runSelection?.mode) || this.runFinished) return false
     this.endlessFormationBreakTimer = ENDLESS_FORMATION_BREAK_DURATION
     this.onRunState?.({
       kind: 'formation-break',
@@ -566,7 +570,7 @@ export class GameEngine {
   get canStartWorldEvent() {
     if (this.runFinished || this.runState !== 'active') return false
     if (this.enemyManager.crowds.active) return false
-    if (this.runSelection.mode === 'timed') return this.elapsed < EVENT_LOCK_AT
+    if (isTimedMode(this.runSelection.mode)) return this.elapsed < getEventLockAt(this.runSelection.mode)
     if (this.runSelection.mode === 'expedition') {
       return ['event', 'mixed'].includes(
         getExpeditionStage(this.runSelection.difficulty, this.expeditionStage).type
@@ -601,11 +605,20 @@ export class GameEngine {
    */
   get strainSkill() {
     if (this.weaponSystem?.ricochetCombat?.enabled) return this.weaponSystem.ricochetCombat.activeSkill
+    if (this.weaponSystem?.petCombat?.enabled) return this.weaponSystem.petCombat.activeSkill
     const skill = getStrainSkill(this.startingStrain), spells = this.weaponSystem.spellCombat
     if (!spells.enabled) return skill
     this._spellActiveSkill ||= { ...skill, use: engine => engine.weaponSystem.spellCombat.useActive() }
-    Object.assign(this._spellActiveSkill, { id: spells.routeUltimate ? `elemental_${spells.routeUltimate}` : spells.fusion ? `fusion_${spells.fusion.id}` : skill.id, name: spells.activeName,
-      cooldown: spells.activeCooldown, getDesc: () => spells.routeUltimate ? `${spells.routeUltimate === 'single' ? '主元素极化爆发' : spells.routeUltimate === 'fusion' ? '终极融合反应' : '完成一轮元素轮转'}，同时推开身边的普通敌人。` : spells.fusion ? `${spells.rank('active') >= 3 ? spells.fusion.evolution : spells.fusion.activeDesc} 同时推开身边的普通敌人。` : skill.desc })
+    Object.assign(this._spellActiveSkill, {
+      id: spells.branchUltimate ? spells.branchUltimate : spells.school ? `spell_active_${spells.school}` : skill.id,
+      name: spells.activeName,
+      cooldown: spells.activeCooldown,
+      getDesc: () => {
+        if (!spells.school) return skill.desc
+        if (spells.branchUltimate && ELEMENTAL_ROUTES[spells.branch]) return ELEMENTAL_ROUTES[spells.branch].ultimateDesc
+        return ELEMENTAL_SCHOOLS[spells.school]?.activeSpell?.desc || skill.desc
+      },
+    })
     return this._spellActiveSkill
   }
 
@@ -786,6 +799,7 @@ export class GameEngine {
       this.openFreeSkillPanel()
       return
     }
+    if (this._openPendingSymbiosisDraft?.()) return
     this.start()
     // 连升结算：剩余经验仍够升级时必须走完整升级（扣经验/升级/阈值递增），
     // 再弹面板——原先只弹面板不扣经验，大额经验（吞噬×2/×3 + 经验基因）时
@@ -1015,9 +1029,9 @@ export class GameEngine {
       const spells = this.weaponSystem.spellCombat
       if (!elementalRouteReady(this) || !ELEMENTAL_ROUTES[route] || !spells.chooseRoute(route)) return false
       this.weaponSystem.registerSkillEvolution({ spec: 'elemental', tier: 2 })
-      this.enemyManager?.addText?.(this.player.x, this.player.y - 20, `🧭 路线锁定：${ELEMENTAL_ROUTES[route].name}`, null, ELEMENTAL_ROUTES[route].color, 16)
+      this.enemyManager?.addText?.(this.player.x, this.player.y - 20, `🌟 专精升华：${ELEMENTAL_ROUTES[route].name}`, null, ELEMENTAL_ROUTES[route].color, 16)
       this.sound.wave()
-      this.evolutionEvent('路线确立', ELEMENTAL_ROUTES[route].name, 'elemental', ELEMENTAL_ROUTES[route].bonus)
+      this.evolutionEvent('专精升华', ELEMENTAL_ROUTES[route].name, 'elemental', ELEMENTAL_ROUTES[route].bonus)
       this._pushStats()
       this.resume()
       return true
@@ -1126,14 +1140,21 @@ export class GameEngine {
         const offered = skill
         const common = SKILL_DATABASE.common.find(entry => entry.id === skill.id)
         const canonical = common ? { ...common, kind: 'common' } : SYMBIOSIS_SKILL_BY_ID[skill.id] || this._symbiosisPrimarySkills().find(entry => entry.id === skill.id)
-        if (!canonical || ((canonical.isSymbiosisSkill || common) && !symbiosisSkillAvailable(this, canonical, this._symbiosisPrimarySkills()))) return false
+        const allowed = canonical?.isPartnerChoice
+          ? symbiosisDraftReady(this) && !(this.skillLevels?.[canonical.id] > 0)
+          : canonical && (!(canonical.isSymbiosisSkill || common) || symbiosisSkillAvailable(this, canonical, this._symbiosisPrimarySkills()))
+        if (!allowed) return false
         const role = common ? 'common' : offered.role
         skill = { ...canonical, role, progressionRole: common ? 'common' : offered.progressionRole }
         choiceState = this.weaponSystem.petCombat
       } else if (this.startingStrain === 'elemental') {
         const offered = skill
         const common = SKILL_DATABASE.common.find(entry => entry.id === skill.id)
-        const canonical = common ? { ...common, kind: 'common' } : skill.isSpellCoreUpgrade ? ordinarySpellCoreSkills(this).find(card => card.id === skill.id) : ELEMENTAL_ROUTE_SKILL_BY_ID[skill.id] || skill
+        const canonical = common
+          ? { ...common, kind: 'common' }
+          : skill.isSpellCoreUpgrade
+            ? ordinarySpellCoreSkills(this).find(card => card.id === skill.id)
+            : ELEMENTAL_SKILL_BY_ID[skill.id] || ELEMENTAL_ROUTE_SKILL_BY_ID[skill.id] || skill
         if (!canonical || ((canonical.isElementalSkill || common) && !elementalSkillAvailable(this, canonical))) return false
         const role = common ? 'common' : offered.role || 'primary'
         skill = { ...canonical, role, progressionRole: common ? 'common' : offered.progressionRole }
@@ -1149,10 +1170,12 @@ export class GameEngine {
           maxLevel: offered.maxLevel ?? canonical.maxLevel }
         choiceState = this.weaponSystem.shadowCombat
       }
-      if (!skill.isEndlessMastery && (this.skillLevels[skill.id] || 0) >= getEffectiveSkillMaxLevel(this, skill, skill.role)) return false
+      if (!skill.isEndlessMastery && !skill.isEndlessSymbiosis && (this.skillLevels[skill.id] || 0) >= getEffectiveSkillMaxLevel(this, skill, skill.role)) return false
       this.skillLevels[skill.id] = (this.skillLevels[skill.id] || 0) + 1
-      if (this.startingStrain === 'elemental' && skill.isElementalDiscovery) this.weaponSystem.spellCombat.applyElementalSkill(skill, this.skillLevels[skill.id])
-      else skill.apply?.(this, this.skillLevels[skill.id])
+      if (this.startingStrain === 'elemental' && (skill.isElementalDiscovery || skill.isElementalSkill)) {
+        this.weaponSystem.spellCombat.applyElementalSkill(skill, this.skillLevels[skill.id])
+      }
+      skill.apply?.(this, this.skillLevels[skill.id])
       if (this.startingStrain === 'shadow') syncShadowStrideBonuses(this)
       // 异源碎片没有进化演出，但至少要让玩家在场上确认“我真的拿到了”。
       if (this.startingStrain === 'origin' && skill.originPool === 'fragment') {
@@ -1162,7 +1185,10 @@ export class GameEngine {
         this.weaponSystem?._ring?.(this.player.x, this.player.y, color, 44)
         this._pushStats()
       }
-      if (choiceState) choiceState.normalChoices++
+      if (choiceState) {
+        if (skill.isPartnerChoice) choiceState.draftChoices = (choiceState.draftChoices || 0) + 1
+        else choiceState.normalChoices++
+      }
     }
 
     const weaponEvolved = !skill.isBossSkill && !skill.isOriginMemory && this.weaponSystem.registerSkillEvolution(skill)
@@ -1199,7 +1225,15 @@ export class GameEngine {
   }
 
   _symbiosisPrimarySkills() {
-    return [...(SKILL_DATABASE?.symbiosis?.primary || []), ...Object.values(SYMBIOSIS_SKILL_BY_ID)]
+    return [...(SKILL_DATABASE?.symbiosis?.primary || []), ...Object.values(SYMBIOSIS_SKILL_BY_ID), SYMBIOSIS_ENDLESS_SKILL]
+  }
+
+  _openPendingSymbiosisDraft() {
+    if (this.runFinished || this.player?.dead || this._pauseLock > 0) return false
+    if (this.runState === 'stage-reward' || this.runState === 'expedition-intro') return false
+    if (!symbiosisDraftReady(this)) return false
+    this.openFreeSkillPanel()
+    return true
   }
 
   /**
@@ -1254,7 +1288,8 @@ export class GameEngine {
   }
 
   queueSpellCore(boss) {
-    if (!this.weaponSystem.spellCombat.enabled || this.runFinished || this.player.dead) return false
+    const spells = this.weaponSystem.spellCombat
+    if (!spells.enabled || this.runFinished || this.player.dead || !spells.coreOptions?.()?.length) return false
     const key = boss.bossGroupId || boss
     if (this._spellCoreSeen.has(key)) return false
     this._spellCoreSeen.add(key)
@@ -1509,8 +1544,12 @@ export class GameEngine {
     this.weaponSystem.spellCombat.shots.length = 0
     this.weaponSystem.spellCombat.fields.length = 0
     this.weaponSystem.spellCombat.delayed.length = 0
+    this.weaponSystem.spellCombat.zones.length = 0
+    this.weaponSystem.spellCombat.summons.length = 0
+    this.weaponSystem.spellCombat.effects.length = 0
+    this.weaponSystem.spellCombat.marks.length = 0
     this.weaponSystem.spellCombat.lightning.reset()
-    this.weaponSystem.spellCombat.shield.reset()
+    this.weaponSystem.spellCombat.shield.reset(true)
     this.weaponSystem.spellCombat.contagion.reset()
     this.weaponSystem.spellCombat.poisonThrow = null
     this._spellCoreQueue = []
@@ -1573,7 +1612,8 @@ export class GameEngine {
     // 终局审判：战场切入王城决战场（与远征统帅共用宫廷构图）
     this._setMapTheme('royal', 'shattered-court', false)
     const boss = this.enemyManager.beginFinale()
-    this.onRunState?.({ kind: 'finale', boss: boss?.encounterLabel || '王国最后防线' })
+    const fallbackLabel = isExtendedTimedMode(this.runSelection.mode) ? '王国终焉防线' : '王国最后防线'
+    this.onRunState?.({ kind: 'finale', boss: boss?.encounterLabel || fallbackLabel })
   }
 
   _updateRunState(dt) {
@@ -1583,27 +1623,28 @@ export class GameEngine {
       this._updateExpedition(dt)
       return
     }
-    // 无尽战场推进：跨过推进波次即换景（边境 → 腐化 → 王城），交叉淡化 + 战区横幅
-    if (this.runSelection.mode === 'endless' && this.runState === 'active') {
+    // 无尽与 20 分钟限时战场推进：跨过推进波次即换景（边境 → 腐化 → 王城），交叉淡化 + 战区横幅
+    if ((this.runSelection.mode === 'endless' || isExtendedTimedMode(this.runSelection.mode)) && this.runState === 'active') {
       this._updateEndlessFormationBreak(dt)
-      this._updateEndlessBounty()
+      if (this.runSelection.mode === 'endless') this._updateEndlessBounty()
       const progression = getProgressionStage(this.enemyManager.wave)
       if (progression.theme !== this._mapThemeId) {
         this._setMapTheme(progression.theme, progression.variant, false)
         this.onRunState?.({ kind: 'zone', zone: getMapTheme(progression.theme).name })
       }
     }
-    if (this.runSelection.mode !== 'timed' || this.runFinished) return
+    if (!isTimedMode(this.runSelection.mode) || this.runFinished) return
     if (this.runState === 'finale') {
       this.finaleTime += dt
       return
     }
     if (this.runState !== 'active') return
-    if (!this._finalWarningShown && this.elapsed >= FINAL_WARNING_AT) {
+    const duration = getTimedDuration(this.runSelection.mode)
+    if (!this._finalWarningShown && this.elapsed >= getFinalWarningAt(this.runSelection.mode)) {
       this._finalWarningShown = true
-      this.onRunState?.({ kind: 'warning', seconds: RUN_DURATION - this.elapsed })
+      this.onRunState?.({ kind: 'warning', seconds: duration - this.elapsed })
     }
-    if (this.elapsed >= RUN_DURATION) this._enterFinale()
+    if (this.elapsed >= duration) this._enterFinale()
   }
 
   _enterExpeditionStage(stage, forceMap = false) {
@@ -1611,7 +1652,15 @@ export class GameEngine {
     this.weaponSystem.gluttonCombat.clearOverflow()
     this.bossTomes?.clearStage()
     this.weaponSystem.shadowCombat.reset({ preserveBuild: true })
-    this.weaponSystem.petCombat.reset()
+    this.weaponSystem.petCombat.reset({ preserveBuild: true })
+    this.weaponSystem.spellCombat.zones.length = 0
+    this.weaponSystem.spellCombat.summons.length = 0
+    this.weaponSystem.spellCombat.shots.length = 0
+    this.weaponSystem.spellCombat.fields.length = 0
+    this.weaponSystem.spellCombat.delayed.length = 0
+    this.weaponSystem.spellCombat.effects.length = 0
+    this.weaponSystem.spellCombat.marks.length = 0
+    this.weaponSystem.spellCombat.contagion.reset()
     // 换章不遗留上一章的源质延迟技能与超载启动（已学记忆保留）。
     this.weaponSystem.originSourceCombat?.reset()
     this.weaponSystem.originOverload?.reset()
@@ -2039,16 +2088,20 @@ export class GameEngine {
     this.weaponSystem.shadowCombat.start()
     if (this.runSelection.mode === 'expedition') {
       this._enterExpeditionStage(1, true)
-    } else if (this.runSelection.mode === 'endless') {
-      // 无尽：边境开局，随灾变波次推进到腐化、王城（战场烧向王都）
+    } else if (this.runSelection.mode === 'endless' || isExtendedTimedMode(this.runSelection.mode)) {
+      // 无尽与 20 分钟限时：边境开局，随波次推进到腐化、王城（战场烧向王都）
       this._setMapTheme('frontier', 'marsh-edge', true, true)
     } else {
-      // 限时：边境或腐化开局（种子决定），王城留给终局勇者的决战场
+      // 12 分钟限时：边境或腐化开局（种子决定），王城留给终局勇者的决战场
       const startTheme = this._mapSeed % 2 === 0 ? 'frontier' : 'blight'
       const variants = { frontier: 'marsh-edge', blight: 'blight-garden' }
       this._setMapTheme(startTheme, variants[startTheme], true, true)
     }
     this.gameplay?.reset() // Gameplay 层整局重置（arena 空实现，不影响既有 reset 顺序）
+    if (this.gameplayId === 'arena') {
+      this._pushStats()
+      this._pushCooldown()
+    }
   }
 
   /** 设置黑市基因（存档加载/购买后调用），立即生效并持续到后续每局 */
@@ -2197,10 +2250,17 @@ export class GameEngine {
       enemies: this.enemyManager.count,
       gems: this.gemManager.count,
       kills: this.weaponSystem.kills,
-      // 实际攻击力（基础 × 等级成长 × 捕食吞噬加成，供 HUD 展示）
+      // 实际攻击力（基础 × 等级成长 × 捕食吞噬加成 × 血统专精倍率，供 HUD 展示）
       dmg:
         Math.round(
-          this.weaponSystem.damage * this.weaponSystem.levelMul * this.weaponSystem.devourDamageMul * (this.weaponSystem.ricochetCombat.route === 'pierce' ? 1.35 : 1) * 100
+          this.weaponSystem.damage * this.weaponSystem.levelMul * this.weaponSystem.devourDamageMul *
+          (this.weaponSystem.ricochetCombat.route === 'pierce'
+            ? 1.35
+            : this.weaponSystem.ricochetCombat.route === 'bounce'
+              ? prismDamageScaleForCount(this.weaponSystem.projectileCount)
+              : this.weaponSystem.petCombat?.enabled && this.weaponSystem.petCombat?.fullRoster
+                ? this.weaponSystem.petCombat.playerBodyDamageMultiplier()
+                : 1) * 100
         ) / 100,
       wave: this.enemyManager.wave,
       waveName: this.enemyManager.waveName,
@@ -2313,7 +2373,15 @@ export class GameEngine {
             reactionName: plan.reaction ? getReaction(plan.reaction)?.name || null : null,
             secondaryReactions: plan.secondaries.map((r) => ({ id: r.id, name: r.name })),
             elements: [...this.player.elements.keys()].map(id => ({ id, name: getElement(id)?.name || id })),
-            skills: originComboEntries(this).map(entry => ({ id: entry.id, name: entry.def.name, level: entry.level })) }
+            skills: originComboEntries(this).map(entry => ({
+              id: entry.id,
+              cardId: entry.def.cardId || entry.id,
+              name: entry.def.name,
+              iconKey: entry.def.iconKey || null,
+              color: entry.def.color || '#8cffc8',
+              innate: !!entry.innate,
+              level: entry.level,
+            })) }
         })() : null,
       },
       // 兼容旧 HUD：primal 仍指向同一份异源能量
@@ -2343,8 +2411,8 @@ export class GameEngine {
         modeName: this.runProfile.modeInfo.name,
         difficultyName: this.runProfile.difficultyInfo.name,
         state: this.runState,
-        remaining: this.runSelection.mode === 'timed' && this.runState === 'active'
-          ? Math.max(0, RUN_DURATION - this.elapsed)
+        remaining: isTimedMode(this.runSelection.mode) && this.runState === 'active'
+          ? Math.max(0, getTimedDuration(this.runSelection.mode) - this.elapsed)
           : null,
         // 章节时限（带 deadline 的远征章节）：HUD 实时倒计时，仅 active 阶段有意义。
         stageDeadline: this.runSelection.mode === 'expedition'
@@ -2429,6 +2497,7 @@ export class GameEngine {
         this.player.settleLevelUp()
         if (this._pauseLock > 0) return
       }
+      if (this._openPendingSymbiosisDraft?.()) return
       for (const e of this.entities) {
         if (e.active && !this.runFinished) e.update(dt)
         if (this._pauseLock > 0 || this.runFinished) break

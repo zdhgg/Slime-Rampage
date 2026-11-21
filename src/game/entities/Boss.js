@@ -159,6 +159,11 @@ export class Boss extends Enemy {
     // —— 血量阈值事件：75% 增援 / 25% 困兽之斗（半血二阶段仍走原路径） ——
     this._reinforced = false
     this._lastStand = false
+    // —— 防暴毙（四层韧性）：滚动 2 秒爆发窗口、韧性受击闪光与飘字冷却 ——
+    this._burstLog = []
+    this._antiBurstClock = 0
+    this._antiBurstFlash = 0
+    this._antiBurstTextCd = 0
     // —— 决斗圈（P0：仅限时第 5 波骑士王）：activate 时由 BossArena 挂接 ——
     this.duelArena = null
     this._duelRage = false
@@ -265,15 +270,124 @@ export class Boss extends Enemy {
     return this.phaseShift > 0 || this.specialState === 'telegraph' || this.specialState === 'dash'
   }
 
+  _difficultyId() {
+    return this.game?.runSelection?.difficulty || this.game?.runProfile?.id || 'normal'
+  }
+
+  _isHardcore() {
+    const diff = this._difficultyId()
+    return diff === 'hard' || diff === 'hell'
+  }
+
+  _antiBurstConfig() {
+    const diff = this._difficultyId()
+    const vuln = this.vulnerableTimer > 0
+    if (diff === 'hell') {
+      return { singleCap: vuln ? 0.085 : 0.055, soft2s: vuln ? 0.15 : 0.09, band2s: 0.08 }
+    }
+    if (diff === 'hard') {
+      return { singleCap: vuln ? 0.10 : 0.065, soft2s: vuln ? 0.17 : 0.11, band2s: 0.08 }
+    }
+    if (diff === 'easy') {
+      return { singleCap: vuln ? 0.28 : 0.22, soft2s: vuln ? 0.45 : 0.36, band2s: 0.14 }
+    }
+    return { singleCap: vuln ? 0.24 : 0.18, soft2s: vuln ? 0.38 : 0.30, band2s: 0.12 }
+  }
+
   hit(damage, effects = null) {
+    if (!this.active || this.hp <= 0) return
+    if (damage > 0 && this.phaseShift > 0) {
+      // 转阶段/困兽霸体无敌：防止在阶段演出瞬间被爆发秒杀跳阶段
+      this._antiBurstFlash = Math.max(this._antiBurstFlash || 0, 0.22)
+      if ((this._antiBurstTextCd || 0) <= 0) {
+        this._antiBurstTextCd = 0.65
+        this.game?.enemyManager?.addText?.(this.x, this.y - this.radius - 26, '阶段霸体', null, '#ffe3a2', 13)
+      }
+      return
+    }
     const formationMul = damage > 0
       ? this.game?.enemyManager?.getBossDamageTakenMultiplier?.(this) || 1
       : 1
     const guardMul = damage > 0 ? this._guardMitigation() : 1
-    const amplified = (this.vulnerableTimer > 0 && damage > 0
+    let amplified = (this.vulnerableTimer > 0 && damage > 0
       ? damage * this.vulnerableMultiplier
       : damage) * formationMul * guardMul
+
+    // 四层防暴毙（仅对正常血量 Boss 启用，maxHp < 60 的轻量测试木桩或显式调试指令保持直通）
+    const antiBurstActive = this.maxHp >= 60 && amplified > 0 && !effects?.bypassAntiBurst
+    let clampedByBurst = false
+    if (antiBurstActive) {
+      const cfg = this._antiBurstConfig()
+      const maxSingle = Math.max(1, this.maxHp * cfg.singleCap)
+      if (amplified > maxSingle) {
+        amplified = maxSingle
+        clampedByBurst = true
+      }
+
+      const now = Math.max(this._antiBurstClock || 0, this.game?.elapsed || 0)
+      const log = (this._burstLog ||= [])
+      while (log.length > 0 && now - log[0].t > 2.0) log.shift()
+      let recent = 0
+      for (const entry of log) recent += entry.amt
+
+      const t1 = this.maxHp * cfg.soft2s
+      const t2 = this.maxHp * (cfg.soft2s + cfg.band2s)
+      if (recent + amplified > t1) {
+        clampedByBurst = true
+        const part0 = Math.max(0, t1 - recent)
+        const overflow = amplified - part0
+        const band1Room = Math.max(0, t2 - Math.max(recent, t1))
+        const part1 = Math.min(overflow, band1Room)
+        const part2 = Math.max(0, overflow - part1)
+        amplified = part0 + part1 * 0.45 + part2 * 0.18
+      }
+    }
+
+    const hpBefore = this.hp
+    // 强制锁血门：50% 二阶段锁血（全难度）；25% 困兽锁血（困难/地狱/终局/远征）
+    let hitGate = null
+    if (antiBurstActive) {
+      const phase2Gate = Math.max(1, Math.ceil(this.maxHp * 0.5))
+      const lastStandGate = Math.max(1, Math.ceil(this.maxHp * 0.25))
+      const useLastStandGate = this._isHardcore() || this.isFinalBoss || this.isExpeditionBoss
+      if (this.phase === 1 && hpBefore > phase2Gate) {
+        hitGate = { kind: 'phase2', floor: phase2Gate }
+      } else if (useLastStandGate && !this._lastStand && hpBefore > lastStandGate) {
+        hitGate = { kind: 'lastStand', floor: lastStandGate }
+      }
+    }
+
     super.hit(amplified, effects)
+
+    if (hitGate && this.hp <= hitGate.floor) {
+      this.hp = hitGate.floor
+      this.active = true
+      if (hitGate.kind === 'phase2' && this.phase === 1) {
+        this._enterPhaseTwo()
+      } else if (hitGate.kind === 'lastStand' && !this._lastStand) {
+        this._lastStand = true
+        this._onLastStand()
+        this.phaseShift = Math.max(this.phaseShift || 0, 0.45)
+        if (!this._duelRage && this.duelArena?.rageEnabled) {
+          this._duelRage = true
+          this._onDuelRage()
+        }
+      }
+    }
+
+    if (antiBurstActive) {
+      const actualDealt = Math.max(0, hpBefore - Math.max(0, this.hp))
+      if (actualDealt > 0) {
+        this._burstLog.push({ t: Math.max(this._antiBurstClock || 0, this.game?.elapsed || 0), amt: actualDealt })
+      }
+      if (clampedByBurst) {
+        this._antiBurstFlash = Math.max(this._antiBurstFlash || 0, 0.28)
+        if ((this._antiBurstTextCd || 0) <= 0) {
+          this._antiBurstTextCd = 1.1
+          this.game?.enemyManager?.addText?.(this.x, this.y - this.radius - 26, '王级韧性', null, '#f6c453', 12)
+        }
+      }
+    }
     if (damage > 0) this._checkThresholdEvents()
   }
 
@@ -363,15 +477,23 @@ export class Boss extends Enemy {
       return
     }
     const count = this.type === 'boss-mage' ? 3 : 2
+    const hardcore = this._isHardcore()
+    const guardType = this.type === 'boss-mage' && (hardcore || this.phase === 2) ? 'bulwark' : 'knight'
     for (let i = 0; i < count; i++) {
       const angle = (i / count) * TAU + Math.random() * 0.6
-      this._trackGuard(manager.spawnAt(
+      const guard = manager.spawnAt(
         clamp(this.x + Math.cos(angle) * 90, 24, this.game.worldWidth - 24),
         clamp(this.y + Math.sin(angle) * 90, 24, this.game.worldHeight - 24),
-        'knight'
-      ))
+        guardType,
+        { summoned: true, rank: hardcore ? 3 : 2 }
+      )
+      if (guard && this.type === 'boss-mage' && (hardcore || this.phase === 2)) {
+        guard.shieldHits = Math.max(guard.shieldHits || 0, 2)
+        guard.hp = guard.maxHp = Math.round(guard.maxHp * 1.45)
+      }
+      this._trackGuard(guard)
     }
-    manager.addText(this.x, this.y - this.radius - 34, '召唤护卫', null, '#ffd166', 14)
+    manager.addText(this.x, this.y - this.radius - 34, guardType === 'bulwark' ? '召唤重盾护卫' : '召唤护卫', null, '#ffd166', 14)
     this.game.sound.enemyShoot()
     this.game.shakeScreen(3, 0.18)
   }
@@ -404,7 +526,10 @@ export class Boss extends Enemy {
     if (!Number.isFinite(dt) || dt <= 0 || !this.active) return
     const canAct = this._tickStatus(dt)
     this._tickAnimation(dt, canAct)
+    this._antiBurstClock = (this._antiBurstClock || 0) + dt
     this.vulnerableTimer = Math.max(0, this.vulnerableTimer - dt)
+    this._antiBurstFlash = Math.max(0, (this._antiBurstFlash || 0) - dt)
+    this._antiBurstTextCd = Math.max(0, (this._antiBurstTextCd || 0) - dt)
     if (this.hp <= 0) return
     if (this.phase === 1 && this.hp <= this.maxHp * 0.5) this._enterPhaseTwo()
     if (!canAct && this.phaseShift <= 0) return
@@ -472,6 +597,9 @@ export class Boss extends Enemy {
     this.summonCd = Math.min(this.summonCd, 3)
     this.freeze = 0
     this.slow = 0
+    this.petSlowTime = 0
+    this.petFrostTime = 0
+    this.petFrostStacks = 0
     const cfg = BOSS_CFG[this.type]
     this.game.enemyManager.addText(this.x, this.y - this.radius - 18, '第二阶段', cfg.phaseName, '#ff7466', 16)
     this.game.dialogue?.sayBoss(this, 'phase')
@@ -480,7 +608,14 @@ export class Boss extends Enemy {
   }
 
   _startSpecial() {
-    this._specialAttackEvent = { enemyAttack: true, spellAttack: false, isBoss: true }
+    const hardcore = this._isHardcore()
+    this._specialAttackEvent = {
+      enemyAttack: true,
+      spellAttack: false,
+      isBoss: true,
+      breakShield: hardcore,
+      grievous: hardcore ? 3.0 : 0,
+    }
     const claimCast = this.game.enemyManager.claimBossCast
     if (claimCast && !claimCast.call(this.game.enemyManager, this)) {
       this.specialCd = 0.35
@@ -675,9 +810,11 @@ export class Boss extends Enemy {
 
     if (this.specialPattern === 'boss-mage') {
       const p = this.game.player
+      const hardcore = this._isHardcore()
       const burst = geo?.burst ?? { radius: 102, count: 12, bulletSpeed: 285 }
+      const hitDmg = hardcore ? 3 : 2
       if ((p.x - this.targetX) ** 2 + (p.y - this.targetY) ** 2 <= burst.radius * burst.radius) {
-        p.hit(2, this._specialAttackEvent ||= { enemyAttack: true, spellAttack: true, isBoss: true })
+        p.hit(hitDmg, this._specialAttackEvent ||= { enemyAttack: true, spellAttack: true, isBoss: true, breakShield: hardcore, grievous: hardcore ? 3.0 : 0 })
       }
       for (let i = 0; i < burst.count; i++) {
         this.game.enemyManager.spawnBullet(
@@ -685,8 +822,33 @@ export class Boss extends Enemy {
           this.targetY,
           (i / burst.count) * TAU,
           'mage',
-          { speed: burst.bulletSpeed, radius: 8, isBoss: true, damage: 2 }
+          { speed: burst.bulletSpeed, radius: 8, isBoss: true, damage: hitDmg }
         )
+      }
+      // 困难/地狱：交错双速弹环 + 玩家脚下延迟奥术爆裂
+      if (hardcore) {
+        const innerCount = Math.max(8, Math.round(burst.count * 0.65))
+        const halfOffset = Math.PI / innerCount
+        for (let i = 0; i < innerCount; i++) {
+          this.game.enemyManager.spawnBullet(
+            this.targetX,
+            this.targetY,
+            (i / innerCount) * TAU + halfOffset,
+            'mage',
+            { speed: Math.round(burst.bulletSpeed * 0.72), radius: 7.5, isBoss: true, damage: 2 }
+          )
+        }
+        this.game.enemyManager?.spawnTelegraphBlast?.({
+          x: p.x,
+          y: p.y,
+          radius: 78,
+          delay: 0.78,
+          damage: hardcore ? 3 : 2,
+          isBoss: true,
+          spellAttack: true,
+          grievous: hardcore ? 2.5 : 0,
+          color: '#a855f7',
+        })
       }
       this.game.shakeScreen(4, 0.2)
       this._beginRecovery(1.15)
@@ -698,13 +860,30 @@ export class Boss extends Enemy {
     // 一次施放最多结算一次，避免站桩时被三点各打一次。
     const trib = this._tribunal
     const p = this.game.player
+    const hardcore = this._isHardcore()
     if (trib && !this._volleyHit) {
       for (const pt of trib.points) {
         if ((p.x - pt.x) ** 2 + (p.y - pt.y) ** 2 <= trib.radius * trib.radius) {
-          p.hit(2, this._specialAttackEvent ||= { enemyAttack: true, isBoss: true })
+          p.hit(hardcore ? 3 : 2, this._specialAttackEvent ||= { enemyAttack: true, isBoss: true, breakShield: hardcore, grievous: hardcore ? 3.0 : 0 })
           this._volleyHit = true
           break
         }
+      }
+    }
+    // 困难/地狱：落点留下 2.2 秒残余箭雨区（减速 + 周期扎伤）
+    if (trib && hardcore) {
+      for (const pt of trib.points) {
+        this.game.enemyManager?.spawnHazardZone?.({
+          x: pt.x,
+          y: pt.y,
+          radius: Math.round(trib.radius * 0.86),
+          lingerDur: 2.2,
+          slowMul: 0.74,
+          dotDamage: 1,
+          dotInterval: 0.85,
+          kind: 'arrows',
+          isBoss: true,
+        })
       }
     }
     // 落箭闪光：事后读法——告诉玩家「他刚才以为你会在这里」
@@ -755,8 +934,9 @@ export class Boss extends Enemy {
     if (this._ruptureOff) return // 25% 之后：不再留地，节奏变成纯冲锋
     const radius = 86
     const slow = 0.7
-    const life = 0.9
+    const life = this._isHardcore() ? 1.4 : 0.9
     const tier = Math.max(1, this._ruptureTier)
+    const shockDamage = this._isHardcore() || this.phase === 2 ? 1 : 0
     // 双段：沿冲锋方向前后各裂一道（间距 168 ≈ 两块半径 86 相切），
     // 把「他停下的地方」拼成一条 340px 的劣地带，而不是两个孤立的圆。
     for (let i = 0; i < tier; i++) {
@@ -766,6 +946,9 @@ export class Boss extends Enemy {
         y: clamp(this.y - Math.sin(this.lockedAngle) * back, 24, this.game.worldHeight - 24),
         radius,
         slow,
+        damage: shockDamage,
+        dotInterval: 0.65,
+        dotTick: 0.35,
         born: this.game.elapsed,
         until: this.game.elapsed + life,
         duration: life,
@@ -777,10 +960,26 @@ export class Boss extends Enemy {
       this._rupture = seg
       this.game.enemyManager?.addBossField?.(seg)
     }
+    // 75% 之后（双段裂地阶段）：冲锋落地顺势斩出 180° 五道剑气弧，封锁近身站桩
+    if (tier >= 2) {
+      const count = 5
+      for (let i = 0; i < count; i++) {
+        const off = ((i / (count - 1)) - 0.5) * Math.PI
+        this.game.enemyManager?.spawnBullet?.(
+          this.x,
+          this.y,
+          this.lockedAngle + off,
+          'archer',
+          { speed: 440, radius: 7, isBoss: true, damage: this._isHardcore() ? 3 : 2, rank: 3 }
+        )
+      }
+    }
     // 首段才飘字：连段 2~3 段连续落地时不刷屏，但第一次一定把规则说清楚
     if (this.dashChain === 0) {
       this.game.enemyManager?.addText?.(this.x, this.y - this.radius - 26,
-        tier > 1 ? '地裂·双段' : '地裂', '移速 ×0.7 · 0.9s', '#ff9c6e', 13)
+        tier > 1 ? '地裂·剑气弧' : '地裂',
+        shockDamage > 0 ? '移速 ×0.7 · 裂地余震' : '移速 ×0.7 · 0.9s',
+        '#ff9c6e', 13)
     }
     this.game.sound.enemyShoot()
     this.game.shakeScreen(3, 0.16)
@@ -908,7 +1107,8 @@ export class Boss extends Enemy {
     this.facing = Math.atan2(dy, dx)
     const ux = dx / dist
     const uy = dy / dist
-    const spd = this.speed * (this.slow > 0 ? 0.6 : 1)
+    const spd = this.speed * (this.slow > 0 ? 0.6 : this.petSlowTime > 0 ? 1 - (this.petSlowAmount || 0) : 1)
+    const suppressMul = this.petWeakenTime > 0 ? Math.max(0.5, 1 - (this.petSuppressAmount || 0)) : 1
     this._moving = false
 
     if (this.type === 'boss-knight') {
@@ -919,7 +1119,7 @@ export class Boss extends Enemy {
         this.y += uy * spd * dt
         this._moving = true
       } else {
-        this.attackCd -= dt
+        this.attackCd -= dt * suppressMul
         if (this.attackCd <= 0) {
           this.attackCd = this.attackInterval
           player.hit(this.damage, { enemyAttack: true, isBoss: true })
@@ -938,7 +1138,7 @@ export class Boss extends Enemy {
       this.y -= uy * spd * 0.8 * dt
       this._moving = true
     } else {
-      this.attackCd -= dt
+      this.attackCd -= dt * suppressMul
       if (this.attackCd <= 0) {
         this.attackCd = this.attackInterval
         const count = this.type === 'boss-mage'
@@ -948,9 +1148,25 @@ export class Boss extends Enemy {
         const fan = this.type === 'boss-mage' ? null : archerFan(this.phase, 0, this.patternBonus)
         const shots = fan ? fan.count : count
         const gap = fan ? fan.step : step
+        const bSpeed = (this.type === 'boss-mage' ? 210 : 380) * suppressMul
+        const hardcore = this._isHardcore()
+        const centerIdx = Math.floor(shots / 2)
         for (let i = 0; i < shots; i++) {
           const off = (i - (shots - 1) / 2) * gap
-          this.game.enemyManager.spawnBullet(this.x, this.y, this.facing + off, this.type === 'boss-mage' ? 'mage' : 'archer', { isBoss: true, damage: 2 })
+          const isSnipe = this.type === 'boss-archer' && (this.phase === 2 || hardcore) && i === centerIdx
+          this.game.enemyManager.spawnBullet(
+            this.x,
+            this.y,
+            this.facing + off,
+            this.type === 'boss-mage' ? 'mage' : 'archer',
+            {
+              isBoss: true,
+              damage: isSnipe && hardcore ? 3 : 2,
+              speed: isSnipe ? Math.round(bSpeed * 1.25) : bSpeed,
+              rank: isSnipe ? 3 : 2,
+              pierceSummon: isSnipe ? 1 : 0,
+            }
+          )
         }
         this.game.sound.enemyShoot()
       }
@@ -962,9 +1178,20 @@ export class Boss extends Enemy {
       if (this.summonCd <= 0) {
         this.summonCd = this.phase === 2 ? 6 : 8
         const count = this.phase === 2 ? 3 : 2
+        const hardcore = this._isHardcore()
+        const guardType = hardcore || this.phase === 2 ? 'bulwark' : 'knight'
         for (let i = 0; i < count; i++) {
           const angle = Math.random() * TAU
-          this._trackGuard(this.game.enemyManager.spawnAt(this.x + Math.cos(angle) * 60, this.y + Math.sin(angle) * 60, 'knight'))
+          const guard = this.game.enemyManager.spawnAt(
+            this.x + Math.cos(angle) * 60,
+            this.y + Math.sin(angle) * 60,
+            guardType,
+            { summoned: true, rank: hardcore ? 3 : 2 }
+          )
+          if (guard && guardType === 'bulwark') {
+            guard.shieldHits = Math.max(guard.shieldHits || 0, 2)
+          }
+          this._trackGuard(guard)
         }
       }
     } else {
@@ -1309,13 +1536,29 @@ export class Boss extends Enemy {
       ctx.restore()
     }
 
-    if (this.phaseShift > 0) {
+    if (this.phaseShift > 0 || (this._antiBurstFlash || 0) > 0) {
       ctx.save()
-      ctx.strokeStyle = 'rgba(255, 116, 102, 0.85)'
-      ctx.lineWidth = 3
+      const shiftActive = this.phaseShift > 0
+      const pulse = shiftActive ? 0.85 : Math.min(1, (this._antiBurstFlash || 0) / 0.28)
+      ctx.strokeStyle = shiftActive
+        ? `rgba(255, 116, 102, ${0.88})`
+        : `rgba(255, 214, 102, ${(0.72 * pulse).toFixed(2)})`
+      ctx.lineWidth = shiftActive ? 3.5 : 2.5
       ctx.beginPath()
-      ctx.arc(this.x, this.y, r + 18 + (0.85 - this.phaseShift) * 35, 0, TAU)
+      ctx.arc(
+        this.x,
+        this.y,
+        r + (shiftActive ? 18 + (0.85 - Math.min(0.85, this.phaseShift)) * 35 : 12 + (1 - pulse) * 8),
+        0,
+        TAU
+      )
       ctx.stroke()
+      if (shiftActive) {
+        ctx.fillStyle = 'rgba(255, 214, 102, 0.14)'
+        ctx.beginPath()
+        ctx.arc(this.x, this.y, r + 14, 0, TAU)
+        ctx.fill()
+      }
       ctx.restore()
     }
 

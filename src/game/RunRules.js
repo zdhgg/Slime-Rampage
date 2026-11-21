@@ -1,11 +1,37 @@
-import { ENDLESS_DEFEAT_RETENTION, getEndlessBossFormation } from './EndlessMode.js'
+import { ENDLESS_BOSS_FORMATIONS, ENDLESS_DEFEAT_RETENTION, getEndlessBossFormation } from './EndlessMode.js'
 
 export const RUN_DURATION = 12 * 60
+export const RUN_DURATION_20 = 20 * 60
 export const FINAL_WARNING_AT = RUN_DURATION - 30
 export const EVENT_LOCK_AT = RUN_DURATION - 60
 
-export const MODE_IDS = ['expedition', 'timed', 'endless']
+export const PRIMARY_MODE_IDS = ['expedition', 'timed', 'endless']
+export const MODE_IDS = ['expedition', 'timed', 'timed20', 'endless']
 export const DIFFICULTY_IDS = ['easy', 'normal', 'hard', 'hell']
+
+export function isTimedMode(mode) {
+  return mode === 'timed' || mode === 'timed20'
+}
+
+export function isExtendedTimedMode(mode) {
+  return mode === 'timed20'
+}
+
+export function getTimedDuration(mode) {
+  return mode === 'timed20' ? RUN_DURATION_20 : RUN_DURATION
+}
+
+export function getFinalWarningAt(mode) {
+  return getTimedDuration(mode) - 30
+}
+
+export function getEventLockAt(mode) {
+  return getTimedDuration(mode) - 60
+}
+
+export function getTimedMaxWave(mode) {
+  return mode === 'timed20' ? 40 : 24
+}
 
 export const MODES = {
   timed: {
@@ -13,6 +39,12 @@ export const MODES = {
     name: '限时讨伐',
     shortName: '限时',
     description: '突破阶段首领，坚守 12 分钟后击败王国最后防线。',
+  },
+  timed20: {
+    id: 'timed20',
+    name: '限时讨伐 · 20分',
+    shortName: '限时20',
+    description: '深入王城围剿与多王混战，坚守 20 分钟后迎战王国终焉防线。',
   },
   endless: {
     id: 'endless',
@@ -379,19 +411,22 @@ const EXPEDITION_INTERLUDE_COUNTS = { easy: 0, normal: 2, hard: 4, hell: 6 }
  *  - 远征：每章一档逐章递进（上限 12 章），避免旧口径「前段平、末章暴涨」
  * 用查表而非 pow 是为了让断言可精确复现，也便于逐档手调。
  */
-// BOSS 平衡 2026-11：前段档位大幅抬升（1 → 2），配合 Boss 基础体量公式上调，
-// 让第 5/10 波首领不再被实战构筑 10~25 秒融化；终局档位保持 3.32 不变。
-const TIMED_BOSS_GROWTH = [2, 2.3, 2.6, 2.9, 3.32]
-const EXPEDITION_BOSS_GROWTH = [1, 1.16, 1.35, 1.56, 1.81, 2.1, 2.44, 2.83, 3.28, 3.8, 4.41, 5.12]
+// BOSS 平衡 2026-11：前段与中后段整体抬升，配合 Boss 四层防暴毙与困难/地狱高压曲线，
+// 目标困难/地狱成型构筑首领实战 TTK 落在 45~70 秒（约 60 秒硬核高压体验）。
+const TIMED_BOSS_GROWTH = [2.2, 2.6, 3.0, 3.5, 4.2]
+// 20 分钟限时在第 20 波后继续爬坡（第 25/30/35/40+ 波对应 4.2 → 7.4），追赶玩家深层构筑输出。
+const TIMED20_BOSS_GROWTH = [2.2, 2.6, 3.0, 3.5, 4.2, 5.1, 6.2, 7.4]
+const EXPEDITION_BOSS_GROWTH = [1.05, 1.24, 1.48, 1.76, 2.08, 2.46, 2.95, 3.4, 4.02, 4.72, 5.55, 6.5]
 
 /** 首领成长系数：远征按章、限时按波次档位、无尽按灾变档位复用同一成长表 */
 function getBossGrowth(selection, wave, expeditionTier) {
   if (selection?.mode === 'expedition') {
     return EXPEDITION_BOSS_GROWTH[Math.min(expeditionTier, EXPEDITION_BOSS_GROWTH.length - 1)]
   }
-  if (selection?.mode === 'timed') {
+  if (isTimedMode(selection?.mode)) {
     const timedTier = Math.max(0, Math.floor((Math.max(1, wave) - 5) / 5))
-    return TIMED_BOSS_GROWTH[Math.min(timedTier, TIMED_BOSS_GROWTH.length - 1)]
+    const table = selection.mode === 'timed20' ? TIMED20_BOSS_GROWTH : TIMED_BOSS_GROWTH
+    return table[Math.min(timedTier, table.length - 1)]
   }
   // 无尽（BOSS 平衡 2026-11 补齐）：此前成长恒为 1，前段首领只有 baseHp 线性抬升、
   // 血量明显落后于限时同波次。改为 20 波前与限时首档一致（×2），
@@ -440,14 +475,14 @@ export const DIFFICULTIES = {
     name: '简单',
     description: '更耐打，勇者攻势更舒缓。',
     playerBonusHp: 2,
-    enemyHpMul: 0.85,
-    eliteHpMul: 0.9,
+    enemyHpMul: 0.92,
+    eliteHpMul: 0.95,
     enemySpeedMul: 0.92,
     enemySpeedCap: 285,
-    spawnPressureMul: 0.85,
+    spawnPressureMul: 0.88,
     attackTempoMul: 0.92,
-    eliteChanceMul: 0.7,
-    eliteChanceCap: 0.1,
+    eliteChanceMul: 0.75,
+    eliteChanceCap: 0.11,
     bossHpMul: 0.85,
     rewardMul: 0.8,
     doubleAffixChance: 0,
@@ -458,15 +493,17 @@ export const DIFFICULTIES = {
     name: '普通',
     description: '标准攻势与完整成长节奏。',
     playerBonusHp: 0,
-    enemyHpMul: 1,
-    eliteHpMul: 1,
+    enemyHpMul: 1.15,
+    eliteHpMul: 1.15,
     enemySpeedMul: 1,
-    enemySpeedCap: 305,
+    enemySpeedCap: 310,
     spawnPressureMul: 1,
-    attackTempoMul: 1,
-    eliteChanceMul: 1,
-    eliteChanceCap: 0.12,
-    bossHpMul: 1,
+    attackTempoMul: 1.02,
+    eliteChanceMul: 1.1,
+    eliteChanceCap: 0.14,
+    bossHpMul: 1.35,
+    timedBossHpRamp: [1.05, 0.12, 1.55],
+    timed20BossHpMax: 1.9,
     rewardMul: 1,
     doubleAffixChance: 0,
     bossPatternBonus: 0,
@@ -474,39 +511,69 @@ export const DIFFICULTIES = {
   hard: {
     id: 'hard',
     name: '困难',
-    description: '更密集的精英攻势、零星双词缀精英与更强的王级勇者。',
+    description: '高压硬核攻势、高频双词缀精英与具备防暴毙韧性的王级勇者。',
     playerBonusHp: 0,
-    enemyHpMul: 1.18,
-    eliteHpMul: 1.1,
-    enemySpeedMul: 1.04,
-    enemySpeedCap: 320,
-    spawnPressureMul: 1.12,
-    attackTempoMul: 1.06,
-    eliteChanceMul: 1.5,
-    eliteChanceCap: 0.18,
-    bossHpMul: 1.22,
+    enemyHpMul: 1.45,
+    eliteHpMul: 1.35,
+    enemySpeedMul: 1.06,
+    enemySpeedCap: 332,
+    spawnPressureMul: 1.25,
+    attackTempoMul: 1.12,
+    eliteChanceMul: 1.75,
+    eliteChanceCap: 0.24,
+    bossHpMul: 2.8,
+    timedBossHpRamp: [1.4, 0.55, 4.15],
+    timed20BossHpMax: 6.2,
+    expeditionBossHpRamp: [1.15, 0.14, 2.55],
     rewardMul: 1.35,
-    doubleAffixChance: 0.12,
+    doubleAffixChance: 0.22,
     bossPatternBonus: 1,
   },
   hell: {
     id: 'hell',
     name: '地狱',
-    description: '极限攻势；大量精英同时拥有两种词缀，首领展现终极杀招。',
+    description: '极限硬核攻势；大量精英兼具双词缀与新词缀，王级勇者拥有极高耐久、破盾与重伤杀招。',
     playerBonusHp: 0,
-    enemyHpMul: 1.38,
-    eliteHpMul: 1.2,
-    enemySpeedMul: 1.07,
+    enemyHpMul: 1.85,
+    eliteHpMul: 1.55,
+    enemySpeedMul: 1.08,
     enemySpeedCap: 335,
-    spawnPressureMul: 1.22,
-    attackTempoMul: 1.12,
-    eliteChanceMul: 2,
-    eliteChanceCap: 0.24,
-    bossHpMul: 1.45,
+    spawnPressureMul: 1.4,
+    attackTempoMul: 1.2,
+    eliteChanceMul: 2.3,
+    eliteChanceCap: 0.32,
+    bossHpMul: 3.8,
+    timedBossHpRamp: [1.55, 0.72, 5.4],
+    timed20BossHpMax: 7.4,
+    expeditionBossHpRamp: [1.3, 0.2, 3.4],
     rewardMul: 1.8,
-    doubleAffixChance: 0.35,
+    doubleAffixChance: 0.48,
     bossPatternBonus: 2,
   },
+}
+
+/**
+ * 难度对首领生命的修正倍率：
+ *  - 限时/普通以上：按首领波次档位递增；
+ *  - 远征困难/地狱：按章节深度递增，避免后期黑市+成型构筑融化章节守将；
+ *  - 无尽困难/地狱：按 5 波一档递增，追赶深层构筑输出。
+ */
+export function getDifficultyBossHpMultiplier(profile, selection, wave = 1, stage = 0) {
+  const base = profile?.bossHpMul || 1
+  if (selection?.mode === 'expedition') {
+    if (!Array.isArray(profile?.expeditionBossHpRamp)) return base
+    const [start, step, max] = profile.expeditionBossHpRamp
+    const expTier = Math.max(0, (stage || 1) - 1)
+    return base * Math.min(max, start + expTier * step)
+  }
+  if (!Array.isArray(profile?.timedBossHpRamp)) return base
+  if (!isTimedMode(selection?.mode) && selection?.mode !== 'endless') return base
+  const [start, step, max] = profile.timedBossHpRamp
+  const cap = (selection?.mode === 'timed20' || selection?.mode === 'endless') && Number.isFinite(profile?.timed20BossHpMax)
+    ? profile.timed20BossHpMax
+    : max
+  const tier = Math.max(0, Math.floor((Math.max(1, wave) - 5) / 5))
+  return base * Math.min(cap, start + tier * step)
 }
 
 export function normalizeRunSelection(selection = {}) {
@@ -542,12 +609,38 @@ export function getBossWavePlan(selection, wave, extraBossMembers = 0) {
   const value = normalizeRunSelection(selection)
   if (value.mode === 'expedition' || wave < 5 || wave % 5 !== 0) return null
 
-  if (value.mode === 'timed') {
+  if (isTimedMode(value.mode)) {
     const plans = {
       5: { label: '边境督战', types: ['boss-knight'], memberHpMul: 0.9 },
       10: { label: '皇家奥术镇压', types: ['boss-mage'], memberHpMul: 1 },
       15: { label: '王国双锋', types: ['boss-knight', 'boss-archer'], memberHpMul: 0.72 },
       20: { label: '王庭术猎团', types: ['boss-mage', 'boss-archer'], memberHpMul: 0.72 },
+    }
+    if (value.mode === 'timed20') {
+      plans[25] = {
+        label: '王庭三圣卫',
+        types: ['boss-knight', 'boss-mage', 'boss-archer'],
+        total: 3,
+        maxActive: 3,
+        memberHpMul: 0.62,
+        formation: { ...ENDLESS_BOSS_FORMATIONS[0] },
+      }
+      plans[30] = {
+        label: '血誓讨伐团',
+        types: ['boss-knight', 'boss-mage', 'boss-archer', 'boss-knight'],
+        total: 4,
+        maxActive: 3,
+        memberHpMul: 0.56,
+        formation: { ...ENDLESS_BOSS_FORMATIONS[1] },
+      }
+      plans[35] = {
+        label: '四王围猎阵',
+        types: ['boss-knight', 'boss-mage', 'boss-archer', 'boss-knight'],
+        total: 4,
+        maxActive: 4,
+        memberHpMul: 0.5,
+        formation: { ...ENDLESS_BOSS_FORMATIONS[2] },
+      }
     }
     return plans[wave] || null
   }
@@ -585,14 +678,20 @@ export function getBossWavePlan(selection, wave, extraBossMembers = 0) {
 export function getWaveModifiers(selection, wave, stage = 0) {
   const tier = getEndlessDisasterTier(selection, wave)
   const expeditionTier = selection?.mode === 'expedition' ? Math.max(0, (stage || 1) - 1) : 0
+  const timedLateTier = selection?.mode === 'timed20' && wave > 20
+    ? Math.min(4, Math.floor((wave - 20) / 5))
+    : 0
   const bossGrowth = getBossGrowth(selection, wave, expeditionTier)
   return {
     tier,
-    enemyHpMul: 1 + tier * 0.12 + expeditionTier * 0.06,
+    enemyHpMul: 1 + tier * 0.12 + expeditionTier * 0.06 + timedLateTier * 0.1,
     bossHpMul: (1 + tier * 0.18) * bossGrowth,
-    attackTempoMul: 1 + Math.min(0.3, tier * 0.03),
-    eliteChanceBonus: Math.min(0.1, tier * 0.02 + expeditionTier * 0.015),
-    bossPatternBonus: Math.min(4, tier) + Math.min(2, Math.floor(expeditionTier / 4)),
+    attackTempoMul: 1 + Math.min(0.3, tier * 0.03) + timedLateTier * 0.03,
+    eliteChanceBonus: Math.min(0.1, tier * 0.02 + expeditionTier * 0.015) + timedLateTier * 0.02,
+    bossPatternBonus:
+      Math.min(4, tier) +
+      Math.min(2, Math.floor(expeditionTier / 4)) +
+      Math.min(2, Math.floor((timedLateTier + 1) / 2)),
   }
 }
 
@@ -623,39 +722,47 @@ export function difficultyUnlockHint(difficulty) {
   return ''
 }
 
+function normalizedHighestMode(progression) {
+  const raw = progression?.highestMode
+  if (PRIMARY_MODE_IDS.includes(raw)) return raw
+  if (raw === 'timed20') return 'endless'
+  return 'expedition'
+}
+
 export function isModeUnlocked(progression, mode) {
-  const requested = MODE_IDS.indexOf(mode)
-  const highest = MODE_IDS.indexOf(
-    MODE_IDS.includes(progression?.highestMode) ? progression.highestMode : 'expedition'
-  )
-  return requested >= 0 && requested <= highest
+  const highest = normalizedHighestMode(progression)
+  if (mode === 'timed20') return highest === 'endless'
+  const requested = PRIMARY_MODE_IDS.indexOf(mode)
+  const highestIdx = PRIMARY_MODE_IDS.indexOf(highest)
+  return requested >= 0 && requested <= highestIdx
 }
 
 export function getUnlockedModeIds(progression) {
-  return MODE_IDS.filter((mode) => isModeUnlocked(progression, mode))
+  return PRIMARY_MODE_IDS.filter((mode) => isModeUnlocked(progression, mode))
 }
 
 export function modeUnlockHint(mode) {
   // 条件直接点名模式，避免「闯关/限时」这类需要玩家自行映射的简称。
   if (mode === 'timed') return '通关「王庭逆袭 · 困难」后解锁'
+  if (mode === 'timed20') return '通关「限时讨伐（12 分钟）· 困难」后解锁'
   if (mode === 'endless') return '通关「限时讨伐 · 困难」后解锁'
   return ''
 }
 
 export function getNextModeUnlock(progression) {
-  const mode = MODE_IDS.find((id) => !isModeUnlocked(progression, id))
+  const mode = PRIMARY_MODE_IDS.find((id) => !isModeUnlocked(progression, id))
   return mode ? { mode, name: MODES[mode].name, hint: modeUnlockHint(mode) } : null
 }
 
-/** 模式按远征 → 限时 → 无尽推进；只认可对应模式的困难通关。 */
+/** 模式按远征 → 限时 → 无尽推进；通关 12 分钟困难会同步解锁 20 分钟限时与无尽。 */
 export function unlockedModeAfterRun(progression, run) {
-  const current = MODE_IDS.includes(progression?.highestMode)
-    ? progression.highestMode
-    : 'expedition'
+  const current = normalizedHighestMode(progression)
   let next = current
   if (run?.result === 'victory' && run?.difficulty === 'hard') {
-    if (run.mode === 'expedition' && MODE_IDS.indexOf(next) < MODE_IDS.indexOf('timed')) next = 'timed'
-    if (run.mode === 'timed') next = 'endless'
+    if (run.mode === 'expedition' && PRIMARY_MODE_IDS.indexOf(next) < PRIMARY_MODE_IDS.indexOf('timed')) {
+      next = 'timed'
+    }
+    if (isTimedMode(run.mode)) next = 'endless'
   }
   return next
 }
@@ -665,7 +772,7 @@ export function unlockedDifficultyAfterRun(progression, run) {
   let next = current
   if (
     run?.difficulty === 'normal' &&
-    (((run.mode === 'timed' || run.mode === 'expedition') && run.result === 'victory') ||
+    (((isTimedMode(run.mode) || run.mode === 'expedition') && run.result === 'victory') ||
       (run.mode === 'endless' && Number(run.wave) >= 20))
   ) {
     next = 'hard'
@@ -673,7 +780,7 @@ export function unlockedDifficultyAfterRun(progression, run) {
   if (
     DIFFICULTY_IDS.indexOf(next) >= DIFFICULTY_IDS.indexOf('hard') &&
     run?.difficulty === 'hard' &&
-    (((run.mode === 'timed' || run.mode === 'expedition') && run.result === 'victory') ||
+    (((isTimedMode(run.mode) || run.mode === 'expedition') && run.result === 'victory') ||
       (run.mode === 'endless' && Number(run.wave) >= 25))
   ) {
     next = 'hell'
@@ -714,7 +821,8 @@ export function sanitizeRun(run, selection = run) {
 
 export function computeScoreBreakdown(run) {
   const clean = sanitizeRun(run)
-  const progressWave = clean.mode === 'timed' ? Math.min(24, clean.wave) : clean.wave
+  const timed = isTimedMode(clean.mode)
+  const progressWave = timed ? Math.min(getTimedMaxWave(clean.mode), clean.wave) : clean.wave
   const breakdown = {
     combat: clean.kills * 10,
     devour: clean.devours * 15,
@@ -723,12 +831,12 @@ export function computeScoreBreakdown(run) {
     events: clean.eventsCompleted * 350,
     progress: clean.mode === 'expedition' ? (clean.stage - 1) * 800 : (progressWave - 1) * 100,
     victory:
-      (clean.mode === 'timed' || clean.mode === 'expedition') && clean.result === 'victory'
-        ? clean.mode === 'expedition' ? 6000 : 4000
+      (timed || clean.mode === 'expedition') && clean.result === 'victory'
+        ? clean.mode === 'expedition' || clean.mode === 'timed20' ? 6000 : 4000
         : 0,
     finaleSpeed:
-      clean.mode === 'timed' && clean.result === 'victory'
-        ? Math.max(0, Math.round((180 - clean.finaleTime) * 10))
+      timed && clean.result === 'victory'
+        ? Math.max(0, Math.round(((clean.mode === 'timed20' ? 240 : 180) - clean.finaleTime) * 10))
         : 0,
     clearSpeed:
       clean.mode === 'expedition' && clean.result === 'victory'
@@ -746,13 +854,17 @@ export function computeScore(run) {
 /**
  * 战力点（黑市货币）：由本局分数按难度倍率折算，客户端预览与服务端入账共用同一公式。
  * 锚点：POINTS_PER_SCORE = 30（即旧口径 ÷3000 的 ×100 展示尺度）→ 困难通关（~2.6 万分 ×1.35）
- * 约 1100 点、普通通关约 800 点；通关奖励已计入分数，暴毙局自动低保（约 200~400 点），
- * 无需单独保留率规则。三位数面值只为成就感，收支同比例缩放不改变经济实质。
+ * 约 1100 点、普通通关约 800 点；20 分钟限时分母为 50（同难度完整通关约 +20% 收益）；
  * 无尽沿用灾变/继续加成与战败 70% 保留；POINTS_SOFT_CAP 后收益减半，
- * 防止深层无尽单局打穿黑市货架（限时/远征分数天然封顶，几乎碰不到软顶）。
+ * 防止深层无尽单局打穿黑市货架。
  */
 export const POINTS_PER_SCORE = 30
+export const POINTS_PER_SCORE_TIMED20 = 50
 export const POINTS_SOFT_CAP = 2000
+
+export function getPointsPerScore(mode) {
+  return mode === 'timed20' ? POINTS_PER_SCORE_TIMED20 : POINTS_PER_SCORE
+}
 
 export function scoreToPoints(score, selection, context = {}) {
   const selected = normalizeRunSelection(selection)
@@ -764,6 +876,6 @@ export function scoreToPoints(score, selection, context = {}) {
     : 1
   const scaled = Math.max(0, Number(score) || 0) *
     getRunProfile(selected).rewardMul * (1 + endlessBonus) * retention
-  const raw = Math.max(0, Math.round(scaled / POINTS_PER_SCORE))
+  const raw = Math.max(0, Math.round(scaled / getPointsPerScore(selected.mode)))
   return raw > POINTS_SOFT_CAP ? POINTS_SOFT_CAP + Math.round((raw - POINTS_SOFT_CAP) / 2) : raw
 }

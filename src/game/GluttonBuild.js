@@ -3,7 +3,7 @@ import { getEffectiveSkillMaxLevel, getSoftRankMultiplier } from './SkillProgres
 export const GLUTTON_RULES = Object.freeze({
   choicesBeforeRoute: 5, routeWave: 6, routeStage: 3,
   ultimateLevel: 14, ultimateWave: 10, ultimateStage: 5, ultimateInvestment: 4,
-  ownedWeight: 1.2, routeWeight: 1.15, maxWeightBoost: 1.35,
+  ownedWeight: 1.28, routeWeight: 1.18, maxWeightBoost: 1.5,
 })
 
 export const GLUTTON_ROUTES = Object.freeze({
@@ -48,64 +48,122 @@ const makeRouteSkill = (id, name, route, maxLevel, desc, stats, apply, extra = {
 })
 
 /** 「咬合/胃压震慑」（饕甲进阶卡）：受光环/反伤/咬击命中的非首领敌人出手伤害折扣与持续时间。 */
-export const gluttonCowPowerAt = level => Math.min(0.54, 0.26 + Math.max(0, Math.floor(Number(level) || 0)) * 0.07)
-export const gluttonCowDurationAt = level => 1.6 + Math.max(0, Math.floor(Number(level) || 0)) * 0.25
+export const gluttonCowPowerAt = level => Math.min(0.64, 0.26 + Math.max(0, Math.floor(Number(level) || 0)) * 0.07)
+export const gluttonCowDurationAt = level => Math.min(4.2, 1.6 + Math.max(0, Math.floor(Number(level) || 0)) * 0.25)
 
-/** 酸蚀沸腾：光环半径、伤害加成与融甲易伤。 */
-export const gluttonAcidAuraBonusAt = level => Math.max(0, Math.floor(Number(level) || 0)) * 10
-export const gluttonAcidAuraDamageAt = level => 1 + Math.max(0, Math.floor(Number(level) || 0)) * 0.15
-export const gluttonAcidAuraVulnAt = level => Math.min(0.24, 0.04 + Math.max(0, Math.floor(Number(level) || 0)) * 0.04)
+/** 酸蚀沸腾：光环半径、伤害加成与融甲易伤；前 4 级全额，之后递减。 */
+export const gluttonAcidAuraBonusAt = level => {
+  const n = Math.max(0, Math.floor(Number(level) || 0))
+  return Math.min(4, n) * 10 + Math.min(72, Math.max(0, n - 4) * 9)
+}
+export const gluttonAcidAuraDamageAt = level => {
+  const n = Math.max(0, Math.floor(Number(level) || 0))
+  return 1 + Math.min(4, n) * 0.15 + Math.min(0.6, Math.max(0, n - 4) * 0.08)
+}
+export const gluttonAcidAuraVulnAt = level => Math.min(0.32, 0.04 + Math.max(0, Math.floor(Number(level) || 0)) * 0.04)
 
 /** 荆棘反胃：反伤半径与基础倍率。 */
-export const gluttonCounterRadiusAt = level => 112 + Math.max(0, Math.floor(Number(level) || 0)) * 11
-export const gluttonCounterDamageAt = level => 0.75 + Math.max(0, Math.floor(Number(level) || 0)) * 0.18
+export const gluttonCounterRadiusAt = level => Math.min(230, 112 + Math.max(0, Math.floor(Number(level) || 0)) * 11)
+export const gluttonCounterDamageAt = level => Math.min(2.4, 0.75 + Math.max(0, Math.floor(Number(level) || 0)) * 0.18)
 
 /** 血宴连噬：每次吞噬/击杀返还深渊吸噬冷却与单次封顶比例。 */
-export const gluttonPounceResetPerKillAt = level => Math.min(0.65, 0.2 + Math.max(0, Math.floor(Number(level) || 0)) * 0.15)
-export const gluttonPounceResetCapRatioAt = level => Math.min(0.6, 0.35 + Math.max(0, Math.floor(Number(level) || 0)) * 0.08)
+export const gluttonPounceResetPerKillAt = level => Math.min(1.1, 0.2 + Math.min(3, Math.max(0, Math.floor(Number(level) || 0))) * 0.15 + Math.max(0, Math.floor(Number(level) || 0) - 3) * 0.08)
+export const gluttonPounceResetCapRatioAt = level => Math.min(0.72, 0.35 + Math.max(0, Math.floor(Number(level) || 0)) * 0.08)
 
 /** 裂颚狂咬：吸噬重咬后咬击攻速与额外弧度。 */
-export const gluttonFrenzyHasteAt = level => [0, 0.18, 0.25, 0.32][Math.min(3, Math.max(0, Math.floor(Number(level) || 0)))] || 0.32
-export const gluttonFrenzyArcDegAt = level => [0, 45, 65, 85][Math.min(3, Math.max(0, Math.floor(Number(level) || 0)))] || 85
+export const gluttonFrenzyHasteAt = level => {
+  const n = Math.max(0, Math.floor(Number(level) || 0))
+  return n <= 3 ? [0, 0.18, 0.25, 0.32][n] : 0.32 + Math.min(0.28, (n - 3) * 0.05)
+}
+export const gluttonFrenzyArcDegAt = level => {
+  const n = Math.max(0, Math.floor(Number(level) || 0))
+  return n <= 3 ? [0, 45, 65, 85][n] : 85 + Math.min(60, (n - 3) * 12)
+}
 
 /** 破阵重压：吸噬重咬额外伤害与易伤。 */
-export const gluttonBreachDamageAt = level => Math.max(0, Math.floor(Number(level) || 0)) * 0.12
-export const gluttonBreachVulnAt = level => Math.min(0.24, 0.05 + Math.max(0, Math.floor(Number(level) || 0)) * 0.05)
+export const gluttonBreachDamageAt = level => {
+  const n = Math.max(0, Math.floor(Number(level) || 0))
+  return Math.min(4, n) * 0.12 + Math.min(0.56, Math.max(0, n - 4) * 0.07)
+}
+export const gluttonBreachVulnAt = level => Math.min(0.32, 0.05 + Math.max(0, Math.floor(Number(level) || 0)) * 0.05)
+
+/** 贪婪巨口（T1）：咬击弧度、攻速与伤害的前段全额 + 后段递减。 */
+export const gluttonBiteSweepArcDegAt = level => {
+  const n = Math.max(0, Math.floor(Number(level) || 0))
+  return Math.min(3, n) * 18 + Math.min(48, Math.max(0, n - 3) * 10)
+}
+export const gluttonBiteSweepHasteAt = level => {
+  const n = Math.max(0, Math.floor(Number(level) || 0))
+  return Math.min(3, n) * 0.06 + Math.min(0.2, Math.max(0, n - 3) * 0.03)
+}
+export const gluttonBiteSweepDamageAt = level => {
+  const n = Math.max(0, Math.floor(Number(level) || 0))
+  return Math.min(4, n) * 0.12 + Math.min(0.32, Math.max(0, n - 4) * 0.08)
+}
+/** 硬化甲壳反震对受击/挡伤的基础倍率。 */
+export const gluttonBulkReflectScaleAt = level => {
+  const n = Math.max(0, Math.floor(Number(level) || 0))
+  return 1 + Math.min(4, n) * 0.15 + Math.min(0.56, Math.max(0, n - 4) * 0.07)
+}
+/** 蓄甲爆刺：爆刺威力倍率。 */
+export const gluttonThornsSurgeScaleAt = level => {
+  const n = Math.max(0, Math.floor(Number(level) || 0))
+  return n <= 3 ? [0, 1.35, 1.75, 2.2][n] : 2.2 + Math.min(0.8, (n - 3) * 0.16)
+}
+/** 胃酸迸发：吞噬酸爆的半径与伤害倍率。 */
+export const gluttonEruptionRadiusAt = level => {
+  const n = Math.max(0, Math.floor(Number(level) || 0))
+  return 105 + Math.min(4, n) * 12 + Math.min(32, Math.max(0, n - 4) * 8)
+}
+export const gluttonEruptionDamageAt = level => {
+  const n = Math.max(0, Math.floor(Number(level) || 0))
+  return 0.9 + Math.min(4, n) * 0.35 + Math.min(0.6, Math.max(0, n - 4) * 0.15)
+}
+/** 颚震余波：冲击半径与伤害倍率。 */
+export const gluttonAftershockRadiusAt = level => 145 + Math.min(10, Math.max(0, Math.floor(Number(level) || 0))) * 14
+export const gluttonAftershockDamageAt = level => 0.5 + Math.min(10, Math.max(0, Math.floor(Number(level) || 0))) * 0.14
+/** 消化代谢：吞噬/酸浪后的百分比减伤。 */
+export const gluttonSubDigestDrAt = level => [0, 0.18, 0.26, 0.34, 0.4, 0.45, 0.5][Math.min(6, Math.max(0, Math.floor(Number(level) || 0)))] || 0.5
 
 export const GLUTTON_ROUTE_SKILLS = [
   // —— 腐沼吞城（mire） ——
-  makeRouteSkill('glut_acid_aura', '酸蚀沸腾', 'mire', 4,
+  makeRouteSkill('glut_acid_aura', '酸蚀沸腾', 'mire', 8,
     '大幅扩大体表腐蚀光环范围与跳伤威力，使圈内敌人减速并承受额外伤害（对首领同样生效）。',
     lv => `光环半径 +${gluttonAcidAuraBonusAt(lv + 1)}px · 伤害 +${Math.round((gluttonAcidAuraDamageAt(lv + 1) - 1) * 100)}% · 额外融甲 +${Math.round(gluttonAcidAuraVulnAt(lv + 1) * 100)}%`,
     (game, level) => { game.player.gluttonAcidAuraLevel = level },
     { growthClass: 'core' }),
-  makeRouteSkill('glut_eruption', '胃酸迸发', 'mire', 3,
+  makeRouteSkill('glut_eruption', '胃酸迸发', 'mire', 8,
     '吞噬或深渊吸噬咬合时爆发近身强酸溅射，减速周围普通敌人并将残血猎物压入吞噬线（每 0.35 秒最多一次）。',
-    lv => `酸爆半径 ${105 + (lv + 1) * 12}px · 伤害 ×${(0.9 + (lv + 1) * 0.35).toFixed(2)} · 减速 0.8 秒`,
-    (game, level) => { game.player.devourAcidBurst = level }),
-  makeRouteSkill('glut_mire', '腐蚀残渣', 'mire', 4,
+    lv => `酸爆半径 ${gluttonEruptionRadiusAt(lv + 1)}px · 伤害 ×${gluttonEruptionDamageAt(lv + 1).toFixed(2)} · 减速 0.8 秒`,
+    (game, level) => { game.player.devourAcidBurst = level },
+    { growthClass: 'core' }),
+  makeRouteSkill('glut_mire', '腐蚀残渣', 'mire', 8,
     '吞噬或深渊吸噬咬合后在原处留下沸腾酸沼，周期伤害并减速附近敌人，同时牵引圈内白旗猎物；酸沼可将普通敌人压进吞噬线。',
-    lv => `酸沼半径 ${64 + Math.min(7, lv + 1) * 8}px · 持续 ${Math.min(4.0, 2.6 + (lv + 1) * 0.3).toFixed(1)} 秒`,
-    (game, level) => { game.player.gluttonMireLevel = level }),
+    lv => `酸沼半径 ${64 + Math.min(9, lv + 1) * 8}px · 持续 ${Math.min(4.6, 2.6 + (lv + 1) * 0.3).toFixed(1)} 秒`,
+    (game, level) => { game.player.gluttonMireLevel = level },
+    { growthClass: 'core' }),
 
   // —— 裂颚破阵（jaw） ——
-  makeRouteSkill('glut_aftershock', '颚震余波', 'jaw', 4,
+  makeRouteSkill('glut_aftershock', '颚震余波', 'jaw', 8,
     '深渊吸噬闭颚重咬与普攻咬击后追加冲击余波，可将外围敌人震入吞噬线；余波不递归触发自身。',
-    lv => `余波伤害 ${Math.round((0.5 + Math.min(8, lv + 1) * 0.14) * 100)}% · 范围 ${145 + Math.min(8, lv + 1) * 14}px`,
+    lv => `余波伤害 ${Math.round(gluttonAftershockDamageAt(lv + 1) * 100)}% · 范围 ${gluttonAftershockRadiusAt(lv + 1)}px`,
     (game, level) => { game.player.gluttonAftershockLevel = level },
     { growthClass: 'core' }),
-  makeRouteSkill('glut_pounce_reset', '血宴连噬', 'jaw', 3,
+  makeRouteSkill('glut_pounce_reset', '血宴连噬', 'jaw', 8,
     '深渊吸噬每吞噬或击杀敌人，返还深渊吸噬冷却时间，拉聚吞食敌群后更快凝聚下一口。',
     lv => `每吞杀返还 ${gluttonPounceResetPerKillAt(lv + 1).toFixed(2)} 秒 · 单次至多返还 ${Math.round(gluttonPounceResetCapRatioAt(lv + 1) * 100)}% 冷却`,
-    (game, level) => { game.player.gluttonPounceResetLevel = level }),
-  makeRouteSkill('glut_frenzy_jaw', '裂颚狂咬', 'jaw', 3,
+    (game, level) => { game.player.gluttonPounceResetLevel = level },
+    { growthClass: 'core' }),
+  makeRouteSkill('glut_frenzy_jaw', '裂颚狂咬', 'jaw', 8,
     '深渊吸噬咬合后 3 秒内进入狂咬狂热：大幅拓宽普攻咬击扇角并提高咬击攻速。',
     lv => `咬击弧度 +${gluttonFrenzyArcDegAt(lv + 1)}° · 攻速 +${Math.round(gluttonFrenzyHasteAt(lv + 1) * 100)}%（持续 3 秒）`,
-    (game, level) => { game.player.gluttonFrenzyJawLevel = level }),
-  makeRouteSkill('glut_breach', '破阵重压', 'jaw', 3,
+    (game, level) => { game.player.gluttonFrenzyJawLevel = level },
+    { growthClass: 'core' }),
+  makeRouteSkill('glut_breach', '破阵重压', 'jaw', 8,
     '大幅提高深渊吸噬重咬伤害，并使命中目标 3 秒内承受伤害提高（对精英与首领同样生效）。',
     lv => `吸噬伤害 +${Math.round(gluttonBreachDamageAt(lv + 1) * 100)}% · 命中易伤 +${Math.round(gluttonBreachVulnAt(lv + 1) * 100)}%`,
-    (game, level) => { game.player.gluttonBreachLevel = level }),
+    (game, level) => { game.player.gluttonBreachLevel = level },
+    { growthClass: 'core' }),
   {
     id: 'glut_jaw_ultimate', name: '🌟 断岳暴食', spec: 'gluttony', route: 'jaw', kind: 'ultimate',
     maxLevel: 1, desc: GLUTTON_ROUTES.jaw.ultimateDesc, stats: '互斥终极 · 引力 +30% · 双重碎地震波 · 狂怒增益',
@@ -114,26 +172,30 @@ export const GLUTTON_ROUTE_SKILLS = [
   },
 
   // —— 饕甲反噬（shell） ——
-  makeRouteSkill('glut_counter', '荆棘反胃', 'shell', 4,
+  makeRouteSkill('glut_counter', '荆棘反胃', 'shell', 8,
     '大幅强化胃铠挡伤与受击时的 360° 酸刺反震；反震伤害额外受自身生命上限加成，并可将敌人震入吞噬线。',
     lv => `反震半径 ${gluttonCounterRadiusAt(lv + 1)}px · 威力 ${Math.round(gluttonCounterDamageAt(lv + 1) * 100)}%（每点最大生命 +5%）`,
     (game, level) => { game.player.gluttonCounterLevel = level },
     { growthClass: 'core' }),
-  makeRouteSkill('glut_sub_digest', '消化代谢', 'shell', 3,
+  makeRouteSkill('glut_sub_digest', '消化代谢', 'shell', 6,
     '吞噬或触发饱食酸浪时恢复 1 点生命（共享 3.5 秒间隔），并获得 3.5 秒百分比减伤。',
-    lv => `恢复 +1 生命（3.5 秒冷却）· 减伤 ${[18, 26, 34][Math.min(2, lv)]}%`,
+    lv => `恢复 +1 生命（3.5 秒冷却）· 减伤 ${Math.round(gluttonSubDigestDrAt(lv + 1) * 100)}%`,
     (game, level) => {
       game.player.devourHeal = true
-      game.player.devourDamageReduction = [0.18, 0.26, 0.34][Math.min(2, level - 1)] || 0.34
-    }),
-  makeRouteSkill('glut_cow', '胃压震慑', 'shell', 4,
+      game.player.devourDamageReduction = gluttonSubDigestDrAt(level)
+    },
+    { growthClass: 'core',
+      rankCaps: { expedition: { hard: 6, hell: 6 }, timed: 6, endless: 6 } }),
+  makeRouteSkill('glut_cow', '胃压震慑', 'shell', 8,
     '被腐蚀光环、反震或咬击命中的非首领敌人在短时间内出手伤害大幅降低；刷新时长不叠加。',
     lv => `出手伤害 −${Math.round(gluttonCowPowerAt(lv + 1) * 100)}% · 持续 ${gluttonCowDurationAt(lv + 1).toFixed(1)} 秒`,
-    (game, level) => { game.player.gluttonCowLevel = level }),
-  makeRouteSkill('glut_thorns_surge', '蓄甲爆刺', 'shell', 3,
+    (game, level) => { game.player.gluttonCowLevel = level },
+    { growthClass: 'core' }),
+  makeRouteSkill('glut_thorns_surge', '蓄甲爆刺', 'shell', 8,
     '每通过胃铠挡伤或受击承受 3 次攻击，自动向外爆射一轮高伤穿透钢刺并立刻再生 1 层胃铠。',
-    lv => `爆刺威力 ${[135, 175, 220][Math.min(2, lv)]}% 反伤 · 立即 +1 层胃铠`,
-    (game, level) => { game.player.gluttonThornsSurgeLevel = level }),
+    lv => `爆刺威力 ${Math.round(gluttonThornsSurgeScaleAt(lv + 1) * 100)}% 反伤 · 立即 +1 层胃铠`,
+    (game, level) => { game.player.gluttonThornsSurgeLevel = level },
+    { growthClass: 'core' }),
   {
     id: 'glut_shell_ultimate', name: '🌟 不灭胃铠', spec: 'gluttony', route: 'shell', kind: 'ultimate',
     maxLevel: 1, desc: GLUTTON_ROUTES.shell.ultimateDesc, stats: '互斥终极 · 甲上限 +1 · 自动再生 · 挡伤缩 CD',

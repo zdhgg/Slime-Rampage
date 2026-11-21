@@ -8,7 +8,7 @@
  *  - 纯展示 + 上报，不持有任何游戏状态。
  */
 import { computed } from 'vue'
-import { MODES, POINTS_PER_SCORE } from '../game/RunRules.js'
+import { MODES, getPointsPerScore, getTimedMaxWave, isTimedMode } from '../game/RunRules.js'
 
 /** 元素图标（生态档案展示） */
 const EL_ICONS = { fire: '🔥', water: '💧', poison: '☠️', lightning: '⚡' }
@@ -79,7 +79,7 @@ const scoreRows = computed(() => {
       label: props.info?.mode === 'expedition' ? '章节推进' : '波次推进',
       detail: props.info?.mode === 'expedition'
         ? `抵达第 ${props.info?.stage || 1} / ${props.info?.totalStages || 6} 章`
-        : `通过 ${Math.max(0, Math.min(props.info?.mode === 'timed' ? 24 : 9999, props.info?.wave || 1) - 1)} 波`,
+        : `通过 ${Math.max(0, Math.min(isTimedMode(props.info?.mode) ? getTimedMaxWave(props.info?.mode) : 9999, props.info?.wave || 1) - 1)} 波`,
       value: b.progress || 0,
     },
   ]
@@ -98,8 +98,9 @@ const scoreRows = computed(() => {
 /** 分数榜行首标记：前三奖牌，其余 #n */
 const rankBadge = (i) => (i < 3 ? MEDALS[i] : `#${i + 1}`)
 
-/** 本局战力点入账（分数 ÷ POINTS_PER_SCORE × 倍率，与服务端入账共用 scoreToPoints 口径） */
+/** 本局战力点入账（分数 ÷ getPointsPerScore × 倍率，与服务端入账共用 scoreToPoints 口径） */
 const pointsText = computed(() => `${Math.floor(props.info?.earnedDrops || 0)}`)
+const pointsPerScore = computed(() => getPointsPerScore(props.info?.mode))
 </script>
 
 <template>
@@ -141,7 +142,7 @@ const pointsText = computed(() => `${Math.floor(props.info?.earnedDrops || 0)}`)
         <div class="gameover-drops">
           🎒 战力点
           <span class="drop-list">
-            <span class="drop-total">分数 {{ scoreText }} ÷ {{ POINTS_PER_SCORE }} · 入账 <b>{{ pointsText }}</b> 点</span>
+            <span class="drop-total">分数 {{ scoreText }} ÷ {{ pointsPerScore }} · 入账 <b>{{ pointsText }}</b> 点</span>
           </span>
           <b v-if="info.mode === 'endless'">
             结算倍率 ×{{ Number(info.effectiveMultiplier || info.rewardMultiplier || 1).toFixed(2) }} ·
@@ -155,7 +156,7 @@ const pointsText = computed(() => `${Math.floor(props.info?.earnedDrops || 0)}`)
           新难度已解锁：{{ info.unlocked === 'hell' ? '地狱' : '困难' }}
         </div>
         <div v-if="info.unlockedMode" class="unlock-banner mode-unlock-banner">
-          新模式已解锁：{{ MODES[info.unlockedMode]?.name || info.unlockedMode }}
+          新模式已解锁：{{ info.unlockedMode === 'endless' ? '限时讨伐（20 分钟）与无尽灾变' : (MODES[info.unlockedMode]?.name || info.unlockedMode) }}
         </div>
         <div class="gameover-species">
           <div class="species-name">{{ info.species?.threatIcon }} {{ info.species?.name || '普通史莱姆' }}</div>
@@ -191,7 +192,7 @@ const pointsText = computed(() => `${Math.floor(props.info?.earnedDrops || 0)}`)
             <span class="board-rank">{{ rankBadge(i) }}</span>
             <span class="board-score">{{ row.score.toLocaleString('en-US') }}</span>
             <span class="board-meta">
-              <template v-if="info.mode === 'timed'">
+              <template v-if="isTimedMode(info.mode)">
                 {{ row.result === 'victory' ? `通关 · 终局 ${fmtTime(row.finaleTime)}` : `败退 · 波${row.wave}` }}
               </template>
               <template v-else-if="info.mode === 'expedition'">
@@ -215,7 +216,7 @@ const pointsText = computed(() => `${Math.floor(props.info?.earnedDrops || 0)}`)
             <span class="board-rank">#{{ entry.rank }}</span>
             <span class="board-score">{{ entry.score.toLocaleString('en-US') }}</span>
             <span class="board-meta">
-              <template v-if="info.mode === 'timed'">
+              <template v-if="isTimedMode(info.mode)">
                 {{ entry.result === 'victory' ? `通关 · 终局 ${fmtTime(entry.finaleTime)}` : `败退 · 波${entry.wave}` }}
               </template>
               <template v-else-if="info.mode === 'expedition'">

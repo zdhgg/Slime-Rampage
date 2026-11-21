@@ -15,6 +15,19 @@ assert.equal(getBossWavePlan(timed, 25), null)
 assert.equal(getBossWavePlan({ mode: 'expedition', difficulty: 'normal' }, 15), null)
 ok('限时第 5/10 波单首领、第 15/20 波双首领，远征不插入波次首领')
 
+const timed20 = { mode: 'timed20', difficulty: 'normal' }
+assert.deepEqual(
+  [5, 10, 15, 20, 25, 30, 35, 40].map((wave) => getBossWavePlan(timed20, wave)?.types.length || 0),
+  [1, 1, 2, 2, 3, 4, 4, 0]
+)
+assert.equal(getBossWavePlan(timed20, 25).maxActive, 3)
+assert.equal(getBossWavePlan(timed20, 25).formation.id, 'royal_guard')
+assert.equal(getBossWavePlan(timed20, 30).maxActive, 3)
+assert.equal(getBossWavePlan(timed20, 30).formation.id, 'blood_oath')
+assert.equal(getBossWavePlan(timed20, 35).maxActive, 4)
+assert.equal(getBossWavePlan(timed20, 35).formation.id, 'arcane_relay')
+ok('20 分钟限时第 25/30/35 波接入三王护卫阵、血誓补位与四王围猎阵')
+
 const endless = { mode: 'endless', difficulty: 'normal' }
 assert.deepEqual(
   [20, 25, 30, 35, 40, 45, 80].map((wave) => getBossWavePlan(endless, wave).types.length),
@@ -152,7 +165,7 @@ function createManager(selection = timed) {
 
   const protectedHp = captain.hp
   captain.hit(10)
-  assert.equal(protectedHp - captain.hp, 6.5)
+  assert.equal(protectedHp - captain.hp, 5.5)
   guard.destroy()
   manager.advanceBossEncounter(guard)
   assert.equal(manager.bossInfo.formation.active, false)
@@ -161,7 +174,7 @@ function createManager(selection = timed) {
   const exposedHp = captain.hp
   captain.hit(10)
   assert.equal(exposedHp - captain.hp, 10)
-  ok('王庭护卫阵为主将减伤 35%，护卫清空后立即解除')
+  ok('王庭护卫阵为主将减伤 45%，护卫清空后立即解除')
 }
 
 {
@@ -171,15 +184,15 @@ function createManager(selection = timed) {
   const [defeated, survivor] = manager._bosses
   survivor.hp = Math.round(survivor.maxHp * 0.5)
   const hpBefore = survivor.hp
-  const expectedHeal = Math.max(1, Math.round(survivor.maxHp * 0.08))
+  const expectedHeal = Math.max(1, Math.round(survivor.maxHp * 0.10))
   defeated.destroy()
   manager.advanceBossEncounter(defeated)
   assert.equal(manager._bossEncounter.furyStacks, 1)
-  assert.equal(manager.getBossTempoMultiplier(survivor), 1.12)
+  assert.equal(manager.getBossTempoMultiplier(survivor), 1.15)
   assert.equal(survivor.hp, Math.min(survivor.maxHp, hpBefore + expectedHeal))
-  assert.match(manager.bossInfo.formation.status, /行动 \+12%/)
+  assert.match(manager.bossInfo.formation.status, /行动 \+15%/)
   assert.equal(manager.game.formationBreaks.length, 0)
-  ok('复仇血誓在成员阵亡时治疗余众，并叠加 12% 行动节奏')
+  ok('复仇血誓在成员阵亡时治疗余众，并叠加 15% 行动节奏')
 }
 
 {
@@ -251,6 +264,29 @@ function createManager(selection = timed) {
   survivors[1].destroy()
   assert.equal(manager.advanceBossEncounter(survivors[1]), true)
   ok('限时终局维持两名在场，终审勇者补位且整队清空才完成')
+}
+
+{
+  const { manager } = createManager(timed20)
+  manager.wave = 35
+  const quad = manager.spawnBossGroup(getBossWavePlan(timed20, 35))
+  assert.equal(quad.length, 4)
+  assert.equal(manager.activeBossCount, 4)
+  assert.equal(manager.pendingBossCount, 0)
+
+  const hard20 = { mode: 'timed20', difficulty: 'hard' }
+  const { manager: finaleMgr } = createManager(hard20)
+  finaleMgr.beginFinale()
+  assert.equal(finaleMgr.wave, 41)
+  assert.equal(finaleMgr.activeBossCount, 4)
+  assert.equal(finaleMgr.pendingBossCount, 1)
+  assert.equal(finaleMgr.bossInfo.total, 5)
+  const first = finaleMgr._bosses.find((boss) => boss.active)
+  first.destroy()
+  assert.equal(finaleMgr.advanceBossEncounter(first), false)
+  assert.equal(finaleMgr.activeBossCount, 4)
+  assert.equal(finaleMgr.pendingBossCount, 0)
+  ok('20 分钟限时第 35 波与高难终局支持四王同场与后备补位')
 }
 
 console.log(`\n首领编队专项通过：${n} 组断言 ✓`)

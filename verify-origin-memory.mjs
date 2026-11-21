@@ -427,14 +427,13 @@ check('C4 三条路线只叠加自己的专属效果，加成都有上限', g =>
 })
 
 check('C4b 棱镜/调谐进入统一乘区，合计不超过硬上限', g => {
-  g.skillLevels = { origin_overload: 6 }
+  g.skillLevels = { origin_overload: 10 }
   g.bossSkillLevels = { boss_origin_aftershock: 3 }
   g.originRoute = 'assimilation'
   const mods = originSourceCastMods(g, { stacks: 9, circuits: 0 })
-  assert.ok(mods.damage <= 1.8, '伤害乘区封顶 1.8')
-  assert.ok(mods.area <= 1.35, '范围乘区封顶 1.35')
-  // 棱镜 6 级 1.45 × 调谐 1.15 × 满层重组 1.15 = 1.919 → 被 1.8 截断
-  assert.ok(mods.damage > 1.4, '棱镜与调谐确实进入了乘区')
+  assert.ok(mods.damage <= 2.4, '伤害乘区封顶 2.4')
+  assert.ok(mods.area <= 1.45, '范围乘区封顶 1.45')
+  assert.ok(mods.damage > 1.8, '棱镜与调谐确实进入了乘区')
 
   g.originRoute = null
   const plain = originSourceCastMods(g, { stacks: 0, circuits: 0 })

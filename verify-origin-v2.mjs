@@ -452,7 +452,7 @@ check('共振 ×0.9 在乘区封顶后结算，频率代价始终成立', g => {
   g.skillLevels.origin_overload = 12
   g.bossSkillLevels.boss_origin_aftershock = 3
   const mods = originSourceCastMods(g, { circuits: 3 })
-  assert.ok(Math.abs(mods.damage - 1.62) < 1e-9, String(mods.damage))
+  assert.ok(Math.abs(mods.damage - 2.16) < 1e-9, String(mods.damage))
 })
 
 console.log(`\n原生黏液重构验证通过：${passed} 组 ✓`)

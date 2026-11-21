@@ -7,15 +7,41 @@ import { setCritSource } from './CritSources.js'
 export const RICOCHET_RULES = Object.freeze({
   choicesBeforeRoute: 4, routeWave: 4, routeStage: 2,
   ultimateLevel: 11, ultimateWave: 8, ultimateStage: 4, ultimateInvestment: 3,
-  ownedWeight: 1.2, routeWeight: 1.15, maxWeightBoost: 1.35,
+  ownedWeight: 1.28, routeWeight: 1.18, maxWeightBoost: 1.5,
   projectileLimit: 320, collisionPadding: 140, activeCountCap: 7,
 })
 
 export const ricochetSplitChance = rank => [0, 65, 95][Math.min(2, Math.max(0, rank | 0))] || 0
 export const splitSporeDamageBonus = rank => (rank <= 0 ? 0 : rank <= 2 ? rank * 12 : 24 + Math.min(32, (rank - 2) * 4))
-export const ricochetPierceOverdrivePct = rank => [0, 15, 25][Math.min(2, Math.max(0, rank | 0))] || 0
-export const ricochetShockPct = rank => [0, 75, 115][Math.min(2, Math.max(0, rank | 0))] || 0
-export const bounceAmplifyPct = rank => (rank <= 0 ? 0 : rank <= 3 ? rank * 12 : 36 + Math.min(24, (rank - 3) * 4))
+export const ricochetPierceOverdrivePct = rank => {
+  const n = Math.max(0, rank | 0)
+  return n <= 2 ? [0, 15, 25][n] : 25 + Math.min(35, (n - 2) * 6)
+}
+export const ricochetShockPct = rank => {
+  const n = Math.max(0, rank | 0)
+  return n <= 2 ? [0, 75, 115][n] : 115 + Math.min(105, (n - 2) * 18)
+}
+export const bounceAmplifyPct = rank => (rank <= 0 ? 0 : rank <= 3 ? rank * 10 : 30 + Math.min(30, (rank - 3) * 4))
+export const prismScatterBonus = rank => {
+  const n = Math.max(0, rank | 0)
+  return { rays: Math.min(5, n), retentionPct: Math.min(15, Math.max(0, n - 5) * 3) }
+}
+export const prismExtensionStats = rank => {
+  const n = Math.max(0, rank | 0)
+  return {
+    rangeBonus: n <= 4 ? n * 35 : 140 + Math.min(60, (n - 4) * 15),
+    reachPct: n <= 4 ? n * 10 : 40 + Math.min(20, (n - 4) * 4),
+    hastePct: n <= 0 ? 0 : Math.min(18, n <= 3 ? n * 4 : 12 + (n - 3) * 1.5),
+  }
+}
+export const prismWidthForCount = (count, ultimate = false) => {
+  const n = Math.max(1, Math.min(RICOCHET_RULES.activeCountCap, count | 0))
+  return (4.5 + (n - 1) * 1.4) * (ultimate ? 1.35 : 1)
+}
+export const prismDamageScaleForCount = count => {
+  const n = Math.max(1, Math.min(RICOCHET_RULES.activeCountCap, count | 0))
+  return 1 + (n - 1) * 0.62
+}
 
 export const RICOCHET_ROUTES = {
   split: {
@@ -39,11 +65,11 @@ export const RICOCHET_ROUTES = {
   bounce: {
     id: 'bounce', name: '棱镜群落', short: '折射', icon: '◇', color: '#b4a2ef',
     seed: 'rico_bounce', ultimate: 'rico_prism',
-    desc: '飞弹在怪群与首领之间高速来回弹射，交织激光弹网且越弹越痛。',
-    bonus: '主弹折射 +1、折射不再衰减（100% 保伤）、索敌扩至 360px，且允许在多目标间来回乒乓折射。',
-    weakness: '需要周围有其他目标接力；面对绝对孤立的单体时无法继续弹射。',
+    desc: '主弹进化为光棱聚能激光：齐射越多光线越粗越强，命中瞬间向周围星爆折射出多道高能子激光。',
+    bonus: '普攻聚能为 1 道光棱主束（开火间隔 ×1.15、齐射数转为光线粗细与威力并扩增散射）；命中点爆发多道星爆散射光线（基础 62% 伤害、光程 380px 起、折射半径 230px）。',
+    weakness: '中程激光有光程上限且无法二次回弹；面对绝对孤立的单体时无法折射。',
     activeName: '折光齐射', ultimateName: '棱镜风暴',
-    ultimateDesc: '常驻折射 +1；空格释放 3 枚高能棱镜核心，无衰减连续折射 6 次并触发越弹越痛。冷却 12 秒。',
+    ultimateDesc: '常驻星爆散射 +1 道；空格同时射出 3 道超粗棱镜主束（单束 1.5 倍主束威力），必定触发 7 道星爆散射与二级折光网。冷却 12 秒。',
   },
 }
 
@@ -58,54 +84,70 @@ const make = (id, name, kind, maxLevel, desc, stats, extra = {}) => ({
 export const RICOCHET_SKILLS = [
   make('rico_split', '分裂胚芽', 'seed', 2, '主弹首次命中时分裂出追踪孢弹，自动追击周围其他敌人。',
     lv => `分裂概率 ${ricochetSplitChance(lv + 1)}% · 产生 ${lv >= 1 ? 3 : 2} 枚追踪孢弹`, { route: 'split' }),
-  make('rico_pierce', '穿透腺体', 'seed', 3, '主弹命中后保持直线穿透多名敌人，每次穿透保留 90% 伤害。',
-    lv => `额外穿透 ${lv + 1} 名敌人`, { route: 'pierce', growthClass: 'core', rankCaps: { expedition: { hard: 7, hell: 10 }, timed: 8, endless: 10 } }),
-  make('rico_bounce', '折射表皮', 'seed', 3, '穿透耗尽后折向 300px 内的其他敌人，每次折射保留 85% 伤害。',
-    lv => `额外折射 ${lv + 1} 次`, { route: 'bounce', growthClass: 'core', rankCaps: { expedition: { hard: 7, hell: 9 }, timed: 8, endless: 9 } }),
-  make('rico_multishot', '多重喷射腔', 'common', 4, '每次普通攻击额外发射 1 枚主弹，并同步提升路线主动与终极威力。',
+  make('rico_pierce', '穿透腺体', 'seed', 6, '主弹命中后保持直线穿透多名敌人，每次穿透保留 90% 伤害。',
+    lv => `额外穿透 ${lv + 1} 名敌人`, { route: 'pierce', growthClass: 'core', rankCaps: { expedition: { hard: 8, hell: 10 }, timed: 8, endless: 11 } }),
+  make('rico_bounce', '折射表皮', 'seed', 6, '命中后折向 300px 内的其他敌人（保伤 85%）；棱镜群落下转为增加落点星爆散射光线数（5 级后提升散射伤害）。',
+    (lv, g) => {
+      const rank = lv + 1
+      if (g?.weaponSystem?.ricochetCombat?.route === 'bounce') {
+        const b = prismScatterBonus(rank)
+        return `星爆散射 +${b.rays} 道${b.retentionPct ? ` · 散射伤害 +${b.retentionPct} 个百分点` : ''}`
+      }
+      return `额外折射 ${rank} 次`
+    }, { route: 'bounce', growthClass: 'core', rankCaps: { expedition: { hard: 8, hell: 10 }, timed: 8, endless: 10 } }),
+  make('rico_multishot', '多重喷射腔', 'common', 4, '每次普通攻击额外发射 1 枚主弹，棱镜群落下改为加粗激光光线、提高单束威力并扩增散射数。',
     '齐射飞弹 +1', { growthClass: 'common', apply(g) { g.weaponSystem.projectileCount = Math.min(RICOCHET_RULES.activeCountCap, g.weaponSystem.projectileCount + 1) } }),
-  make('rico_haste', '速射腔', 'common', 2, '缩短普通攻击的射击间隔，显著加快火力倾泻与触发节奏。',
-    '射击间隔 ×0.88', { apply(g) { g.weaponSystem.fireInterval *= .88 } }),
-  make('rico_velocity', '喷射增压', 'common', 2, '同时加快飞弹飞行速度并提高单发基础伤害。', (lv) => {
+  make('rico_haste', '速射腔', 'common', 5, '缩短普通攻击的射击间隔，显著加快火力倾泻与触发节奏。',
+    lv => `射击间隔 ×${lv < 2 ? .88 : .94}`, { apply(g, lv) { g.weaponSystem.fireInterval *= lv <= 2 ? .88 : .94 } }),
+  make('rico_velocity', '喷射增压', 'common', 8, '同时加快飞弹飞行速度并提高单发基础伤害。', (lv) => {
     const speedRatio = getSoftRankMultiplier(lv + 1, .15, 3, 2) / getSoftRankMultiplier(lv, .15, 3, 2)
     const damageRatio = getSoftRankMultiplier(lv + 1, .16, 3, 2.35) / getSoftRankMultiplier(lv, .16, 3, 2.35)
     return `弹速 ×${speedRatio.toFixed(2)} · 伤害 ×${damageRatio.toFixed(2)}`
-  }, { growthClass: 'core', rankCaps: { expedition: { hard: 8, hell: 12 }, timed: 10, endless: 14 }, apply(g, lv) {
+  }, { growthClass: 'core', rankCaps: { expedition: { hard: 10, hell: 12 }, timed: 10, endless: 14 }, apply(g, lv) {
     applyRankMultiplier(g.weaponSystem, 'projectileSpeed', lv - 1, lv, rank => getSoftRankMultiplier(rank, .15, 3, 2))
     applyRankMultiplier(g.weaponSystem, 'damage', lv - 1, lv, rank => getSoftRankMultiplier(rank, .16, 3, 2.35))
   } }),
-  make('rico_compression', '聚焦晶核', 'common', 2, '提高暴击率与暴击伤害，让贯穿、折射与齐射频繁爆出高额暴击。',
-    '暴击率 +10% · 暴击伤害 +35%', { apply(g, lv) { setCritSource(g, 'rico_focus', { chance: lv * .1, multiplier: lv * .35 }) } }),
-  make('rico_recharge', '回充腔', 'common', 2, '缩短空格技能冷却，定向与觉醒终极后依然保留。',
-    '空格冷却 ×0.88', { apply(g) { g.player.activeSkillCdMultiplier *= .88 } }),
-  make('rico_vitality', '细胞增殖', 'common', 4, '增加生命上限并立即恢复 1 点生命。',
+  make('rico_compression', '聚焦晶核', 'common', 5, '提高暴击率与暴击伤害，让贯穿、折射与齐射频繁爆出高额暴击。',
+    lv => `暴击率 +${Math.round(((lv + 1) <= 2 ? (lv + 1) * .1 : .2 + (lv - 1) * .04) * 100)}% · 暴击伤害 +${Math.round(((lv + 1) <= 2 ? (lv + 1) * .35 : .7 + (lv - 1) * .15) * 100)}%`,
+    { apply(g, lv) {
+      setCritSource(g, 'rico_focus', {
+        chance: lv <= 2 ? lv * .1 : .2 + (lv - 2) * .04,
+        multiplier: lv <= 2 ? lv * .35 : .7 + (lv - 2) * .15,
+      })
+    } }),
+  make('rico_recharge', '回充腔', 'common', 5, '缩短空格技能冷却，定向与觉醒终极后依然保留。',
+    lv => `空格冷却 ×${lv < 2 ? .88 : .94}`, { apply(g, lv) { g.player.activeSkillCdMultiplier *= lv <= 2 ? .88 : .94 } }),
+  make('rico_vitality', '细胞增殖', 'common', 5, '增加生命上限并立即恢复 1 点生命。',
     '生命上限 +1 · 恢复 1 点生命', { growthClass: 'common', apply(g) { g.player.maxHp++; g.player.heal(1) } }),
-  make('rico_density', '增殖囊泡', 'advanced', 2, '每次分裂额外产生更多追踪孢弹，瞬间铺满视野。',
+  make('rico_density', '增殖囊泡', 'advanced', 3, '每次分裂额外产生更多追踪孢弹，瞬间铺满视野。',
     '分裂孢弹 +1', { route: 'split' }),
   make('rico_hunt', '嗜血孢群', 'advanced', 10, '大幅提升追踪孢弹伤害与追击时长，并对半血以下敌人触发斩杀增伤。', lv => {
     const rank = lv + 1
     return `孢弹伤害 +${splitSporeDamageBonus(rank)} 个百分点 · 半血目标 +30% · 存续 +${Math.min(1.5, rank * .25).toFixed(2)} 秒`
-  }, { route: 'split', growthClass: 'core', rankCaps: { expedition: { hard: 8, hell: 10 }, timed: 9, endless: 10 } }),
+  }, { route: 'split', growthClass: 'core', rankCaps: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 12 } }),
   make('rico_bloom', '爆裂孢弹', 'rare', 1, '追踪孢弹击杀小怪立即引发范围毒爆；对首领／精英每累计命中 4 枚孢弹同样引爆！',
     '爆炸半径 95px · 主弹 75% 范围伤害', { route: 'split' }),
-  make('rico_sustain', '穿甲过载', 'advanced', 2, '重弹每穿透 1 名敌人后续伤害递增（最多 4 层），并对首领／精英造成额外破甲伤害。',
-    lv => `每穿 1 敌增伤 +${ricochetPierceOverdrivePct(lv + 1)}% · 对首领／精英 +${ricochetPierceOverdrivePct(lv + 1)}%`, { route: 'pierce' }),
-  make('rico_shock', '破阵冲击', 'advanced', 2, '主弹每次穿透敌人或触发暴击时释放冲击波，震伤周围敌群。',
-    lv => `冲击波半径 95px · 单弹 ${ricochetShockPct(lv + 1)}% 伤害`, { route: 'pierce' }),
+  make('rico_sustain', '穿甲过载', 'advanced', 8, '重弹每穿透 1 名敌人后续伤害递增（最多 4 层），并对首领／精英造成额外破甲伤害。',
+    lv => `每穿 1 敌增伤 +${ricochetPierceOverdrivePct(lv + 1)}% · 对首领／精英 +${ricochetPierceOverdrivePct(lv + 1)}%`, { route: 'pierce', growthClass: 'core' }),
+  make('rico_shock', '破阵冲击', 'advanced', 8, '主弹每次穿透敌人或触发暴击时释放冲击波，震伤周围敌群。',
+    lv => `冲击波半径 95px · 单弹 ${ricochetShockPct(lv + 1)}% 伤害`, { route: 'pierce', growthClass: 'core' }),
   make('rico_breach', '破城弹头', 'rare', 1, '主弹首击首领／精英造成重击；击杀敌人向前方扇形喷射破甲碎弹。',
     '首领／精英首击 +40% · 击杀前向溅射 110px', { route: 'pierce' }),
-  make('rico_extension', '折光加速', 'advanced', 3, '同时增加折射次数、索敌接力范围与转向飞行速度。',
-    lv => `折射 +${lv + 1} 次 · 范围 +${(lv + 1) * 120}px · 转向弹速 +${(lv + 1) * 25}%`, { route: 'bounce', growthClass: 'core', rankCaps: { expedition: { hard: 5, hell: 6 }, timed: 5, endless: 6 } }),
-  make('rico_amplify', '余辉增幅', 'advanced', 10, '每次折射都会累加威力，让飞弹在怪群间越弹越痛（每弹最多叠加 6 层）。',
-    lv => `每次折射伤害 +${bounceAmplifyPct(lv + 1)}%`, { route: 'bounce', growthClass: 'core', rankCaps: { expedition: { hard: 8, hell: 10 }, timed: 8, endless: 10 } }),
-  make('rico_echo', '棱镜分束', 'rare', 1, '主弹首次折射时一分为二，衍生光弹继承剩余折射次数一同在战场上弹射！',
-    '首跳分束 2 道光弹 · 继承 65% 伤害', { route: 'bounce' }),
+  make('rico_extension', '折光加速', 'advanced', 3, '扩大光棱主束射程与落点散射折射半径，并加快光棱蓄能开火节奏。',
+    lv => {
+      const s = prismExtensionStats(lv + 1)
+      return `折射范围 +${s.rangeBonus}px · 光程 +${s.reachPct}% · 蓄能间隔 -${s.hastePct}%`
+    }, { route: 'bounce', growthClass: 'core', rankCaps: { expedition: { hard: 8, hell: 9 }, timed: 8, endless: 9 } }),
+  make('rico_amplify', '余辉增幅', 'advanced', 10, '星爆散射命中的不同目标越多，本发散射光线伤害越高（4 名起满层，孤立单体不生效）。',
+    lv => `散射命中 ≥4 目标时额外增伤 +${bounceAmplifyPct(lv + 1)}%`, { route: 'bounce', growthClass: 'core', rankCaps: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 12 } }),
+  make('rico_echo', '棱镜分束', 'rare', 1, '一级散射命中的前 3 个目标化作次级棱镜，各自再向外折射 2 道余辉激光（55% 主束伤害，不递归）。',
+    '二级折光 3×2 道 · 继承 55% 主束伤害', { route: 'bounce' }),
   make('rico_split_pierce', '穿心裂变', 'hybrid', 1, '追踪孢弹获得 2 次直线穿透，且穿透过程不衰减伤害。',
     '追踪孢弹穿透 +2 · 100% 保伤', { routes: ['split', 'pierce'], needs: ['rico_split', 'rico_pierce'] }),
   make('rico_split_bounce', '追猎折光', 'hybrid', 1, '追踪孢弹命中后可继续折射 2 次，精准收割漏网目标。',
     '追踪孢弹折射 +2 · 保伤 85%', { routes: ['split', 'bounce'], needs: ['rico_split', 'rico_bounce'] }),
-  make('rico_pierce_bounce', '折光穿梭', 'hybrid', 1, '主弹每次折射后，在新弹道上额外附带 1 次直线穿透。',
-    '每次折射追加 +1 穿透（最多 4 次）', { routes: ['pierce', 'bounce'], needs: ['rico_pierce', 'rico_bounce'] }),
+  make('rico_pierce_bounce', '折光穿梭', 'hybrid', 1, '光棱主束可顺穿沿途至多 3 名敌人（75% 保伤），且末段穿刺终点额外触发一次星爆散射。',
+    '主束顺穿 +3 · 终点追加星爆散射', { routes: ['pierce', 'bounce'], needs: ['rico_pierce', 'rico_bounce'] }),
   ...Object.values(RICOCHET_ROUTES).map(r => make(r.ultimate, r.ultimateName, 'ultimate', 1, r.ultimateDesc,
     '替换空格技能 · 本局终极互斥', { route: r.id, icon: r.icon, isCapstone: true })),
 ]

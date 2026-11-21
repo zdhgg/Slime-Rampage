@@ -1,6 +1,8 @@
+import { getFinalWarningAt, isTimedMode } from './RunRules.js'
+
 /** Small crowd encounters share the arena director's spawn slots and quiet windows. */
 export const CROWD_RULES = Object.freeze({
-  firstDelay: 6, interval: 38, tideDuration: 15, routDuration: 2,
+  firstDelay: 6, interval: 28, tideDuration: 15, routDuration: 2,
   tideHp: .35, tideReward: .35, tideDamage: .35, vulnerability: 1.35,
 })
 
@@ -25,7 +27,13 @@ export class CrowdDirector {
       (g.gameplayId && g.gameplayId !== 'arena') || m._finale || m.hasBoss || m.pendingBossCount > 0 ||
       m._bossGrace > 0 || m._bossRecovery > 0 || m._stagePressure > .7 ||
       g.mapFeatures?.nestDefenseActive || !!g.worldEvents?.current ||
-      (g.runSelection?.mode === 'timed' && g.elapsed >= 690)
+      (isTimedMode(g.runSelection?.mode) && g.elapsed >= getFinalWarningAt(g.runSelection.mode))
+  }
+  _crowdInterval() {
+    const g = this.game
+    return g?.runSelection?.mode === 'timed20' && this.manager._effectiveWave() > 20
+      ? 22
+      : CROWD_RULES.interval
   }
   update(dt) {
     if (this.blocked()) { this.cancel(); return }
@@ -65,15 +73,16 @@ export class CrowdDirector {
   startTide() {
     if (this.blocked() || this.active) return false
     this.tide = CROWD_RULES.tideDuration
-    this.nextIn = CROWD_RULES.interval; this.nextKind = 'squad'
+    this.nextIn = this._crowdInterval(); this.nextKind = 'squad'
     if (this.stats) this.stats.swarmTides = (this.stats.swarmTides || 0) + 1
     this.manager.addText(this.game.player.x, this.game.player.y - 90, '战獒奔潮', '低血量兽群 · 迎击收割', '#a8e2c3', 19)
     return true
   }
-  /** Two weak hounds replace one ordinary reinforcement, with reduced total XP. */
+  /** Two weak hounds replace one ordinary reinforcement (three in late timed20), with reduced total XP. */
   spawnTide(x, y) {
     const m = this.manager
-    for (let i = 0; i < 2 && m.count < Math.ceil(m._populationTarget() * 1.2); i++) {
+    const batch = this.game?.runSelection?.mode === 'timed20' && m._effectiveWave() > 20 ? 3 : 2
+    for (let i = 0; i < batch && m.count < Math.ceil(m._populationTarget() * 1.2); i++) {
       const e = m.spawnAt(Math.max(0, Math.min(this.game.worldWidth, x + i * 22)),
         Math.max(0, Math.min(this.game.worldHeight, y + i * 18)), 'hound')
       if (!e) continue
@@ -86,7 +95,19 @@ export class CrowdDirector {
   }
   startSquad() {
     const m = this.manager, g = this.game
-    if (this.blocked() || this.active || m.count + 6 > Math.ceil(m._populationTarget() * 1.2)) return false
+    const eliteSquad = m._effectiveWave() >= 12
+    const formation = eliteSquad
+      ? [
+        ['bulwark', 74, -52], ['berserker', 74, 0], ['bulwark', 74, 52],
+        ['bannerman', 10, 0],
+        ['archer', -34, -56], ['mage', -34, 56], ['knight', 24, -46],
+        ['priest', -82, 0],
+      ]
+      : [
+        ['knight', 68, -46], ['knight', 68, 0], ['knight', 68, 46],
+        ['archer', -30, -48], ['archer', -30, 48], ['priest', -78, 0],
+      ]
+    if (this.blocked() || this.active || m.count + formation.length > Math.ceil(m._populationTarget() * 1.2)) return false
     const p = g.player
     // Choose an approach with room for both ranks; never clamp a squad onto the player.
     const choices = [[1, 0, g.worldWidth - p.x], [-1, 0, p.x], [0, 1, g.worldHeight - p.y], [0, -1, p.y]]
@@ -95,20 +116,22 @@ export class CrowdDirector {
     const [ux, uy, room] = available[Math.floor(Math.random() * available.length)]
     const distance = Math.min(520, room - 110), angle = Math.atan2(-uy, -ux)
     const s = { x: Math.max(100, Math.min(g.worldWidth - 100, p.x + ux * distance)),
-      y: Math.max(100, Math.min(g.worldHeight - 100, p.y + uy * distance)), angle, life: 26, broken: false, members: [], leader: null }
-    for (const [type, forward, side] of [['knight', 68, -46], ['knight', 68, 0], ['knight', 68, 46],
-      ['archer', -30, -48], ['archer', -30, 48], ['priest', -78, 0]]) {
+      y: Math.max(100, Math.min(g.worldHeight - 100, p.y + uy * distance)), angle, life: 28, broken: false, members: [], leader: null }
+    for (const [type, forward, side] of formation) {
       const e = m.spawnAt(s.x + Math.cos(angle) * forward - Math.sin(angle) * side,
         s.y + Math.sin(angle) * forward + Math.cos(angle) * side, type)
       if (!e) continue
       e.crowdSquad = s; e.squadSlot = { forward, side }
-      if (type === 'knight') { e.shieldHits = 1; e.crowdShield = true }
+      if (type === 'knight' || type === 'bulwark' || type === 'berserker') {
+        e.shieldHits = Math.max(e.shieldHits || 0, eliteSquad ? 2 : 1)
+        e.crowdShield = true
+      }
       if (type === 'priest') s.leader = e
       s.members.push(e)
     }
     if (!s.leader) { for (const e of s.members) { e.crowdSquad = null; e.shieldHits = 0; e.crowdShield = false }; return false }
     this.squad = s
-    this.nextIn = CROWD_RULES.interval; this.nextKind = 'tide'
+    this.nextIn = this._crowdInterval(); this.nextKind = 'tide'
     this.spawnDebt += s.members.length
     if (this.stats) this.stats.squadsFaced = (this.stats.squadsFaced || 0) + 1
     m.addText(s.leader.x, s.leader.y - 44, '讨伐旗手', '击破旗手 → 全队破盾溃散', '#f3d58b', 16)

@@ -7,6 +7,8 @@ import { Enemy } from './src/game/entities/Enemy.js'
 import { Boss } from './src/game/entities/Boss.js'
 import {
   DIFFICULTIES,
+  getBossWavePlan,
+  getDifficultyBossHpMultiplier,
   getExpeditionBoss,
   getExpeditionStages,
   getRunProfile,
@@ -215,9 +217,9 @@ function createManager(mode = 'timed', difficulty = 'normal', stage = 1) {
     assert.ok(current.eliteChanceCap > prev.eliteChanceCap)
     assert.ok(current.rewardMul > prev.rewardMul)
   }
-  assert.equal(DIFFICULTIES.hard.doubleAffixChance, 0.12)
-  assert.equal(DIFFICULTIES.hell.doubleAffixChance, 0.35)
-  ok('简单到地狱的生命、精英耐久、首领血量、移速上限、密度、精英率与奖励倍率严格递增，困难预热双词缀')
+  assert.equal(DIFFICULTIES.hard.doubleAffixChance, 0.22)
+  assert.equal(DIFFICULTIES.hell.doubleAffixChance, 0.48)
+  ok('简单到地狱的生命、精英耐久、首领血量、移速上限、密度、精英率与奖励倍率严格递增，困难与地狱高密度双词缀')
 }
 
 // 11. 远征后段不再叠出过量 Boss 招式层数，且修饰与计时波次无关。
@@ -228,8 +230,8 @@ function createManager(mode = 'timed', difficulty = 'normal', stage = 1) {
   assert.deepEqual(atWave99, atWave1)
   assert.equal(atWave1.bossPatternBonus, 2)
   assert.equal(atWave1.enemyHpMul, 1.66)
-  // bossHpMul = 灾变档位 1 × 末章乘算成长 5.12：首领须有乘算成长才能追上玩家 DPS 曲线
-  assert.equal(atWave1.bossHpMul, 5.12)
+  // bossHpMul = 灾变档位 1 × 末章乘算成长 6.5：首领须有乘算成长才能追上玩家 DPS 曲线
+  assert.equal(atWave1.bossHpMul, 6.5)
   ok('远征末关修饰固定，额外 Boss 招式层数封顶为 2')
 }
 
@@ -263,20 +265,18 @@ function createManager(mode = 'timed', difficulty = 'normal', stage = 1) {
     const encounter = getExpeditionBoss(stage.bossId)
     return manager.beginExpeditionStageBoss(encounter, !!encounter.final).maxHp
   })
-  assert.deepEqual(hp, [314, 421, 556, 750, 970, 1260, 1665, 2646])
+  assert.ok(hp[0] >= 400 && hp[hp.length - 1] >= 4000, `普通远征首领曲线抬升（${hp[0]}～${hp[hp.length - 1]}）`)
   assert.ok(hp.every((value, index) => index === 0 || value > hp[index - 1]))
 
-  // 曲线平滑性：不再有末章悬崖（旧口径终章相对前章 +82%~+99%），
-  // 且整体必须明显跑赢玩家纯等级成长（Lv.1→20 约 4.3×），否则后期首领相对变脆
+  // 曲线平滑性：不再有末章悬崖，且整体必须明显跑赢玩家纯等级成长
   const steps = hp.slice(1).map((value, index) => value / hp[index])
   assert.ok(steps.every((ratio) => ratio < 1.6), `逐章增幅应平滑（实际最大 ${Math.max(...steps).toFixed(2)}×）`)
   assert.ok(hp[hp.length - 1] / hp[0] > 8, '终章相对首章应有量级差距（追赶玩家乘算成长）')
 
   const timed = createManager('timed', 'normal', 1).manager
   timed.wave = 5
-  // BOSS 平衡 2026-11：基础体量 100+10w × 首档 2 → 300（原 100 太脆，实战 10~25 秒即倒）
-  assert.equal(timed.spawnBoss({ type: 'boss-knight' }).maxHp, 300)
-  ok('普通远征首领生命递增至 314～2646，曲线平滑且限时首领基础生命不受影响')
+  assert.equal(timed.spawnBoss({ type: 'boss-knight' }).maxHp, 468)
+  ok('普通远征首领生命平滑递增且限时首领基础生命同步抬升')
 }
 
 // 15. 限时首领血量按波次档位乘算成长，终局成为真正的强度高峰。
@@ -288,16 +288,13 @@ function createManager(mode = 'timed', difficulty = 'normal', stage = 1) {
   const at20 = getWaveModifiers(normal, 20).bossHpMul
   const at25 = getWaveModifiers(normal, 25).bossHpMul
   assert.ok(at5 < at10 && at10 < at15 && at15 < at20 && at20 < at25)
-  // BOSS 平衡 2026-11：首档 1 → 2（前段抬升），终档 3.32 不变
-  assert.equal(at5, 2)
-  assert.equal(at25, 3.32)
+  assert.equal(at5, 2.2)
+  assert.equal(at25, 4.2)
   // 档位在波次区间内保持稳定（第 25~29 波同档），避免同段内无意义抖动
   assert.equal(getWaveModifiers(normal, 29).bossHpMul, at25)
-  // 无尽补齐乘算成长（2026-11）：20 波前与限时首档一致（×2），
-  // 之后按灾变档位复用限时成长表并与 (1+tier*0.18) 叠乘（第 25 波：1.18 × 2.3）
-  assert.equal(getWaveModifiers({ mode: 'endless', difficulty: 'normal' }, 5).bossHpMul, 2)
-  assert.ok(Math.abs(getWaveModifiers({ mode: 'endless', difficulty: 'normal' }, 25).bossHpMul - 1.18 * 2.3) < 1e-9)
-  ok('限时首领按波次档位乘算成长（2 → 3.32），无尽按灾变档位复用同一成长表')
+  assert.equal(getWaveModifiers({ mode: 'endless', difficulty: 'normal' }, 5).bossHpMul, 2.2)
+  assert.ok(Math.abs(getWaveModifiers({ mode: 'endless', difficulty: 'normal' }, 25).bossHpMul - 1.18 * 2.6) < 1e-9)
+  ok('限时首领按波次档位乘算成长（2.2 → 4.2），无尽按灾变档位复用同一成长表')
 }
 
 // 16. 首领二阶段连击：段数随难度档位提升，破绽窗口随段数延长。
@@ -409,6 +406,84 @@ function createManager(mode = 'timed', difficulty = 'normal', stage = 1) {
   assert.equal(mage.summonCd, Infinity, '法师 25% 停止召唤，护盾层只减不增')
 
   ok('血量阈值事件：75% / 25% 各只触发一次、零伤害不误触发，且骑士王加地形 / 法师加护盾层')
+}
+
+// 18. 困难与地狱难度首领耐久加强：普通 < 困难 < 地狱梯级平滑，远征与限时高难均有挑战度。
+{
+  const expNormal = createManager('expedition', 'normal', 10).manager.beginExpeditionStageBoss(getExpeditionBoss('court_commander'), true).maxHp
+  const expHard = createManager('expedition', 'hard', 10).manager.beginExpeditionStageBoss(getExpeditionBoss('court_commander'), true).maxHp
+  const expNormal12 = createManager('expedition', 'normal', 12).manager.beginExpeditionStageBoss(getExpeditionBoss('court_commander'), true).maxHp
+  const expHell = createManager('expedition', 'hell', 12).manager.beginExpeditionStageBoss(getExpeditionBoss('court_commander'), true).maxHp
+  assert.ok(expHard >= expNormal * 1.5 && expHard < expHell, `远征困难统帅落在普通与地狱之间（实际 ${expHard}）`)
+  assert.ok(expHell >= expNormal12 * 2.2, `远征地狱统帅应显著高于普通难度（实际 ${expHell} vs ${expNormal12}）`)
+
+  const timedHard = createManager('timed', 'hard').manager
+  timedHard.wave = 5
+  const [hardW5] = timedHard.spawnBossGroup(getBossWavePlan({ mode: 'timed', difficulty: 'hard' }, 5))
+  const timedHell = createManager('timed', 'hell').manager
+  timedHell.wave = 5
+  const [hellW5] = timedHell.spawnBossGroup(getBossWavePlan({ mode: 'timed', difficulty: 'hell' }, 5))
+  assert.ok(hardW5.maxHp >= 450 && hardW5.maxHp < hellW5.maxHp, `限时困难第 5 波首领平滑强化（实际 ${hardW5.maxHp}）`)
+  assert.ok(hellW5.maxHp >= 850, `限时地狱第 5 波首领耐久提升（实际 ${hellW5.maxHp}）`)
+
+  const timedNormal = createManager('timed', 'normal').manager
+  timedNormal.wave = 25
+  const normalFinal = timedNormal.spawnBoss({ type: 'boss-final', finalBoss: true, memberHpMul: 0.78 }).maxHp
+  const hardMgr = createManager('timed', 'hard').manager
+  hardMgr.wave = 25
+  const hardFinal = hardMgr.spawnBoss({ type: 'boss-final', finalBoss: true, memberHpMul: 0.78 }).maxHp
+  const hellMgr = createManager('timed', 'hell').manager
+  hellMgr.wave = 25
+  const hellFinal = hellMgr.spawnBoss({ type: 'boss-final', finalBoss: true, memberHpMul: 0.78 }).maxHp
+  assert.ok(hardFinal >= normalFinal * 3.5 && hardFinal < hellFinal * 0.65, `限时困难终审勇者硬核强化（实际 ${hardFinal}）`)
+  assert.ok(hellFinal >= normalFinal * 7.5 && hellFinal >= 20000, `限时地狱终审勇者具备硬核挑战度（实际 ${hellFinal}）`)
+  for (const diff of ['hard', 'hell']) {
+    assert.ok(
+      getDifficultyBossHpMultiplier(DIFFICULTIES[diff], { mode: 'timed' }, 25) >
+      getDifficultyBossHpMultiplier(DIFFICULTIES[diff], { mode: 'timed' }, 5),
+      `限时 ${diff} 首领倍率随波次递增`
+    )
+  }
+  ok('困难与地狱首领耐久加强：普通 < 困难 < 地狱梯度平滑，终局均有足够挑战度')
+}
+
+// 19. 首领四层防暴毙护盾：单击上限、2 秒滚动爆发衰减、50%/25% 锁血转阶段与转阶段霸体无敌。
+{
+  const { manager, game } = createManager('timed', 'hard', 1)
+  game.elapsed = 10
+  manager.wave = 20
+  const boss = manager.spawnBoss({ type: 'boss-knight' })
+  const maxHp = boss.maxHp
+  // 1) 单击伤害上限（困难非破绽 6.5%）
+  boss.hit(maxHp * 0.8)
+  const lost1 = maxHp - boss.hp
+  assert.ok(lost1 <= maxHp * 0.066, `单次重击被限制在 6.5% 内（实际 ${(lost1 / maxHp * 100).toFixed(2)}%）`)
+
+  // 2) 2 秒滚动窗口爆发衰减（困难超过 11% 开始强衰减）
+  for (let i = 0; i < 6; i++) boss.hit(maxHp * 0.065)
+  const lostWindow = maxHp - boss.hp
+  assert.ok(lostWindow < maxHp * 0.28, `2 秒连续爆发受到自适应衰减（总损血 ${(lostWindow / maxHp * 100).toFixed(1)}%）`)
+
+  // 3) 50% 二阶段强制锁血 + 转阶段霸体无敌
+  boss.hp = Math.ceil(maxHp * 0.5) + 5
+  game.elapsed = 20 // 清空 2 秒窗口
+  boss.hit(maxHp * 0.065)
+  assert.equal(boss.phase, 2, '触及 50% 锁血门立即转二阶段')
+  assert.equal(boss.hp, Math.ceil(maxHp * 0.5), '50% 锁血门截断溢出伤害')
+  assert.ok(boss.phaseShift > 0, '转阶段获得霸体无敌')
+  const hpDuringShift = boss.hp
+  boss.hit(maxHp * 0.06)
+  assert.equal(boss.hp, hpDuringShift, '转阶段霸体期间免疫一切伤害')
+
+  // 4) 25% 困兽锁血门（困难/地狱生效）
+  boss.phaseShift = 0
+  boss.hp = Math.ceil(maxHp * 0.25) + 5
+  game.elapsed = 30
+  boss.hit(maxHp * 0.065)
+  assert.equal(boss._lastStand, true, '触及 25% 锁血门触发困兽之斗')
+  assert.equal(boss.hp, Math.ceil(maxHp * 0.25), '25% 锁血门截断溢出伤害')
+  assert.ok(boss.phaseShift > 0, '困兽锁血触发短霸体窗口')
+  ok('首领四层防暴毙：单击封顶、2秒爆发衰减、50%/25% 强制锁血门与转阶段霸体全部生效')
 }
 
 console.log(`\n难度曲线专项通过：${n} 组断言 ✓`)

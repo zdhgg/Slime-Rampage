@@ -65,7 +65,7 @@ export class OriginCombat {
         p.originMoveBuffTimer = Math.max(p.originMoveBuffTimer || 0, 0.2)
       }
       p.originDr = this.game?.originRoute === 'assimilation'
-        ? Math.min(0.2, p.mutationState.stacks * g.stackDrBonus)
+        ? Math.min(0.32, p.mutationState.stacks * g.stackDrBonus)
         : 0
     } else {
       p.originDr = 0
@@ -139,52 +139,102 @@ export class OriginCombat {
   render(ctx) {
     const t = this.game?.elapsed || 0
     for (const field of this.fields) {
-      const k = Math.max(0, field.life / field.maxLife)
-      const pulse = 0.86 + 0.14 * Math.sin(t * 4 + field.x * 0.02)
+      const k = Math.max(0, field.life / Math.max(0.01, field.maxLife))
+      const pulse = 0.9 + 0.1 * Math.sin(t * 4.2 + field.x * 0.02)
       ctx.save()
       ctx.translate(field.x, field.y)
-      ctx.globalAlpha = 0.26 * k
-      ctx.fillStyle = field.color
-      ctx.beginPath()
-      ctx.ellipse(0, 0, field.r * pulse, field.r * 0.62 * pulse, 0, 0, TAU)
-      ctx.fill()
+      ctx.scale(1, 0.64)
+      const grad = ctx.createRadialGradient(0, 0, field.r * 0.12, 0, 0, field.r * pulse)
+      grad.addColorStop(0, field.color)
+      grad.addColorStop(0.7, field.overloadField ? 'rgba(255, 209, 102, 0.24)' : 'rgba(90, 209, 200, 0.24)')
+      grad.addColorStop(1, 'rgba(90, 209, 200, 0)')
       ctx.globalAlpha = 0.42 * k
-      ctx.strokeStyle = field.color
-      ctx.lineWidth = 1.5
+      ctx.fillStyle = grad
       ctx.beginPath()
-      ctx.ellipse(0, 0, field.r * 0.7, field.r * 0.44, 0, 0, TAU)
+      ctx.arc(0, 0, field.r * pulse, 0, TAU)
+      ctx.fill()
+
+      // 外缘波纹环与内圈高光
+      ctx.globalAlpha = 0.56 * k
+      ctx.strokeStyle = field.color
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      ctx.arc(0, 0, field.r * 0.92 * pulse, 0, TAU)
       ctx.stroke()
+
+      ctx.globalAlpha = 0.34 * k
+      ctx.strokeStyle = '#ffffff'
+      ctx.lineWidth = 1.2
+      ctx.setLineDash([7, 7])
+      ctx.beginPath()
+      ctx.arc(0, 0, field.r * 0.62, t * 0.9, t * 0.9 + TAU)
+      ctx.stroke()
+      ctx.setLineDash([])
+
+      // 液域升腾泡点
+      const seed = field.x * 0.013 + field.y * 0.019
+      for (let b = 0; b < 4; b++) {
+        const cyc = ((t * 0.85 + b * 0.27 + seed) % 1 + 1) % 1
+        const ang = seed + b * 1.57
+        const dist = field.r * (0.25 + (b % 3) * 0.22)
+        const br = 2.4 + cyc * 4.5
+        ctx.globalAlpha = Math.sin(cyc * Math.PI) * 0.65 * k
+        ctx.strokeStyle = '#eafff6'
+        ctx.lineWidth = 1.2
+        ctx.beginPath()
+        ctx.arc(Math.cos(ang) * dist, Math.sin(ang) * dist, br, 0, TAU)
+        ctx.stroke()
+      }
       ctx.restore()
     }
 
-    // 碎片/印记的防御型效果必须有画面：1 点护甲和支援泡泡都只存在于状态里，
-    // 不画出来玩家就永远不知道它们触发过。
+    // 碎片/印记的防御型效果必须有画面：1 点护甲和支援泡泡清晰呈现。
     const p = this.player
     if (p && !p.dead) {
       if (p.originGuard > 0 && p.originGuardTimer > 0) {
-        const guardRadius = (p.radius || 14) + 7
+        const guardRadius = (p.radius || 14) + 8
         ctx.save()
-        ctx.globalAlpha = 0.55 + 0.2 * Math.sin(t * 8)
+        ctx.translate(p.x, p.y)
+        ctx.rotate(t * 1.4)
+        ctx.globalAlpha = 0.62 + 0.2 * Math.sin(t * 8)
         ctx.strokeStyle = ORIGIN_MARKS.glutton.color
-        ctx.lineWidth = 2
+        ctx.lineWidth = 2.4
         ctx.beginPath()
-        ctx.arc(p.x, p.y, guardRadius, 0, TAU)
+        for (let i = 0; i < 6; i++) {
+          const a = (i / 6) * TAU
+          const gx = Math.cos(a) * guardRadius
+          const gy = Math.sin(a) * guardRadius
+          if (i === 0) ctx.moveTo(gx, gy)
+          else ctx.lineTo(gx, gy)
+        }
+        ctx.closePath()
         ctx.stroke()
         ctx.restore()
       }
       if ((p.markState?.bubble || 0) > 0) {
-        const bubbleRadius = (p.radius || 14) + 11
+        const bubbleRadius = (p.radius || 14) + 12
         ctx.save()
-        ctx.globalAlpha = 0.24 + 0.06 * Math.sin(t * 3)
-        ctx.fillStyle = ORIGIN_MARKS.symbiosis.color
+        ctx.translate(p.x, p.y)
+        const bGrad = ctx.createRadialGradient(-bubbleRadius * 0.3, -bubbleRadius * 0.3, 2, 0, 0, bubbleRadius)
+        bGrad.addColorStop(0, 'rgba(255, 255, 255, 0.38)')
+        bGrad.addColorStop(0.65, 'rgba(237, 196, 121, 0.16)')
+        bGrad.addColorStop(1, 'rgba(237, 196, 121, 0.42)')
+        ctx.globalAlpha = 0.72 + 0.12 * Math.sin(t * 3.5)
+        ctx.fillStyle = bGrad
         ctx.beginPath()
-        ctx.arc(p.x, p.y, bubbleRadius, 0, TAU)
+        ctx.arc(0, 0, bubbleRadius, 0, TAU)
         ctx.fill()
-        ctx.globalAlpha = 0.6
         ctx.strokeStyle = ORIGIN_MARKS.symbiosis.color
-        ctx.lineWidth = 1.5
+        ctx.lineWidth = 1.8
         ctx.beginPath()
-        ctx.arc(p.x, p.y, bubbleRadius, 0, TAU)
+        ctx.arc(0, 0, bubbleRadius, 0, TAU)
+        ctx.stroke()
+        // 泡泡左上月牙反光
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.75)'
+        ctx.lineWidth = 2
+        ctx.lineCap = 'round'
+        ctx.beginPath()
+        ctx.arc(0, 0, bubbleRadius - 3.5, -Math.PI * 0.85, -Math.PI * 0.55)
         ctx.stroke()
         ctx.restore()
       }

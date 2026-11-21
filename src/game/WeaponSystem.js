@@ -42,6 +42,8 @@ export const DIGEST_GAIN_ELITE = 14
  * 技能是构筑向强化，两者叠加后后期依旧需要元素反应撑强度。
  */
 const LEVEL_DMG_GROWTH = 1.08
+const TIMED20_LEVEL_SOFT_AFTER = 26
+const TIMED20_LATE_DMG_GROWTH = 1.045
 const ENDLESS_LEVEL_SOFTCAP = 6
 const ENDLESS_LEVEL_TAPER = 18
 
@@ -185,7 +187,9 @@ export class WeaponSystem extends Entity {
     const huntMul = this.player?._huntRushTimer > 0 ? this.geneHuntHaste || 1 : 1
     const biteHaste = this.gluttonCombat?.enabled ? this.gluttonCombat.biteHasteMultiplier() : 1
     const shadowHaste = this.shadowCombat?.enabled ? this.shadowCombat.bladeHasteMultiplier() : 1
-    return this.fireInterval * (this.berserkBuffTimer > 0 ? 0.6 : 1) * formationMul * huntMul / ((this.game?.bossTomes?.biteHaste || 1) * biteHaste * shadowHaste)
+    const prismCadence = this.ricochetCombat?.enabled ? this.ricochetCombat.prismIntervalMultiplier() : 1
+    const petHaste = this.petCombat?.enabled ? this.petCombat.playerAttackHasteBonus() : 0
+    return this.fireInterval * prismCadence * (this.berserkBuffTimer > 0 ? 0.6 : 1) * formationMul * huntMul / ((this.game?.bossTomes?.biteHaste || 1) * biteHaste * shadowHaste * (1 + petHaste))
   }
 
   /** 重置武器属性与弹幕（游戏重开时由引擎调用） */
@@ -295,6 +299,12 @@ export class WeaponSystem extends Entity {
 
   refreshLevelMultiplier() {
     const levelUps = Math.max(0, (this.player?.level || 1) - 1)
+    if (this.game?.runSelection?.mode === 'timed20') {
+      const early = Math.min(TIMED20_LEVEL_SOFT_AFTER, levelUps)
+      const tail = Math.max(0, levelUps - TIMED20_LEVEL_SOFT_AFTER)
+      this.levelMul = (LEVEL_DMG_GROWTH ** early) * (TIMED20_LATE_DMG_GROWTH ** tail)
+      return this.levelMul
+    }
     if (this.game?.runSelection?.mode !== 'endless') {
       this.levelMul = LEVEL_DMG_GROWTH ** levelUps
       return this.levelMul
@@ -396,7 +406,7 @@ export class WeaponSystem extends Entity {
 
   /** 以玩家位置为原点，向目标发射飞弹（多弹时并排扇形齐射） */
   fire(target, options = {}) {
-    if (this.spellCombat.enabled && !this.spellCombat.usesBasicProjectile) return this.spellCombat.cast([...this.spellCombat.elements][0], target)
+    if (this.spellCombat.enabled && !this.spellCombat.usesBasicProjectile) return this.spellCombat.castPrimary(target)
     if (this.gluttonCombat.enabled) return this.gluttonCombat.bite(target)
     if (this.shadowCombat.enabled) return this.shadowCombat.stab(target)
     if (this.ricochetCombat.enabled) return this.ricochetCombat.fire(target, options)
@@ -414,6 +424,12 @@ export class WeaponSystem extends Entity {
     // （之前所有弹从同一点出发 + 高追踪强度，多枚完全重叠飞行，视觉上等于一枚）
     const perpX = Math.cos(base + Math.PI / 2)
     const perpY = Math.sin(base + Math.PI / 2)
+    const strainMul = this.petCombat?.enabled && this.petCombat?.fullRoster
+      ? this.petCombat.playerBodyDamageMultiplier()
+      : (STRAINS[this.game?.startingStrain]?.bodyProjectileDamageMul || 1)
+    const projSpeed = this.projectileSpeed * (this.petCombat?.playerProjectileSpeedMul?.() || 1)
+    const petCrit = this.petCombat?.playerCritBonus?.() || 0
+    const petPierces = this.petCombat?.playerBonusPierces?.() || 0
     for (let i = 0; i < n; i++) {
       // 角度散布：第 i 枚围绕基准角 ±0.3rad（约 ±17°，评审反馈扇面偏窄已调大）
       const off = n > 1 ? (i - (n - 1) / 2) * 0.3 : 0
@@ -426,21 +442,21 @@ export class WeaponSystem extends Entity {
           y: py + perpY * spread,
           target,
           // 实际伤害 = 基础（技能叠加）× 等级成长 × 捕食原核吞噬加成（读实时值，非快照）
-          damage: this.damage * this.levelMul * this.devourDamageMul * (STRAINS[this.game?.startingStrain]?.bodyProjectileDamageMul || 1)
-            * (this.game?.startingStrain === 'origin' && (this.game.skillLevels?.origin_discovery || this.game.originSourceMemories?.length) ? 0.65 : 1),
-          speed: this.projectileSpeed,
-          vx: Math.cos(a) * this.projectileSpeed,
-          vy: Math.sin(a) * this.projectileSpeed,
+          damage: this.damage * this.levelMul * this.devourDamageMul * strainMul
+            * (this.game?.startingStrain === 'origin' && (this.game.skillLevels?.origin_discovery || this.game.originSourceMemories?.length) ? 0.88 : 1),
+          speed: projSpeed,
+          vx: Math.cos(a) * projSpeed,
+          vy: Math.sin(a) * projSpeed,
           // 追踪强度：单弹完全锁定；多弹降到 0.8，弧线聚拢更明显
           homing: this.isGatlingMother ? 1 : n > 1 ? 0.8 : 1,
           // 特效概率：按武器系统当前技能等级注入
           splitChance: this.splitChance,
-          critChance: this.critChance,
+          critChance: this.critChance + petCrit,
           freezeChance: this.freezeChance,
           burnChance: this.burnChance,
           poisonChance: this.poisonChance,
           isBasicAttack: true,
-          pierces: this.basePierces + this.genePierces,
+          pierces: this.basePierces + this.genePierces + petPierces,
           visual,
           life: (this.isGatlingMother ? 5 : 2.5) * (this.geneRangeMul || 1),
         })
@@ -873,6 +889,8 @@ export class WeaponSystem extends Entity {
     else if (e.isElite) this.eliteKills++
     this.game.worldEvents?.onEnemyDefeated(e)
     this.player.triggerKillRush?.(2)
+    this.petCombat?.onKill?.(e)
+    this.spellCombat?.onEnemyKilled?.(e)
     // 狩猎亢奋（黑市）：击杀刷新 2.5 秒攻速窗口
     if (this.geneHuntHaste > 0) this.player._huntRushTimer = 2.5
     if (this.gluttonCombat.enabled && !e.isBoss) {
@@ -950,10 +968,22 @@ export class WeaponSystem extends Entity {
     // 精英词缀死亡特效（阶段十三）：吞噬路径（onDevoured）不经过这里——
     // 把残血怪「安全吃掉」是克制自爆/召唤词缀的手段
     if (!e.isBoss && (e.hasAffix?.('explosive') || e.affix === 'explosive')) {
-      // 自爆：死亡时炸伤附近玩家（90px 内 1 点，无敌帧兜底）
+      // 自爆：死亡瞬间贴脸震爆（90px 内 1 点伤害），并留下一道 0.6s 延迟警示红圈（120px 2 点伤害 + 6 枚火球）；
+      // 吞噬（onDevoured）不经过此路径，可安全拆弹。
       const p = this.game.player
       const d2 = (p.x - e.x) ** 2 + (p.y - e.y) ** 2
       if (d2 < 90 * 90) p.hit(1, { enemyAttack: true })
+      if (!p.dead && this.game.enemyManager?.spawnTelegraphBlast) {
+        this.game.enemyManager.spawnTelegraphBlast({
+          x: e.x,
+          y: e.y,
+          radius: 120,
+          delay: 0.6,
+          damage: 2,
+          radialBullets: 6,
+          color: '#ff9d4a',
+        })
+      }
       this._burst(e.x, e.y, 'mage', 14, true) // 金色爆屑
       this.game.sound.kill()
     }
@@ -1039,16 +1069,17 @@ export class WeaponSystem extends Entity {
             }
 
             // —— 命中：飞弹销毁，敌人扣血 ——
-            const critChance = p.critChance + burstBonus
+            const petMod = this.petCombat?.modifyPlayerHit?.(p.damage, p.critChance + burstBonus, this.critMul || 3.0, e)
+            const critChance = petMod ? petMod.critChance : (p.critChance + burstBonus)
             // 原生黏液的刺客觉醒仍使用飞弹必暴；暗影在 ShadowCombat 内结算。
-            const isCrit = (critChance > 0 && Math.random() < critChance) || this.player.guaranteedCrit
+            const isCrit = (critChance > 0 && Math.random() < critChance) || this.player.guaranteedCrit || !!petMod?.forceCrit
             if (this.player.guaranteedCrit) this.player.guaranteedCrit = false
 
-            let critMultiplier = isCrit ? (this.critMul || 3.0) : 1.0
+            let critMultiplier = isCrit ? (petMod ? petMod.critMul : (this.critMul || 3.0)) : 1.0
             if (isCrit && this.executeCrit && e.hp <= e.maxHp * 0.5) {
               critMultiplier *= 2.0
             }
-            let damage = p.damage * critMultiplier
+            let damage = (petMod ? petMod.damage : p.damage) * critMultiplier
             let originHitBonus = 0
             // 暗影印记：震荡后的下一次本体命中强化；只消费一次。
             if (this.player.originNextHitMul > 1) {
@@ -1138,6 +1169,7 @@ export class WeaponSystem extends Entity {
               isCrit ? 26 : 14
             )
             if (!e.active) this._onKill(e)
+            this.petCombat?.onPlayerProjectileHit?.(e, damage, isCrit, p)
 
             // 元素反应
             if (gelR) this._chainLightning(e, damage * rMul)
@@ -1197,6 +1229,8 @@ export class WeaponSystem extends Entity {
     if (e.isElite) this.eliteKills++
     this.game.worldEvents?.onEnemyDefeated(e)
     this.player.triggerKillRush?.(2)
+    this.petCombat?.onKill?.(e)
+    this.spellCombat?.onEnemyKilled?.(e)
     // 狩猎亢奋（黑市）：击杀刷新 2.5 秒攻速窗口
     if (this.geneHuntHaste > 0) this.player._huntRushTimer = 2.5
     this.player.triggerDevourGuard?.(3)
@@ -1517,6 +1551,8 @@ export class WeaponSystem extends Entity {
 
   renderGround(ctx) {
     this.gluttonCombat.renderGround(ctx)
+    this.petCombat.renderGround(ctx)
+    this.spellCombat.renderGround(ctx)
   }
 
   render(ctx) {

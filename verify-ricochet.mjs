@@ -99,9 +99,11 @@ for (const route of Object.keys(routes)) check(`${routes[route].name}：锁定�
   assert.ok(Object.keys(g.skillLevels).filter(id => /rico_(swarm|cannon|prism)$/.test(id)).length === 1)
   const target = spawn(g)
   g.weaponSystem._projectiles.length = 0
+  const rc = g.weaponSystem.ricochetCombat
+  rc.beams.length = 0
   g.weaponSystem.fire(target)
-  const normalDamage = g.weaponSystem._projectiles[0].damage
-  g.weaponSystem._projectiles.length = 0
+  const normalDamage = route === 'bounce' ? rc.beams.at(-1).damage : g.weaponSystem._projectiles[0].damage
+  g.weaponSystem._projectiles.length = 0; rc.beams.length = 0
   pressSpace(g)
   const projectiles = g.weaponSystem._projectiles
   const count = g.weaponSystem.projectileCount
@@ -114,8 +116,10 @@ for (const route of Object.keys(routes)) check(`${routes[route].name}：锁定�
     assert.equal(projectiles.length, 1); near(projectiles[0].damage, normalDamage * count * 8)
     assert.equal(g.weaponSystem.rapidVolley, null); assert.equal(g.player.strainSkillCd, 10)
   } else {
-    assert.equal(projectiles.length, 3); near(projectiles[0].damage, normalDamage * count * 1.5)
-    assert.equal(projectiles[0].ricochet.bounces, 6); assert.equal(g.player.strainSkillCd, 12)
+    assert.equal(projectiles.length, 0, '棱镜群落不再产生实体主弹')
+    assert.equal(rc.beams.length, 3)
+    near(rc.beams[0].damage, normalDamage * 1.5)
+    assert.equal(rc.beams[0].bounces, 6); assert.equal(g.player.strainSkillCd, 12)
   }
 })
 
@@ -171,47 +175,64 @@ check('破阵冲击在贯穿或暴击时爆发；破城弹头首击增伤并前�
   assert.ok(back.hp < 1000 - src)
 })
 
-check('折射优先未命中目标；多目标允许乒乓反弹；孤立首领只打一次；折光穿梭续穿透', g => {
-  prepare(g, 'bounce'); learn(g, 'pierce_bounce'); learn(g, 'bounce')
+check('光棱激光：齐射加粗并压缩伤害、落点星爆散射不乒乓、斜角扫掠精准、折光穿梭延续散射', g => {
+  prepare(g, 'bounce'); learn(g, 'bounce', 2)
+  const rc = g.weaponSystem.ricochetCombat
+  // 1) 齐射数与光线粗细/威力关联，且在 activeCountCap=7 封顶
+  const samples = []
+  for (const cnt of [1, 3, 7, 9]) {
+    g.enemyManager._enemies.length = 0; rc.beams.length = 0
+    g.weaponSystem.projectileCount = cnt
+    const t = spawn(g, { x: 140, hp: 10000 })
+    g.weaponSystem.fire(t)
+    const primary = rc.beams.find(b => b.stage === 0)
+    samples.push({ cnt, width: primary.width, damage: primary.damage })
+  }
+  assert.ok(samples[0].width < samples[1].width && samples[1].width < samples[2].width, '齐射越多主光束越粗')
+  assert.ok(samples[0].damage < samples[1].damage && samples[1].damage < samples[2].damage, '齐射越多单束主光束威力越高')
+  assert.equal(samples[2].width, samples[3].width, '光线粗细在齐射封顶 7 处停止放大')
+  near(samples[2].damage, samples[3].damage, '单束伤害在齐射封顶 7 处停止放大')
+
+  // 2) 星爆散射：主束击中第一目标后同时向周围散射，绝不对同一目标乒乓重复结算
+  g.enemyManager._enemies.length = 0; rc.beams.length = 0
   g.weaponSystem.projectileCount = 1
-  for (let i = 1; i <= 9; i++) spawn(g, { x: i * 100, hp: 10000 })
-  g.weaponSystem.fire(g.enemyManager.enemies[0])
-  const p = g.weaponSystem._projectiles[0]
-  for (let i = 0; p.active && i < 12; i++) {
-    p.prevX = p.x; p.prevY = p.y
-    const target = p.target || g.weaponSystem.ricochetCombat.findTarget(p.x, p.y, p.hitTargets)
-    if (!target) break
-    p.x = target.x; p.y = target.y; g.enemyManager._buildGrid(); g.weaponSystem.ricochetCombat.resolve(p)
-  }
-  assert.ok(p.ricochet.turns <= 3)
-  assert.equal(p.ricochet.hybridPierces, 1)
-  assert.equal(p.hitTargets.size, 8)
-
-  // 乒乓折射：只有首领与一名小怪时来回弹射，直到次数耗尽
-  g.weaponSystem._projectiles.length = 0; g.enemyManager._enemies.length = 0
-  const mob = spawn(g, { x: 120, hp: 10000 }), boss = spawnBoss(g, 10000)
-  boss.x = g.player.x + 260; boss.y = g.player.y
+  const mob = spawn(g, { x: 110, hp: 10000 })
+  const boss = spawnBoss(g, 10000); boss.x = g.player.x + 170; boss.y = g.player.y + 48
+  const add1 = spawn(g, { x: 140, y: 120, hp: 10000 })
+  const add2 = spawn(g, { x: 140, y: -120, hp: 10000 })
+  const bBefore = rc.metrics.bounces
   g.weaponSystem.fire(mob)
-  const ping = g.weaponSystem._projectiles[0]
-  ping.pierces = 0
-  const hitsBefore = ping.ricochet.turns
-  for (let i = 0; ping.active && i < 12; i++) {
-    ping.prevX = ping.x; ping.prevY = ping.y
-    const t = ping.target
-    if (!t) break
-    ping.x = t.x; ping.y = t.y; g.enemyManager._buildGrid(); g.weaponSystem.ricochetCombat.resolve(ping)
-  }
-  assert.equal(ping.ricochet.turns, hitsBefore + 3)
-  assert.ok(boss.hp < 10000 && mob.hp < 10000)
+  assert.equal(rc.metrics.bounces - bBefore, 3, '主束命中 mob 后向 3 个周围目标星爆散射')
+  const primary = rc.beams.find(b => b.stage === 0)
+  const scatters = rc.beams.filter(b => b.stage === 1)
+  assert.equal(scatters.length, 3)
+  near(10000 - mob.hp, primary.damage, '主目标每发只受 1 次主束伤害，不回弹乒乓')
+  assert.ok(boss.hp < 10000 && add1.hp < 10000 && add2.hp < 10000)
 
-  // 孤立首领：绝不自己弹自己
-  g.weaponSystem._projectiles.length = 0; g.enemyManager._enemies.length = 0
-  const loneBoss = spawnBoss(g, 10000)
+  // 3) 斜角精度：非轴向目标也能 100% 稳定命中并触发散射（回归浮点 proj > dist 截断漏洞）
+  g.enemyManager._enemies.length = 0; rc.beams.length = 0
+  const diag = spawn(g, { x: 173, y: 139, hp: 10000 })
+  const diagSub = spawn(g, { x: 240, y: 190, hp: 10000 })
+  g.weaponSystem.fire(diag)
+  assert.ok(diag.hp < 10000 && diagSub.hp < 10000, '斜角发射不得因浮点截断丢失端点或散射')
+
+  // 4) 孤立首领：不触发任何散射，仅吃 1 次主束伤害；超射程不隔空击杀
+  g.enemyManager._enemies.length = 0; rc.beams.length = 0
+  const loneBoss = spawnBoss(g, 10000); loneBoss.x = g.player.x + 180; loneBoss.y = g.player.y
   g.weaponSystem.fire(loneBoss)
-  const lone = g.weaponSystem._projectiles[0]
-  lone.pierces = 0
-  sweep(g, lone, 150)
-  assert.equal(lone.hitTargets.size, 1); assert.equal(lone.active, false, '无第二目标时停止折射')
+  assert.equal(rc.beams.length, 1)
+  near(10000 - loneBoss.hp, rc.beams[0].damage)
+
+  // 5) 折光穿梭：主束穿过首位后顺穿后排并在穿刺终点再触发一次散射
+  learn(g, 'pierce_bounce')
+  g.enemyManager._enemies.length = 0; rc.beams.length = 0
+  const front = spawn(g, { x: 90, hp: 10000 })
+  const back = spawn(g, { x: 190, hp: 10000 })
+  const flank = spawn(g, { x: 220, y: 95, hp: 10000 })
+  const pBefore = rc.metrics.penetrations
+  g.weaponSystem.fire(front)
+  assert.ok(rc.metrics.penetrations > pBefore, '折光穿梭沿主束方向继续穿刺后排')
+  assert.ok(back.hp < 10000 && flank.hp < 10000, '穿刺终点补发散射命中侧翼目标')
 })
 
 check('裂殖母体必定分裂；孢弹不再分裂，爆裂孢弹支持击杀与首领叠层引爆', g => {
@@ -266,22 +287,22 @@ check('空格疾射逐轮扫射：同轮弹体分散锁定、各轮换锁新目�
   assert.ok(g.weaponSystem._projectiles.every(p => p.target === only), '无可锁目标时应集火最近敌人')
 })
 
-check('棱镜分束首跳一分为二且不递归；空场不扣冷却', g => {
+check('棱镜分束触发二级折光网且不递归；空场不扣冷却', g => {
   prepare(g, 'bounce', false); learn(g, 'echo')
   g.weaponSystem.projectileCount = 1
+  const rc = g.weaponSystem.ricochetCombat
   const target = spawn(g, { x: 80, hp: 1000 })
-  const next = spawn(g, { x: 180, hp: 1000 })
-  const third = spawn(g, { x: 260, hp: 1000 })
+  const next = spawn(g, { x: 160, y: 60, hp: 1000 })
+  const third = spawn(g, { x: 160, y: -60, hp: 1000 })
+  const far1 = spawn(g, { x: 260, y: 120, hp: 1000 })
+  const far2 = spawn(g, { x: 260, y: -120, hp: 1000 })
   target.shieldHits = 1
   g.weaponSystem.fire(target)
-  const p = g.weaponSystem._projectiles[0]
-  sweep(g, p, 110)
   assert.equal(target.hp, 1000); assert.equal(target.shieldHits, 0)
-  const splitBeam = g.weaponSystem._projectiles.find(s => s !== p)
-  assert.ok(splitBeam, '首跳应分束产生衍生光弹')
-  assert.equal(splitBeam.ricochet.echo, false)
-  assert.equal(splitBeam.ricochet.bounces, p.ricochet.bounces)
-  assert.ok(third.active && next.active)
+  assert.ok(rc.beams.some(b => b.stage === 0), '主束生成')
+  assert.equal(rc.beams.filter(b => b.stage === 1).length, 2, '一级散射命中 2 名近邻')
+  assert.ok(rc.beams.some(b => b.stage === 2), '二级折光向更外圈折射，但不递归回弹')
+  assert.ok(next.hp < 1000 && third.hp < 1000 && far1.hp < 1000 && far2.hp < 1000)
   g.enemyManager._enemies.length = 0; g.player.strainSkillCd = 0
   pressSpace(g); assert.equal(g.player.strainSkillCd, 0)
 })
@@ -385,44 +406,62 @@ check('巨炮齐射数缩放计至 7，秘典弹仓不放大终极', g => {
   near(g.weaponSystem._projectiles[0].damage, normalDamage * 7 * 8)
 })
 
-check('棱镜风暴齐射数缩放计至 7', g => {
+check('棱镜风暴齐射数缩放计至 7 且粗细与威力同步封顶', g => {
   prepare(g, 'bounce'); learn(g, 'bounce', 2); learn(g, 'extension')
   g.player.level = RICOCHET_RULES.ultimateLevel; g.enemyManager.wave = RICOCHET_RULES.ultimateWave
   assert.equal(g.applySkill(skills.rico_prism), true)
   g._pauseLock = 0; g.running = true
   g.weaponSystem.projectileCount = 9
+  const rc = g.weaponSystem.ricochetCombat
   const target = spawn(g)
-  g.weaponSystem._projectiles.length = 0
+  g.weaponSystem._projectiles.length = 0; rc.beams.length = 0
   g.weaponSystem.fire(target)
-  const normalDamage = g.weaponSystem._projectiles[0].damage
-  g.weaponSystem._projectiles.length = 0
+  const normalBeam = rc.beams.find(b => b.stage === 0)
+  const normalDamage = normalBeam.damage
+  rc.beams.length = 0
   pressSpace(g)
-  const cores = g.weaponSystem._projectiles
-  assert.equal(cores.length, 3)
-  near(cores[0].damage, normalDamage * 7 * 1.5)
+  const beams = rc.beams.filter(b => b.stage === 0)
+  assert.equal(beams.length, 3)
+  assert.ok(beams.every(b => b.bounces === 6))
+  assert.ok(beams[0].width > normalBeam.width, '棱镜风暴终极光束更粗')
+  near(beams[0].damage, normalDamage * 1.5)
 })
 
-check('余辉增幅每跳线性累加且第 7 跳不再追加（越弹越痛）', g => {
-  prepare(g, 'bounce'); learn(g, 'amplify', 4)
+check('余辉增幅仅在散射命中多名不同目标时放大伤害（单挑不增伤）', g => {
+  prepare(g, 'bounce'); learn(g, 'amplify', 3); learn(g, 'bounce', 4)
   g.weaponSystem.projectileCount = 1
-  for (let i = 1; i <= 8; i++) spawn(g, { x: i * 90, hp: 10000 })
-  g.weaponSystem.fire(g.enemyManager.enemies[0])
-  const p = g.weaponSystem._projectiles[0], rc = g.weaponSystem.ricochetCombat
-  const d0 = p.damage, b = p.ricochet.bounceBonus, ret = p.ricochet.bounceRetention
-  near(ret, 1)
-  near(b, .4)
-  const first = g.enemyManager.enemies[0]
-  p.x = first.x; p.y = first.y; p.hitTargets.add(first)
-  p.pierces = 0; p.ricochet.bounces = 7
-  const d = []
-  for (let i = 0; i < 7; i++) { rc.continueAfterHit(p); d.push(p.damage) }
-  for (let i = 0; i < 6; i++) near(d[i], d0 * (1 + (i + 1) * b))
-  near(d[6], d[5])
+  const rc = g.weaponSystem.ricochetCombat
+  // 仅 1 个侧翼散射目标（避开正后方穿透线）：ampFactor = 0，保持基础 62%
+  const primary1 = spawn(g, { x: 90, hp: 100000 })
+  const onlyScatter = spawn(g, { x: 90, y: 110, hp: 100000 })
+  g.weaponSystem.fire(primary1)
+  const d0 = rc.beams.find(b => b.stage === 0).damage
+  near(100000 - onlyScatter.hp, d0 * .62, '仅 1 个散射目标时不吃余辉共鸣加伤')
+
+  // 4+ 个侧翼散射目标：吃满 Lv.3 的 30% 共鸣加伤（0.62 + 0.30 = 0.92）
+  g.enemyManager._enemies.length = 0; rc.beams.length = 0
+  const primary2 = spawn(g, { x: 90, hp: 100000 })
+  const crowd = Array.from({ length: 4 }, (_, i) => spawn(g, { x: 80 + (i - 1.5) * 35, y: (i % 2 ? 1 : -1) * (80 + i * 15), hp: 100000 }))
+  g.weaponSystem.fire(primary2)
+  for (const e of crowd) near(100000 - e.hp, d0 * (.62 + .3), '命中 ≥4 个不同散射目标吃满余辉共鸣')
+})
+
+check('探索期混拿穿透与折射：前方无可穿目标时让位折射，不再盲飞丢锁', g => {
+  learn(g, 'pierce'); learn(g, 'bounce')
+  g.weaponSystem.projectileCount = 1
+  const front = spawn(g, { x: 100, hp: 10000 })
+  const side = spawn(g, { x: 100, y: 160, hp: 10000 })
+  g.weaponSystem.fire(front)
+  const p = g.weaponSystem._projectiles[0]
+  sweep(g, p, 100)
+  assert.equal(p.ricochet.turns, 1, '无正前目标时应直接折射而非消耗穿透盲飞')
+  assert.equal(p.pierces, 1, '穿透次数未被空掷')
+  assert.equal(p.target, side)
 })
 
 check('弹射系卡面与实现口径一致', g => {
-  assert.equal(skills.rico_extension.stats(2), '折射 +3 次 · 范围 +360px · 转向弹速 +75%')
-  assert.equal(skills.rico_amplify.stats(4), '每次折射伤害 +44%')
+  assert.equal(skills.rico_extension.stats(2), '折射范围 +105px · 光程 +30% · 蓄能间隔 -12%')
+  assert.equal(skills.rico_amplify.stats(4), '散射命中 ≥4 目标时额外增伤 +38%')
   assert.equal(skills.rico_hunt.stats(5), '孢弹伤害 +40 个百分点 · 半血目标 +30% · 存续 +1.50 秒')
 })
 console.log(`verify-ricochet：${passed} 组通过`)

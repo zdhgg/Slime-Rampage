@@ -1,5 +1,5 @@
 import { BOSS_TOMES, rollBossTomes } from './BossTomes.js'
-import { PET_SPEC_INFO, PET_SKILLS, PET_PARTNER_SKILLS } from './PetSkills.js'
+import { PET_SPEC_INFO, PET_SKILLS } from './PetSkills.js'
 import { setCritSource } from './CritSources.js'
 import { ELEMENTAL_SKILLS, ELEMENTAL_SPEC_INFO, resolveElementalSkill } from './SpellRules.js'
 import { spellSkillAvailable, prioritizeSpellChoices } from './ElementalUpgrades.js'
@@ -9,8 +9,13 @@ import { rollOriginSkills } from './OriginBuild.js'
 import { rollRicochetSkills, RICOCHET_SPEC_INFO, RICOCHET_ROUTES } from './RicochetRules.js'
 import { CORE_SKILL_RANK_CAPS, getEffectiveSkillMaxLevel, getSoftRankMultiplier, applyRankMultiplier } from './SkillProgression.js'
 import { ENDLESS_SKILLS } from './EndlessSkills.js'
-import { GLUTTON_ROUTES, rollGluttonSkills } from './GluttonBuild.js'
-import { rollSymbiosisSkills } from './SymbiosisBuild.js'
+import {
+  GLUTTON_ROUTES, rollGluttonSkills,
+  getGluttonHeavyDamageMultiplier, getGluttonHeavyReachMultiplier,
+  gluttonBiteSweepArcDegAt, gluttonBiteSweepDamageAt, gluttonBiteSweepHasteAt, gluttonBulkReflectScaleAt,
+} from './GluttonBuild.js'
+import { getGluttonMawDevourProgressMultiplierAtLevel } from './GluttonResource.js'
+import { rollSymbiosisSkills, SYMBIOSIS_ROUTES, SYMBIOSIS_ROUTE_SKILLS } from './SymbiosisBuild.js'
 import { elementalSkillOptions } from './ElementalBuild.js'
 /**
  * 技能池：流派化专精技能体系（阶段式里程碑觉醒架构）
@@ -118,18 +123,18 @@ export const SKILL_DATABASE = {
         icon: '🕳️',
         desc: '提高吞噬线与吸附范围，扩大体表腐蚀光环半径并加快饱食度积蓄',
         tags: ['暴食·T1', '吞噬'],
-        maxLevel: 3,
+        maxLevel: 8,
         growthClass: 'core',
         stats(lv) {
           const rank = lv + 1
           const threshold = Math.min(40, 24 + rank * 4)
-          const radius = Math.min(3, Math.max(1.35, 1 + rank * 0.2))
-          const charge = Math.min(120, rank * 25)
-          return `吞噬阈值 ${threshold}% · 吸附 +${Math.round((radius - 1) * 100)}% · 光环 +${rank * 10}px · 饱食 +${charge}%`
+          const radius = Math.min(3.4, Math.max(1.35, 1 + rank * 0.2))
+          const charge = getGluttonMawDevourProgressMultiplierAtLevel(rank)
+          return `吞噬阈值 ${threshold}% · 吸附 +${Math.round((radius - 1) * 100)}% · 光环 +${rank * 10}px · 饱食加速 ×${charge.toFixed(2)}`
         },
         apply(game, lv) {
           game.devourThreshold = Math.min(0.4, 0.24 + lv * 0.04)
-          game.player.devourRadiusBonus = Math.max(game.player.devourRadiusBonus || 1, Math.min(3, 1 + lv * 0.2))
+          game.player.devourRadiusBonus = Math.max(game.player.devourRadiusBonus || 1, Math.min(3.4, 1 + lv * 0.2))
           game.player.gluttonMawAuraLevel = lv
         },
       },
@@ -141,18 +146,20 @@ export const SKILL_DATABASE = {
         icon: '🛡️',
         desc: '增加生命上限、胃铠上限与持续时间，并强化受击/挡伤反震威力',
         tags: ['暴食·T1', '体魄'],
-        maxLevel: 3,
+        maxLevel: 8,
         growthClass: 'core',
         stats(lv, game) {
           const rank = lv + 1
-          const guardBonus = Math.ceil(rank / 2)
-          return `生命上限 ${game.player.maxHp} → ${game.player.maxHp + 1} · 胃铠上限 +${guardBonus} · 持续 ${Math.min(3.4, 2.2 + rank * 0.4).toFixed(1)} 秒 · 反伤 +${rank * 15}%`
+          const guardBonus = Math.min(4, Math.ceil(rank / 2))
+          return `生命上限 ${game.player.maxHp} → ${game.player.maxHp + (rank <= 6 ? 1 : 0)} · 胃铠上限 +${guardBonus} · 持续 ${Math.min(3.4, 2.2 + rank * 0.4).toFixed(1)} 秒 · 反伤 +${Math.round((gluttonBulkReflectScaleAt(rank) - 1) * 100)}%`
         },
         apply(game, lv) {
-          game.player.maxHp += 1
-          game.player.hp = Math.min(game.player.maxHp, game.player.hp + 1)
+          if (lv <= 6) {
+            game.player.maxHp += 1
+            game.player.hp = Math.min(game.player.maxHp, game.player.hp + 1)
+          }
           game.player.gluttonBulkLevel = lv
-          game.player.gluttonBulkGuardBonus = Math.ceil(lv / 2)
+          game.player.gluttonBulkGuardBonus = Math.min(4, Math.ceil(lv / 2))
           game.player.gluttonGuardDuration = Math.min(3.4, 2.2 + lv * 0.4)
         },
       },
@@ -163,8 +170,11 @@ export const SKILL_DATABASE = {
         name: '腐蚀重碾',
         icon: '🚜',
         desc: '扩大深渊吸噬的引力聚怪与重咬范围，并强化重咬与重击伤害',
-        tags: ['暴食·T1', '吸噬'], maxLevel: 3, growthClass: 'core',
-        stats(lv) { const rank = lv + 1; return `吸噬引力/范围 +${rank * 10}% · 重咬伤害 +${rank * 15}%` },
+        tags: ['暴食·T1', '吸噬'], maxLevel: 8, growthClass: 'core',
+        stats(lv) {
+          const rank = lv + 1
+          return `吸噬引力/范围 ×${getGluttonHeavyReachMultiplier(rank).toFixed(2)} · 重咬伤害 ×${getGluttonHeavyDamageMultiplier(rank).toFixed(2)}`
+        },
         apply(game, lv) { game.player.gluttonHeavyLevel = lv },
       },
       {
@@ -175,10 +185,10 @@ export const SKILL_DATABASE = {
         icon: '🦷',
         desc: '拓宽普通咬击的扇面覆盖角度，提升普攻咬击伤害与出手频率',
         tags: ['暴食·T1', '扫咬'],
-        maxLevel: 3,
+        maxLevel: 8,
         stats(lv) {
           const rank = lv + 1
-          return `咬击弧度 +${rank * 18}° · 普攻伤害 +${rank * 12}% · 攻速 +${rank * 6}%`
+          return `咬击弧度 +${gluttonBiteSweepArcDegAt(rank)}° · 普攻伤害 +${Math.round(gluttonBiteSweepDamageAt(rank) * 100)}% · 攻速 +${Math.round(gluttonBiteSweepHasteAt(rank) * 100)}%`
         },
         apply(game, lv) { game.player.gluttonBiteSweepLevel = lv },
       },
@@ -254,7 +264,7 @@ export const SKILL_DATABASE = {
         icon: '💨',
         desc: '飞弹速度与伤害协同提升',
         tags: ['机枪·T1', '弹速'],
-        maxLevel: 3,
+        maxLevel: 8,
         growthClass: 'core',
         stats(lv, game) {
           const v = Math.round(game.weaponSystem.projectileSpeed)
@@ -405,7 +415,7 @@ export const SKILL_DATABASE = {
         icon: '🌀',
         desc: '复合元素反应（蒸汽/酸池/麻痹/毒雷）伤害与范围提升',
         tags: ['元素·T1', '反应'],
-        maxLevel: 3,
+        maxLevel: 8,
         growthClass: 'core',
         stats(lv) {
           const rank = lv + 1
@@ -443,12 +453,12 @@ export const SKILL_DATABASE = {
         icon: '🎆',
         desc: '任何元素反应触发时，在目标脚底额外炸开强力震荡波',
         tags: ['元素·T3', '爆轰'],
-        maxLevel: 2,
+        maxLevel: 6,
         stats(lv) {
-          return `爆轰震荡波伤害 ×${[1.5, 2.5][lv] || 2.5}`
+          return `爆轰震荡波伤害 ×${[1.5, 2, 2.5, 2.85, 3.15, 3.4][lv] || 3.4}`
         },
         apply(game, lv) {
-          game.weaponSystem.reactionShockwave = [1.5, 2.5][lv - 1]
+          game.weaponSystem.reactionShockwave = [1.5, 2, 2.5, 2.85, 3.15, 3.4][lv - 1] || 3.4
         },
       },
       {
@@ -518,13 +528,15 @@ export const SKILL_DATABASE = {
         icon: '🎯',
         desc: '大幅提高暴击概率',
         tags: ['刺客·T1', '暴击率'],
-        maxLevel: 3,
+        maxLevel: 8,
         stats(lv) {
-          const rate = [25, 40, 55][lv] || 55
-          return `暴击率提升至 ${rate}%`
+          const rank = lv + 1
+          const bonus = rank <= 3 ? [0.15, 0.3, 0.45][rank - 1] : 0.45 + Math.min(0.3, (rank - 3) * 0.06)
+          return `暴击率提升至 ${Math.round(10 + bonus * 100)}%`
         },
         apply(game, lv) {
-          setCritSource(game, 'lethal', { chance: [0.15, 0.3, 0.45][lv - 1] })
+          const chance = lv <= 3 ? [0.15, 0.3, 0.45][lv - 1] : 0.45 + Math.min(0.3, (lv - 3) * 0.06)
+          setCritSource(game, 'lethal', { chance })
         },
       },
       {
@@ -535,7 +547,7 @@ export const SKILL_DATABASE = {
         icon: '👟',
         desc: '移动速度与主动技能冷却全面强化',
         tags: ['刺客·T1', '机动'],
-        maxLevel: 3,
+        maxLevel: 8,
         growthClass: 'core',
         stats(lv, game) {
           const s = Math.round(game.player.speed)
@@ -558,7 +570,7 @@ export const SKILL_DATABASE = {
         icon: '🗡️',
         desc: '暴击伤害倍率由 3 倍大幅提升',
         tags: ['刺客·T2', '暴伤'],
-        maxLevel: 3,
+        maxLevel: 8,
         growthClass: 'core',
         stats(lv) {
           const rank = lv + 1
@@ -720,12 +732,12 @@ export const SKILL_DATABASE = {
       icon: '🌱',
       desc: '每 8 秒自动缓慢修复 1 点生命值',
       tags: ['通用', '自愈'],
-      maxLevel: 3,
+      maxLevel: 5,
       stats(lv) {
-        return `自愈周期 ${[8, 6, 4][lv] || 4} 秒`
+        return `自愈周期 ${[8, 6, 4.5, 3.8, 3.2][lv] || 3.2} 秒`
       },
         apply(game, lv) {
-          game.player.regenInterval = [8, 6, 4][lv - 1]
+          game.player.regenInterval = [8, 6, 4.5, 3.8, 3.2][lv - 1]
           game.player._regenTimer = game.player.regenInterval
         },
     },
@@ -735,13 +747,13 @@ export const SKILL_DATABASE = {
       icon: '⚡',
       desc: '受击时触发移速爆发——把「挨打」转化为走位资源，越危险越灵活',
       tags: ['通用', '机动'],
-      maxLevel: 3,
+      maxLevel: 5,
       stats(lv) {
-        const b = [30, 45, 60][lv] || 60
+        const b = [30, 45, 60, 70, 78][lv] || 78
         return `受击后移速 +${b}%（持续 3 秒）`
       },
       apply(game, lv) {
-        game.player.adrenalineSpeed = [0.3, 0.45, 0.6][lv - 1]
+        game.player.adrenalineSpeed = [0.3, 0.45, 0.6, 0.7, 0.78][lv - 1]
       },
     },
   ],
@@ -750,14 +762,24 @@ export const SKILL_DATABASE = {
 // Only these audited tracks receive extra high-difficulty ranks. Discrete
 // proc/count/evolution skills retain their authored cap to avoid runaway chains.
 const CORE_GROWTH_IDS = new Set([
-  'glut_maw', 'glut_bulk', 'glut_ram', 'glut_acid_aura', 'glut_aftershock', 'glut_counter',
+  'glut_maw', 'glut_bulk', 'glut_ram', 'glut_bite_sweep', 'glut_acid_aura', 'glut_aftershock', 'glut_counter',
   'gat_velocity', 'ele_resonance',
-  'ass_lethal', 'ass_ward', 'ass_stride', 'ass_execute', 'pet_power', 'pet_vitality', 'pet_haste',
+  'ass_lethal', 'ass_ward', 'ass_stride', 'ass_execute',
+  'pet_power', 'pet_vitality', 'pet_haste', 'sym_tactic_weaken',
+  'sym_beast_seed', 'sym_beast_frenzy', 'sym_beast_cleave', 'sym_beast_curse', 'sym_beast_revive',
+  'sym_ranger_seed', 'sym_ranger_infuse', 'sym_ranger_focus', 'sym_ranger_escort', 'sym_ranger_barrage',
+  'sym_bond_seed', 'sym_bond_chain', 'sym_bond_volley', 'sym_bond_aegis', 'sym_bond_surge',
   'origin_flux', 'origin_overload', 'origin_concord',
 ])
 for (const [treeKey, tree] of Object.entries(SKILL_DATABASE)) {
   const entries = [...(tree.primary || []), ...(tree.secondary || []), ...(Array.isArray(tree) ? tree : [])]
   for (const skill of entries) if (CORE_GROWTH_IDS.has(skill.id)) {
+    skill.growthClass = 'core'
+    skill.rankCaps = CORE_SKILL_RANK_CAPS[skill.id]
+  }
+}
+for (const skill of SYMBIOSIS_ROUTE_SKILLS) {
+  if (CORE_GROWTH_IDS.has(skill.id)) {
     skill.growthClass = 'core'
     skill.rankCaps = CORE_SKILL_RANK_CAPS[skill.id]
   }
@@ -801,6 +823,11 @@ export function getSpecInfo(spec, game) {
     const route = game?.weaponSystem?.shadowCombat?.route
     const r = route && SHADOW_ROUTES[route]
     return r ? { ...SHADOW_SPEC_INFO, name: r.name, icon: r.icon, desc: `${r.desc} ${r.bonus}` } : SHADOW_SPEC_INFO
+  }
+  if (spec === 'symbiosis' && (game?.startingStrain || game?.strainId) === 'summoner') {
+    const route = game?.weaponSystem?.petCombat?.route
+    const r = route && SYMBIOSIS_ROUTES[route]
+    return r ? { ...PET_SPEC_INFO, name: r.name, icon: r.icon, desc: `${r.desc} ${r.bonus}` } : PET_SPEC_INFO
   }
   const info = SPEC_INFO[spec]
   if (spec === 'elemental' && (game?.startingStrain || game?.strainId) === 'elemental') return { ...info, ...ELEMENTAL_SPEC_INFO }
@@ -1093,14 +1120,7 @@ export function rollSkills(game, count = 3) {
     }
   }
 
-  // 觉醒时先选第一位搭档，后续升级仍可招募其余伙伴。
-  // effectiveStrain：共生血统先招募（岩甲团团随 enabled 自动到场，
-  // 但三选一招募位是共生树的组队入口，不能只靠常驻位）。
-  if (effectiveStrain === 'summoner' && primarySpec === 'symbiosis' &&
-      !PET_PARTNER_SKILLS.some(id => (levels[id] || 0) > 0)) {
-    const choices = PET_PARTNER_SKILLS.map(id => candidatePool.find(skill => skill.id === id)).filter(Boolean)
-    if (choices.length === PET_PARTNER_SKILLS.length) return choices.slice(0, count)
-  }
+  // 觉醒与普通抽取流程在 rollSymbiosisSkills / rollSkills 顶部已分流。
 
   // 洗牌算法
   // 投入收敛（自由探索期治「散落」）：已投入系 / 已点过的卡加权排前——

@@ -85,7 +85,8 @@ export class OriginSourceCombat {
     mods.damage *= options.scale ?? 1
     if (options.secondary && this.game.originRoute === 'resonance') mods.damage *= 1.1
     if (options.secondary) { mods.consumeStacks = false; mods.consumeCircuits = false; mods.echo = false }
-    const base = (this.weapon.damage || 1) * (this.weapon.levelMul || 1)
+    const hastePower = Math.max(1, Math.min(2.2, 1 / Math.max(0.35, this.weapon.attackInterval || 1)))
+    const base = (this.weapon.damage || 1) * (this.weapon.levelMul || 1) * (this.weapon.devourDamageMul || 1) * hastePower
     const token = skillInjectionToken(options.token || createOriginInjectionToken(this.game), !!options.secondary, options.category || 'main')
     const previousLastCast = this.game.originSourceLastCast
     // 路线资源归属（D3）：同化满层 / 共振满回路只由被动超载兑现与消耗，
@@ -638,19 +639,27 @@ export class OriginSourceCombat {
     return best
   }
 
-  /** 统一伤害收口：击杀保留经验/掉落/统计，但标记来源以阻断异源充能。 */
+  /** 统一伤害收口：击杀保留经验/掉落/统计，支持超载暴击，但标记来源以阻断异源充能。 */
   _hit(enemy, damage, token = null, category = null) {
     if (!enemy?.active || enemy.devouring || damage <= 0) return false
+    const critChance = this.weapon?.critChance || 0
+    const isCrit = critChance > 0 && Math.random() < Math.min(0.95, critChance)
+    const critMul = isCrit ? 1.65 + Math.max(0, (this.weapon?.critMul || 3) - 3) * 0.45 : 1
+    const finalDamage = damage * critMul
     const hpBefore = enemy.hp
-    enemy.hit(damage, { originDamageKind: category || token?.category || 'main' })
+    enemy.hit(finalDamage, { originDamageKind: category || token?.category || 'main' })
     if (!(enemy.hp < hpBefore)) return false
-    applyOriginInjection(this, enemy, damage, token)
+    if (isCrit) {
+      const txt = Math.round(finalDamage * 10) / 10
+      this.game?.enemyManager?.addText?.(enemy.x, enemy.y - (enemy.radius || 14) - 10, `✦${txt}`, null, '#a7f3d0', 14)
+    }
+    applyOriginInjection(this, enemy, finalDamage, token)
     this.weapon.originCombat?.applyRiders(null, 0, 1, true, 'hit')
     const growth = getOriginGrowth(this.game)
     const combat = this.weapon.originCombat
     if (growth.recoveryLevel > 0 && this.player.hp < this.player.maxHp && combat?.ready('recovery')) {
       this.player.heal(1)
-      combat.setIcd('recovery', growth.recoveryLevel >= 2 ? 10 : 12)
+      combat.setIcd('recovery', [12, 12, 10, 9, 8][Math.min(4, growth.recoveryLevel)])
     }
     if (!enemy.active) {
       if (enemy._settled) return false
@@ -701,27 +710,56 @@ export class OriginSourceCombat {
       ctx.save()
       ctx.translate(wave.x, wave.y)
       ctx.rotate(wave.angle)
-      // 与命中带同口径：越远越宽，画成楔形而不是等宽胶囊。
+      // 与命中带同口径：越远越宽，画成多层荧光液态新月波体。
       const halfW = wave.width * (0.5 + 0.35 * progress)
-      const stretch = halfW * 1.5
-      ctx.globalAlpha = 0.18 + 0.12 * k
-      ctx.fillStyle = wave.color
+      const stretch = halfW * 1.45
+
+      // 尾部拖曳渐变羽流
+      const trailGrad = ctx.createLinearGradient(-stretch * 1.5, 0, halfW * 0.45, 0)
+      trailGrad.addColorStop(0, 'rgba(90, 209, 200, 0)')
+      trailGrad.addColorStop(0.55, wave.color)
+      trailGrad.addColorStop(1, '#eafff6')
+      ctx.globalAlpha = 0.24 + 0.18 * k
+      ctx.fillStyle = trailGrad
       ctx.beginPath()
-      ctx.ellipse(-stretch * 0.3, 0, halfW * 1.5, halfW * 0.92, 0, 0, TAU)
+      ctx.ellipse(-stretch * 0.35, 0, halfW * 1.45, halfW * 0.96, 0, 0, TAU)
       ctx.fill()
-      ctx.globalAlpha = 0.55
+
+      // 前锋液态新月波峰
+      ctx.globalAlpha = 0.48 + 0.34 * k
       ctx.strokeStyle = wave.color
-      ctx.lineWidth = 2
+      ctx.lineWidth = Math.max(3, 5 * k + 1.5)
+      ctx.lineCap = 'round'
       ctx.beginPath()
-      ctx.ellipse(0, 0, halfW * 0.9, halfW * 0.55, 0, 0, TAU)
+      ctx.arc(-halfW * 0.32, 0, halfW * 0.95, -Math.PI * 0.42, Math.PI * 0.42)
       ctx.stroke()
-      ctx.globalAlpha = 0.3
-      ctx.lineWidth = 1.2
+
+      // 高光白芯波缘
+      ctx.globalAlpha = 0.65 + 0.25 * k
+      ctx.strokeStyle = '#ffffff'
+      ctx.lineWidth = 1.8
+      ctx.beginPath()
+      ctx.arc(-halfW * 0.28, 0, halfW * 0.94, -Math.PI * 0.34, Math.PI * 0.34)
+      ctx.stroke()
+
+      // 流体尾迹丝带与飞沫泡点
+      ctx.globalAlpha = 0.36 * k + 0.14
+      ctx.strokeStyle = wave.color
+      ctx.lineWidth = 1.4
       for (let i = -1; i <= 1; i++) {
+        const yOff = i * halfW * 0.44
         ctx.beginPath()
-        ctx.moveTo(-stretch * 1.4, i * halfW * 0.42)
-        ctx.lineTo(-stretch * 0.2, i * halfW * 0.42)
+        ctx.moveTo(-stretch * 1.35 + Math.abs(i) * 14, yOff)
+        ctx.lineTo(-stretch * 0.1, yOff * 0.82)
         ctx.stroke()
+      }
+      ctx.fillStyle = '#eafff6'
+      for (let i = 0; i < 3; i++) {
+        const bx = -stretch * (0.35 + i * 0.26)
+        const by = Math.sin(this.time * 12 + i * 2.1) * halfW * 0.55
+        ctx.beginPath()
+        ctx.arc(bx, by, 2.2 + (2 - i) * 0.7, 0, TAU)
+        ctx.fill()
       }
       ctx.restore()
     }
@@ -729,41 +767,92 @@ export class OriginSourceCombat {
 
   _renderCores(ctx) {
     for (const core of this.cores) {
-      const t = core.fired ? Math.min(1, (core.t - core.delay) / 0.32) : core.t / core.delay
+      const t = core.fired ? Math.min(1, (core.t - core.delay) / 0.35) : core.t / Math.max(0.01, core.delay)
       ctx.save()
       ctx.translate(core.x, core.y)
       if (!core.fired) {
-        // 向内坍缩：外环收缩 + 内核变亮。
-        const r = core.radius * (1.25 - 0.85 * t)
-        ctx.globalAlpha = 0.24 + 0.4 * t
-        ctx.strokeStyle = core.color
-        ctx.lineWidth = 2
+        // 向内坍缩：外域渐变底盘 + 旋转虚线法阵 + 6 道向心流光 + 收缩核心。
+        const outerGrad = ctx.createRadialGradient(0, 0, core.radius * 0.08, 0, 0, core.radius)
+        outerGrad.addColorStop(0, core.color)
+        outerGrad.addColorStop(0.65, 'rgba(162, 155, 254, 0.18)')
+        outerGrad.addColorStop(1, 'rgba(162, 155, 254, 0)')
+        ctx.globalAlpha = 0.28 + 0.28 * t
+        ctx.fillStyle = outerGrad
         ctx.beginPath()
-        ctx.arc(0, 0, r, 0, TAU)
-        ctx.stroke()
-        ctx.globalAlpha = 0.2 + 0.3 * t
-        ctx.fillStyle = core.color
-        ctx.beginPath()
-        ctx.arc(0, 0, Math.max(4, r * 0.45), 0, TAU)
+        ctx.arc(0, 0, core.radius, 0, TAU)
         ctx.fill()
-        ctx.globalAlpha = 0.5
-        ctx.lineWidth = 1.2
+
+        // 旋转符文虚线外环
+        ctx.save()
+        ctx.rotate(this.time * 2.8)
+        ctx.globalAlpha = 0.55 + 0.3 * t
+        ctx.strokeStyle = core.color
+        ctx.lineWidth = 1.6
+        ctx.setLineDash([8, 6])
         ctx.beginPath()
         ctx.arc(0, 0, core.radius, 0, TAU)
         ctx.stroke()
+        ctx.setLineDash([])
+        ctx.restore()
+
+        // 向内收缩的能量波环与向心粒子
+        const r = core.radius * (1.12 - 0.82 * t)
+        ctx.globalAlpha = 0.35 + 0.5 * t
+        ctx.strokeStyle = '#ffffff'
+        ctx.lineWidth = 2.2
+        ctx.beginPath()
+        ctx.arc(0, 0, Math.max(6, r), 0, TAU)
+        ctx.stroke()
+
+        for (let s = 0; s < 6; s++) {
+          const ang = (s / 6) * TAU + t * 1.9
+          const dist = core.radius * (1.0 - t * 0.84)
+          ctx.fillStyle = s % 2 === 0 ? '#ffffff' : core.color
+          ctx.globalAlpha = 0.45 + 0.45 * t
+          ctx.beginPath()
+          ctx.arc(Math.cos(ang) * dist, Math.sin(ang) * dist, 2.5 + t * 1.5, 0, TAU)
+          ctx.fill()
+        }
+
+        // 高能聚变内核
+        const coreR = Math.max(6, core.radius * (0.12 + 0.16 * t))
+        ctx.globalAlpha = 0.55 + 0.4 * t
+        ctx.fillStyle = core.color
+        ctx.beginPath()
+        ctx.arc(0, 0, coreR, 0, TAU)
+        ctx.fill()
+        ctx.fillStyle = '#ffffff'
+        ctx.globalAlpha = 0.7 + 0.3 * t
+        ctx.beginPath()
+        ctx.arc(0, 0, coreR * 0.5, 0, TAU)
+        ctx.fill()
       } else {
-        const r = core.radius * (0.5 + t)
-        ctx.globalAlpha = 0.4 * (1 - t)
+        // 坍缩爆裂：双层扩散环 + 中心亮白余辉
+        const r = core.radius * (0.42 + t * 0.92)
+        const fade = Math.max(0, 1 - t)
+        const burstGrad = ctx.createRadialGradient(0, 0, 0, 0, 0, r)
+        burstGrad.addColorStop(0, 'rgba(255, 255, 255, 0.55)')
+        burstGrad.addColorStop(0.5, core.color)
+        burstGrad.addColorStop(1, 'rgba(162, 155, 254, 0)')
+        ctx.globalAlpha = 0.38 * fade
+        ctx.fillStyle = burstGrad
+        ctx.beginPath()
+        ctx.arc(0, 0, r, 0, TAU)
+        ctx.fill()
+
+        ctx.globalAlpha = 0.72 * fade
         ctx.strokeStyle = core.color
-        ctx.lineWidth = 3 * (1 - t) + 1
+        ctx.lineWidth = 3.5 * fade + 1
         ctx.beginPath()
         ctx.arc(0, 0, r, 0, TAU)
         ctx.stroke()
-        ctx.globalAlpha = 0.16 * (1 - t)
-        ctx.fillStyle = core.color
+
+        ctx.globalAlpha = 0.52 * fade
+        ctx.strokeStyle = '#ffffff'
+        ctx.lineWidth = 1.6
         ctx.beginPath()
-        ctx.arc(0, 0, r * 0.9, 0, TAU)
-        ctx.fill()
+        ctx.arc(0, 0, r * 0.72, 0, TAU)
+        ctx.stroke()
       }
       ctx.restore()
     }
@@ -771,19 +860,58 @@ export class OriginSourceCombat {
 
   _renderOrbs(ctx) {
     for (const orb of this.orbs) {
-      const r = orb.swirlT > 0 ? 7 : 6
+      const r = orb.swirlT > 0 ? 7.5 : 6.5
       ctx.save()
       ctx.translate(orb.x, orb.y)
-      ctx.globalAlpha = 0.9
+
+      // 飞行尾迹流光
+      if (orb.swirlT <= 0 && (orb.vx || orb.vy)) {
+        const ang = Math.atan2(orb.vy, orb.vx)
+        ctx.save()
+        ctx.rotate(ang)
+        const tail = ctx.createLinearGradient(-22, 0, 0, 0)
+        tail.addColorStop(0, 'rgba(140, 255, 200, 0)')
+        tail.addColorStop(1, orb.color)
+        ctx.globalAlpha = 0.52
+        ctx.strokeStyle = tail
+        ctx.lineWidth = r * 1.15
+        ctx.lineCap = 'round'
+        ctx.beginPath()
+        ctx.moveTo(-22, 0)
+        ctx.lineTo(0, 0)
+        ctx.stroke()
+        ctx.restore()
+      }
+
+      // 柔和等离子外晕
+      const halo = ctx.createRadialGradient(0, 0, r * 0.2, 0, 0, r * 2.2)
+      halo.addColorStop(0, orb.color)
+      halo.addColorStop(1, 'rgba(140, 255, 200, 0)')
+      ctx.globalAlpha = 0.45
+      ctx.fillStyle = halo
+      ctx.beginPath()
+      ctx.arc(0, 0, r * 2.2, 0, TAU)
+      ctx.fill()
+
+      // 液态原质球体 + 晶亮高光点
+      ctx.globalAlpha = 0.94
       ctx.fillStyle = orb.color
       ctx.beginPath()
       ctx.arc(0, 0, r, 0, TAU)
       ctx.fill()
-      ctx.globalAlpha = 0.35
-      ctx.strokeStyle = orb.color
-      ctx.lineWidth = 2
+
+      ctx.globalAlpha = 0.85
+      ctx.fillStyle = '#ffffff'
       ctx.beginPath()
-      ctx.arc(0, 0, r + 3.5, 0, TAU)
+      ctx.arc(-r * 0.28, -r * 0.28, r * 0.36, 0, TAU)
+      ctx.fill()
+
+      // 环绕涟漪细圈
+      ctx.globalAlpha = 0.48
+      ctx.strokeStyle = '#d2ffe9'
+      ctx.lineWidth = 1.4
+      ctx.beginPath()
+      ctx.arc(0, 0, r + 3.2 + Math.sin(this.time * 10 + orb.angle) * 1.2, 0, TAU)
       ctx.stroke()
       ctx.restore()
     }
@@ -794,20 +922,37 @@ export class OriginSourceCombat {
       ctx.save()
       ctx.translate(spike.x, spike.y)
       ctx.rotate(spike.angle)
-      ctx.globalAlpha = 0.28
-      ctx.strokeStyle = spike.color
-      ctx.lineWidth = 2
+      // 锥形流光尾迹
+      const trail = ctx.createLinearGradient(-22, 0, 4, 0)
+      trail.addColorStop(0, 'rgba(255, 209, 102, 0)')
+      trail.addColorStop(1, spike.color)
+      ctx.globalAlpha = 0.6
+      ctx.strokeStyle = trail
+      ctx.lineWidth = 3.2
+      ctx.lineCap = 'round'
       ctx.beginPath()
-      ctx.moveTo(-12, 0)
+      ctx.moveTo(-22, 0)
       ctx.lineTo(2, 0)
       ctx.stroke()
-      ctx.globalAlpha = 0.92
+
+      // 晶棱棘刺本体
+      ctx.globalAlpha = 0.96
       ctx.fillStyle = spike.color
       ctx.beginPath()
-      ctx.moveTo(9, 0)
-      ctx.lineTo(-2, -4.4)
-      ctx.lineTo(-5, 0)
-      ctx.lineTo(-2, 4.4)
+      ctx.moveTo(11, 0)
+      ctx.lineTo(-2, -5.2)
+      ctx.lineTo(-6, 0)
+      ctx.lineTo(-2, 5.2)
+      ctx.closePath()
+      ctx.fill()
+
+      // 亮白晶脊高光
+      ctx.globalAlpha = 0.85
+      ctx.fillStyle = '#fff9db'
+      ctx.beginPath()
+      ctx.moveTo(9.5, 0)
+      ctx.lineTo(-1, -2.2)
+      ctx.lineTo(-3.5, 0)
       ctx.closePath()
       ctx.fill()
       ctx.restore()

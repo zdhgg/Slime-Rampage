@@ -115,34 +115,34 @@ assert.equal(
 assert.equal(scoreToPoints(90000, { mode: 'endless', difficulty: 'normal' }, { result: 'extracted' }), 2500)
 ok('scoreToPoints：空值安全、难度倍率正确、无尽保留/加成/软顶生效')
 
-// —— 4. 黑市成本后段加速：首级 2 点起步可触达，高级节点与原核承担长期消耗 ——
+// —— 4. 黑市成本后段加速：首级 150 点起步可触达，高级节点与原核承担长期消耗 ——
 {
   const expectedCosts = {
-    giant: [200, 300, 500, 600],
-    thorns: [200, 300, 500, 600],
-    regen: [200, 300, 600],
-    siphon: [300, 500, 900],
-    leech: [300, 600, 1000],
-    cocoon: [1400],
-    gorged_origin: [2500],
-    razor: [200, 300, 500, 800],
-    rapid: [200, 300, 500, 800],
-    hunt: [200, 300, 500, 600],
-    hunter: [300, 600, 900],
-    fury: [300, 500, 900],
-    arsenal_origin: [2500],
-    lore: [200, 300, 500, 600],
-    swift: [200, 200, 300, 400],
-    expand: [300, 500, 900],
-    blueprint: [500, 900],
-    magnet: [1300],
-    horizon: [1600],
-    flux_origin: [2200],
-    stim: [800],
-    serum: [800],
-    greed: [600],
-    glass: [1000],
-    dicer: [800],
+    giant: [150, 200, 300, 450, 650, 900, 1200, 1600, 2100, 2700],
+    thorns: [150, 200, 300, 450, 650, 900, 1200, 1600, 2100, 2700],
+    regen: [300, 550, 950, 1500, 2300],
+    siphon: [400, 750, 1300, 2100, 3400],
+    leech: [400, 800, 1400, 2300, 3600],
+    cocoon: [4800],
+    gorged_origin: [9500],
+    razor: [150, 200, 300, 450, 700, 1000, 1400, 1900, 2400, 3000],
+    rapid: [150, 200, 300, 450, 700, 1000, 1400, 1900, 2400, 3000],
+    hunt: [150, 250, 400, 650, 1000, 1450, 2050, 2850],
+    hunter: [300, 550, 900, 1400, 2100, 3050],
+    fury: [250, 400, 650, 1000, 1450, 2050, 2800],
+    arsenal_origin: [9500],
+    lore: [150, 200, 300, 450, 650, 900, 1200, 1600, 2100, 2700],
+    swift: [150, 200, 300, 450, 700, 1050, 1500, 2150],
+    expand: [300, 550, 900, 1400, 2100, 3050],
+    blueprint: [1000, 2000, 3500],
+    magnet: [4800],
+    horizon: [6000],
+    flux_origin: [8500],
+    stim: [3200],
+    serum: [3200],
+    greed: [2400],
+    glass: [4000],
+    dicer: [3200],
     split: [300, 500],
     resonance: [300, 600, 1000],
     shadow_step: [200, 300, 600],
@@ -165,13 +165,13 @@ ok('scoreToPoints：空值安全、难度倍率正确、无尽保留/加成/软�
   // 货架总价只算在售通用基因：legacy 已下架，违禁品互斥只计最贵一件
   const shelfTotal = GENES.filter((gene) => !gene.hidden && !gene.isCapstone && !gene.isContraband)
     .reduce((sum, gene) => sum + gene.costs.reduce((branch, cost) => branch + cost, 0), 0)
-  assert.equal(shelfTotal, 26700)
+  assert.equal(shelfTotal, 138400)
   const contrabandCost = Math.max(...GENES.filter((gene) => gene.isContraband).map((gene) => gene.costs[0]))
-  assert.equal(contrabandCost, 1000)
-  assert.equal(shelfTotal + contrabandCost + expectedCosts.gorged_origin[0], 30200)
-  assert.equal(shelfTotal + contrabandCost + expectedCosts.arsenal_origin[0], 30200)
-  assert.equal(shelfTotal + contrabandCost + expectedCosts.flux_origin[0], 29900)
-  ok('黑市货架总价 26700＋一件违禁品 1000，选择终点原核后总价为 29900～30200')
+  assert.equal(contrabandCost, 4000)
+  assert.equal(shelfTotal + contrabandCost + expectedCosts.gorged_origin[0], 151900)
+  assert.equal(shelfTotal + contrabandCost + expectedCosts.arsenal_origin[0], 151900)
+  assert.equal(shelfTotal + contrabandCost + expectedCosts.flux_origin[0], 150900)
+  ok('黑市货架总价 138400＋一件违禁品 4000，选择终点原核后总价为 150900～151900')
 }
 
 engine.destroy()

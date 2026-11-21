@@ -187,11 +187,11 @@ check('模式等级上限延长成长跑道，分身强度始终有限', game =>
   game.player.level = 14; game.weaponSystem.shadowCombat.route = 'swarm'
   const pursuit = SHADOW_ROUTE_SKILL_BY_ID.shadow_hunt_pursuit
   game.runSelection = { ...game.runSelection, mode: 'expedition', difficulty: 'easy' }
-  assert.equal(getEffectiveSkillMaxLevel(game, pursuit, 'primary'), 3)
-  game.runSelection.difficulty = 'hard'; assert.equal(getEffectiveSkillMaxLevel(game, pursuit, 'primary'), 8)
-  game.runSelection.difficulty = 'hell'; assert.equal(getEffectiveSkillMaxLevel(game, pursuit, 'primary'), 10)
+  assert.equal(getEffectiveSkillMaxLevel(game, pursuit, 'primary'), 6)
+  game.runSelection.difficulty = 'hard'; assert.equal(getEffectiveSkillMaxLevel(game, pursuit, 'primary'), 9)
+  game.runSelection.difficulty = 'hell'; assert.equal(getEffectiveSkillMaxLevel(game, pursuit, 'primary'), 11)
   game.runSelection = { ...game.runSelection, mode: 'timed', difficulty: 'normal' }
-  assert.equal(getEffectiveSkillMaxLevel(game, pursuit, 'primary'), 8)
+  assert.equal(getEffectiveSkillMaxLevel(game, pursuit, 'primary'), 9)
   game.runSelection.mode = 'endless'; assert.equal(getEffectiveSkillMaxLevel(game, pursuit, 'primary'), 12)
   const execute = getShadowSkill('ass_execute', SKILL_DATABASE.assassin.primary, SKILL_DATABASE.common)
   assert.equal(getEffectiveSkillMaxLevel(game, execute, 'primary'), 14)

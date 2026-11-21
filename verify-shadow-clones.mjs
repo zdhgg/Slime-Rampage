@@ -59,8 +59,8 @@ check('开局属性与四项分身成长独立', g => {
   learn(g, 'ass_execute'); near(c.power, 0.68); near(c.duration, 4.75)
   learn(g, 'ass_decoy'); near(c.duration, 6.25); assert.equal(c.cap, 2)
   learn(g, 'ass_legion', 2); assert.equal(c.cap, 4)
-  learn(g, 'ass_stride', 3); near(g.player.evasionChance, 0.33)
-  learnTome(g, 'boss_shadow_cloak', 3); near(g.player.evasionChance, 0.33); near(g.bossTomes.onEvade(), 0.4)
+  learn(g, 'ass_stride', 3); near(g.player.evasionChance, 0.38)
+  learnTome(g, 'boss_shadow_cloak', 3); near(g.player.evasionChance, 0.38); near(g.bossTomes.onEvade(), 0.4)
   g.player.shadowEvasionBonus = 1; near(g.player.evasionChance, 0.4)
   assert.ok(g.player.evasionOverflow > 0.7)
 })
@@ -467,7 +467,7 @@ check('F 留身继承成长与免费挡弹，挡完后再消耗寿命，命中�
   learn(g, 'ass_afterimage'); prepareCloneSkill(g, true); learn(g, 'ass_decoy', 2); learn(g, 'ass_execute', 3)
   spawn(g, { x: 100, hp: 1000 }); p.facing = 0
   pressSpace(g); const clone = c.clones.items[0]
-  near(clone.life, 7); near(c.clones.power, 1.0); assert.equal(clone.freeBlocks, 2)
+  near(clone.life, 7); near(c.clones.power, 1.09); assert.equal(clone.freeBlocks, 2)
   random(0, () => p.update(0.26))
   assert.equal(c.clones.items.length, 2)
   assert.ok(c.clones.items.every(item => !item.rush))

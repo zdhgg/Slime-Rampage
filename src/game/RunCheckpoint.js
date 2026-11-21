@@ -7,7 +7,10 @@ const omitted = new Set(['__proto__', 'prototype', 'constructor', 'game', 'weapo
   'canvas', 'ctx', 'renderer', 'sound', 'enemies', '_pool', '_grid', '_projectiles', '_particles',
   '_texts', 'shots', 'fields', 'pendingRings', 'delayed', 'jobs', 'targets', 'huntTarget',
   'swing', 'assault', 'flash', '_trail', '_aura', '_decoys', 'echoQueue', 'domains', 'cleaves', 'echoes', 'waves', 'marks',
-  'pounce', 'vortex', 'vortices', 'aimTarget', 'impacts', 'morsels', 'acidBursts', 'pounceEchoes', 'slams', 'spikes', 'auraPulses', 'mires'])
+  'beams',
+  'pounce', 'vortex', 'vortices', 'aimTarget', 'impacts', 'morsels', 'acidBursts', 'pounceEchoes', 'slams', 'spikes', 'auraPulses', 'mires',
+  'sporeZones', 'meteorDrops', 'arcs', 'monuments', 'spiritEchoes', 'frostPillars', 'fountainZone', 'markOrder', 'claims', 'taunted', 'supportTargets', 'specialLines', 'rollDash',
+  'zones', 'summons', 'effects', '_queue'])
 
 function encode(value, ancestors = new Set()) {
   if (typeof value === 'number' && !Number.isFinite(value)) return { $number: String(value) }
@@ -153,6 +156,8 @@ export function restoreExpeditionCheckpoint(engine, saved) {
     engine.player.pickupRadius *= 2
   }
   engine.player._refreshElements()
+  engine.weaponSystem.petCombat?.migrateLegacyBuild?.()
+  engine.weaponSystem.spellCombat?.migrateLegacyBuild?.()
   engine.player.dead = false
   engine.worldEvents.completed = saved.metrics.completed
   engine.worldEvents.failed = saved.metrics.failed

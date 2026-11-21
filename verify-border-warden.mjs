@@ -93,7 +93,7 @@ check('冻结保留蓄力/破绽，减速影响追击，伙伴削弱作用于技
 })
 check('半血取消旧攻击和连段，不叠加速度伤害；不额外召怪', ({ g, b, p }) => {
   b._startSpecial(); const speed = b.speed
-  b.hit(b.maxHp * .51); b.update(.01)
+  b.hit(b.maxHp * .51, { bypassAntiBurst: true }); b.update(.01)
   assert.equal(b.phase, 2); assert.equal(b._cast, null); assert.equal(b._sequence.length, 0)
   assert.equal(b._flank, null, '阶段转换取消未兑现的二段')
   assert.equal(b.speed, speed); assert.equal(g.enemyManager.enemies.length, 1)
@@ -246,7 +246,7 @@ for (const build of ['glutton', 'shadow', 'origin', 'ricochet', 'elemental:water
         assert.equal(spells.applyMilestone(spells.milestoneReward().options.find(o => o.element === element)), true)
       }
       if (element === 'poison' || element === 'fire') {
-        const id = element === 'poison' ? 'spell_poison_linger' : 'spell_fire_burn'
+        const id = element === 'poison' ? 'poi_agony_bolt' : 'fire_ignite'
         g.applySkill(ELEMENTAL_SKILLS.find(s => s.id === id))
       }
       if (role === 'glutton') learn(g, 'glut_bulk')

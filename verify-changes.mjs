@@ -481,10 +481,10 @@ ok('早期保底精英：只对有元素权限的角色生成，无权限角色�
   const spells = engine.weaponSystem.spellCombat
   engine.player.level = 2
   assert.equal(spells.applyMilestone(spells.milestoneReward().options.find(option => option.element === 'fire')), true)
-  engine.player.level = 5
-  assert.equal(spells.applyMilestone(spells.milestoneReward().options.find(option => option.element === 'water')), true)
+  engine.player.level = 3
+  assert.equal(spells.learnCantrip('ice'), true)
   assert.equal(engine.canUseElements, true)
-  assert.equal(engine.player.elements.size, 2, '元素角色已累积元素')
+  assert.equal(engine.player.elements.size, 2, '元素角色已记录主系与跨系兼修')
 
   engine.applyStartingStrain('shadow')
   engine.reset()
@@ -498,8 +498,9 @@ ok('早期保底精英：只对有元素权限的角色生成，无权限角色�
   engine.applyStartingStrain('elemental')
   engine.reset()
   assert.equal(engine.canUseElements, true, '切回元素角色后权限恢复')
-  assert.equal(engine.player.elements.size, 0, '重开后回到原质飞弹，Lv.2 重新选择第一法术')
-  assert.equal(engine.weaponSystem.spellCombat.cores, 0, '重开后核心强化不残留')
+  assert.equal(engine.player.elements.size, 0, '重开后回到原质飞弹，Lv.2 重新选择专精')
+  assert.equal(engine.weaponSystem.spellCombat.school, null, '重开后专精归零')
+  assert.equal(engine.weaponSystem.spellCombat.crossCantrips.length, 0, '重开后兼修归零')
 }
 ok('重置归位：元素权限、元素等级、反应与附魔缓存在换角色/重开后全部归零')
 

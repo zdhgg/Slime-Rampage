@@ -9,19 +9,35 @@ const TAU = Math.PI * 2
  *  - 寿命耗尽或飞出视口余量外自动销毁。
  */
 export class EnemyBullet {
-  constructor({ x, y, angle, kind, rank = 2, speed = 0, damage = 1, radius = 0, life = 0, isBoss = false }) {
+  constructor({
+    x,
+    y,
+    angle,
+    kind,
+    rank = 2,
+    speed = 0,
+    damage = 1,
+    radius = 0,
+    life = 0,
+    isBoss = false,
+    pierceSummon = 0,
+    grievous = 0,
+  }) {
     this.x = x
     this.y = y
     this.kind = kind // 'mage'（奥术法球）| 'archer'（飞箭）
     this.spellAttack = kind === 'mage'
     this.rank = Math.max(1, Math.min(3, Math.round(rank || 2)))
-    this.speed = speed || (kind === 'mage' ? (isBoss ? 210 : 115) : 380)
+    this.speed = speed || (kind === 'mage' ? (isBoss ? 210 : 130) : 380)
     this.radius = radius || (kind === 'mage' ? (this.rank === 1 ? 6.5 : this.rank === 3 ? 8.5 : 8) : (this.rank === 3 ? 5.5 : 5))
     this.damage = damage
     this.vx = Math.cos(angle) * this.speed
     this.vy = Math.sin(angle) * this.speed
     this.life = life || (kind === 'mage' ? 4.5 : 3) // 存活上限（秒）
     this.isBoss = isBoss
+    this.pierceSummon = Math.max(0, Math.round(pierceSummon || 0))
+    this.grievous = grievous || 0
+    this._pierced = null
     this.active = true
     this.age = 0
   }
@@ -181,6 +197,12 @@ export class EnemyBullet {
         ctx.fillRect(-10, -3, 3, 6)
         ctx.fillStyle = '#ffffff'
         ctx.fillRect(-7, -2, 2, 4)
+      }
+      if (this.pierceSummon > 0) {
+        ctx.strokeStyle = `rgba(255, 92, 92, ${0.55 + pulse * 0.3})`
+        ctx.lineWidth = 3.2
+        ctx.lineCap = 'round'
+        ctx.beginPath(); ctx.moveTo(-24, 0); ctx.lineTo(10, 0); ctx.stroke()
       }
       if (this.isBoss) {
         ctx.strokeStyle = `rgba(255, 209, 102, ${0.62 + pulse * 0.2})`

@@ -3,9 +3,11 @@ import { estimateGeneInvestment, hasPurchasedGenes } from './BlackMarketRefund.j
 import {
   DIFFICULTY_IDS,
   MODE_IDS,
+  PRIMARY_MODE_IDS,
   computeScore,
   computeScoreBreakdown,
   isModeUnlocked,
+  isTimedMode,
   normalizeRunSelection,
   runKey,
   sanitizeRun,
@@ -105,11 +107,11 @@ function sanitizeEntry(value, selection) {
 }
 
 export function compareEntries(a, b, mode) {
-  if ((mode === 'timed' || mode === 'expedition') && a.result !== b.result) {
+  if ((isTimedMode(mode) || mode === 'expedition') && a.result !== b.result) {
     return a.result === 'victory' ? -1 : 1
   }
   if (b.score !== a.score) return b.score - a.score
-  if (mode === 'timed' && a.result === 'victory' && a.finaleTime !== b.finaleTime) {
+  if (isTimedMode(mode) && a.result === 'victory' && a.finaleTime !== b.finaleTime) {
     return a.finaleTime - b.finaleTime
   }
   if (mode === 'expedition' && a.result === 'victory' && a.time !== b.time) return a.time - b.time
@@ -196,10 +198,13 @@ function recordHasVictory(record) {
 
 /** V3 旧档按真实战绩补权，不以默认偏好误判已经解锁的模式。 */
 function inferHighestMode(source, records) {
-  if (MODE_IDS.includes(source.progression?.highestMode)) return source.progression.highestMode
+  if (PRIMARY_MODE_IDS.includes(source.progression?.highestMode)) return source.progression.highestMode
+  if (source.progression?.highestMode === 'timed20') return 'endless'
   if (
     recordHasVictory(records['timed:hard']) ||
-    DIFFICULTY_IDS.some((difficulty) => recordHasHistory(records[`endless:${difficulty}`]))
+    recordHasVictory(records['timed20:hard']) ||
+    DIFFICULTY_IDS.some((difficulty) => recordHasHistory(records[`endless:${difficulty}`])) ||
+    DIFFICULTY_IDS.some((difficulty) => recordHasHistory(records[`timed20:${difficulty}`]))
   ) {
     return 'endless'
   }

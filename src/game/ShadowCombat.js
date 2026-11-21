@@ -707,9 +707,9 @@ export class ShadowCombat {
         if (primary) { this.markHuntTarget(e); this.clones.command(e, a.cloneIds) }
         if (this.route === 'hunt' && this.huntSpellbreakLevel > 0 && !a.spellbreakApplied && (e === this.huntTarget || shadowRangedEnemy(e))) {
           a.spellbreakApplied = true
-          this.shield?.accelerate(1.2 + this.huntSpellbreakLevel * 0.3)
+          this.shield?.accelerate(Math.min(3.6, 1.2 + this.huntSpellbreakLevel * 0.3))
           if (!e.isBoss) {
-            e.attackCd = Math.max(e.attackCd || 0, 1.2 + this.huntSpellbreakLevel * 0.2)
+            e.attackCd = Math.max(e.attackCd || 0, Math.min(2.6, 1.2 + this.huntSpellbreakLevel * 0.2))
             e.spellSlowTime = Math.max(e.spellSlowTime || 0, 1.5)
             e.spellSlowAmount = Math.max(e.spellSlowAmount || 0, 0.25)
           }
@@ -736,7 +736,7 @@ export class ShadowCombat {
             this.weapon.enemyManager.addText(p.x, p.y - 42, `影袭收割 · 影袭 −${refund.toFixed(2)}秒`, null, '#f18d9e', 13)
           }
           if (this.route === 'hunt' && this.huntReapLevel > 0) {
-            this.shield?.accelerate(1.0 + this.huntReapLevel * 0.25)
+            this.shield?.accelerate(Math.min(3, 1.0 + this.huntReapLevel * 0.25))
           }
         }
       }

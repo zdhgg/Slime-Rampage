@@ -69,7 +69,7 @@ function setDifficulty(game, difficulty) {
   assert.equal(g1.bossArena.active, true)
   assert.equal(g1.bossArena.boss, knight)
   assert.equal(knight.type, 'boss-knight')
-  assert.equal(knight.maxHp, 270, '限时第 5 波 HP=300×0.9（成员系数）')
+  assert.equal(knight.maxHp, 421, '限时第 5 波普通 HP=150×(1.35×1.05)×2.2×0.9')
   dispose(g1)
 
   // 限时第 10 波：大法师（单体，圈+狂暴生效；无冲锋故无夹击）
@@ -77,7 +77,7 @@ function setDifficulty(game, difficulty) {
   g2.enemyManager.wave = 10
   const [mage] = g2.enemyManager.spawnBossGroup(getBossWavePlan(g2.runSelection, 10))
   assert.equal(g2.bossArena.active, true, '限时第 10 波大法师应挂圈')
-  assert.equal(mage.maxHp, 460, '限时第 10 波 HP=(100+100)×2.3×1')
+  assert.equal(mage.maxHp, 821, '限时第 10 波普通 HP=200×(1.35×1.17)×2.6×1')
   dispose(g2)
 
   // 无尽第 5 波：单体首领
@@ -87,7 +87,7 @@ function setDifficulty(game, difficulty) {
   g3.enemyManager.wave = 5
   const [eBoss] = g3.enemyManager.spawnBossGroup(getBossWavePlan(g3.runSelection, 5))
   assert.equal(g3.bossArena.active, true, '无尽第 5 波单体首领应挂圈')
-  assert.equal(eBoss.maxHp, 300, '无尽第 5 波 HP=(100+50)×2（成长已补齐）')
+  assert.equal(eBoss.maxHp, 468, '无尽第 5 波普通 HP=150×(1.35×1.05)×2.2')
   dispose(g3)
 
   // 远征第 2 章：信标术士（章节首领 → 挂圈）
@@ -113,7 +113,7 @@ function setDifficulty(game, difficulty) {
   assert.equal(g5.bossArena.followSpeed, 0, '固定决斗圈圆心不再追随飘移')
   assert.equal(g5.bossArena.rageEnabled, false, '独立 AI 不开决斗狂暴')
   assert.equal(g5.bossArena.pincerEnabled, false, '独立 AI 不开决斗夹击')
-  assert.equal(warden.maxHp, 314, '远征第 1 章 HP=(100+130)×0.62×2.2（上一论调整已生效）')
+  assert.equal(warden.maxHp, 445, '远征第 1 章普通 HP=230×1.35×1.05×0.62×2.2')
   dispose(g5)
 
   // 限时第 15 波：双首领编队 → 不挂圈
@@ -155,7 +155,7 @@ function setDifficulty(game, difficulty) {
   // 残血 20%：不触发决斗狂暴，也不额外瞬缩
   const radiusBefore = boss.radius
   const arenaRBefore = arena.radius
-  boss.hit(boss.maxHp * 0.85)
+  boss.hit(boss.maxHp * 0.85, { bypassAntiBurst: true })
   assert.ok(boss.hp / boss.maxHp <= 0.25)
   assert.equal(boss._duelRage, false, '边防官 25% 不触发决斗狂暴')
   assert.equal(boss.radius, radiusBefore, '无狂暴体型变化')
@@ -361,7 +361,7 @@ function setDifficulty(game, difficulty) {
   // 狂暴连段 +2（困难）
   p.x = arena.cx
   p.invincible = 0
-  boss.hit(boss.maxHp * 0.8)
+  boss.hit(boss.maxHp * 0.8, { bypassAntiBurst: true })
   assert.equal(boss._duelRage, true)
   assert.equal(boss._duelChainBonus, 2, '困难狂暴连段再 +1')
   boss.phase = 2
@@ -378,7 +378,7 @@ function setDifficulty(game, difficulty) {
   arena.activate(boss)
   assert.equal(arena.burnDamage, 2, '地狱灼烧 ×2')
   const radiusBeforeRage = arena.radius
-  boss.hit(boss.maxHp * 0.8)
+  boss.hit(boss.maxHp * 0.8, { bypassAntiBurst: true })
   assert.equal(boss._duelRage, true)
   assert.equal(arena.radius, radiusBeforeRage, '地狱狂暴不再额外突缩，改由随时间平滑收缩控制空间')
   dispose(game)
@@ -393,7 +393,7 @@ function setDifficulty(game, difficulty) {
   assert.equal(arena.active, true, '简单仍开圈')
   assert.equal(arena.rageEnabled, false, '简单不开狂暴')
   assert.equal(arena.pincerEnabled, false, '简单不开夹击')
-  boss.hit(boss.maxHp * 0.8)
+  boss.hit(boss.maxHp * 0.8, { bypassAntiBurst: true })
   assert.equal(boss._duelRage, false, '简单 25% 不触发狂暴')
   dispose(game)
   ok('简单：只留圈，不开狂暴与夹击')
@@ -407,12 +407,12 @@ function setDifficulty(game, difficulty) {
   arena.activate(boss)
   const before = { radius: boss.radius, attackInterval: boss.attackInterval, damage: boss.damage }
 
-  boss.hit(boss.maxHp * 0.3) // 70%：只触发 75% 增援，不触发狂暴
+  boss.hit(boss.maxHp * 0.3, { bypassAntiBurst: true }) // 70%：只触发 75% 增援，不触发狂暴
   assert.equal(boss._reinforced, true, '75% 增援不受影响')
   assert.equal(boss._duelRage, false, '70% 不触发狂暴')
 
   const radiusBeforeRage = arena.radius
-  boss.hit(boss.maxHp * 0.5) // 20%：触发狂暴
+  boss.hit(boss.maxHp * 0.5, { bypassAntiBurst: true }) // 20%：触发狂暴
   assert.equal(boss._duelRage, true, '25% 触发狂暴')
   assert.ok(Math.abs(boss.radius - before.radius * 1.08) < 1e-9, '体型 +8%')
   // 25% 同时触发既有「困兽之斗」(×0.88) 与狂暴(×0.75)
@@ -488,7 +488,7 @@ function setDifficulty(game, difficulty) {
   const game = createArena()
   const boss = spawnBoss(game, 300, 'boss-knight')
   game.bossArena.activate(boss)
-  boss.hit(boss.maxHp * 0.8)
+  boss.hit(boss.maxHp * 0.8, { bypassAntiBurst: true })
   assert.equal(boss._duelRage, true)
   const p = game.player
   p.invincible = 0

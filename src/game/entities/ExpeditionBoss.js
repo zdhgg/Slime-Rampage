@@ -154,10 +154,17 @@ export class ExpeditionBoss extends Boss {
     const p = this.game.player
     const mechanic = this.specialPattern
     const spellAttack = SPELL_MECHANICS.has(mechanic)
-    const attackToken = () => (this.skillData.attackEvent ||= { enemyAttack: true, spellAttack, isBoss: true })
+    const hardcore = this._isHardcore()
+    const attackToken = () => (this.skillData.attackEvent ||= {
+      enemyAttack: true,
+      spellAttack,
+      isBoss: true,
+      breakShield: hardcore,
+      grievous: hardcore ? 3.0 : 0,
+    })
     const pb = Math.min(3, this.patternBonus || 0)
-    // 强招命中 3/4 点（原 2/3）：章节机制都有明确预警与走位解，命中代价应构成威胁
-    const damage = this.phase === 2 ? 4 : 3
+    // 强招命中：普通 3/4 点，困难/地狱 4/5 点，构成明确走位威胁
+    const damage = (this.phase === 2 ? 4 : 3) + (hardcore ? 1 : 0)
 
     if (mechanic === 'border-pincer') {
       const angles = [this.lockedAngle - 0.46, this.lockedAngle + 0.46]
@@ -278,7 +285,9 @@ export class ExpeditionBoss extends Boss {
     this._recoveryDuration = breakWindow
     this.vulnerableTimer = breakWindow
     this.stateLabel = '破绽暴露'
-    this.specialCd = (this.encounter.cooldown * (this.phase === 2 ? 0.78 : 1) * (this._duelRage ? 0.7 : 1)) / this.attackTempo
+    const diff = this._difficultyId()
+    const diffCdMul = diff === 'hell' ? 0.78 : diff === 'hard' ? 0.85 : 1
+    this.specialCd = (this.encounter.cooldown * diffCdMul * (this.phase === 2 ? 0.78 : 1) * (this._duelRage ? 0.7 : 1)) / this.attackTempo
   }
 
   _bullet(x, y, angle, kind, speed) {

@@ -102,12 +102,14 @@ function repel(engine, radius, distance, slow = 0) {
 
 function petRallyDescription(level = 0) {
   const rally = getPetRally(level)
-  return `鼓舞全体伙伴 ${rally.duration} 秒：攻击力 +${Math.round(rally.damage * 100)}%、攻速 +${Math.round(rally.haste * 100)}%、移速 +${Math.round(rally.move * 100)}%。无敌人时也可释放，全员倒地时不消耗冷却`
+  return `战吼震退周围敌人，全队伙伴同步释放爆发绝技并鼓舞 ${rally.duration.toFixed(1)} 秒：攻击力 +${Math.round(rally.damage * 100)}%、攻速 +${Math.round(rally.haste * 100)}%、移速 +${Math.round(rally.move * 100)}%。全员倒地时可自发战吼或随路线进化`
 }
 
 export const PET_SKILL = {
   id: 'companion_hunt', name: '共生鼓舞', icon: '🐾', cooldown: PET_RALLY_BASE.cooldown,
   desc: petRallyDescription(),
-  getDesc(engine) { return petRallyDescription(engine.skillLevels?.pet_command || 0) },
+  getDesc(engine) {
+    return engine?.weaponSystem?.petCombat?.activeSkill?.getDesc?.(engine) || petRallyDescription(engine?.skillLevels?.pet_command || 0)
+  },
   use(engine) { return engine.weaponSystem?.petCombat?.rally() || false },
 }

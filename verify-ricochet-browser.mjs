@@ -140,7 +140,7 @@ try {
     g.player.level = 14; g.enemyManager.wave = 10; g.expeditionStage = 5
     // Keep this UI verification deterministic while production draws stay random.
     const random = Math.random
-    let seed = 3
+    let seed = 6
     Math.random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 2 ** 32 }
     g.openFreeSkillPanel()
     Math.random = random
@@ -152,7 +152,7 @@ try {
     const e = g.enemyManager.spawnAt(g.player.x + 200, g.player.y, 'knight'); e.hp = e.maxHp = 10000; e.shieldHits = 0
     g.enemyManager._buildGrid(); g.player.strainSkillCd = 0; g.player.activeSkillCdMultiplier = 1
     g.input.queueFever(); g._updateStrainSkill(0)
-    const cores = g.weaponSystem._projectiles.filter(p => p.ricochet?.bounces === 6).length
+    const cores = g.weaponSystem.ricochetCombat.beams.filter(b => b.bounces === 6).length
     g._pushStats(); g._pushCooldown(); g.render()
     return { route: g.weaponSystem.ricochetCombat.route, active: g.strainSkill.name, cores, cd: g.player.strainSkillCd, pauseLock: g._pauseLock }
   })

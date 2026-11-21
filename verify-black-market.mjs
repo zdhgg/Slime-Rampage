@@ -25,7 +25,7 @@ check('无账本档案按冻结价格估算，旧币折算只做一次，已记�
 })
 
 check('新通用原核遵守依赖和终点互斥', () => {
-  const genes = { giant: 2, leech: 1 }
+  const genes = { giant: 4, leech: 2 }
   assert.equal(getGenePurchaseState('gorged_origin', genes, 99999).canBuy, true)
   assert.equal(getGenePurchaseState('arsenal_origin', genes, 99999).locked, true)
   genes.gorged_origin = 1
@@ -36,13 +36,13 @@ check('新通用原核遵守依赖和终点互斥', () => {
 check('通用火力基因接入伤害、攻速与暴击（近战远程同源）', () => {
   const game = createArena('shadow')
   try {
-    game.setGenes({ razor: 4, rapid: 4, hunter: 3, arsenal_origin: 1 })
+    game.setGenes({ razor: 10, rapid: 10, hunter: 6, arsenal_origin: 1 })
     // 复刻 reset() 顺序：基因先写基础值，血统先天乘数最后叠加
     game.applyStartingStrain('shadow')
-    assert.ok(game.weaponSystem.damage > 1.3) // 1.24 × 1.15
-    assert.ok(game.weaponSystem.fireInterval < 0.75) // 0.96^4 × 0.92 × 0.55（暗影血统）
-    assert.ok(game.weaponSystem.critChance > 0.17) // 0.1 + 0.075 + 血统
-    assert.ok(game.weaponSystem.critMul > 3.4)
+    assert.ok(game.weaponSystem.damage > 1.4) // 1.30 × 1.15
+    assert.ok(game.weaponSystem.fireInterval < 0.45) // 0.98^10 × 0.92 × 0.55（暗影血统）
+    assert.ok(game.weaponSystem.critChance > 0.17) // 0.1 + 0.09 + 血统
+    assert.ok(game.weaponSystem.critMul > 3.5)
     assert.equal(game.weaponSystem.genePierces, 1)
   } finally { dispose(game) }
 })
@@ -87,17 +87,17 @@ check('兵工原核让弹射主弹多穿一敌，但不增加咬击与影刃命�
 check('噬血基因按击杀计数回血且遵守回复间隔', () => {
   const game = createArena('origin')
   try {
-    game.setGenes({ leech: 3, gorged_origin: 1, giant: 4, regen: 1 })
+    game.setGenes({ leech: 5, gorged_origin: 1, giant: 4, regen: 1 })
     const p = game.player
-    // 饕餮原核：阈值 20 × 0.6 = 12；生命上限 5+8+2 = 15
-    assert.equal(p.maxHp, 15)
+    // 饕餮原核：阈值 18 × 0.6 ≈ 11；生命上限 5+4+2 = 11
+    assert.equal(p.maxHp, 11)
     p.hp = 1
-    for (let i = 0; i < 12; i++) game.weaponSystem._tickLeech()
+    for (let i = 0; i < 11; i++) game.weaponSystem._tickLeech()
     assert.equal(p.hp, 2) // 满额回复 1 点
     for (let i = 0; i < 40; i++) game.weaponSystem._tickLeech() // 冷却期内不再回血
     assert.equal(p.hp, 2)
     p._leechHealCd = 0
-    for (let i = 0; i < 12; i++) game.weaponSystem._tickLeech()
+    for (let i = 0; i < 11; i++) game.weaponSystem._tickLeech()
     assert.equal(p.hp, 3)
     assert.ok(p.geneIFramesMul > 1.2) // 无敌帧延长
   } finally { dispose(game) }
@@ -107,19 +107,19 @@ check('扩张基因接入近战触及、法术半径与拾取范围', () => {
   const glutton = createArena('glutton')
   try {
     const base = glutton.weaponSystem.gluttonCombat.reach()
-    glutton.setGenes({ expand: 3, swift: 1 })
+    glutton.setGenes({ expand: 6, swift: 1 })
     assert.ok(glutton.weaponSystem.gluttonCombat.reach() > base)
     assert.ok(glutton.player.pickupRadius > 200)
   } finally { dispose(glutton) }
   const elemental = createArena('elemental')
   try {
-    elemental.setGenes({ expand: 3, swift: 1 })
-    assert.ok(elemental.weaponSystem.spellCombat.rangeScale > 1.2)
+    elemental.setGenes({ expand: 6, swift: 1 })
+    assert.ok(elemental.weaponSystem.spellCombat.rangeScale > 1.25)
   } finally { dispose(elemental) }
   const shadow = createArena('shadow')
   try {
     const base = shadow.weaponSystem.shadowCombat.reach
-    shadow.setGenes({ expand: 3, swift: 1 })
+    shadow.setGenes({ expand: 6, swift: 1 })
     assert.ok(shadow.weaponSystem.shadowCombat.reach > base)
   } finally { dispose(shadow) }
 })
@@ -154,9 +154,9 @@ check('扩张基因延长弹射主弹、主动弹和派生弹航程，不改变�
       }
     } finally { dispose(game) }
   }
-  const base = fireRicochet(0), expanded = fireRicochet(3)
+  const base = fireRicochet(0), expanded = fireRicochet(6)
   assert.deepEqual(base.flight, [2.5, 5, 1.2, 1.2, 2.5])
-  expanded.flight.forEach((life, index) => near(life, base.flight[index] * 1.24))
+  expanded.flight.forEach((life, index) => near(life, base.flight[index] * 1.3))
   assert.deepEqual(expanded.behavior, base.behavior)
 })
 
@@ -170,7 +170,7 @@ check('违禁品互斥且附带副作用', () => {
   const game = createArena('origin')
   try {
     game.setGenes({ stim: 1, giant: 2 })
-    assert.equal(game.player.maxHp, 8) // 5+4-1
+    assert.equal(game.player.maxHp, 6) // 5+2-1
     assert.ok(game.weaponSystem.fireInterval < 0.85) // ×0.80
   } finally { dispose(game) }
 })
@@ -184,16 +184,16 @@ check('旧血统基因下架不可购买，但旧存档仍按原等级生效', (
     assert.ok(game.player.evasionChance > 0.15)
     assert.ok(game.weaponSystem.shadowCombat.clones.duration > 4)
     // 旧原核不再占用互斥位：同档可同时购买新通用原核
-    assert.equal(getGenePurchaseState('gorged_origin', { shadow_origin: 1, giant: 2, leech: 1 }, 99999).canBuy, true)
+    assert.equal(getGenePurchaseState('gorged_origin', { shadow_origin: 1, giant: 4, leech: 2 }, 99999).canBuy, true)
   } finally { dispose(game) }
 })
 
 check('新基因仍按存档等级幂等应用', () => {
   const game = createArena('elemental')
   try {
-    applyGenes(game, { razor: 3, expand: 2, flux_origin: 1, lore: 4, swift: 4 })
+    applyGenes(game, { razor: 5, expand: 3, flux_origin: 1, lore: 6, swift: 5 })
     const first = { damage: game.weaponSystem.damage, range: game.weaponSystem.geneRangeMul, speed: game.player.speed }
-    applyGenes(game, { razor: 3, expand: 2, flux_origin: 1, lore: 4, swift: 4 })
+    applyGenes(game, { razor: 5, expand: 3, flux_origin: 1, lore: 6, swift: 5 })
     assert.equal(game.weaponSystem.damage, first.damage)
     assert.equal(game.weaponSystem.geneRangeMul, first.range)
     assert.equal(game.player.speed, first.speed)
@@ -203,11 +203,11 @@ check('新基因仍按存档等级幂等应用', () => {
 check('新血肉基因：反震、经验回血与免死茧接入运行时', () => {
   const game = createArena('origin')
   try {
-    game.setGenes({ giant: 4, thorns: 2, regen: 1, siphon: 3, leech: 1, cocoon: 1 })
+    game.setGenes({ giant: 4, thorns: 3, regen: 1, siphon: 3, leech: 2, cocoon: 1 })
     const p = game.player
     assert.equal(p.thornsPulse, true)
-    assert.equal(p.thornsDamage, 4)
-    assert.equal(p.geneSiphonRate, 0.25)
+    assert.equal(p.thornsDamage, 5)
+    assert.equal(p.geneSiphonRate, 0.4)
     p.hp = 1
     p._siphonProgress = p.maxExp // 一次拾取越线即触发回血
     p.gainExp(1)
@@ -243,16 +243,16 @@ check('暴食胃铠完全挡伤只触发自身反击，扣血时才额外触发�
   const guardCounter = takeHit(false, true)
   assert.ok(guardCounter > 0)
   near(takeHit(true, true), guardCounter)
-  near(takeHit(true, false), takeHit(false, false) + 2)
+  near(takeHit(true, false), takeHit(false, false) + 3)
 })
 
 check('新军火基因：狩猎窗口攻速与困兽残血增伤', () => {
   const game = createArena('origin')
   try {
-    game.setGenes({ razor: 1, rapid: 1, hunt: 2, fury: 2 })
+    game.setGenes({ razor: 1, rapid: 1, hunt: 3, fury: 4 })
     const ws = game.weaponSystem
     const p = game.player
-    assert.ok(Math.abs(ws.geneHuntHaste - Math.pow(0.95, 2)) < 1e-9)
+    assert.ok(Math.abs(ws.geneHuntHaste - Math.pow(0.97, 3)) < 1e-9)
     const idle = ws.attackInterval
     p._huntRushTimer = 2.5 // 击杀窗口内攻速提升
     assert.ok(ws.attackInterval < idle * 0.95)
@@ -271,19 +271,19 @@ check('新军火基因：狩猎窗口攻速与困兽残血增伤', () => {
 check('新杂货基因：刷新次数与候选扩容', () => {
   const game = createArena('origin')
   try {
-    game.setGenes({ swift: 1, blueprint: 2, lore: 2, horizon: 1 })
+    game.setGenes({ swift: 1, blueprint: 3, lore: 3, horizon: 1 })
     const p = game.player
-    assert.equal(p.geneRerolls, 2)
+    assert.equal(p.geneRerolls, 3)
     assert.equal(p.geneExtraOptions, 1)
     assert.equal(game._skillOptionCount(), 4)
     game._skillPanelRerollable = true
     game.onLevelUp = (opts) => { game._rerolled = opts }
     assert.equal(game.rerollSkillOptions(), true)
-    assert.equal(p.geneRerolls, 1)
+    assert.equal(p.geneRerolls, 2)
     assert.ok(Array.isArray(game._rerolled) && game._rerolled.length <= 4)
     game._skillPanelRerollable = false // 里程碑/路线面板不可刷新
     assert.equal(game.rerollSkillOptions(), false)
-    assert.equal(p.geneRerolls, 1)
+    assert.equal(p.geneRerolls, 2)
   } finally { dispose(game) }
 })
 
@@ -295,7 +295,7 @@ check('全域磁感翻倍并叠加引力细胞，元素核心使用独立半径'
     const { player, gemManager } = game
     const { x, y } = player
     const updateMagnets = () => { for (let i = 0; i < 3; i++) gemManager.update(0) }
-    near(player.pickupRadius, 345)
+    near(player.pickupRadius, 327)
     const exp = gemManager.spawn(x + 310, y, 1)
     const tome = gemManager.spawn(x, y + 310, 0, 'tome')
     const core = gemManager.spawn(x + 130, y, 0, 'fire')
@@ -306,9 +306,9 @@ check('全域磁感翻倍并叠加引力细胞，元素核心使用独立半径'
       ['magnet', 'magnet', 'idle', 'idle', 'idle'])
 
     const card = SKILL_DATABASE.common.find(skill => skill.id === 'com_magnet')
-    assert.equal(card.stats(0, game), '拾取半径 345 → 431')
+    assert.equal(card.stats(0, game), '拾取半径 327 → 409')
     assert.equal(game.applySkill(card), true)
-    near(player.pickupRadius, 431.25)
+    near(player.pickupRadius, 408.75)
     updateMagnets()
     assert.deepEqual([core.state, upgradeRange.state, outside.state], ['idle', 'magnet', 'idle'])
   } finally { dispose(game) }
@@ -334,19 +334,19 @@ check('新违禁品：玻璃腺体/赌命菌株互斥且副作用生效', () => 
 })
 
 check('黑市预览展示通用数值收益', () => {
-  const razor = getGenePresentation({ id: 'razor', maxLevel: 4, desc: '锋锐' }, 2)
+  const razor = getGenePresentation({ id: 'razor', maxLevel: 10, desc: '锋锐' }, 2)
   assert.match(razor.preview.current, /\+\d+%/)
-  const leech = getGenePresentation({ id: 'leech', maxLevel: 3, desc: '噬血' }, 0)
+  const leech = getGenePresentation({ id: 'leech', maxLevel: 5, desc: '噬血' }, 0)
   assert.match(leech.preview.next, /击杀/)
   const stim = getGenePresentation({ id: 'stim', maxLevel: 1, desc: '燃血' }, 0)
   assert.match(stim.description, /攻击间隔/)
   assert.deepEqual(getGenePresentation(getGene('magnet'), 0).preview,
     { label: '吸附半径', current: '×1', next: '×2' })
   const thorns = getGene('thorns')
-  assert.deepEqual(getGenePresentation(thorns, 0).preview, { label: '受击反震', current: '未解锁', next: '2 点' })
-  assert.deepEqual(getGenePresentation(thorns, 3).preview, { label: '受击反震', current: '6 点', next: '8 点' })
+  assert.deepEqual(getGenePresentation(thorns, 0).preview, { label: '受击反震', current: '未解锁', next: '3 点' })
+  assert.deepEqual(getGenePresentation(thorns, 3).preview, { label: '受击反震', current: '5 点', next: '6 点' })
   const hunter = getGenePresentation(getGene('hunter'), 0)
-  assert.equal(hunter.preview.next, '+2.5% · +0.15x')
+  assert.equal(hunter.preview.next, '+1.5% · +0.10x')
   assert.match(hunter.note, /暗影每溢出 1 个百分点/)
   const arsenal = getGenePresentation(getGene('arsenal_origin'), 0)
   assert.match(arsenal.description, /飞弹额外穿透/)

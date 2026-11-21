@@ -51,7 +51,7 @@ export function mageBurst(phase, chain = 0, patternBonus = 0) {
  * 落点在预警开始时就冻结（不追着玩家滑动），所以它是一条「他以为你会这么跑」的
  * 假路线，而不是无法躲避的追踪弹。
  */
-export function archerTribunal(px, py, vx, vy, { leads = [0, 0.8, 1.6], radius = 52 } = {}) {
+export function archerTribunal(px, py, vx, vy, { leads = [0, 0.8, 1.6], radius = 64 } = {}) {
   return {
     radius,
     leads: [...leads],
@@ -67,6 +67,6 @@ export function bossSpecialGeometry({ pattern, phase = 1, chain = 0, patternBonu
   const geo = { pattern, phase, chain, telegraph: telegraphSeconds(pattern, chain) }
   if (pattern === 'boss-knight') geo.lane = knightDash(phase, chain, laneRadius)
   else if (pattern === 'boss-mage') geo.burst = mageBurst(phase, chain, patternBonus)
-  else geo.judgement = { leads: [0, 0.8, 1.6], radius: 52 }
+  else geo.judgement = { leads: [0, 0.8, 1.6], radius: 64 }
   return Object.freeze(geo)
 }

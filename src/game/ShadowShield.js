@@ -46,7 +46,7 @@ export class ShadowShield {
     const clones = this.combat.clones?.items?.length || 0
     const legionBonus = (p?.shadowCloneCapLevel || 0) >= 2 ? 0.15 : (p?.shadowCloneCapLevel || 0) >= 1 ? 0.10 : 0.05
     const bulwark = this.combat.swarmBulwarkLevel || 0
-    const bulwarkPerClone = bulwark > 0 ? ([0, 0.12, 0.16, 0.20, 0.25][Math.min(4, bulwark)] || 0.25) : 0
+    const bulwarkPerClone = bulwark > 0 ? ([0, 0.12, 0.16, 0.20, 0.25, 0.28, 0.31, 0.34, 0.36][Math.min(8, bulwark)] || 0.36) : 0
     const cloneHaste = clones * (legionBonus + bulwarkPerClone)
     const domainHaste = this.combat.inDomain ? 0.35 : 0
     return 1 + strideHaste + overflowHaste + cloneHaste + domainHaste
@@ -119,8 +119,9 @@ export class ShadowShield {
   }
 
   onRangedKill() {
+    const huntRefund = this.combat.huntRefundLevel || 0
     if (!this.combat.available || this.charges >= this.capacity) return false
-    return this.accelerate(SHADOW_SHIELD_KILL_GAIN)
+    return this.accelerate(SHADOW_SHIELD_KILL_GAIN + Math.min(1.6, huntRefund * 0.25))
   }
 
   /** 仅吸收敌方带有 spellAttack 标记的法术攻击；一次完整抵挡 1 次法术命中。 */

@@ -782,13 +782,13 @@ const fresh = defaultSave()
 assert.deepEqual(fresh.preferences, { mode: 'expedition', difficulty: 'normal' })
 assert.deepEqual(getUnlockedModeIds(fresh.progression), ['expedition'])
 assert.equal(getNextModeUnlock(fresh.progression).mode, 'timed')
-assert.equal(Object.keys(fresh.records).length, 12)
+assert.equal(Object.keys(fresh.records).length, 16)
 assert.equal(RUN_DURATION, 720)
 assert.equal(FINAL_WARNING_AT, 690)
 assert.equal(EVENT_LOCK_AT, 660)
 assert.equal(DIFFICULTIES.easy.playerBonusHp, 2)
 assert.equal(DIFFICULTIES.hard.rewardMul, 1.35)
-assert.equal(DIFFICULTIES.hell.eliteChanceCap, 0.24)
+assert.equal(DIFFICULTIES.hell.eliteChanceCap, 0.32)
 assert.equal(getEndlessDisasterTier({ mode: 'endless' }, 24), 0)
 assert.equal(getEndlessDisasterTier({ mode: 'endless' }, 25), 1)
 assert.equal(getWaveModifiers({ mode: 'endless' }, 30).tier, 2)
@@ -945,21 +945,29 @@ const expeditionHell = pushScore(expeditionUnlockSave, { mode: 'expedition', dif
 assert.equal(expeditionHell.unlocked, 'hell')
 assert.equal(expeditionHell.unlockedMode, 'timed')
 assert.equal(isModeUnlocked(expeditionUnlockSave.progression, 'timed'), true)
+assert.equal(isModeUnlocked(expeditionUnlockSave.progression, 'timed20'), false)
 assert.equal(isModeUnlocked(expeditionUnlockSave.progression, 'endless'), false)
+pushScore(expeditionUnlockSave, { mode: 'timed', difficulty: 'normal' }, {
+  result: 'victory', wave: 25, kills: 180, time: 760, finaleTime: 40, bossKills: 4,
+})
+assert.equal(isModeUnlocked(expeditionUnlockSave.progression, 'timed20'), false, '普通 12 分钟不解锁 20 分钟')
 const endlessUnlock = pushScore(expeditionUnlockSave, { mode: 'timed', difficulty: 'hard' }, {
   result: 'victory', wave: 25, kills: 220, time: 780, finaleTime: 60, bossKills: 5,
 })
 assert.equal(endlessUnlock.unlockedMode, 'endless')
+assert.equal(isModeUnlocked(expeditionUnlockSave.progression, 'timed20'), true, '困难 12 分钟解锁 20 分钟')
 assert.deepEqual(getUnlockedModeIds(expeditionUnlockSave.progression), ['expedition', 'timed', 'endless'])
 assert.equal(getNextModeUnlock(expeditionUnlockSave.progression), null)
-ok('章节远征计分与模式推进：困难闯关解锁限时，困难限时解锁无尽')
+ok('章节远征计分与模式推进：困难闯关解锁限时，困难限时解锁无尽与 20 分钟限时')
 
 const expeditionIntro = getRunIntro({ mode: 'expedition', difficulty: 'normal' })
 const timedHardIntro = getRunIntro({ mode: 'timed', difficulty: 'hard' })
+const timed20HardIntro = getRunIntro({ mode: 'timed20', difficulty: 'hard' })
 const endlessHellIntro = getRunIntro({ mode: 'endless', difficulty: 'hell' })
 assert.equal(expeditionIntro.location, '史莱姆巢界 · 破晓前')
 assert.match(timedHardIntro.threatReport, /精英比例提升/)
 assert.equal(timedHardIntro.rewardMultiplier, 1.35)
+assert.match(timed20HardIntro.signal, /20:00/)
 assert.match(endlessHellIntro.signal, /第二十波/)
 ok('战前简报随模式与难度组合生成地点、目标、信号和威胁情报')
 
@@ -970,12 +978,12 @@ const retiredSplit = getGenePurchaseState('split', { split: 1 }, 99999)
 assert.equal(retiredSplit.locked, true) // 旧血统基因已下架：旧档生效但不再出售
 assert.equal(retiredSplit.hidden, true)
 const originReady = {
-  giant: 2,
-  leech: 1,
-  razor: 2,
-  rapid: 2,
-  lore: 2,
-  expand: 1,
+  giant: 4,
+  leech: 2,
+  razor: 4,
+  rapid: 4,
+  lore: 4,
+  expand: 2,
 }
 assert.equal(getGenePurchaseState('gorged_origin', originReady, 99999).canBuy, true)
 const chosenGenes = { ...originReady, gorged_origin: 1 }
@@ -988,11 +996,11 @@ ok('永久基因路线：前置解锁、旧基因下架拒购与终点原核互�
 player.resetRunState()
 weaponSystem.reset()
 applyGenes(game, { giant: 2, regen: 2, predator_origin: 1 })
-assert.equal(player.maxHp, 11)
+assert.equal(player.maxHp, 9)
 assert.equal(player.geneDevourHeal, 1)
 assert.equal(player.geneDevourExpMul, 1.35)
 applyGenes(game, { giant: 2, regen: 2, predator_origin: 1 })
-assert.equal(player.maxHp, 11)
+assert.equal(player.maxHp, 9)
 gemManager.reset()
 const geneMeal = new Enemy({ x: player.x, y: player.y, speed: 80, hp: 5, type: 'knight' })
 geneMeal.attach(game)
@@ -1007,7 +1015,7 @@ assert.equal(
 
 weaponSystem.reset()
 applyGenes(game, { swift: 2, split: 1, kinetic_origin: 1 })
-assert.ok(Math.abs(player.speed - 340 * 1.16 * 1.08) < 1e-7)
+assert.ok(Math.abs(player.speed - 340 * 1.10 * 1.08) < 1e-7)
 assert.equal(weaponSystem.genePierces, 1)
 assert.equal(weaponSystem.splitChance, 0.25) // 基础分裂概率已同步到实际概率
 enemyManager.reset()

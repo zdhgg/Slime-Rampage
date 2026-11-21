@@ -117,7 +117,7 @@ for (const strain of ['origin', 'glutton', 'ricochet', 'elemental', 'shadow', 's
   check(strain, `${strain}: 旧动能原核有效且幂等，普攻能从碰撞线外清理拒马`, g => {
     const genes = { swift: 2, split: 1, kinetic_origin: 1 }
     applyGenes(g, genes); const speed = g.player.speed
-    applyGenes(g, genes); near(g.player.speed, speed); near(speed, 340 * 1.16 * 1.08)
+    applyGenes(g, genes); near(g.player.speed, speed); near(speed, 340 * 1.10 * 1.08)
     const p = g.player, barrier = { active: true, hp: 2, hitCooldown: 0, flash: 0,
       xRatio: (p.x + 65) / g.worldWidth, yRatio: p.y / g.worldHeight, angle: Math.PI / 2, length: 150, width: 18 }
     g.mapFeatures.barricades = [barrier]

@@ -17,12 +17,13 @@ import {
 import {
   DIFFICULTIES,
   DIFFICULTY_IDS,
-  MODE_IDS,
   MODES,
+  PRIMARY_MODE_IDS,
   getNextModeUnlock,
   getUnlockedModeIds,
   isDifficultyUnlocked,
   isModeUnlocked,
+  isTimedMode,
   modeUnlockHint,
   normalizeRunSelection,
   runKey,
@@ -115,8 +116,14 @@ function runnerActionLabel(submode) {
 const MODE_FACTS = {
   expedition: ['独立章节', '章间补给', '讨伐统帅决战'],
   timed: ['十二分钟封锁', '终局勇者', '通关速度计分'],
+  timed20: ['二十分钟围剿', '三王/四王同场', '战力点收益 +20%'],
   endless: ['无时间上限', '二十波后灾变', '长期生存纪录'],
 }
+
+const TIMED_DURATIONS = [
+  { id: 'timed', title: '12 分钟 · 标准封锁', desc: '24 波 · 双王编队 · 经典节奏' },
+  { id: 'timed20', title: '20 分钟 · 终焉围剿', desc: '40 波 · 四王同场 · 战力点 +20%' },
+]
 
 /**
  * 模式图标统一使用 lucide 组件（与玩法选择页一致）：
@@ -131,8 +138,12 @@ const MODE_LUCIDE_ICONS = {
 /** 模式卡标签：把模式差异（时长/机制/结算）直接摆到选择页，三秒可读。 */
 const MODE_CHIPS = {
   expedition: ['章节制 · 6–12 章', '章间补给', '统帅决战'],
-  timed: ['12 分钟限时', '阶段首领', '速度计分'],
+  timed: ['12 / 20 分钟', '阶段首领', '速度计分'],
   endless: ['无尽波次', '20 波后灾变', '生存纪录'],
+}
+
+const MODE_CARD_DESCRIPTIONS = {
+  timed: '突破阶段首领，可选 12 分钟标准封锁或 20 分钟四王深度围剿。',
 }
 
 /** 战斗卡用不同的亮色识别战斗类型（深色大厅下保持对比度）。 */
@@ -242,7 +253,7 @@ watch(
 const unlockedModes = computed(() => getUnlockedModeIds(props.progression))
 const nextUnlock = computed(() => getNextModeUnlock(props.progression))
 const modeCards = computed(() =>
-  MODE_IDS.map((mode) => ({
+  PRIMARY_MODE_IDS.map((mode) => ({
     mode,
     locked: !isModeUnlocked(props.progression, mode),
     hint: modeUnlockHint(mode),
@@ -252,7 +263,7 @@ const modeCards = computed(() =>
 const featuredMode = computed(
   () => unlockedModes.value[unlockedModes.value.length - 1]
 )
-const allModesUnlocked = computed(() => unlockedModes.value.length === MODE_IDS.length)
+const allModesUnlocked = computed(() => unlockedModes.value.length === PRIMARY_MODE_IDS.length)
 
 /* 锁卡点击反馈：抖动 + 条件 toast（锁卡不使用 disabled，键盘/屏幕阅读器可达） */
 const shakingMode = ref(null)
@@ -278,8 +289,9 @@ function difficultyMeta(difficulty) {
 }
 
 function modeSummary(mode) {
-  const records = DIFFICULTY_IDS.map((difficulty) =>
-    props.records[runKey({ mode, difficulty })]
+  const modes = mode === 'timed' ? ['timed', 'timed20'] : [mode]
+  const records = modes.flatMap((m) =>
+    DIFFICULTY_IDS.map((difficulty) => props.records[runKey({ mode: m, difficulty })])
   ).filter(Boolean)
   const bestScore = Math.max(0, ...records.map((item) => item.best?.score || 0))
   const clears = records.reduce((sum, item) => sum + (item.best?.clears || 0), 0)
@@ -289,7 +301,7 @@ function modeSummary(mode) {
 
 /** 模式卡数据只需随 records / progression 变化重算，模板中避免重复调用。 */
 const modeSummaries = computed(() =>
-  Object.fromEntries(MODE_IDS.map((mode) => [mode, modeSummary(mode)]))
+  Object.fromEntries(PRIMARY_MODE_IDS.map((mode) => [mode, modeSummary(mode)]))
 )
 
 /**
@@ -354,7 +366,13 @@ function showArenaTypes() {
 }
 
 function selectMode(mode) {
-  selection.value.mode = mode
+  if (mode === 'timed') {
+    if (selection.value.mode !== 'timed20' || !isModeUnlocked(props.progression, 'timed20')) {
+      selection.value.mode = 'timed'
+    }
+  } else {
+    selection.value.mode = mode
+  }
   if (!isDifficultyUnlocked(props.progression, selection.value.difficulty)) {
     selection.value.difficulty = 'normal'
   }
@@ -364,6 +382,13 @@ function selectMode(mode) {
     menuRoot.value?.scrollTo({ top: 0 })
     configBackLink.value?.focus({ preventScroll: true })
   })
+}
+
+function selectTimedDuration(targetMode) {
+  if (!isModeUnlocked(props.progression, targetMode)) return
+  if (selection.value.mode === targetMode) return
+  selection.value.mode = targetMode
+  emit('ui-sound', 'select')
 }
 
 /** 模式卡统一入口：已解锁进入配置；锁定则抖动并弹出条件提示。 */
@@ -579,7 +604,7 @@ watch(
                 />
                 <h3>{{ MODES[card.mode].name }}</h3>
               </div>
-              <p>{{ MODES[card.mode].description }}</p>
+              <p>{{ MODE_CARD_DESCRIPTIONS[card.mode] || MODES[card.mode].description }}</p>
 
               <div class="mode-chips" aria-hidden="true">
                 <i v-for="chip in MODE_CHIPS[card.mode]" :key="chip">{{ chip }}</i>
@@ -771,7 +796,7 @@ watch(
                 <ArrowLeft :size="17" :stroke-width="1.8" aria-hidden="true" />
               </button>
               <div class="config-mode-copy">
-                <div class="config-kicker"><p>本局配置</p><span aria-hidden="true">/</span><h2 id="config-title">{{ selectedMode.name }}</h2></div>
+                <div class="config-kicker"><p>本局配置</p><span aria-hidden="true">/</span><h2 id="config-title">{{ isTimedMode(selection.mode) ? '限时讨伐' : selectedMode.name }}</h2></div>
                 <details class="config-mode-details">
                   <summary>{{ modeFacts.join(' · ') }}</summary>
                   <p>{{ selectedMode.description }}</p>
@@ -782,6 +807,46 @@ watch(
 
           <div class="config-flow">
             <StrainSelect :model-value="selection.strain" @update:model-value="selectStrain" />
+            <section v-if="isTimedMode(selection.mode)" class="config-step" aria-labelledby="timed-duration-heading">
+              <header class="step-heading">
+                <b id="timed-duration-heading">封锁时长</b>
+                <span>{{ selection.mode === 'timed20' ? '第 20 波后大密度割草 · 三王 / 四王高压混战' : '经典 12 分钟快节奏封锁' }}</span>
+              </header>
+              <div class="difficulty-options duration-options" :style="{ '--difficulty-count': TIMED_DURATIONS.length }">
+                <button
+                  v-for="item in TIMED_DURATIONS"
+                  :key="item.id"
+                  :data-duration="item.id"
+                  :class="{
+                    selected: selection.mode === item.id,
+                    locked: !isModeUnlocked(props.progression, item.id),
+                  }"
+                  :aria-pressed="selection.mode === item.id"
+                  :aria-disabled="!isModeUnlocked(props.progression, item.id)"
+                  :title="isModeUnlocked(props.progression, item.id) ? item.desc : modeUnlockHint(item.id)"
+                  @click="selectTimedDuration(item.id)"
+                >
+                  <span class="option-copy">
+                    <b>{{ item.title }}</b>
+                    <i>{{ isModeUnlocked(props.progression, item.id) ? item.desc : modeUnlockHint(item.id) }}</i>
+                  </span>
+                  <svg
+                    v-if="!isModeUnlocked(props.progression, item.id)"
+                    class="diff-lock-icon"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.9"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path v-for="d in LOCK_ICON" :key="d" :d="d" />
+                  </svg>
+                  <span v-else class="choice-indicator" aria-hidden="true">✓</span>
+                </button>
+              </div>
+            </section>
             <section class="config-step" aria-labelledby="difficulty-heading">
               <header class="step-heading">
                 <b id="difficulty-heading">难度</b>
@@ -831,7 +896,8 @@ watch(
         <!-- 独立底部操作区：内容在上方滚动，不遮挡角色与排行榜。 -->
         <div class="config-actions">
           <p class="config-summary">
-            <b>{{ selectedMode.name }}</b>
+            <b>{{ isTimedMode(selection.mode) ? '限时讨伐' : selectedMode.name }}</b>
+            <span v-if="isTimedMode(selection.mode)">{{ selection.mode === 'timed20' ? '20 分钟' : '12 分钟' }}</span>
             <span>{{ selectedDifficulty.name }}</span>
             <i aria-hidden="true">·</i>
             <span class="summary-strain">{{ selectedStrain.name }}</span>
@@ -2331,6 +2397,7 @@ button.selected .option-copy i {
   .resume-copy { order: 2; flex-basis: calc(100% - 60px); }
   .resume-actions { order: 3; width: 100%; margin-left: 0; }
   .resume-primary { flex: 1; }
+  .difficulty-options.duration-options { grid-template-columns: 1fr; }
 }
 
 .runner-config-sub { margin: 4px 0 0; font-size: 13px; color: var(--hub-text-muted); }

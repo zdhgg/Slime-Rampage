@@ -12,6 +12,7 @@ import { drawEnemyArt, enemyArtFeet, enemySizeMul, hasEnemyArt } from './EnemyAr
 import {
   applyEnemyBias,
   getBossWavePlan,
+  getDifficultyBossHpMultiplier,
   getExpeditionBossHpMultiplier,
   getStageEnemyBias,
   getWaveModifiers,
@@ -85,6 +86,10 @@ const WAVE_NAMES = {
   12: '圣骑士团',
   15: '传说中的勇者',
   20: '？？？（世界级灾害确认）',
+  25: '王庭三圣卫合围',
+  30: '血誓讨伐动员令',
+  35: '四王围猎总攻',
+  40: '终焉倒计时 · 举国决死',
 }
 
 /** 命名波次对应真实敌军编成；取不高于当前波次的最近一档。
@@ -101,12 +106,16 @@ const WAVE_ROSTERS = [
   { min: 12, units: [['knight', 0.22], ['bulwark', 0.12], ['priest', 0.18], ['bannerman', 0.08], ['berserker', 0.14], ['archer', 0.06], ['alchemist', 0.06], ['golem', 0.06], ['wraith', 0.08]] },
   { min: 15, units: [['assassin', 0.18], ['archer', 0.16], ['berserker', 0.14], ['bulwark', 0.1], ['priest', 0.1], ['mage', 0.08], ['alchemist', 0.07], ['bannerman', 0.06], ['wraith', 0.07], ['golem', 0.04]] },
   { min: 20, units: [['knight', 0.1], ['bulwark', 0.1], ['mage', 0.12], ['archer', 0.11], ['assassin', 0.13], ['berserker', 0.11], ['priest', 0.09], ['alchemist', 0.07], ['bannerman', 0.06], ['golem', 0.05], ['wraith', 0.06]] },
+  { min: 25, units: [['knight', 0.1], ['bulwark', 0.11], ['mage', 0.11], ['archer', 0.1], ['assassin', 0.12], ['berserker', 0.12], ['priest', 0.09], ['alchemist', 0.07], ['bannerman', 0.07], ['golem', 0.04], ['wraith', 0.04], ['hound', 0.03]] },
+  { min: 30, units: [['knight', 0.09], ['bulwark', 0.11], ['mage', 0.11], ['archer', 0.11], ['assassin', 0.12], ['berserker', 0.12], ['priest', 0.09], ['alchemist', 0.07], ['bannerman', 0.06], ['golem', 0.05], ['wraith', 0.05], ['hound', 0.02]] },
+  { min: 35, units: [['knight', 0.09], ['bulwark', 0.12], ['mage', 0.1], ['archer', 0.1], ['assassin', 0.13], ['berserker', 0.12], ['priest', 0.09], ['alchemist', 0.07], ['bannerman', 0.06], ['golem', 0.05], ['wraith', 0.05], ['hound', 0.02]] },
 ]
 
 const rand = (min, max) => min + Math.random() * (max - min)
 
-/** 精英词缀池（阶段十三）：精英怪额外获得一种行为词缀 */
+/** 精英词缀池（阶段十三 + 高波次/高难拓展）：精英怪额外获得行为词缀 */
 const AFFIXES = ['swift', 'shielded', 'explosive', 'summoner']
+const ADVANCED_AFFIXES = ['juggernaut', 'arcane']
 
 /**
  * 敌人管理器（自身也是 Entity，由引擎统一驱动 update/render）
@@ -135,6 +144,7 @@ export class EnemyManager extends Entity {
     this._boss = null // 当前主目标（兼容旧索敌/测试入口）
     this._bosses = [] // 活跃首领编队，最多三名
     this._bossCaster = null // 当前持有大型技能施放权的首领
+    this._bossCasters = new Set() // 多王并发施法集合（困难/地狱 3+ 首领允许双核并发）
     this._bossEncounter = null // 终局增援队列与编队元数据
     this._bossGroupSeq = 0
     this._bossGrace = 0 // Boss 登场后的短暂清晰读招窗口
@@ -261,6 +271,7 @@ export class EnemyManager extends Entity {
     this._boss = null
     this._bosses.length = 0
     this._bossCaster = null
+    this._bossCasters?.clear?.()
     this._bossEncounter = null
     this._bossGroupSeq = 0
     this._bossGrace = 0
@@ -302,7 +313,32 @@ export class EnemyManager extends Entity {
   }
 
   _populationTarget() {
-    return Math.min(58, Math.round(25 + this._effectiveWave() * 3))
+    const wave = this._effectiveWave()
+    const diff = this.game?.runSelection?.difficulty || this.game?.runProfile?.id || 'normal'
+    const diffMul = diff === 'hell' ? 1.28 : diff === 'hard' ? 1.18 : diff === 'easy' ? 0.92 : 1
+    if (this.game?.runSelection?.mode === 'timed20' && wave > 20) {
+      return Math.min(165, Math.round(Math.min(126, 76 + (wave - 20) * 2.5) * diffMul))
+    }
+    const base = Math.min(76, Math.round(28 + wave * 3.8))
+    return Math.min(110, Math.round(base * (wave <= 2 ? 1 : diffMul)))
+  }
+
+  /** 第 6 波起的乘算血量曲线：前 5 波保持丝滑，中后期稳步追赶史莱姆成长；经验仍锚定线性 rewardHp */
+  _waveHpScale(effectiveWave) {
+    return effectiveWave <= 5 ? 1 : Math.pow(1.06, Math.min(35, effectiveWave - 5))
+  }
+
+  /** 高波次高难下的精锐与重装伤害分级 */
+  _enemyDamage(type, rank, elite, effectiveWave, profile) {
+    const diff = this.game?.runSelection?.difficulty || profile?.id || 'normal'
+    const hardcore = diff === 'hard' || diff === 'hell'
+    if (type === 'golem') return hardcore && effectiveWave >= 14 ? 3 : 2
+    if (hardcore && effectiveWave >= (diff === 'hell' ? 8 : 11)) {
+      if (elite || rank === 3 || type === 'berserker' || type === 'bulwark' || type === 'wraith') {
+        return diff === 'hell' && effectiveWave >= 18 && elite ? 3 : 2
+      }
+    }
+    return 1
   }
 
   /** 下一次生成的随机等待时间：保持高节奏割草频率，难度转向兵种/阶位强化。 */
@@ -312,11 +348,13 @@ export class EnemyManager extends Entity {
     const pressure =
       (this.game?.runProfile?.spawnPressureMul || 1) *
       (this.game?.endlessModifiers?.spawnPressureMul || 1)
+    const lateCrowdMul = this.game?.runSelection?.mode === 'timed20' && effectiveWave > 20 ? 0.82 : 1
+    const minFloor = this.game?.runSelection?.mode === 'timed20' && effectiveWave > 20 ? 0.15 : 0.2
     const interval =
-      (rand(0.32, 0.64) * introMul * Math.pow(0.95, effectiveWave - 1) * this._directorFactor()) /
+      (rand(0.32, 0.64) * introMul * Math.pow(0.95, effectiveWave - 1) * this._directorFactor() * lateCrowdMul) /
       pressure
     // 高难度的刷怪倍率在后期仍然有效，而不是所有档位一起撞上 0.2 秒硬下限。
-    return Math.max(0.2 / Math.max(0.75, pressure), interval)
+    return Math.max(minFloor / Math.max(0.75, pressure), interval)
   }
 
   _combatModifiers() {
@@ -399,11 +437,16 @@ export class EnemyManager extends Entity {
 
   _rollAffixes(elite, forced = null) {
     if (!elite) return []
-    const first = forced || AFFIXES[(Math.random() * AFFIXES.length) | 0]
+    const effectiveWave = this._effectiveWave()
+    const diff = this.game?.runSelection?.difficulty || this.game?.runProfile?.id || 'normal'
+    const poolAll = effectiveWave >= 8 || diff === 'hard' || diff === 'hell'
+      ? [...AFFIXES, ...ADVANCED_AFFIXES]
+      : AFFIXES
+    const first = forced || poolAll[(Math.random() * poolAll.length) | 0]
     const affixes = [first]
     const chance = this.game?.runProfile?.doubleAffixChance || 0
     if (Math.random() < chance) {
-      const pool = AFFIXES.filter((affix) => affix !== first)
+      const pool = poolAll.filter((affix) => affix !== first)
       affixes.push(pool[(Math.random() * pool.length) | 0])
     }
     return affixes
@@ -524,13 +567,114 @@ export class EnemyManager extends Entity {
     this._bullets.push(new EnemyBullet({ x, y, angle, kind, ...options }))
   }
 
-  /** 炼金投弹手抛掷酸液瓶：先显示落地圈预警，落地命中后留下短暂减速腐蚀池。 */
-  spawnLobHazard({ startX, startY, targetX, targetY, radius = 52, flightDur = 0.72, lingerDur = 3.4, slowMul = 0.68, damage = 1 }) {
+  /** 炼金投弹手抛掷酸液瓶：先显示落地圈预警，落地命中后留下减速+腐蚀 DoT 毒池。 */
+  spawnLobHazard({
+    startX,
+    startY,
+    targetX,
+    targetY,
+    radius = 64,
+    flightDur = 0.72,
+    lingerDur = 4.2,
+    slowMul = 0.65,
+    damage = 1,
+    dotDamage = 1,
+    dotInterval = 0.85,
+  }) {
     const ww = this.game?.worldWidth || 2000
     const wh = this.game?.worldHeight || 2000
     const x = Math.max(radius, Math.min(ww - radius, targetX))
     const y = Math.max(radius, Math.min(wh - radius, targetY))
-    this._hazards.push({ startX, startY, x, y, radius, flightDur, lingerDur, slowMul, damage, age: 0, landed: false, active: true })
+    this._hazards.push({
+      kind: 'lob',
+      startX,
+      startY,
+      x,
+      y,
+      radius,
+      flightDur,
+      lingerDur,
+      slowMul,
+      damage,
+      dotDamage,
+      dotInterval,
+      dotTick: dotInterval,
+      age: 0,
+      landed: false,
+      active: true,
+    })
+  }
+
+  /** 延迟警示红圈爆裂（魔像震地 / 法师奥爆 / 自爆精英 / Boss 法师二阶段爆裂） */
+  spawnTelegraphBlast({
+    x,
+    y,
+    radius = 78,
+    delay = 0.72,
+    damage = 2,
+    isBoss = false,
+    spellAttack = false,
+    grievous = 0,
+    radialBullets = 0,
+    color = '#ef4444',
+  }) {
+    const ww = this.game?.worldWidth || 2000
+    const wh = this.game?.worldHeight || 2000
+    const cx = Math.max(radius * 0.5, Math.min(ww - radius * 0.5, x))
+    const cy = Math.max(radius * 0.5, Math.min(wh - radius * 0.5, y))
+    this._hazards.push({
+      kind: 'blast',
+      x: cx,
+      y: cy,
+      radius,
+      flightDur: Math.max(0.15, delay),
+      lingerDur: 0,
+      slowMul: 1,
+      damage,
+      isBoss: !!isBoss,
+      spellAttack: !!spellAttack,
+      grievous: grievous || 0,
+      radialBullets: radialBullets || 0,
+      color,
+      age: 0,
+      landed: false,
+      active: true,
+    })
+  }
+
+  /** 立即生效的地面残余危险区（如弓王三判落点残余箭雨） */
+  spawnHazardZone({
+    x,
+    y,
+    radius = 56,
+    lingerDur = 2.2,
+    slowMul = 0.74,
+    dotDamage = 1,
+    dotInterval = 0.85,
+    kind = 'arrows',
+    isBoss = false,
+  }) {
+    const ww = this.game?.worldWidth || 2000
+    const wh = this.game?.worldHeight || 2000
+    const cx = Math.max(radius * 0.5, Math.min(ww - radius * 0.5, x))
+    const cy = Math.max(radius * 0.5, Math.min(wh - radius * 0.5, y))
+    this._hazards.push({
+      kind,
+      x: cx,
+      y: cy,
+      radius,
+      flightDur: 0,
+      lingerDur,
+      slowMul,
+      damage: 0,
+      dotDamage,
+      dotInterval,
+      dotTick: 0.45,
+      isBoss: !!isBoss,
+      age: 0,
+      landed: true,
+      active: true,
+    })
   }
 
   /** 屏幕边缘生成一个勇者（相机视口边缘外侧，营造「涌入」感） */
@@ -571,43 +715,59 @@ export class EnemyManager extends Entity {
     if (this.crowds.tide > 0) { this.crowds.spawnTide(x, y); return }
 
     // 命名波次使用对应的加权敌军编成；Boss 战期间保持全编成与全强度出兵，不降档不暂缓。
-    // 另在第 2 波有一只保底精英作为「早期元素入口」（见 EARLY_ELEMENT_WAVE）。
-    const type = this._rollType()
+    // 第 6 波起在人口不足目标时按 2~3 只成批补兵，弥补后期高清场效率下的怪海密度。
     const { profile, wave } = this._combatModifiers()
     const effectiveWave = this._effectiveWave()
-    const rank = this._rollRank(effectiveWave, type)
-    const baseEliteChance = 0.03 + effectiveWave * 0.01
-    const eliteChance = Math.min(
-      (profile.eliteChanceCap || 0.12) + (wave.eliteChanceCapBonus || 0),
-      baseEliteChance * (profile.eliteChanceMul || 1) + wave.eliteChanceBonus
-    )
-    const elite = effectiveWave >= 3 && Math.random() < eliteChance
-    const affixes = this._rollAffixes(elite)
+    const diff = this.game?.runSelection?.difficulty || profile?.id || 'normal'
+    const targetPop = this._populationTarget()
+    const softCap = Math.ceil(targetPop * 1.2)
+    let batchCount = 1
+    if (effectiveWave >= 6 && this._enemies.length < targetPop * 0.78) {
+      batchCount = (diff === 'hard' || diff === 'hell') && effectiveWave >= 12 ? 3 : 2
+    }
+    const waveHpScale = this._waveHpScale(effectiveWave)
 
-    const baseHp = 1 + ((Math.random() * 3) | 0) + Math.floor((effectiveWave - 1) / 2)
-    const eliteHpMul = elite ? profile.eliteHpMul || 1 : 1
-    const enemy = new Enemy({
-      x,
-      y,
-      type,
-      rank,
-      elite,
-      affixes,
-      // 波次成长曲线：每波速度 +6%（封顶）、每 2 波基础生命 +1（职业/精英系数在 Enemy 内乘算）
-      speed: rand(65, 110) * this._speedGrowth() * (profile.enemySpeedMul || 1),
-      speedCap: profile.enemySpeedCap,
-      hp: baseHp * (profile.enemyHpMul || 1) * eliteHpMul * wave.enemyHpMul,
-      rewardHp: baseHp,
-      attackTempo: (profile.attackTempoMul || 1) * (wave.attackTempoMul || 1),
-    })
-    enemy.objectiveTarget = this.game.mapFeatures?.shouldTargetNest(enemy) ? 'nest' : null
-    enemy.attach(this.game)
-    this._enemies.push(enemy)
+    for (let i = 0; i < batchCount; i++) {
+      if (this._enemies.length >= MAX_ENEMIES || (i > 0 && this._enemies.length >= softCap)) break
+      const sx = i === 0 ? x : Math.max(0, Math.min(this.game.worldWidth, x + rand(-48, 48)))
+      const sy = i === 0 ? y : Math.max(0, Math.min(this.game.worldHeight, y + rand(-48, 48)))
+      const type = this._rollType()
+      const rank = this._rollRank(effectiveWave, type)
+      const baseEliteChance = 0.03 + effectiveWave * 0.01
+      const eliteChance = Math.min(
+        (profile.eliteChanceCap || 0.12) + (wave.eliteChanceCapBonus || 0),
+        baseEliteChance * (profile.eliteChanceMul || 1) + wave.eliteChanceBonus
+      )
+      const elite = effectiveWave >= 3 && Math.random() < eliteChance
+      const affixes = this._rollAffixes(elite)
+
+      const baseHp = 1 + ((Math.random() * 3) | 0) + Math.floor((effectiveWave - 1) / 2)
+      const eliteHpMul = elite ? profile.eliteHpMul || 1 : 1
+      const enemy = new Enemy({
+        x: sx,
+        y: sy,
+        type,
+        rank,
+        elite,
+        affixes,
+        // 波次成长曲线：每波速度 +6%（封顶）、第 6 波起叠乘 1.06^(w-5) 血量倍率
+        speed: rand(65, 110) * this._speedGrowth() * (profile.enemySpeedMul || 1),
+        speedCap: profile.enemySpeedCap,
+        hp: baseHp * waveHpScale * (profile.enemyHpMul || 1) * eliteHpMul * wave.enemyHpMul,
+        rewardHp: baseHp,
+        attackTempo: (profile.attackTempoMul || 1) * (wave.attackTempoMul || 1),
+      })
+      enemy.damage = this._enemyDamage(type, rank, elite, effectiveWave, profile)
+      if (i > 0) enemy.expValue = Math.max(1, Math.round(enemy.expValue * 0.75))
+      enemy.objectiveTarget = this.game.mapFeatures?.shouldTargetNest(enemy) ? 'nest' : null
+      enemy.attach(this.game)
+      this._enemies.push(enemy)
+    }
   }
 
   /**
    * 在指定坐标生成敌人（Boss 召唤 / 召唤词缀用），受上限保护。
-   * 阶段十三修复：复用 spawn 的波次成长公式（速度 +6%/波且封顶、生命 +1/2波），
+   * 阶段十三修复：复用 spawn 的波次成长公式（速度 +6%/波且封顶、第 6 波起乘算血量成长），
    * 高波次下召唤兵不再是一碰就碎的第 1 波属性空气。
    */
   spawnAt(x, y, type = 'knight', options = {}) {
@@ -618,19 +778,22 @@ export class EnemyManager extends Entity {
     const baseHp = 1 + ((Math.random() * 3) | 0) + Math.floor((effectiveWave - 1) / 2)
     const hpDivisor = Math.max(1, options.hpDivisor || 1)
     const eliteHpMul = elite ? profile.eliteHpMul || 1 : 1
+    const waveHpScale = this._waveHpScale(effectiveWave)
+    const rank = options.rank || 2
     const enemy = new Enemy({
       x,
       y,
       type,
-      rank: options.rank || 2,
+      rank,
       elite,
       affixes: this._rollAffixes(elite, options.affix || null),
       speed: rand(65, 110) * this._speedGrowth() * (profile.enemySpeedMul || 1) * (options.speedMul || 1),
       speedCap: profile.enemySpeedCap,
-      hp: (baseHp * (profile.enemyHpMul || 1) * eliteHpMul * wave.enemyHpMul) / hpDivisor,
+      hp: (baseHp * waveHpScale * (profile.enemyHpMul || 1) * eliteHpMul * wave.enemyHpMul) / hpDivisor,
       rewardHp: baseHp,
       attackTempo: (profile.attackTempoMul || 1) * (wave.attackTempoMul || 1),
     })
+    enemy.damage = this._enemyDamage(type, rank, elite, effectiveWave, profile)
     enemy.eventToken = options.eventToken || null
     enemy.summoned = !!options.summoned
     enemy.objectiveTarget = options.objectiveTarget || null
@@ -639,11 +802,24 @@ export class EnemyManager extends Entity {
     return enemy
   }
 
-  /** 大型技能共享令牌：编队中同一时刻只允许一名首领制造全屏预警。 */
+  /** 大型技能共享令牌：常规同时 1 名施法；困难/地狱 3 名及以上首领同场允许 2 名并发施法。 */
   claimBossCast(boss) {
     if (!boss?.active) return false
-    if (this._bossCaster?.active && this._bossCaster !== boss) return false
-    this._bossCaster = boss
+    const casters = (this._bossCasters ||= new Set())
+    for (const c of [...casters]) {
+      if (!c?.active) casters.delete(c)
+    }
+    if (this._bossCaster && !this._bossCaster.active) this._bossCaster = null
+    if (casters.has(boss) || this._bossCaster === boss) {
+      casters.add(boss)
+      if (!this._bossCaster) this._bossCaster = boss
+      return true
+    }
+    const diff = this.game?.runSelection?.difficulty || this.game?.runProfile?.id || 'normal'
+    const limit = (diff === 'hard' || diff === 'hell') && this.activeBossCount >= 3 ? 2 : 1
+    if (casters.size >= limit) return false
+    casters.add(boss)
+    if (!this._bossCaster) this._bossCaster = boss
     const encounter = this._bossEncounter
     if (encounter && encounter.relayTargetId === boss.bossMemberId) {
       encounter.relayTargetId = null
@@ -652,8 +828,11 @@ export class EnemyManager extends Entity {
   }
 
   releaseBossCast(boss) {
-    const wasCaster = this._bossCaster === boss
-    if (wasCaster) this._bossCaster = null
+    const casters = (this._bossCasters ||= new Set())
+    const wasCaster = casters.delete(boss) || this._bossCaster === boss
+    if (this._bossCaster === boss) {
+      this._bossCaster = [...casters].find((c) => c?.active) || null
+    }
     const encounter = this._bossEncounter
     if (
       !wasCaster ||
@@ -683,7 +862,7 @@ export class EnemyManager extends Entity {
     const guards = this._bosses.some((member) =>
       member.active && member !== boss && member.bossGroupId === encounter.id
     ) || encounter.pending.length > 0
-    return guards ? 0.65 : 1
+    return guards ? 0.55 : 1
   }
 
   /**
@@ -732,7 +911,7 @@ export class EnemyManager extends Entity {
       encounter.breakClaimed ||
       encounter.id !== boss?.bossGroupId
     ) return 1
-    return 1 + Math.min(4, encounter.furyStacks || 0) * 0.12
+    return 1 + Math.min(4, encounter.furyStacks || 0) * 0.15
   }
 
   _bossFormationInfo(active = this._bosses.filter((boss) => boss.active)) {
@@ -760,7 +939,7 @@ export class EnemyManager extends Entity {
         broken: !!encounter.breakClaimed,
         status: encounter.breakClaimed
           ? '血誓已断 · 追击中'
-          : `血誓 ${stacks}/4 · 行动 +${stacks * 12}% · 破绽击杀`,
+          : `血誓 ${stacks}/4 · 行动 +${stacks * 15}% · 破绽击杀`,
       }
     }
     const relay = active.find((boss) => boss.bossMemberId === encounter.relayTargetId)
@@ -775,10 +954,14 @@ export class EnemyManager extends Entity {
     }
   }
 
+  _maxActiveBossCap() {
+    return this.game?.runSelection?.mode === 'timed20' ? 4 : 3
+  }
+
   /** 生成一名 Boss：编队入口显式传 allowMultiple，普通调用仍保持单首领语义。 */
   spawnBoss(options = {}) {
     if (this.hasBoss && !options.allowMultiple) return
-    if (this.activeBossCount >= 3) return
+    if (this.activeBossCount >= this._maxActiveBossCap()) return
     const types = ['boss-knight', 'boss-mage', 'boss-archer']
     const encounter = options.encounter || null
     const type = encounter ? `boss-${encounter.archetype}` : options.type || types[(Math.random() * 3) | 0]
@@ -799,7 +982,12 @@ export class EnemyManager extends Entity {
       wave: scalingWave,
       type,
       hpMultiplier:
-        (profile.bossHpMul || 1) *
+        getDifficultyBossHpMultiplier(
+          profile,
+          this.game?.runSelection,
+          scalingWave,
+          expedition ? (this.game.expeditionStage || 1) : 0
+        ) *
         wave.bossHpMul *
         (encounter?.hpMul || 1) *
         expeditionBossHpMul *
@@ -839,12 +1027,12 @@ export class EnemyManager extends Entity {
     return boss
   }
 
-  /** 五波节点首领：场上硬封顶三名，超出的编队成员在首领阵亡后依次补位。 */
+  /** 五波节点首领：常规模式同屏封顶三名，20 分钟限时放宽至四名；超出成员阵亡后补位。 */
   spawnBossGroup(plan) {
     if (!plan?.types?.length) return []
     const active = this._bosses.filter((boss) => boss.active)
     const target = Math.max(active.length, plan.total || plan.types.length)
-    const maxActive = Math.min(3, plan.maxActive || target)
+    const maxActive = Math.min(this._maxActiveBossCap(), plan.maxActive || target)
     const existing = this._bossEncounter?.final ? null : this._bossEncounter
     const formationChanged = !existing || existing.formationWave !== this.wave
     const committed = active.length + (existing?.pending.length || 0)
@@ -1001,7 +1189,7 @@ export class EnemyManager extends Entity {
     if (bloodOathTriggered) {
       for (const survivor of this._bosses) {
         if (!survivor.active || survivor.bossGroupId !== encounter.id) continue
-        const heal = Math.max(1, Math.round(survivor.maxHp * 0.08))
+        const heal = Math.max(1, Math.round(survivor.maxHp * 0.10))
         survivor.hp = Math.min(survivor.maxHp, survivor.hp + heal)
         this.addText(survivor.x, survivor.y - survivor.radius - 14, `血誓 +${encounter.furyStacks}`, `恢复 ${heal}`, '#ef998c', 13)
       }
@@ -1034,18 +1222,36 @@ export class EnemyManager extends Entity {
     return complete
   }
 
-  /** 限时终局：两名先遣同时登场，任一阵亡后终审勇者补位，场上始终最多两名。 */
+  /** 限时终局：12 分钟双先遣 + 终审补位（同屏最多 2）；20 分钟四王同场直面（高难加 1 名后备）。 */
   beginFinale() {
     if (this._finale) return this._boss
     this._finale = true
     this._clearCombatants()
-    this.wave = Math.max(25, this.wave)
+    const extended = this.game?.runSelection?.mode === 'timed20'
+    this.wave = Math.max(extended ? 41 : 25, this.wave)
     this._waveTimer = 0
     this._bossGrace = 0
     this._bossRecovery = 0
     this._spawnTimer = 0.4
     this._directorPhase = '终局审判'
     this._directorIntensity = 1
+    if (extended) {
+      const difficulty = this.game?.runSelection?.difficulty || 'normal'
+      const members = [
+        { type: 'boss-knight', memberHpMul: 0.54, spawnAngle: -Math.PI * 0.75, distance: 500 },
+        { type: 'boss-mage', memberHpMul: 0.54, spawnAngle: -Math.PI * 0.25, distance: 500 },
+        { type: 'boss-archer', memberHpMul: 0.54, spawnAngle: Math.PI * 0.25, distance: 500 },
+        { type: 'boss-final', finalBoss: true, memberHpMul: 0.82, spawnAngle: Math.PI * 0.75, distance: 540 },
+      ]
+      if (difficulty === 'hard' || difficulty === 'hell') {
+        members.push({ type: 'boss-knight', memberHpMul: 0.54, spawnAngle: Math.PI, distance: 520 })
+      }
+      return this._startBossEncounter({
+        label: '王国终焉防线',
+        maxActive: 4,
+        members,
+      })
+    }
     return this._startBossEncounter({
       label: '王国最后防线',
       maxActive: 2,
@@ -1068,6 +1274,7 @@ export class EnemyManager extends Entity {
     this._boss = null
     this._bosses.length = 0
     this._bossCaster = null
+    this._bossCasters?.clear?.()
     this._bossEncounter = null
   }
 
@@ -1181,8 +1388,23 @@ export class EnemyManager extends Entity {
     this._checkDevour(dt)
     this._updateDevouring(dt)
     this._updateRouting(dt)
-    // 2.7) 首领劣地到期回收（持有者已死的场立即失效，不留隐形减速）
+    // 2.7) 首领劣地到期回收 & 周期余震伤害结算（持有者已死的场立即失效，不留隐形减速）
     if (this._bossFields.length) {
+      const p = this.game?.player
+      for (const f of this._bossFields) {
+        if (!(f.until > this.game.elapsed) || (f.source && !f.source.active)) continue
+        if (f.damage > 0 && p && !p.dead) {
+          const dx = p.x - f.x
+          const dy = p.y - f.y
+          if (dx * dx + dy * dy <= f.radius * f.radius) {
+            f.dotTick = (f.dotTick ?? f.dotInterval ?? 0.65) - dt
+            if (f.dotTick <= 0) {
+              f.dotTick = f.dotInterval || 0.65
+              p.hit(f.damage, { enemyAttack: true, isBoss: true })
+            }
+          }
+        }
+      }
       this._bossFields = this._bossFields.filter((f) => f.until > this.game.elapsed && (!f.source || f.source.active))
     }
     for (const t of this._texts) t.update(dt)
@@ -1348,23 +1570,45 @@ export class EnemyManager extends Entity {
     for (const b of list) {
       if (!b.active) continue
       const fromX = b.x, fromY = b.y
-      b.update(dt)
+      const spellCombat = this.game.weaponSystem?.spellCombat
+      const bulletDt = spellCombat?.enabled ? dt * (spellCombat.bulletSpeedMultiplierAt?.(b) ?? 1) : dt
+      b.update(bulletDt)
       if (!b.active) continue
-      if (this.game.weaponSystem?.petCombat?.intercept(b, fromX, fromY)) continue
+      if (this.game.weaponSystem?.petCombat?.intercept(b, fromX, fromY)) {
+        if (b.pierceSummon > 0) {
+          b.pierceSummon--
+          b.active = true
+        } else {
+          continue
+        }
+      }
+      if (spellCombat?.interceptBullet?.(b, fromX, fromY)) {
+        if (b.pierceSummon > 0) {
+          b.pierceSummon--
+          b.active = true
+        } else {
+          continue
+        }
+      }
       const clones = this.game.weaponSystem?.shadowCombat?.clones
       if (!b.isBoss && clones?.combat.available) {
         let contact = shadowCircleEntry(fromX, fromY, b.x, b.y, player, b.radius), blocker = null
         for (const c of clones.items) {
-          if (c.life <= 0) continue
+          if (c.life <= 0 || b._pierced?.has(c)) continue
           const t = shadowCircleEntry(fromX, fromY, b.x, b.y, c, b.radius)
           if (t < contact) { contact = t; blocker = c }
         }
         if (blocker) {
           clones.blockBullet(blocker)
-          b.active = false
-          continue
+          if (b.pierceSummon > 0) {
+            b.pierceSummon--
+            ;(b._pierced ||= new Set()).add(blocker)
+          } else {
+            b.active = false
+            continue
+          }
         }
-        if (contact !== Infinity) {
+        if (contact !== Infinity && !blocker) {
           b.active = false; b.enemyAttack = true
           player.hit(b.damage, b)
           continue
@@ -1396,30 +1640,54 @@ export class EnemyManager extends Entity {
     if (hasDead) this._bullets = list.filter((b) => b.active)
   }
 
-  /** 王国战旗官光环：半径 185px 内友军获得 +20% 移速与攻速鼓舞，击杀旗官即刻散去。 */
+  /** 王国战旗官光环（半径 220px：+22% 移速/攻速 + 22% 减伤）与重盾塔兵盾墙掩护（身后 95px 内友军 25% 减伤） */
   _applyBannerAuras() {
     const r2 = BANNER_AURA_RADIUS * BANNER_AURA_RADIUS
+    const coverR2 = 95 * 95
     const bannermen = []
+    const bulwarks = []
     for (const e of this._enemies) {
       if (!e.active || e.isBoss) continue
       e._bannerBuff = 0
-      if (e.type === 'bannerman' && !e.devouring) bannermen.push(e)
+      e._bannerDr = 0
+      e._bulwarkCover = 0
+      if (e.devouring) continue
+      if (e.type === 'bannerman') bannermen.push(e)
+      else if (e.type === 'bulwark') bulwarks.push(e)
     }
-    if (!bannermen.length) return
+    if (!bannermen.length && !bulwarks.length) return
     for (const e of this._enemies) {
-      if (!e.active || e.isBoss || e.type === 'bannerman') continue
-      for (const b of bannermen) {
-        const dx = e.x - b.x
-        const dy = e.y - b.y
-        if (dx * dx + dy * dy <= r2) {
-          e._bannerBuff = 0.2
-          break
+      if (!e.active || e.isBoss) continue
+      if (e.type !== 'bannerman' && bannermen.length) {
+        for (const b of bannermen) {
+          const dx = e.x - b.x
+          const dy = e.y - b.y
+          if (dx * dx + dy * dy <= r2) {
+            e._bannerBuff = 0.22
+            e._bannerDr = 0.22
+            break
+          }
+        }
+      }
+      if (e.type !== 'bulwark' && bulwarks.length) {
+        for (const bw of bulwarks) {
+          const dx = e.x - bw.x
+          const dy = e.y - bw.y
+          const d2 = dx * dx + dy * dy
+          if (d2 > 0.01 && d2 <= coverR2) {
+            // 位于重盾身后（与重盾面向点积 < 0）获得盾墙掩护
+            const dot = dx * Math.cos(bw.facing) + dy * Math.sin(bw.facing)
+            if (dot < 0) {
+              e._bulwarkCover = 0.25
+              break
+            }
+          }
         }
       }
     }
   }
 
-  /** 炼金投弹手抛投酸液瓶：飞行期显示落地圈预警，落地命中玩家后留短暂减速池。 */
+  /** 地面/预警危险区推进：炼金毒瓶抛投、延迟红圈爆裂、残余腐蚀/箭雨 DoT 区域 */
   _updateHazards(dt) {
     const list = this._hazards
     if (!list.length) return
@@ -1432,18 +1700,59 @@ export class EnemyManager extends Entity {
         if (h.age >= h.flightDur) {
           h.landed = true
           h.age = 0
-          if (player && !player.dead) {
+          if (player && !player.dead && h.damage > 0) {
             const rr = h.radius + (player.radius || 14)
             const dx = player.x - h.x
             const dy = player.y - h.y
             if (dx * dx + dy * dy <= rr * rr) {
-              player.hit(h.damage, { enemyAttack: true, spellAttack: true })
+              player.hit(h.damage, {
+                enemyAttack: true,
+                spellAttack: h.spellAttack ?? (h.kind !== 'blast' && h.kind !== 'arrows'),
+                isBoss: !!h.isBoss,
+                grievous: h.grievous || 0,
+              })
+            }
+          }
+          if (h.radialBullets > 0) {
+            for (let i = 0; i < h.radialBullets; i++) {
+              this.spawnBullet(h.x, h.y, (i / h.radialBullets) * TAU, 'mage', {
+                speed: 190,
+                radius: 7,
+                damage: 1,
+                life: 2.6,
+              })
+            }
+            this.game?.weaponSystem?._ring?.(h.x, h.y, h.color || '#ff9d4a', h.radius)
+            this.game?.sound?.kill?.()
+          } else if (h.kind === 'blast') {
+            this.game?.weaponSystem?._ring?.(h.x, h.y, h.color || '#ef4444', h.radius)
+          }
+          if (!(h.lingerDur > 0)) {
+            h.active = false
+            hasDead = true
+          }
+        }
+      } else {
+        if (h.dotDamage > 0 && player && !player.dead) {
+          const rr = h.radius + (player.radius || 14) * 0.6
+          const dx = player.x - h.x
+          const dy = player.y - h.y
+          if (dx * dx + dy * dy <= rr * rr) {
+            h.dotTick = (h.dotTick ?? h.dotInterval ?? 0.85) - dt
+            if (h.dotTick <= 0) {
+              h.dotTick = h.dotInterval || 0.85
+              player.hit(h.dotDamage, {
+                enemyAttack: true,
+                spellAttack: h.kind === 'lob',
+                isBoss: !!h.isBoss,
+              })
             }
           }
         }
-      } else if (h.age >= h.lingerDur) {
-        h.active = false
-        hasDead = true
+        if (h.age >= h.lingerDur) {
+          h.active = false
+          hasDead = true
+        }
       }
     }
     if (hasDead) this._hazards = list.filter((h) => h.active)
@@ -1455,29 +1764,70 @@ export class EnemyManager extends Entity {
       if (!h.active) continue
       ctx.save()
       if (!h.landed) {
+        // 飞行期：与 Boss 技能统一的敌方警示红圈，明确提示落点即将造成伤害
         const u = Math.min(1, h.age / Math.max(0.01, h.flightDur))
-        ctx.fillStyle = `rgba(163, 230, 53, ${(0.08 + u * 0.14).toFixed(2)})`
+        ctx.fillStyle = 'rgba(224, 68, 68, 0.12)'
+        ctx.beginPath()
+        ctx.arc(h.x, h.y, h.radius, 0, TAU)
+        ctx.fill()
+        ctx.fillStyle = `rgba(239, 68, 68, ${(0.16 + u * 0.24).toFixed(2)})`
         ctx.beginPath()
         ctx.arc(h.x, h.y, h.radius * u, 0, TAU)
         ctx.fill()
-        ctx.strokeStyle = 'rgba(190, 242, 100, 0.72)'
-        ctx.lineWidth = 1.6
-        ctx.setLineDash([6, 5])
+        ctx.strokeStyle = 'rgba(76, 5, 25, 0.42)'
+        ctx.lineWidth = 2.8
+        ctx.beginPath()
+        ctx.arc(h.x, h.y, h.radius, 0, TAU)
+        ctx.stroke()
+        ctx.strokeStyle = 'rgba(255, 96, 96, 0.94)'
+        ctx.lineWidth = 2
+        ctx.setLineDash([7, 5])
         ctx.beginPath()
         ctx.arc(h.x, h.y, h.radius, 0, TAU)
         ctx.stroke()
         ctx.setLineDash([])
       } else {
+        // 落地残留：紫红剧毒腐蚀池 + 高对比警示红边，与绿草地、玩家绿色毒池及暖橙火池清晰区分
         const rem = Math.max(0, 1 - h.age / Math.max(0.01, h.lingerDur))
         const alpha = Math.min(1, rem * 2.2)
-        ctx.fillStyle = `rgba(132, 204, 22, ${(0.24 * alpha).toFixed(2)})`
+        const grad = ctx.createRadialGradient(h.x, h.y, h.radius * 0.08, h.x, h.y, h.radius)
+        grad.addColorStop(0, `rgba(131, 24, 67, ${(0.44 * alpha).toFixed(2)})`)
+        grad.addColorStop(0.58, `rgba(190, 24, 93, ${(0.34 * alpha).toFixed(2)})`)
+        grad.addColorStop(0.88, `rgba(225, 29, 72, ${(0.28 * alpha).toFixed(2)})`)
+        grad.addColorStop(1, 'rgba(136, 19, 55, 0)')
+        ctx.fillStyle = grad
         ctx.beginPath()
         ctx.arc(h.x, h.y, h.radius, 0, TAU)
         ctx.fill()
-        ctx.strokeStyle = `rgba(217, 249, 157, ${(0.5 * alpha).toFixed(2)})`
-        ctx.lineWidth = 1.5
+
+        const seed = h.x * 0.017 + h.y * 0.013
+        for (let i = 0; i < 4; i++) {
+          const raw = h.age * (0.9 + (i % 2) * 0.35) + i * 0.29 + seed
+          const cyc = ((raw % 1) + 1) % 1
+          const ang = seed + i * 1.65
+          const dist = h.radius * (0.24 + ((i * 19) % 10) * 0.055)
+          const bx = h.x + Math.cos(ang) * dist
+          const by = h.y + Math.sin(ang) * dist
+          const br = 2.2 + cyc * 4.4
+          const ba = Math.sin(cyc * Math.PI) * alpha
+          ctx.fillStyle = `rgba(244, 114, 182, ${(0.28 * ba).toFixed(2)})`
+          ctx.strokeStyle = `rgba(255, 118, 146, ${(0.82 * ba).toFixed(2)})`
+          ctx.lineWidth = 1.2
+          ctx.beginPath()
+          ctx.arc(bx, by, br, 0, TAU)
+          ctx.fill()
+          ctx.stroke()
+        }
+
+        ctx.strokeStyle = `rgba(76, 5, 25, ${(0.56 * alpha).toFixed(2)})`
+        ctx.lineWidth = 2.6
         ctx.beginPath()
-        ctx.arc(h.x, h.y, h.radius * 0.94, 0, TAU)
+        ctx.arc(h.x, h.y, h.radius, 0, TAU)
+        ctx.stroke()
+        ctx.strokeStyle = `rgba(255, 92, 108, ${(0.86 * alpha).toFixed(2)})`
+        ctx.lineWidth = 1.8
+        ctx.beginPath()
+        ctx.arc(h.x, h.y, h.radius - 1, 0, TAU)
         ctx.stroke()
       }
       ctx.restore()
@@ -1487,27 +1837,32 @@ export class EnemyManager extends Entity {
   _renderAirHazards(ctx) {
     if (!this._hazards.length) return
     for (const h of this._hazards) {
-      if (!h.active || h.landed) continue
+      if (!h.active || h.landed || h.startX == null || h.startY == null) continue
       const u = Math.min(1, h.age / Math.max(0.01, h.flightDur))
       const px = h.startX + (h.x - h.startX) * u
       const py = h.startY + (h.y - h.startY) * u - Math.sin(u * Math.PI) * 78
       ctx.save()
       ctx.translate(px, py)
       ctx.rotate(u * TAU * 1.4)
-      ctx.fillStyle = 'rgba(163, 230, 53, 0.3)'
+      ctx.fillStyle = 'rgba(225, 29, 72, 0.34)'
       ctx.beginPath()
-      ctx.arc(0, 0, 11, 0, TAU)
+      ctx.arc(0, 0, 11.5, 0, TAU)
       ctx.fill()
-      ctx.fillStyle = '#a3e635'
-      ctx.strokeStyle = '#1a2e05'
-      ctx.lineWidth = 1.6
+      ctx.fillStyle = '#e0a93b'
+      ctx.strokeStyle = '#2a1f0d'
+      ctx.lineWidth = 1.3
+      ctx.fillRect(-2.4, -8.5, 4.8, 3.8)
+      ctx.strokeRect(-2.4, -8.5, 4.8, 3.8)
+      ctx.fillStyle = '#e11d74'
+      ctx.strokeStyle = '#36081d'
+      ctx.lineWidth = 1.7
       ctx.beginPath()
       ctx.arc(0, 1, 6.5, 0, TAU)
       ctx.fill()
       ctx.stroke()
-      ctx.fillStyle = '#fef08a'
+      ctx.fillStyle = '#ffe4f0'
       ctx.beginPath()
-      ctx.arc(-2, -1, 2, 0, TAU)
+      ctx.arc(-2, -1, 2.1, 0, TAU)
       ctx.fill()
       ctx.restore()
     }

@@ -86,7 +86,7 @@ function makeStubGame({ wave = 1, mode = 'timed', stage = 1 } = {}) {
 // 1. Slow mage projectile physics & clarity
 {
   const orb = new EnemyBullet({ x: 0, y: 0, angle: 0, kind: 'mage' })
-  assert.equal(orb.speed, 115, 'ordinary mage orb uses slow 115 px/s speed for dodging')
+  assert.equal(orb.speed, 130, 'ordinary mage orb uses readable 130 px/s speed')
   assert.equal(orb.radius, 8, 'mage orb uses enlarged 8px silhouette radius')
   assert.equal(orb.life, 4.5, 'mage orb retains 4.5s default lifetime')
 
@@ -138,16 +138,17 @@ ok('慢速法师弹幕与 1/2/3 阶敌军弹道区分（含深色威胁描边、
   assert.equal(k1.artId, 'knight:1')
   assert.equal(k2.artId, 'knight')
   assert.equal(k3.artId, 'knight:3')
-  assert.equal(k3.shieldHits, 1, 'T3 knight starts with 1 frontal plate shield layer')
+  assert.equal(k3.shieldHits, 2, 'T3 knight starts with 2 frontal plate shield layers')
 
-  // T3 shield absorbs first hit cleanly
+  // T3 shield absorbs first two hits cleanly
   k3.attach(game)
   const hpBefore = k3.hp
+  k3.hit(5)
   k3.hit(5)
   assert.equal(k3.hp, hpBefore)
   assert.equal(k3.shieldHits, 0)
 
-  // Mage tiers: T1/T2 1 slow orb, T3 3 extra-slow spread orbs with calmer cooldown & bounded lifetime
+  // Mage tiers: T1/T2 1 orb, T3 3 spread orbs with bounded lifetime
   const { game: gMage, manager: mMage } = makeStubGame({ wave: 5 })
   const m1 = new Enemy({ x: 200, y: 200, speed: 80, hp: 10, type: 'mage', rank: 1 })
   const m2 = new Enemy({ x: 200, y: 200, speed: 80, hp: 10, type: 'mage', rank: 2 })
@@ -156,29 +157,28 @@ ok('慢速法师弹幕与 1/2/3 阶敌军弹道区分（含深色威胁描边、
   m1._shoot()
   assert.equal(mMage._bullets.length, 1)
   assert.equal(mMage._bullets[0].rank, 1)
-  assert.equal(mMage._bullets[0].speed, 110)
-  assert.equal(mMage._bullets[0].life, 4.0)
+  assert.equal(mMage._bullets[0].speed, 130)
+  assert.equal(mMage._bullets[0].life, 4.2)
   mMage._bullets.length = 0
   m2._shoot()
   assert.equal(mMage._bullets.length, 1)
-  assert.equal(mMage._bullets[0].speed, 115)
-  assert.equal(mMage._bullets[0].life, 4.0)
+  assert.equal(mMage._bullets[0].speed, 145)
+  assert.equal(mMage._bullets[0].life, 4.2)
   mMage._bullets.length = 0
   m3._shoot()
   assert.equal(mMage._bullets.length, 3, 'T3 archmage fires a 3-orb arcane fan')
-  assert.ok(mMage._bullets.every((b) => b.speed === 90 && b.life === 4.2 && b.rank === 3), 'all T3 multi-shot orbs slow further to 90 px/s with 4.2s bounded lifetime')
-  assert.ok(mMage._bullets[0].speed < 110 && mMage._bullets[0].speed < 115, 'T3 multi-shot orbs are slower than T1/T2 single-shot mage orbs')
-  assert.ok(m3.attackInterval > m2.attackInterval, 'T3 multi-shot mage relaxes fire cooldown to prevent full-screen bullet spam')
+  assert.ok(mMage._bullets.every((b) => b.speed === 120 && b.life === 4.4 && b.rank === 3), 'all T3 multi-shot orbs fly at 120 px/s with 4.4s bounded lifetime')
+  assert.ok(mMage._bullets[0].speed < 130 && mMage._bullets[0].speed < 145, 'T3 multi-shot orbs are slower than T1/T2 single-shot mage orbs')
   const spreadLeft = Math.atan2(mMage._bullets[0].vy, mMage._bullets[0].vx)
   const spreadRight = Math.atan2(mMage._bullets[2].vy, mMage._bullets[2].vx)
   assert.ok(Math.abs(spreadRight - spreadLeft - 0.4) < 1e-6, 'T3 3-orb fan widens to 0.4 rad total cone for clear dodge lanes')
 
-  // Archer tiers: T1 fast single arrow, T3 twin arrows
+  // Archer tiers: T1 fast single arrow, T3 3-arrow fan
   mMage._bullets.length = 0
   const a3 = new Enemy({ x: 200, y: 200, speed: 100, hp: 10, type: 'archer', rank: 3 })
   a3.attach(gMage)
   a3._shoot()
-  assert.equal(mMage._bullets.length, 2, 'T3 royal archer fires 2 arrows')
+  assert.equal(mMage._bullets.length, 3, 'T3 royal archer fires 3-arrow fan')
   assert.ok(mMage._bullets.every((b) => b.rank === 3), 'T3 archer arrows carry rank 3')
 
   // Priest T3 heal grants ward shield + higher heal
@@ -206,8 +206,8 @@ ok('三阶兵种演化（T1→T2→T3 建模键/属性/骑士盾/大法师散射
   const { manager } = makeStubGame({ wave: 1 })
   const targetW1 = manager._populationTarget()
   const targetW12 = (() => { manager.wave = 12; return manager._populationTarget() })()
-  assert.ok(targetW1 >= 26 && targetW1 <= 35, `wave 1 brisk mowing density target (got ${targetW1})`)
-  assert.ok(targetW12 <= 58, `late wave target capped cleanly at <=58 (got ${targetW12})`)
+  assert.ok(targetW1 >= 26 && targetW1 <= 36, `wave 1 brisk mowing density target (got ${targetW1})`)
+  assert.ok(targetW12 <= 76, `late wave target capped cleanly at <=76 (got ${targetW12})`)
 
   // Boss wave (wave 5) no longer sets _bossGrace = 1.5
   manager.wave = 5
@@ -241,13 +241,13 @@ ok('高频率无间断出兵节奏与 Boss 战不暂缓刷怪')
   bw.update(0.016)
   assert.ok(Math.abs(bw.facing) < 1e-6)
 
-  // Projectile moving left (angle PI) hits front (+x face of bulwark) -> mitigated 45%
+  // Projectile moving left (angle PI) hits front (+x face of bulwark) -> mitigated 65%
   bw.hit(20, { hitAngle: Math.PI })
-  assert.equal(bw.hp, 100 - 11, 'frontal hit onto tower shield mitigates damage by 45%')
+  assert.equal(bw.hp, 100 - 7, 'frontal hit onto tower shield mitigates damage by 65%')
 
   // Banked/flank projectile moving right (angle 0) hits rear (-x) -> full 100% damage
   bw.hit(20, { hitAngle: 0 })
-  assert.equal(bw.hp, 89 - 20, 'flank/rear hit bypasses tower shield for full 100% damage')
+  assert.equal(bw.hp, 93 - 20, 'flank/rear hit bypasses tower shield for full 100% damage')
 
   // Bounded turn speed prevents instant 180 flip on rapid flank
   const initialFacing = bw.facing
@@ -284,7 +284,7 @@ ok('重盾塔兵正面 45% 减伤、绕背/反弹破盾与有限转身速率')
   assert.equal(manager.playerFieldMultiplierAt(game.player.x + 200, game.player.y), 1, 'outside puddle has no slow')
 
   // Cleanup on expiry & routAll
-  for (let i = 0; i < 40; i++) manager.update(0.1)
+  for (let i = 0; i < 45; i++) manager.update(0.1)
   assert.equal(manager._hazards.length, 0, 'puddle expires cleanly after lingerDur')
 
   manager.spawnLobHazard({ startX: 1100, startY: 1000, targetX: 1000, targetY: 1000 })

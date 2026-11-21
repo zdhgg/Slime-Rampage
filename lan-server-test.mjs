@@ -86,7 +86,7 @@ try {
   })
   assert.equal(response.status, 200)
   assert.equal(response.payload.catalog.slots[1].data.genes.giant, 1)
-  assert.equal(response.payload.catalog.slots[1].data.drops, 500)
+  assert.equal(response.payload.catalog.slots[1].data.drops, 550)
 
   const start = await api('/api/runs/start', {
     method: 'POST',
@@ -126,11 +126,11 @@ try {
   })
   assert.equal(repeated.status, 200)
   assert.equal(repeated.payload.result.runId, finish.payload.result.runId)
-  assert.equal(repeated.payload.catalog.slots[1].data.drops, 502)
+  assert.equal(repeated.payload.catalog.slots[1].data.drops, 552)
 
   const resetPath = '/api/profile/genes/reset'
   const resetOptions = { method: 'POST', cookie: aliceCookie, catalog: repeated.payload.catalog }
-  assert.equal(repeated.payload.catalog.slots[1].data.geneInvestment, 200)
+  assert.equal(repeated.payload.catalog.slots[1].data.geneInvestment, 150)
   assert.equal((await api(resetPath, { method: 'POST', cookie: aliceCookie })).status, 409)
   assert.equal((await api(resetPath, { method: 'POST' })).status, 401)
   const attempts = await Promise.all([
@@ -139,7 +139,7 @@ try {
   ])
   assert.deepEqual(attempts.map(attempt => attempt.status).sort(), [200, 409])
   const reset = attempts.find(attempt => attempt.status === 200).payload
-  assert.equal(reset.refund.points, 200)
+  assert.equal(reset.refund.points, 150)
   assert.equal(reset.catalog.saveEpoch, resetOptions.catalog.saveEpoch)
   assert.equal(reset.catalog.slots[1].data.drops, 702)
   assert.equal(reset.catalog.slots[1].data.geneInvestment, 0)
@@ -153,7 +153,7 @@ try {
   const repurchase = await api('/api/profile/genes/giant/purchase', { ...resetOptions, catalog: reset.catalog })
   assert.equal(repurchase.status, 200)
   const reroll = await api(resetPath, { ...resetOptions, catalog: repurchase.payload.catalog })
-  assert.equal(reroll.payload.refund.points, 200)
+  assert.equal(reroll.payload.refund.points, 150)
   assert.equal(reroll.payload.catalog.slots[1].data.drops, 702)
 
   const legacySave = { version: 4, drops: 30, records: {}, genes: { giant: 2, split: 1, predator_origin: 1 } }
@@ -192,6 +192,70 @@ try {
   assert.equal(publicBoard.status, 200)
   assert.equal(publicBoard.payload.leaderboard.entries.length, 1)
   assert.equal(publicBoard.payload.leaderboard.entries[0].score, 45)
+
+  const lockedTimed20 = await api('/api/runs/start', {
+    method: 'POST',
+    cookie: aliceCookie,
+    body: { mode: 'timed20', difficulty: 'normal' },
+  })
+  assert.equal(lockedTimed20.status, 403)
+
+  // 解锁远征→限时→20分钟限时，并校验 20 分钟最短通关时长与独立排行榜
+  const aliceProfileId = forgedImport.payload.catalog.slots[1].profileId
+  const unlockedData = JSON.parse(db.prepare('SELECT data_json FROM profiles WHERE id = ?').get(aliceProfileId).data_json)
+  unlockedData.progression = { highestDifficulty: 'hard', highestMode: 'endless' }
+  db.prepare('UPDATE profiles SET data_json = ? WHERE id = ?').run(JSON.stringify(unlockedData), aliceProfileId)
+
+  const startTimed20 = await api('/api/runs/start', {
+    method: 'POST',
+    cookie: aliceCookie,
+    body: { mode: 'timed20', difficulty: 'hard' },
+  })
+  assert.equal(startTimed20.status, 201)
+  db.prepare('UPDATE run_tickets SET issued_at = ? WHERE id = ?').run(Date.now() - 1500_000, startTimed20.payload.ticket.id)
+
+  const tooFastTimed20 = await api(`/api/runs/${startTimed20.payload.ticket.id}/finish`, {
+    method: 'POST',
+    cookie: aliceCookie,
+    body: {
+      run: {
+        result: 'victory',
+        wave: 41,
+        kills: 500,
+        time: 900,
+        finaleTime: 60,
+        devours: 20,
+        eliteKills: 15,
+        bossKills: 8,
+        eventsCompleted: 5,
+        species: { name: '测试终焉史莱姆' },
+      },
+    },
+  })
+  assert.equal(tooFastTimed20.status, 422)
+
+  const validTimed20 = await api(`/api/runs/${startTimed20.payload.ticket.id}/finish`, {
+    method: 'POST',
+    cookie: aliceCookie,
+    body: {
+      run: {
+        result: 'victory',
+        wave: 41,
+        kills: 2000,
+        time: 1260,
+        finaleTime: 60,
+        devours: 40,
+        eliteKills: 30,
+        bossKills: 15,
+        eventsCompleted: 8,
+        species: { name: '测试终焉史莱姆' },
+      },
+    },
+  })
+  assert.equal(validTimed20.status, 200)
+  assert.equal(validTimed20.payload.leaderboard.entries.length, 1)
+  const timed12Board = await api('/api/leaderboard?mode=timed&difficulty=hard')
+  assert.equal(timed12Board.payload.leaderboard.entries.length, 0)
 
   const suspiciousStart = await api('/api/runs/start', {
     method: 'POST',

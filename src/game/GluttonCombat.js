@@ -7,12 +7,16 @@ import {
   GLUTTON_ROUTES, GLUTTON_RULES,
   getGluttonEndlessDamageMultiplier, getGluttonHeavyDamageMultiplier, getGluttonHeavyReachMultiplier,
   gluttonAcidAuraBonusAt, gluttonAcidAuraDamageAt, gluttonAcidAuraVulnAt,
+  gluttonBiteSweepArcDegAt, gluttonBiteSweepDamageAt, gluttonBiteSweepHasteAt,
   gluttonBreachDamageAt, gluttonBreachVulnAt,
+  gluttonBulkReflectScaleAt,
   gluttonCounterDamageAt, gluttonCounterRadiusAt,
   gluttonCowDurationAt, gluttonCowPowerAt,
+  gluttonEruptionDamageAt, gluttonEruptionRadiusAt,
   gluttonFrenzyArcDegAt, gluttonFrenzyHasteAt,
   gluttonPounceResetCapRatioAt, gluttonPounceResetPerKillAt,
   gluttonProgressReady, gluttonRouteInvestment, gluttonRouteReady,
+  gluttonThornsSurgeScaleAt,
 } from './GluttonBuild.js'
 import { traceShadowPath } from './ShadowGeometry.js'
 
@@ -199,7 +203,7 @@ export class GluttonCombat {
 
   biteArc() {
     const p = this.player
-    const sweepRad = (p.gluttonBiteSweepLevel || 0) * (Math.PI / 10) // +18°/级
+    const sweepRad = gluttonBiteSweepArcDegAt(p.gluttonBiteSweepLevel || 0) * Math.PI / 180
     const frenzyRad = p.gluttonFrenzyTimer > 0 && p.gluttonFrenzyJawLevel > 0
       ? gluttonFrenzyArcDegAt(p.gluttonFrenzyJawLevel) * Math.PI / 180
       : 0
@@ -208,7 +212,7 @@ export class GluttonCombat {
 
   biteHasteMultiplier() {
     const p = this.player
-    const sweepHaste = 1 + (p.gluttonBiteSweepLevel || 0) * 0.06
+    const sweepHaste = 1 + gluttonBiteSweepHasteAt(p.gluttonBiteSweepLevel || 0)
     const frenzyHaste = p.gluttonFrenzyTimer > 0 && p.gluttonFrenzyJawLevel > 0
       ? 1 + gluttonFrenzyHasteAt(p.gluttonFrenzyJawLevel)
       : 1
@@ -529,8 +533,8 @@ export class GluttonCombat {
     const radius = (p.radius + baseRadius + (this.route === 'shell' ? 20 : 0) + (surge ? 45 : 0) + tomeRadius) * (this.weapon.geneRangeMul || 1)
     const baseMult = level > 0 ? gluttonCounterDamageAt(level) : GLUTTON_COUNTER_BASE_DAMAGE
     const hpScale = 1 + p.maxHp * (level > 0 ? 0.045 : 0.02)
-    const bulkScale = 1 + (p.gluttonBulkLevel || 0) * 0.15
-    const surgeScale = surge ? [1.35, 1.75, 2.2][Math.min(2, (p.gluttonThornsSurgeLevel || 1) - 1)] : 1
+    const bulkScale = gluttonBulkReflectScaleAt(p.gluttonBulkLevel || 0)
+    const surgeScale = surge ? (gluttonThornsSurgeScaleAt(p.gluttonThornsSurgeLevel || 0) || 1.35) : 1
     const ultimateScale = ultimate && blocked ? 1.5 : 1
     const tomeMul = this.game?.bossTomes?.gluttonThornsDamageMultiplier?.() || 1
     const damage = this.weapon.damage * this.weapon.levelMul * this.weapon.devourDamageMul * this.endlessDamageMultiplier *
@@ -619,18 +623,18 @@ export class GluttonCombat {
   spawnMire(x, y) {
     const level = this.player.gluttonMireLevel || 0
     if (level <= 0) return
-    const radius = 64 + Math.min(7, level) * 8
-    const duration = Math.min(4.0, 2.6 + level * 0.3)
+    const radius = 64 + Math.min(9, level) * 8
+    const duration = Math.min(4.6, 2.6 + level * 0.3)
     this.mires.push({ x, y, r: radius, life: duration, maxLife: duration, tick: 0 })
     if (this.mires.length > 8) this.mires.shift()
   }
 
   aftershock(angle, level, damage, ultimate = false, radial = false) {
-    const radius = 140 + Math.min(8, level) * 14
+    const radius = 140 + Math.min(10, level) * 14
     const waves = ultimate && radial ? 2 : 1
     for (let wave = 0; wave < waves; wave++) {
       const waveRadius = radius * (wave ? 1.25 : 1)
-      const waveDamage = damage * (0.45 + Math.min(8, level) * 0.13) * (wave ? 0.72 : 1)
+      const waveDamage = damage * (0.45 + Math.min(10, level) * 0.13) * (wave ? 0.72 : 1)
       for (const enemy of [...this.weapon.enemyManager.enemies]) {
         if (this.player.dead || this.game.runFinished) break
         if (!alive(enemy)) continue
@@ -870,7 +874,7 @@ export class GluttonCombat {
           const targets = this.weapon.enemyManager.enemies.filter(e => inBiteSector(p, e, swing.angle, swing.reach, swing.arc))
           this.weapon.game.mapFeatures?.attackBarricades(p.x, p.y, swing.reach)
           let landed = false
-          const sweepMul = 1 + (p.gluttonBiteSweepLevel || 0) * 0.12
+          const sweepMul = 1 + gluttonBiteSweepDamageAt(p.gluttonBiteSweepLevel || 0)
           const berserkMul = p.gluttonBerserkTimer > 0 ? 1.35 : 1
           for (const e of targets) {
             if (p.dead || this.weapon.game.runFinished) break
@@ -894,8 +898,8 @@ export class GluttonCombat {
       this.acidPending = false
       this.acidCooldown = 0.35
       const tier = p.devourAcidBurst || 0
-      const radius = (105 + tier * 12) * (this.weapon.geneRangeMul || 1)
-      const damage = this.weapon.damage * this.weapon.levelMul * this.weapon.devourDamageMul * this.endlessDamageMultiplier * (0.9 + tier * 0.35)
+      const radius = gluttonEruptionRadiusAt(tier) * (this.weapon.geneRangeMul || 1)
+      const damage = this.weapon.damage * this.weapon.levelMul * this.weapon.devourDamageMul * this.endlessDamageMultiplier * gluttonEruptionDamageAt(tier)
       for (const e of [...this.weapon.enemyManager.enemies]) {
         if (p.dead || this.weapon.game.runFinished) break
         if (!alive(e) || Math.hypot(e.x - p.x, e.y - p.y) > radius + (e.radius || 0)) continue

@@ -2,15 +2,14 @@
 import SkillIcon from './SkillIcon.vue'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 const props = defineProps({ info: { type: Object, required: true } })
-const heading = computed(() => props.info.stage === 'first' ? '选择你的第一个法术'
-  : props.info.stage === 'evolution' ? '融合主动术进化'
+const heading = computed(() => props.info.stage === 'first' ? '选择本局元素专精'
+  : props.info.stage === 'evolution' ? '专精主动术进化'
   : props.info.stage === 'boss' ? '强化当前元素构筑'
-  : props.info.first ? '选择第二元素，确定本局融合' : '深化你的元素法术')
-const copy = computed(() => props.info.stage === 'first' ? '选择后自动施放，替换原质飞弹。随后通过随机升级发现更多元素，决定本局的进化方向。'
-  : props.info.stage === 'evolution' ? '融合主动术获得新的形态与效果，两套自动法术及已学强化全部保留。'
-  : props.info.stage === 'boss' ? '选择一项强化当前已掌握元素的法术核心。新元素与构筑路线仍通过升级随机探索。'
-  : props.info.first ? '新增一套自动法术，并将空格进化为融合术。组合确定后，本局持续强化这两种元素。'
-  : '选择一项改造，立即生效。法术进化沿用现有技能位。')
+  : '选择元素专精')
+const copy = computed(() => props.info.stage === 'first' ? '选定主修专精后立即替换原质飞弹并激活专属护盾与空格大招；随后主修本系法术，并可兼修至多 2 门他系基础法术。'
+  : props.info.stage === 'evolution' ? '主动法术获得新的形态与效果，已学技能与兼修法术全部保留。'
+  : props.info.stage === 'boss' ? '选择一项强化当前已掌握专精的法术核心。'
+  : '确定主修方向后，本局可专注深化并至多兼修 2 门他系基础法术。')
 const emit = defineEmits(['select'])
 const panel = ref(null)
 let previousFocus
@@ -33,10 +32,10 @@ function trap(event) {
           <span class="core-option-top"><SkillIcon :skill="{ ...option, spec: 'elemental' }" /><small>{{ option.label || (info.stage === 'evolution' ? '空格法术进化' : info.first ? '第二元素' : option.kind === 'form' ? '雷系形态替换' : option.kind === 'shape' ? '基础法术改造' : option.kind === 'reaction' ? '融合反应强化' : option.kind === 'active' ? '空格法术进化' : '法术强度') }}</small></span>
           <strong>{{ option.name }}</strong><p>{{ option.desc }}</p>
           <div v-if="option.fusion" class="core-fusion"><b>{{ option.fusion.name }}</b><p>{{ option.fusion.desc }}</p><span>空格 · {{ option.fusion.active }}</span><p>{{ option.preview }}</p></div>
-          <span v-if="!info.first && info.stage !== 'first'" class="core-upgrade">{{ option.stats }}</span><span class="core-select">{{ info.stage === 'first' ? '学习法术' : info.first ? '确定融合' : option.isEvolution ? '进化法术' : '吸收强化' }} <span aria-hidden="true">→</span></span>
+          <span v-if="option.stats" class="core-upgrade">{{ option.stats }}</span><span class="core-select">{{ info.stage === 'first' ? '选定专精' : info.first ? '确定融合' : option.isEvolution ? '进化法术' : '吸收强化' }} <span aria-hidden="true">→</span></span>
         </button>
       </div>
-      <p class="core-footer">{{ info.stage === 'first' ? '自动瞄准与施法，专心移动躲避敌人即可' : info.stage === 'boss' ? '首领核心只强化当前构筑，不替你决定路线' : '多系法术 · 随机路线 · 一个空格主动术' }} · Tab 切换 · Enter 确认</p>
+      <p class="core-footer">{{ info.stage === 'first' ? '自动施放主系法术 · 单局至多兼修 2 门他系基础法术' : info.stage === 'boss' ? '首领核心只强化当前构筑' : '纯化四系专精 · 兼修上限 2 门 · 单空格主动术' }} · Tab 切换 · Enter 确认</p>
     </section>
   </div>
 </template>

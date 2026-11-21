@@ -31,6 +31,7 @@ export const DUEL_ARENA_DEBUG = { enabled: true }
  */
 export const DUEL_ARENA_RULES = [
   { mode: 'timed', label: '限时前段首领（第 5/10 波）', match: (boss) => boss.wave <= 10 },
+  { mode: 'timed20', label: '限时20分前段首领（第 5/10 波）', match: (boss) => boss.wave <= 10 },
   {
     mode: 'expedition',
     label: '远征第 1 章边防官',

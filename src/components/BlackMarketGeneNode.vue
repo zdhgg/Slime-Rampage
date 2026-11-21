@@ -33,7 +33,7 @@ const emit = defineEmits(['buy'])
       </div>
       <div class="node-progress" :aria-label="`${gene.name}，等级 ${gene.level} / ${gene.maxLevel}`">
         <span class="node-level">{{ gene.level }}/{{ gene.maxLevel }}</span>
-        <div class="level-marks" aria-hidden="true">
+        <div class="level-marks" :class="{ dense: gene.maxLevel > 6 }" aria-hidden="true">
           <i v-for="level in gene.maxLevel" :key="level" :class="{ filled: level <= gene.level }"></i>
         </div>
       </div>
@@ -111,6 +111,8 @@ const emit = defineEmits(['buy'])
 .level-marks { display: flex; gap: 3px; }
 .level-marks i { width: 7px; height: 3px; border-radius: 1px; background: #b5c4b8; }
 .level-marks i.filled { background: var(--branch-color); }
+.level-marks.dense { gap: 2px; }
+.level-marks.dense i { width: 4px; }
 .node-content { color: var(--secondary, #c4cec6); }
 .node-preview { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; line-height: 1.5; }
 .node-preview > div { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; font-variant-numeric: tabular-nums; }
@@ -139,6 +141,7 @@ const emit = defineEmits(['buy'])
 .gene-buy:focus-visible { outline: 2px solid var(--gold, #e6c584); outline-offset: 3px; }
 .contraband .gene-buy { border-color: #7a5a52; background: #7f463e; }
 .contraband .gene-buy:hover:not(:disabled) { background: #683830; border-color: #a07d72; }
+.contraband .gene-buy:disabled { background: color-mix(in srgb, #7f463e 12%, #f7eeeb); border-color: color-mix(in srgb, #7a5a52 45%, #d9bcb2); }
 
 @media (max-width: 900px) {
   .node-footer, .gene-buy { min-height: 40px; }

@@ -1,34 +1,102 @@
+import { isTimedMode } from './RunRules.js'
+
 /**
  * Run-aware skill rank limits. `growthClass` is deliberately opt-in: skills with
  * discrete or recursive mechanics keep their authored cap unless audited.
  */
 export const SKILL_RANK_LIMITS = Object.freeze({
-  expedition: Object.freeze({ easy: { common: 3, core: 3 }, normal: { common: 3, core: 3 }, hard: { common: 3, core: 6 }, hell: { common: 4, core: 10 } }),
-  timed: Object.freeze({ easy: { common: 3, core: 5 }, normal: { common: 3, core: 5 }, hard: { common: 3, core: 5 }, hell: { common: 3, core: 5 } }),
+  expedition: Object.freeze({ easy: { common: 4, core: 6 }, normal: { common: 4, core: 8 }, hard: { common: 5, core: 9 }, hell: { common: 5, core: 10 } }),
+  timed: Object.freeze({ easy: { common: 5, core: 8 }, normal: { common: 5, core: 8 }, hard: { common: 5, core: 8 }, hell: { common: 5, core: 8 } }),
+  timed20: Object.freeze({ easy: { common: 5, core: 10 }, normal: { common: 5, core: 10 }, hard: { common: 5, core: 10 }, hell: { common: 5, core: 10 } }),
   endless: Object.freeze({ easy: { common: 5, core: 10 }, normal: { common: 5, core: 10 }, hard: { common: 5, core: 10 }, hell: { common: 5, core: 10 } }),
 })
 
 // The extended rank runway is authored per skill, not imposed as one universal
 // target. Values are skill ceilings; card offers still remain random.
 export const CORE_SKILL_RANK_CAPS = Object.freeze({
-  glut_maw: { expedition: { hard: 6, hell: 10 }, timed: 8, endless: 12 },
-  glut_bulk: { expedition: { hard: 6, hell: 9 }, timed: 8, endless: 12 },
-  glut_ram: { expedition: { hard: 7, hell: 11 }, timed: 10, endless: 14 },
-  glut_acid_aura: { expedition: { hard: 7, hell: 10 }, timed: 8, endless: 12 },
-  glut_aftershock: { expedition: { hard: 7, hell: 10 }, timed: 8, endless: 12 },
-  glut_counter: { expedition: { hard: 7, hell: 10 }, timed: 8, endless: 12 },
-  gat_velocity: { expedition: { hard: 8, hell: 12 }, timed: 10, endless: 14 },
-  ele_resonance: { expedition: { hard: 7, hell: 11 }, timed: 9, endless: 13 },
-  ass_lethal: { expedition: { hard: 7, hell: 10 }, timed: 8, endless: 12 },
-  ass_ward: { expedition: { hard: 7, hell: 10 }, timed: 8, endless: 12 },
-  ass_stride: { expedition: { hard: 7, hell: 10 }, timed: 9, endless: 12 },
-  ass_execute: { expedition: { hard: 8, hell: 12 }, timed: 10, endless: 14 },
-  pet_power: { expedition: { hard: 8, hell: 12 }, timed: 10, endless: 14 },
-  pet_vitality: { expedition: { hard: 7, hell: 11 }, timed: 9, endless: 13 },
-  pet_haste: { expedition: { hard: 7, hell: 11 }, timed: 9, endless: 13 },
-  origin_flux: { expedition: { hard: 8, hell: 10 }, timed: 10, endless: 10 },
-  origin_overload: { expedition: { hard: 8, hell: 8 }, timed: 8, endless: 8 },
+  glut_maw: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 12 },
+  glut_bulk: { expedition: { hard: 9, hell: 10 }, timed: 9, endless: 12 },
+  glut_ram: { expedition: { hard: 10, hell: 12 }, timed: 10, endless: 14 },
+  glut_bite_sweep: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 12 },
+  glut_acid_aura: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 12 },
+  glut_aftershock: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 12 },
+  glut_counter: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 12 },
+  gat_velocity: { expedition: { hard: 10, hell: 12 }, timed: 10, endless: 14 },
+  ele_resonance: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 13 },
+  fire_mastery: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 13 },
+  fire_hot_streak: { expedition: { hard: 7, hell: 8 }, timed: 7, endless: 10 },
+  fire_rain: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 13 },
+  fire_infernal_pact: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 13 },
+  fire_dest_cataclysm: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 13 },
+  fire_dest_immolate: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 13 },
+  fire_pyro_streak: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 13 },
+  fire_pyro_combust: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 13 },
+  ice_mastery: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 13 },
+  ice_shatter_lance: { expedition: { hard: 7, hell: 8 }, timed: 7, endless: 10 },
+  ice_blizzard: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 13 },
+  ice_comet_mastery: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 13 },
+  ice_storm_hail: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 13 },
+  ice_storm_veins: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 13 },
+  ice_shatter_flurry: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 13 },
+  ice_shatter_deep: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 13 },
+  lit_mastery: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 13 },
+  lit_overload: { expedition: { hard: 7, hell: 8 }, timed: 7, endless: 10 },
+  lit_thunderstorm: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 13 },
+  lit_keeper_pact: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 13 },
+  lit_over_echo: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 13 },
+  lit_over_arc: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 13 },
+  lit_sky_barrage: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 13 },
+  lit_sky_totem: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 13 },
+  poi_mastery: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 13 },
+  poi_contagion: { expedition: { hard: 7, hell: 8 }, timed: 7, endless: 10 },
+  poi_seed: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 13 },
+  poi_rapture_pact: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 13 },
+  poi_pan_burst: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 13 },
+  poi_pan_spread: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 13 },
+  poi_aff_siphon: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 13 },
+  poi_aff_agony: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 13 },
+  ass_lethal: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 12 },
+  ass_ward: { expedition: { hard: 9, hell: 10 }, timed: 9, endless: 12 },
+  ass_stride: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 12 },
+  ass_execute: { expedition: { hard: 10, hell: 12 }, timed: 10, endless: 14 },
+  pet_power: { expedition: { hard: 10, hell: 12 }, timed: 10, endless: 14 },
+  pet_vitality: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 13 },
+  pet_haste: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 13 },
+  sym_tactic_weaken: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 12 },
+  sym_beast_seed: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 12 },
+  sym_beast_frenzy: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 12 },
+  sym_beast_cleave: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 12 },
+  sym_beast_curse: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 12 },
+  sym_beast_revive: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 12 },
+  sym_ranger_seed: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 12 },
+  sym_ranger_infuse: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 12 },
+  sym_ranger_focus: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 12 },
+  sym_ranger_escort: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 12 },
+  sym_ranger_barrage: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 12 },
+  sym_bond_seed: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 12 },
+  sym_bond_chain: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 12 },
+  sym_bond_volley: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 12 },
+  sym_bond_aegis: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 12 },
+  sym_bond_surge: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 12 },
+  origin_flux: { expedition: { hard: 9, hell: 11 }, timed: 10, endless: 11 },
+  origin_overload: { expedition: { hard: 9, hell: 10 }, timed: 9, endless: 10 },
   origin_concord: { expedition: { hard: 3, hell: 3 }, timed: 3, endless: 3 },
+  origin_adapt: { expedition: { hard: 5, hell: 5 }, timed: 5, endless: 5 },
+  origin_motility: { expedition: { hard: 5, hell: 5 }, timed: 5, endless: 5 },
+  origin_recovery: { expedition: { hard: 4, hell: 4 }, timed: 4, endless: 4 },
+  com_shock: { expedition: { hard: 6, hell: 6 }, timed: 6, endless: 6 },
+  ori_exp_ring: { expedition: { hard: 9, hell: 10 }, timed: 9, endless: 10 },
+  ori_exp_residue: { expedition: { hard: 9, hell: 10 }, timed: 9, endless: 10 },
+  ori_exp_edge: { expedition: { hard: 9, hell: 10 }, timed: 9, endless: 10 },
+  ori_exp_control: { expedition: { hard: 6, hell: 6 }, timed: 6, endless: 6 },
+  ori_asm_stack: { expedition: { hard: 8, hell: 9 }, timed: 8, endless: 9 },
+  ori_asm_recompose: { expedition: { hard: 9, hell: 10 }, timed: 9, endless: 10 },
+  ori_asm_adapt: { expedition: { hard: 8, hell: 8 }, timed: 8, endless: 8 },
+  ori_asm_duration: { expedition: { hard: 6, hell: 6 }, timed: 6, endless: 6 },
+  ori_res_circuit: { expedition: { hard: 9, hell: 10 }, timed: 9, endless: 10 },
+  ori_res_core: { expedition: { hard: 9, hell: 10 }, timed: 9, endless: 10 },
+  ori_res_switch: { expedition: { hard: 6, hell: 6 }, timed: 6, endless: 6 },
+  ori_res_burst: { expedition: { hard: 8, hell: 8 }, timed: 8, endless: 8 },
 })
 
 export function getEffectiveSkillMaxLevel(game, skill, role = skill?.role) {
@@ -40,7 +108,9 @@ export function getEffectiveSkillMaxLevel(game, skill, role = skill?.role) {
   const difficulty = game?.runSelection?.difficulty || 'normal'
   const limits = SKILL_RANK_LIMITS[mode]?.[difficulty] || SKILL_RANK_LIMITS.timed.normal
   const authoredCaps = skill.rankCaps || CORE_SKILL_RANK_CAPS[skill.id]
-  const authoredCap = authoredCaps?.[mode]?.[difficulty] ?? authoredCaps?.[mode]
+  const authoredCap = mode === 'timed20'
+    ? (authoredCaps?.timed20 ?? authoredCaps?.expedition?.hell ?? authoredCaps?.timed)
+    : (authoredCaps?.[mode]?.[difficulty] ?? authoredCaps?.[mode])
   if (skill.growthClass === 'endless') {
     if (mode === 'endless') return Infinity
     if (progressionRole === 'common' || skill.kind === 'common') return Math.min(base, limits.common)
@@ -65,6 +135,8 @@ export function getEffectiveSkillMaxLevel(game, skill, role = skill?.role) {
       ? !!game?.weaponSystem?.shadowCombat?.route
       : skill.isRicochetSkill
       ? !!game?.weaponSystem?.ricochetCombat?.route
+      : skill.isSymbiosisSkill
+      ? !!game?.weaponSystem?.petCombat?.route
       : skill.isElementalSkill
         ? !!game?.weaponSystem?.spellCombat?.route
         : !!game?.primarySpec)
@@ -74,7 +146,7 @@ export function getEffectiveSkillMaxLevel(game, skill, role = skill?.role) {
     // continue forever.
     if (mode === 'endless') return Math.max(base, authoredCap ?? limits.core)
     if (mode === 'expedition' && ['easy', 'normal'].includes(difficulty)) return Math.min(base, limits.core)
-    if (mode === 'timed') return authoredCap ?? limits.core
+    if (isTimedMode(mode)) return authoredCap ?? limits.core
     return Math.max(base, authoredCap ?? limits.core)
   }
 

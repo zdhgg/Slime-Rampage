@@ -1,10 +1,12 @@
-/** Stable palettes shared by both spell slots; pair IDs make selection order irrelevant. */
+/** Palettes for the 4 elemental specializations (plus legacy fusion palette compatibility). */
 export const BASE_SPELL_PALETTES = {
-  fire: { main: '#ffae70', accent: '#ef8253', core: '#fff0d8', shade: '#684036', name: '火焰橙' },
-  water: { main: '#94dbef', accent: '#76cce9', core: '#e9faff', shade: '#3a6278', name: '寒冰蓝' },
-  lightning: { main: '#dce3ed', accent: '#b8c5d8', core: '#f5f7fc', shade: '#4e586b', name: '淡白' },
-  poison: { main: '#c3e78d', accent: '#ba9bd6', core: '#efffd2', shade: '#5a347a', name: '毒素绿' },
+  fire: { main: '#ff9e5e', accent: '#ff5e4d', core: '#fff2d6', shade: '#6e2d24', name: '烈焰橙红' },
+  water: { main: '#84d9f5', accent: '#4cb6eb', core: '#ecfbff', shade: '#2a5876', name: '极寒冰蓝' },
+  ice: { main: '#84d9f5', accent: '#4cb6eb', core: '#ecfbff', shade: '#2a5876', name: '极寒冰蓝' },
+  lightning: { main: '#f3d97d', accent: '#9fd4ff', core: '#ffffff', shade: '#485675', name: '雷霆金白' },
+  poison: { main: '#a8e46b', accent: '#b77ee8', core: '#eeffcf', shade: '#462863', name: '灾厄毒绿' },
 }
+
 export const FUSION_SPELL_PALETTES = {
   burst: { main: '#f16e65', accent: '#efb65e', core: '#fff0d1', shade: '#763d46', name: '赤红·金白' },
   gel: { main: '#e0edf7', accent: '#92cce8', core: '#f6fcff', shade: '#536b83', name: '亮银·冰蓝' },
@@ -13,7 +15,10 @@ export const FUSION_SPELL_PALETTES = {
   acid: { main: '#ed955e', accent: '#b6d66c', core: '#fff1c5', shade: '#705446', name: '橙红·酸绿' },
   corrode: { main: '#8cdbc4', accent: '#c6e4de', core: '#effffa', shade: '#426b70', name: '青绿·银白' },
 }
-export const spellPalette = (fusionId, element = 'fire') => FUSION_SPELL_PALETTES[fusionId] || BASE_SPELL_PALETTES[element] || BASE_SPELL_PALETTES.fire
+
+export const spellPalette = (fusionId, element = 'fire') =>
+  (fusionId && FUSION_SPELL_PALETTES[fusionId]) || BASE_SPELL_PALETTES[element] || BASE_SPELL_PALETTES.fire
+
 export function spellColorAlpha(hex, alpha) {
   const n = Number.parseInt(hex.slice(1), 16)
   return `rgba(${n >> 16}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`

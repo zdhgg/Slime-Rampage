@@ -1,4 +1,4 @@
-import { BOSS_TOME_BY_ID, PARTNER_TOME_CHOICES, RICOCHET_RECHARGE_RANKS, tomeLevel } from './BossTomes.js'
+import { BOSS_TOME_BY_ID, RICOCHET_RECHARGE_RANKS, tomeLevel } from './BossTomes.js'
 import { traceShadowPath, shadowLineClear } from './ShadowGeometry.js'
 
 const alive = e => e?.active && e.hp > 0 && !e.devouring
@@ -27,11 +27,11 @@ export class BossTomeCombat {
   }
   base() { return this.w.damage * this.w.levelMul * (this.w.devourDamageMul || 1) }
   learn(card) {
-    const s = BOSS_TOME_BY_ID[card?.id], old = tomeLevel(this.game, card?.id)
+    const s = BOSS_TOME_BY_ID[card?.id], old = tomeLevel(this.game, card?.id), p = this.p, w = this.w
     if (!s || s.strain !== this.game.startingStrain || old >= 3 || card.level !== old) return false
-    if (s.id === 'boss_pet_roster' && card.partnerSkillId &&
-        (!PARTNER_TOME_CHOICES.some(([id]) => id === card.partnerSkillId) || this.game.skillLevels[card.partnerSkillId])) return false
-    const level = old + 1, p = this.p, w = this.w
+    if (s.id === 'boss_pet_roster' && card.starPetType &&
+        (!w.petCombat.squadTypes.includes(card.starPetType) || w.petCombat.starPets.has(card.starPetType))) return false
+    const level = old + 1
     this.game.bossSkillLevels[s.id] = level
     this.game.bossSkillIds.add(s.id)
     const ratio = (a, b) => a / b
@@ -47,19 +47,35 @@ export class BossTomeCombat {
       const previousReduction = RICOCHET_RECHARGE_RANKS[old - 1]?.skillReduction ?? 0
       const { skillReduction } = RICOCHET_RECHARGE_RANKS[level - 1]
       p.activeSkillCdMultiplier *= ratio(100 - skillReduction, 100 - previousReduction)
-    } else if (s.id === 'boss_assassin_voidstep' || s.id === 'boss_pet_command') {
+    } else if (s.id === 'boss_assassin_voidstep') {
       p.activeSkillCdMultiplier *= ratio(1 - bonus(level, .08, .15), 1 - bonus(old, .08, .15))
     }
     if (s.id === 'boss_pet_vitality') {
       const delta = [0, 1, 2, 2][level] - [0, 1, 2, 2][old]
       p.maxHp += delta; p.hp = Math.min(p.maxHp, p.hp + delta)
+      if (old === 0) this.ready.petShield = this.time
     }
     if (s.id === 'boss_glutton_radiance' && old === 0) this.ready.radiance = this.time + 4
     if (s.id === 'boss_pet_roster') {
-      if (card.partnerSkillId) this.game.skillLevels[card.partnerSkillId] = 1
-      w.petCombat.sync()
-      if (!card.partnerSkillId) for (const pet of w.petCombat.items) {
-        if (pet.hp > 0) pet.hp = Math.min(pet.maxHp, pet.hp + pet.maxHp * .25)
+      const petCombat = w.petCombat
+      if (card.draftGrant) {
+        petCombat.bonusSlots = (petCombat.bonusSlots || 0) + 1
+      } else if (card.starPetType) {
+        petCombat.starPets.add(card.starPetType)
+      } else {
+        const candidates = petCombat.squadTypes.filter(type => !petCombat.starPets.has(type))
+        if (candidates.length) {
+          petCombat.starPets.add(candidates[0])
+        } else {
+          for (const pet of petCombat.items) {
+            if (pet.hp > 0) pet.hp = pet.maxHp
+          }
+        }
+      }
+      petCombat.sync()
+      if (card.starPetType) {
+        const promoted = petCombat.items.find(pet => pet.type === card.starPetType)
+        if (promoted) { promoted.down = 0; promoted.hp = promoted.maxHp }
       }
     }
     if (s.id === 'boss_elemental_veil') w.spellCombat.shield.upgrade()
@@ -82,6 +98,12 @@ export class BossTomeCombat {
         this.ready.radiance = this.time + (rank === 1 ? 4 : 3.5)
         this.pulse(this.p, radius, this.base() * (rank === 1 ? 1 : 1.2), '#ffd166')
       }
+    }
+    const vitalityRank = this.rank('pet_vitality')
+    if (vitalityRank && this.w.petCombat?.enabled && this.time >= (this.ready.petShield ?? 0)) {
+      this.ready.petShield = this.time + (vitalityRank >= 2 ? 10 : 14)
+      this.w.petCombat.grantPlayerShield(1, 4, { bypassIcd: true })
+      this.w.petCombat.onPlayerShieldTriggered()
     }
   }
   schedule(delay, run) { if (this.jobs.length < 64) this.jobs.push({ due: this.time + delay, run }) }
@@ -232,10 +254,22 @@ export class BossTomeCombat {
     const rank = this.rank('elemental_sigil')
     if (!rank || this.time < (this.ready.sigil || 0)) return
     this.ready.sigil = this.time + (rank === 1 ? 6 : 5)
+    const spells = this.w.spellCombat
+    const school = spells?.school
+    const colorMap = { fire: '#ff8a48', ice: '#73d3f7', lightning: '#f3d97d', poison: '#a8e46b' }
+    const color = colorMap[school] || '#b6a4ff'
     const center = { x: e.x, y: e.y }, damage = this.base() * (rank === 1 ? .8 : 1.2)
-    this.w._ring?.(center.x, center.y, '#b6a4ff', 22)
-    this.schedule(.8, () => this.pulse(alive(e) ? e : center, rank === 1 ? 100 : 120, damage, '#b6a4ff',
-      rank === 3 ? target => this.sigil.set(target, this.time + 2) : null))
+    this.w._ring?.(center.x, center.y, color, 22)
+    this.schedule(.8, () => this.pulse(alive(e) ? e : center, rank === 1 ? 100 : 120, damage, color, target => {
+      if (rank === 3) this.sigil.set(target, this.time + 2)
+      if (!target?.active || target.hp <= 0 || !spells) return
+      if (school === 'fire') spells.applyBurn(target, 2, damage * 0.35, { allowSpread: false })
+      else if (school === 'ice') spells.applyFrost(target, 1)
+      else if (school === 'lightning') {
+        target.lightningVulnTime = Math.max(target.lightningVulnTime || 0, 2.5)
+        target.lightningVulnAmount = Math.max(target.lightningVulnAmount || 0, 0.1)
+      } else if (school === 'poison') spells.applyAgony(target, 1)
+    }))
   }
   onSpellShieldBroken() {
     if (this.rank('elemental_veil') !== 3) return
@@ -248,18 +282,6 @@ export class BossTomeCombat {
     this.w._ring?.(this.p.x, this.p.y, '#b6a4ff', 160)
   }
   get veilReduction() { return bonus(this.rank('elemental_veil'), .75, 1.5) }
-  onRally(pets) {
-    for (const pet of pets) {
-      pet.tomeRallyFirst = this.rank('pet_unity') === 3
-      if (this.rank('pet_command') === 3) pet.supportCd = Math.max(0, pet.supportCd - 2)
-    }
-    if (this.rank('pet_vitality') === 3 && this.time >= (this.ready.petShield || 0)) {
-      this.ready.petShield = this.time + 12; this.grantShield(3)
-    }
-  }
-  petAttackMultiplier(pet, rallying) {
-    let value = 1 + bonus(this.rank('pet_unity'), .12, .2)
-    if (pet.tomeRallyFirst && rallying) { value *= 1.4; pet.tomeRallyFirst = false }
-    return value
-  }
+  onRally() {}
+  petAttackMultiplier() { return 1 }
 }

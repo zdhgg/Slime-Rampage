@@ -45,7 +45,7 @@ export const SHADOW_SKILL_VARIANTS = {
   ass_lethal: {
     desc: '同时提高本体暴击率与暴击伤害；暴击率超过 100% 时每溢出 1% 自动转化为 +2% 暴击伤害',
     growthClass: 'core',
-    rankCaps: { expedition: { hard: 7, hell: 10 }, timed: 8, endless: 12 },
+    rankCaps: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 12 },
     stats(lv) {
       const cNext = shadowLethalChanceAt(lv + 1) - shadowLethalChanceAt(lv)
       const mNext = shadowLethalCritMulAt(lv + 1) - shadowLethalCritMulAt(lv)
@@ -63,7 +63,7 @@ export const SHADOW_SKILL_VARIANTS = {
     desc: '提高闪避率、移速与影织魔盾充能速度；闪避达到 40% 上限后，每溢出 1% 转为 +2.5% 魔盾充能与 +2% 暴伤',
     tags: ['暗影·T1', '闪避·充能'],
     growthClass: 'core',
-    rankCaps: { expedition: { hard: 7, hell: 10 }, timed: 9, endless: 12 },
+    rankCaps: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 12 },
     stats(lv) {
       const hasteDelta = Math.round((shadowStrideHasteAt(lv + 1) - shadowStrideHasteAt(lv)) * 100)
       return `闪避率 +5 个百分点 · 魔盾充能 +${hasteDelta}% · 移速提升`
@@ -81,7 +81,7 @@ export const SHADOW_SKILL_VARIANTS = {
     desc: '提高每只分身的攻击伤害、影袭夹击威力与分身暴击继承率（全暗影路线通用）',
     tags: ['暗影·T2', '分身强度'], requires: t1,
     growthClass: 'core',
-    rankCaps: { expedition: { hard: 8, hell: 12 }, timed: 10, endless: 14 },
+    rankCaps: { expedition: { hard: 10, hell: 12 }, timed: 10, endless: 14 },
     stats(lv) {
       const power = SHADOW_CLONE_POWERS[Math.min(SHADOW_CLONE_POWERS.length - 1, lv + 1)]
       const inheritPct = Math.round((0.4 + shadowExecuteCritInheritAt(lv + 1)) * 100)
@@ -114,8 +114,8 @@ export const SHADOW_EXTRA_SKILLS = [
   {
     id: 'ass_ward', spec: 'assassin', tier: 1, requiresStrain: 'shadow', name: '噬法暗幕', icon: '🛡️',
     desc: '强化暗影魔盾层数与重建速度，并缩短「影魄汲取」回血冷却；挡下法术攻击后返还影袭冷却、强化噬法必暴并召影反击',
-    tags: ['暗影·T1', '法术护盾'], maxLevel: 3, growthClass: 'core',
-    rankCaps: { expedition: { hard: 7, hell: 10 }, timed: 8, endless: 12 },
+    tags: ['暗影·T1', '法术护盾'], maxLevel: 8, growthClass: 'core',
+    rankCaps: { expedition: { hard: 9, hell: 10 }, timed: 9, endless: 12 },
     stats(lv) {
       const next = lv + 1
       const healCd = Math.max(8, 12 - next)

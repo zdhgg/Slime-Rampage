@@ -4,9 +4,8 @@ import { BOSS_TOMES, rollBossTomes } from './src/game/BossTomes.js'
 import { gainPrimalEnergy, trySpendPrimalOverload } from './src/game/PrimalEnergy.js'
 import { onNormalDevoured } from './src/game/GluttonResource.js'
 import { GLUTTON_VORTEX_WINDUP } from './src/game/GluttonCombat.js'
-import { ordinarySpellCoreSkills } from './src/game/SpellRules.js'
 import { elementalSkillOptions } from './src/game/ElementalBuild.js'
-import { ELEMENTAL_SKILLS } from './src/game/SpellRules.js'
+import { ELEMENTAL_SKILLS, ordinarySpellCoreSkills } from './src/game/SpellRules.js'
 import { SKILL_DATABASE } from './src/game/SkillPool.js'
 import { resolveSkillIcon } from './src/components/skillIconRegistry.js'
 
@@ -114,32 +113,38 @@ test('glutton', '猎食节律吞噬与饱食爆发触发攻速与吸噬减冷却
   assert.ok(g.bossTomes.jaw.get(e) > 0)
   near(g.bossTomes.gluttonPounceCooldownMultiplier(), .9)
 })
-test('elemental', '自动施法第五次强化、主动循环与护盾数值；延迟法印不触发反应', g => {
+test('elemental', '自动施法第五次强化、主动循环与护盾数值；延迟法印按主系上状态', g => {
   const spells = g.weaponSystem.spellCombat
-  spells.elements.add('fire'); spells.syncElements()
+  spells.chooseSchool('fire')
   learn(g, 'elemental_grimoire', 3); learn(g, 'elemental_circuit', 3); learn(g, 'elemental_veil', 3); learn(g, 'elemental_sigil', 3)
-  near(spells.activeCooldown, 8.5); near(spells.shield.cooldown, 6.5)
+  near(spells.activeCooldown, 11 * 0.85); near(spells.shield.cooldown, 5.5)
   const e = spawn(g, { hp: 1000 })
   const powers = []
-  for (let i = 0; i < 5; i++) { spells.cast('fire', e); powers.push(spells.shots.at(-1).power) }
+  for (let i = 0; i < 5; i++) { spells.cast('fire', e); powers.push(spells.shots.at(-1).damage) }
   near(powers[4] / powers[0], 1.3)
   g.bossTomes.onSpellActive(); assert.equal(g.bossTomes.castCredits, 3)
-  const before = e.hp; spells.damage(e, 1, 'fire'); assert.ok(g.bossTomes.jobs.length)
-  const reactions = spells.stats.reactions
-  g.bossTomes.update(.81); assert.ok(e.hp < before - 1); assert.equal(spells.stats.reactions, reactions)
+  const before = e.hp; spells.damageEnemy(e, 1, { element: 'fire' }); assert.ok(g.bossTomes.jobs.length)
+  g.bossTomes.update(.81); assert.ok(e.hp < before - 1); assert.ok(e.burnHits > 0)
+  const foe = spawn(g, { x: g.player.x + 80, y: g.player.y, hp: 200 })
+  g.player.invincible = 0
+  g.player.hit(1, { enemyAttack: true })
+  assert.ok(foe.x > g.player.x + 95, '满级魔力帷幕破盾推开近敌')
 })
-test('elemental', '旧核心形态迁入普通池；雷暴保留双系与三次首领奖励门槛', g => {
+test('elemental', '旧核心卡不进入v2普通池，主系专精与Boss秘典协同正常', g => {
   const spells = g.weaponSystem.spellCombat
-  spells.elements = new Set(['water', 'lightning']); spells.syncElements()
+  spells.chooseSchool('ice')
   assert.equal(ordinarySpellCoreSkills(g).length, 0)
-  learn(g, 'elemental_grimoire')
-  assert.ok(ordinarySpellCoreSkills(g).some(s => s.id === 'spell_core_shape_water'))
-  assert.ok(!ordinarySpellCoreSkills(g).some(s => s.id === 'spell_core_lightning_storm'))
-  learn(g, 'elemental_grimoire', 2)
-  const card = ordinarySpellCoreSkills(g).find(s => s.id === 'spell_core_lightning_storm')
-  assert.ok(card); assert.equal(g.applySkill(card), true); assert.equal(spells.lightning.storm, true)
-  assert.ok(!ordinarySpellCoreSkills(g).some(s => s.id === card.id))
-  assert.ok(elementalSkillOptions(g, ELEMENTAL_SKILLS, SKILL_DATABASE.common, 999).some(s => s.isSpellCoreUpgrade))
+  learn(g, 'elemental_sigil', 3)
+  const e = spawn(g, { hp: 1000 })
+  g.weaponSystem.critChance = 0
+  spells.damageEnemy(e, 1, { element: 'water' })
+  g.bossTomes.update(.81)
+  assert.ok((e.frostStacks || 0) > 0 || e.spellSlowTime > 0)
+  // Lv.3 余辉法印爆发后的 2 秒内，自动法术伤害享受 +15% 易伤
+  const hpBeforeSigilHit = e.hp
+  spells.damageEnemy(e, 10, { element: 'water', extraCritChance: -1 })
+  near(hpBeforeSigilHit - e.hp, 11.5)
+  assert.equal(elementalSkillOptions(g, ELEMENTAL_SKILLS, SKILL_DATABASE.common, 999).some(s => s.isSpellCoreUpgrade), false)
 })
 test('shadow', '分身首击只享受一次；虚化有界；残血增伤不施加给派生伤害', g => {
   learn(g, 'shadow_pact', 3); learn(g, 'shadow_cloak', 3); learn(g, 'assassin_mark', 3)
@@ -152,17 +157,45 @@ test('shadow', '分身首击只享受一次；虚化有界；残血增伤不施�
   near(g.bossTomes.hitMultiplier(e, { bossTomeContext: { shadowBody: true } }), 1.4)
   near(g.bossTomes.hitMultiplier(e, { bossTomeDerived: true }), 1)
 })
-test('summoner', '随机招募预告固定、最多四只；生命成长按总量，鼓舞支援和复苏保护', g => {
-  const oldHp = g.player.maxHp
-  learn(g, 'pet_roster', 3); learn(g, 'pet_vitality', 3); learn(g, 'pet_unity', 3); learn(g, 'pet_command', 3)
-  assert.equal(g.weaponSystem.petCombat.items.length, 4); assert.equal(g.player.maxHp, oldHp + 2)
-  const pets = g.weaponSystem.petCombat.items
+test('summoner', '万灵契约未满编开选秀、满编4人晋升星辰形态；生命与鼓舞协同按v2规则结算', g => {
+  const oldHp = g.player.maxHp, p = g.weaponSystem.petCombat
+  // 未满 4 人时：万灵契约开启选秀名额
+  const rosterCard = rollBossTomes(g, 99).find(c => c.id === 'boss_pet_roster')
+  assert.equal(rosterCard.draftGrant, true)
+  assert.equal(g.applySkill(rosterCard), true)
+  assert.equal(p.bonusSlots, 1)
+
+  // 凑齐 4 人编制后：万灵契约改为随机晋升 🌟 星辰形态
+  g.player.level = 12; g.enemyManager.wave = 8
+  for (const id of ['pet_partner', 'pet_dew_partner', 'pet_spore_partner']) {
+    g.skillLevels[id] = 1
+    p.registerPartner(id === 'pet_partner' ? 'hunter' : id === 'pet_dew_partner' ? 'dew' : 'spore')
+  }
+  p.sync()
+  assert.equal(p.squadTypes.length, 4)
+  const starCard = rollBossTomes(g, 99).find(c => c.id === 'boss_pet_roster')
+  assert.ok(starCard.starPetType && !starCard.draftGrant)
+  const baseStarDmg = p.attackDamage(p.items.find(it => it.type === starCard.starPetType))
+  const baseStarHp = p.petMaxHp(starCard.starPetType)
+  assert.equal(g.applySkill(starCard), true)
+  assert.ok(p.starPets.has(starCard.starPetType))
+  assert.ok(p.petMaxHp(starCard.starPetType) > baseStarHp)
+  assert.ok(p.attackDamage(p.items.find(it => it.type === starCard.starPetType)) > baseStarDmg * 1.3)
+
+  learn(g, 'pet_vitality', 3); learn(g, 'pet_unity', 3); learn(g, 'pet_command', 3)
+  assert.equal(g.player.maxHp, oldHp + 2)
+  const e = spawn(g, { x: 80, hp: 500 })
+  g.bossTomes.update(.01)
+  assert.equal(p.playerShield, 1, '灵盾纽带自动授予本体真实护盾')
+  assert.ok(e.hp < 500, 'Lv.3 灵盾触发 160px 震荡冲击')
+
+  const pets = p.items
   for (const pet of pets) pet.supportCd = 5
-  assert.equal(g.weaponSystem.petCombat.rally(), true)
-  assert.ok(pets.every(p => p.supportCd === 3))
-  assert.equal(g.bossTomes.shield, 1)
-  const pet = pets[0], a = g.weaponSystem.petCombat.attackDamage(pet), b = g.weaponSystem.petCombat.attackDamage(pet)
-  near(a / b, 1.4)
+  const eBeforeRally = e.hp
+  assert.equal(p.rally(), true)
+  assert.ok(pets.every(it => it.supportCd === 4), 'Lv.3 疾令契约鼓舞时全队特技冷却 −1 秒')
+  assert.equal(p.rallyUnityBuffTimer, 4, 'Lv.3 群心契约赋予 4 秒暴击爆发窗')
+  assert.ok(e.hp < eBeforeRally)
 })
 test('glutton', '胃铠挡伤触发反震与荆棘脉冲，冷却内不重复；辉胃等待敌人且猛扑只减一次计时', g => {
   learn(g, 'glutton_thorns', 3); learn(g, 'glutton_radiance', 3)
@@ -234,18 +267,18 @@ test('elemental', '未融合的原质释放也兑现奥术回路主动增伤', g
   learn(g, 'elemental_circuit')
   before = e.hp; assert.equal(spells.useActive(), true); near((before - e.hp) / base, 1.1)
 })
-test('elemental', '毒雾继承整次施法强化，主动不消耗第五次自动施法计数', g => {
+test('elemental', '腐化箭继承整次施法强化，主动不消耗第五次自动施法计数', g => {
   const spells = g.weaponSystem.spellCombat, e = spawn(g, { hp: 1000 })
-  spells.elements.add('poison'); spells.syncElements(); learn(g, 'elemental_grimoire', 3)
+  spells.chooseSchool('poison'); learn(g, 'elemental_grimoire', 3)
   const powers = []
   for (let i = 0; i < 5; i++) {
     spells.cast('poison', e)
-    const shot = spells.shots.at(-1)
-    powers.push(spells.field(e, { tomePower: shot.tomePower }).damage)
+    powers.push(spells.shots.at(-1).damage)
   }
   near(powers[4] / powers[0], 1.3)
+  spells.applyAgony(e, 1)
   const casts = g.bossTomes.casts
-  spells.cast('poison', e, true); assert.equal(g.bossTomes.casts, casts)
+  spells.useActive(); assert.equal(g.bossTomes.casts, casts)
 })
 test('summoner', '万灵满员治疗仍有永久成长，复苏减伤真实生效', g => {
   for (const id of ['pet_partner', 'pet_dew_partner', 'pet_spore_partner']) g.skillLevels[id] = 1

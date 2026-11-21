@@ -14,7 +14,7 @@ const PALETTES = {
   priest: ['#ffffff', '#f1c40f', '#d35400'],
   berserker: ['#ff7675', '#d63031', '#2d3436'],
   bulwark: ['#c8d6e5', '#68798d', '#3b4a59'],
-  alchemist: ['#a3e635', '#65a30d', '#365314'],
+  alchemist: ['#fb719c', '#be185d', '#500724'],
   bannerman: ['#fda4af', '#e11d48', '#881337'],
   hound: ['#d8a06a', '#8a5a2e', '#4a2f16'],
   golem: ['#a8c0d8', '#5d7d9a', '#2e4258'],
@@ -43,6 +43,8 @@ const AFFIX_COLORS = {
   shielded: '#5ad8e8', // 护盾：青
   explosive: '#ff9d4a', // 自爆：橙
   summoner: '#c9a6f0', // 召唤：紫
+  juggernaut: '#f97316', // 霸体：炽橙（减控 + 单击承伤上限）
+  arcane: '#d946ef', // 奥秘：秘紫（周期弹环）
 }
 
 /** 蒸汽减速系数：减速期间移动速度 ×0.6 */
@@ -62,22 +64,22 @@ const RANK_HP_MUL = { 1: 0.72, 2: 1, 3: 1.55 }
 const RANK_SPEED_MUL = { 1: 0.94, 2: 1, 3: 1.08 }
 const RANK_TEMPO_MUL = { 1: 0.9, 2: 1, 3: 1.18 }
 const RANK_EXP_MUL = { 1: 0.8, 2: 1, 3: 1.45 }
-export const BANNER_AURA_RADIUS = 185
+export const BANNER_AURA_RADIUS = 220
 
 /** 敌方数值表：人类九职 + 非人三族（重盾正面减伤 / 炼金抛瓶减速 / 战旗群体鼓舞） */
 const CLASSES = {
-  knight: { hpMul: 1.6, speedMul: 0.85, radius: 14, range: 0, attackInterval: 1.0, sx: 1.18, sy: 0.96 },
-  mage: { hpMul: 0.9, speedMul: 0.65, radius: 13, range: 340, attackInterval: 2.4, sx: 0.86, sy: 1.12 },
-  archer: { hpMul: 0.7, speedMul: 1.15, radius: 13, range: 280, attackInterval: 1.9, sx: 0.94, sy: 0.96 },
-  assassin: { hpMul: 0.65, speedMul: 1.45, radius: 12, range: 0, attackInterval: 1.6, sx: 0.9, sy: 0.95 },
-  priest: { hpMul: 0.85, speedMul: 0.7, radius: 13, range: 320, attackInterval: 2.5, sx: 0.9, sy: 1.05 },
-  berserker: { hpMul: 2.2, speedMul: 0.75, radius: 15, range: 0, attackInterval: 1.2, sx: 1.2, sy: 1.0 },
-  bulwark: { hpMul: 2.5, speedMul: 0.68, radius: 15, range: 0, attackInterval: 1.25, sx: 1.2, sy: 1.02 },
-  alchemist: { hpMul: 0.95, speedMul: 0.78, radius: 13, range: 310, attackInterval: 3.1, sx: 0.94, sy: 1.06 },
-  bannerman: { hpMul: 1.35, speedMul: 0.85, radius: 13, range: 0, attackInterval: 1.35, sx: 0.98, sy: 1.15 },
-  hound: { hpMul: 0.55, speedMul: 1.55, radius: 11, range: 0, attackInterval: 0.75, sx: 1.24, sy: 0.82 },
-  golem: { hpMul: 4.5, speedMul: 0.5, radius: 17, range: 0, attackInterval: 1.6, sx: 1.12, sy: 1.06 },
-  wraith: { hpMul: 1.1, speedMul: 1.05, radius: 13, range: 0, attackInterval: 1.3, sx: 0.94, sy: 1.12 },
+  knight: { hpMul: 1.6, speedMul: 0.88, radius: 14, range: 0, attackInterval: 0.96, sx: 1.18, sy: 0.96 },
+  mage: { hpMul: 1.0, speedMul: 0.68, radius: 13, range: 345, attackInterval: 2.25, sx: 0.86, sy: 1.12 },
+  archer: { hpMul: 0.8, speedMul: 1.15, radius: 13, range: 295, attackInterval: 1.8, sx: 0.94, sy: 0.96 },
+  assassin: { hpMul: 0.78, speedMul: 1.48, radius: 12, range: 0, attackInterval: 1.5, sx: 0.9, sy: 0.95 },
+  priest: { hpMul: 1.0, speedMul: 0.72, radius: 13, range: 325, attackInterval: 2.35, sx: 0.9, sy: 1.05 },
+  berserker: { hpMul: 2.6, speedMul: 0.78, radius: 15, range: 0, attackInterval: 1.15, sx: 1.2, sy: 1.0 },
+  bulwark: { hpMul: 3.0, speedMul: 0.7, radius: 15, range: 0, attackInterval: 1.2, sx: 1.2, sy: 1.02 },
+  alchemist: { hpMul: 1.1, speedMul: 0.8, radius: 13, range: 320, attackInterval: 2.85, sx: 0.94, sy: 1.06 },
+  bannerman: { hpMul: 1.65, speedMul: 0.88, radius: 13, range: 0, attackInterval: 1.3, sx: 0.98, sy: 1.15 },
+  hound: { hpMul: 0.6, speedMul: 1.58, radius: 11, range: 0, attackInterval: 0.72, sx: 1.24, sy: 0.82 },
+  golem: { hpMul: 5.4, speedMul: 0.52, radius: 17, range: 0, attackInterval: 1.55, sx: 1.12, sy: 1.06 },
+  wraith: { hpMul: 1.3, speedMul: 1.08, radius: 13, range: 0, attackInterval: 1.22, sx: 0.94, sy: 1.12 },
 }
 
 /**
@@ -131,13 +133,13 @@ export class Enemy extends Entity {
     this.expValue = baseExp * (elite ? 5 : 1)
     this.radius = CLASSES[type].radius + (elite ? 3 : 0) + (this.rank === 3 ? 1 : 0) // 碰撞半径
     this.range = CLASSES[type].range // 远程射程（骑士为 0 = 纯近战）
-    // 三阶大法师（多发散射）额外放宽出手间隔，避免多只高阶法师叠满全屏弹幕
-    const mageBurstCdMul = type === 'mage' && this.rank === 3 ? 1.35 : 1
+    // 三阶大法师（多发散射）适度放宽出手间隔（1.12×），保持威胁同时避免刷屏
+    const mageBurstCdMul = type === 'mage' && this.rank === 3 ? 1.12 : 1
     this.attackInterval = (CLASSES[type].attackInterval / Math.max(0.1, attackTempo * tierTempoMul)) * mageBurstCdMul
     this.facing = 0 // 朝向玩家的角度（渲染用）
     this.paletteKey = type // 敌方配色即制服
     this.flash = 0 // 受击白闪计时（秒）
-    this.damage = type === 'golem' ? 2 : 1 // 攻击伤害（魔像重击 2 点 / 其余 1 点）
+    this.damage = type === 'golem' ? 2 : 1 // 攻击伤害（魔像重击 2 点 / 高波次高难由 EnemyManager 进一步抬升）
     this.attackCd = Math.random() * 0.6 // 攻击冷却（秒），随机错峰开局
     this.objectiveTarget = null // 守巢章节的指定近战兵会改为攻击巢心
     this.nestAggroTime = 0
@@ -168,6 +170,18 @@ export class Enemy extends Entity {
     this.spellSlowAmount = 0
     this.petWeakenTime = 0
     this.petWeakenAmount = 0
+    this.petSuppressAmount = 0
+    this.petSlowTime = 0
+    this.petSlowAmount = 0
+    this.petVulnTime = 0
+    this.petVulnAmount = 0
+    this.petMarkTime = 0
+    this.petFrostTime = 0
+    this.petFrostStacks = 0
+    this.petSporeMarkTime = 0
+    this.petBeastMarkTime = 0
+    this.petTauntTarget = null
+    this.petTauntTime = 0
     this.slow = 0 // 蒸汽减速剩余时间（秒）：期间移动速度 ×0.6
     // 燃烧/中毒用「剩余跳数」而非时长：跳数在附加时锁定，总伤害恒定、帧率无关
     // 每跳伤害在附加时锁定（阶段十四调优：随武器伤害成长），同一状态取较大值
@@ -177,11 +191,42 @@ export class Enemy extends Entity {
     this.poisonHits = 0
     this._poisonTick = 1
     this._poisonDmg = 1
+    this.agonyStacks = 0
+    this.agonyTime = 0
+    this.agonyTick = 0.75
+    this.agonyDmg = 1
+    this.agonyCritChance = 0
+    this.agonyCritMul = 1.5
+    this.curseTime = 0
+    this.curseSlow = 0
+    this.curseVuln = 0
+    this.unsteadyTime = 0
+    this.unsteadyTick = 0.65
+    this.unsteadyDmg = 1
+    this.lightningVulnTime = 0
+    this.lightningVulnAmount = 0
+    this.deepWinterTime = 0
+    this.cantripVulnTime = 0
+    this.cantripVulnAmount = 0
+    this.cantripFireCritTime = 0
+    this.cantripFireCritAmount = 0
+    this.cantripIceVulnTime = 0
+    this.cantripIceVulnAmount = 0
     // 护盾词缀：吸收前 N 次伤害（DOT/溅射一并吸收，吞噬直接绕过——护盾怪的反制点）
-    this.shieldHits = (this.hasAffix('shielded') ? 2 : 0) + (type === 'knight' && this.rank === 3 ? 1 : 0)
+    this.shieldHits = (this.hasAffix('shielded') ? 2 : 0) + (type === 'knight' && this.rank === 3 ? 2 : 0)
+    this._shieldRegenCd = 6.0
+    this._summonerCd = 8.5 + Math.random() * 2.5
+    this._summonerChildren = []
+    this._arcaneCd = 4.2 + Math.random() * 1.8
+    this._golemSlamCd = 3.4 + Math.random() * 1.4
+    this._wraithBlinkCd = 4.2 + Math.random() * 1.4
+    this._knightChargeCd = 3.8 + Math.random() * 1.2
+    this._shootCount = 0
     this._facingInit = false
     this._blockTextCd = 0
     this._bannerBuff = 0
+    this._bannerDr = 0
+    this._bulwarkCover = 0
     this._rallyT = Math.random() * TAU
 
     // —— 刺客专属状态机（阶段十七：新职业） ——
@@ -236,13 +281,29 @@ export class Enemy extends Entity {
    */
   hit(damage, effects = null) {
     if (!this.isBoss && this.routTime > 0 && damage > 0) damage *= CROWD_RULES.vulnerability
-    if (damage > 0 && this.gluttonCorrodeTime > 0 && this.gluttonCorrodeVuln > 0) {
-      damage *= 1 + this.gluttonCorrodeVuln
-    }
-    if (damage > 0 && this.gluttonBreachTime > 0 && this.gluttonBreachVuln > 0) {
-      damage *= 1 + this.gluttonBreachVuln
+    if (damage > 0) {
+      let vulnMul = 1
+      if (this.gluttonCorrodeTime > 0 && this.gluttonCorrodeVuln > 0) vulnMul *= 1 + this.gluttonCorrodeVuln
+      if (this.gluttonBreachTime > 0 && this.gluttonBreachVuln > 0) vulnMul *= 1 + this.gluttonBreachVuln
+      if (this.petVulnTime > 0 && this.petVulnAmount > 0) vulnMul *= 1 + this.petVulnAmount
+      if (this.curseTime > 0 && this.curseVuln > 0) vulnMul *= 1 + this.curseVuln
+      if (this.lightningVulnTime > 0 && this.lightningVulnAmount > 0 && effects?.element === 'lightning') {
+        vulnMul *= 1 + this.lightningVulnAmount
+      }
+      if (this.slow > 0 || this.petSlowTime > 0 || this.petWeakenTime > 0 || this.freeze > 0 || this.petMarkTime > 0) {
+        const synVuln = this.game?.weaponSystem?.petCombat?.synergies?.controlVulnBonus || 0
+        if (synVuln > 0) vulnMul *= 1 + synVuln
+      }
+      // 首领防叠乘易伤：非破绽的易伤叠加合计封顶 +65%，防止多源易伤把首领打成纸片
+      if (this.isBoss) vulnMul = Math.min(1.65, vulnMul)
+      damage *= vulnMul
     }
     damage *= this.game?.bossTomes?.hitMultiplier(this, effects) ?? 1
+    // 战旗官光环减伤 & 重盾塔兵掩护减伤（仅作用于普通怪，取最高层不叠加）
+    if (!this.isBoss && damage > 0) {
+      const auraDr = Math.max(this._bannerDr || 0, this._bulwarkCover || 0)
+      if (auraDr > 0) damage *= 1 - auraDr
+    }
     if (this.type === 'bulwark' && damage > 0 && !effects?.ignoreShield) {
       let fromX = effects?.hitFromX
       let fromY = effects?.hitFromY
@@ -257,7 +318,7 @@ export class Enemy extends Entity {
         if (len > 0.001) {
           const cosFront = (toHitX * Math.cos(this.facing) + toHitY * Math.sin(this.facing)) / len
           if (cosFront > 0.25) {
-            damage *= 0.55
+            damage *= 0.35
             if (this._blockTextCd <= 0) {
               this._blockTextCd = 0.45
               this.game?.enemyManager?.addText(this.x, this.y - this.radius - 10, '盾挡', null, '#94a3b8', 11)
@@ -265,6 +326,11 @@ export class Enemy extends Entity {
           }
         }
       }
+    }
+    // 霸体词缀（juggernaut）：单次受击上限 35% 最大生命（仅对 maxHp >= 20 的真实单位生效）
+    if (!this.isBoss && damage > 0 && this.hasAffix('juggernaut') && this.maxHp >= 20) {
+      const cap = Math.max(1, this.maxHp * 0.35)
+      if (damage > cap) damage = cap
     }
     const tomeHp = this.hp
     // 有伤害的命中会引走攻巢敌人，护盾挡住伤害也算命中。
@@ -294,15 +360,30 @@ export class Enemy extends Entity {
       }
     }
 
-    // 狂战士 50% 残血暴走判定
+    // 狂战士 50% 残血暴走判定：免疫控制 + 立刻获得 2 层狂血护盾 + 向前短突刺
     if (this.type === 'berserker' && this.hp > 0 && this.hp <= this.maxHp * 0.5 && !this.isEnraged) {
       this.isEnraged = true
+      this.shieldHits = Math.max(this.shieldHits || 0, 2)
       this.freeze = 0
       this.elementStun = 0
       this.spellSlowTime = 0
       this.primeSlow = 0
       this.slow = 0
-      this.game?.enemyManager?.addText(this.x, this.y - 14, '🔥 狂暴!', null, '#ff3838', 14)
+      this.petSlowTime = 0
+      this.petSlowAmount = 0
+      this.petFrostTime = 0
+      this.petFrostStacks = 0
+      this.curseSlow = 0
+      const p = this.game?.player
+      if (p) {
+        const ldx = p.x - this.x
+        const ldy = p.y - this.y
+        const ld = Math.hypot(ldx, ldy) || 1
+        const lunge = Math.min(96, Math.max(0, ld - this.radius - (p.radius || 16)))
+        this.x = Math.max(this.radius, Math.min((this.game.worldWidth || 2000) - this.radius, this.x + (ldx / ld) * lunge))
+        this.y = Math.max(this.radius, Math.min((this.game.worldHeight || 2000) - this.radius, this.y + (ldy / ld) * lunge))
+      }
+      this.game?.enemyManager?.addText(this.x, this.y - 14, '🔥 狂暴护盾!', null, '#ff3838', 14)
     }
 
     const devourHp = Math.max(1, Math.ceil(this.maxHp * this._devourThresh()))
@@ -325,9 +406,10 @@ export class Enemy extends Entity {
       }
       this.devourable = true
     }
-    if (effects && (!this.isEnraged)) { // 狂战士狂暴状态免疫控制
+    if (effects && (!this.isEnraged)) { // 狂战士狂暴状态免疫控制；霸体词缀受控时间减半
+      const ccMul = this.hasAffix('juggernaut') ? 0.5 : 1
       // 同类状态取较长剩余；时长换算成固定跳数
-      if (effects.freeze) this.freeze = Math.max(this.freeze, effects.freeze)
+      if (effects.freeze) this.freeze = Math.max(this.freeze, effects.freeze * ccMul)
       if (effects.burn) {
         const inactive = this.burnHits <= 0
         this.burnHits = Math.max(this.burnHits, Math.ceil(effects.burn / 0.5))
@@ -350,43 +432,110 @@ export class Enemy extends Entity {
     this.flash = Math.max(0, this.flash - dt)
     if (this.nestAggroTime > 0) this.nestAggroTime = Math.max(0, this.nestAggroTime - dt)
     this.routTime = Math.max(0, this.routTime - dt)
-    if (this.freeze > 0) this.freeze -= dt
-    this.gluttonStagger = Math.max(0, (this.gluttonStagger || 0) - dt)
+    const ccTick = this.hasAffix('juggernaut') ? dt * 1.8 : dt
+    if (this.freeze > 0) this.freeze -= ccTick
+    this.gluttonStagger = Math.max(0, (this.gluttonStagger || 0) - ccTick)
     this.gluttonCow = Math.max(0, (this.gluttonCow || 0) - dt)
-    this.corrodeSlowTime = this.isEnraged || this.isBoss ? 0 : Math.max(0, (this.corrodeSlowTime || 0) - dt)
+    this.corrodeSlowTime = this.isEnraged || this.isBoss ? 0 : Math.max(0, (this.corrodeSlowTime || 0) - ccTick)
     if (this.corrodeSlowTime === 0) this.corrodeSlowAmount = 0
     this.gluttonCorrodeTime = Math.max(0, (this.gluttonCorrodeTime || 0) - dt)
     if (this.gluttonCorrodeTime === 0) this.gluttonCorrodeVuln = 0
     this.gluttonBreachTime = Math.max(0, (this.gluttonBreachTime || 0) - dt)
     if (this.gluttonBreachTime === 0) this.gluttonBreachVuln = 0
     this._devourPullT = Math.max(0, (this._devourPullT || 0) - dt)
-    this.primeSlow = Math.max(0, (this.primeSlow || 0) - dt)
-    this.elementStun = Math.max(0, (this.elementStun || 0) - dt)
-    this.spellSlowTime = this.isEnraged ? 0 : Math.max(0, (this.spellSlowTime || 0) - dt)
+    this.primeSlow = Math.max(0, (this.primeSlow || 0) - ccTick)
+    this.elementStun = Math.max(0, (this.elementStun || 0) - ccTick)
+    this.spellSlowTime = this.isEnraged ? 0 : Math.max(0, (this.spellSlowTime || 0) - ccTick)
     if (this.spellSlowTime === 0) this.spellSlowAmount = 0
-    this.slow = Math.max(0, this.slow - dt)
+    this.slow = Math.max(0, this.slow - ccTick)
+    this.petSlowTime = this.isEnraged ? 0 : Math.max(0, this.petSlowTime - ccTick)
+    if (this.petSlowTime === 0) this.petSlowAmount = 0
     this.petWeakenTime = Math.max(0, this.petWeakenTime - dt)
-    if (this.petWeakenTime === 0) this.petWeakenAmount = 0
+    if (this.petWeakenTime === 0) {
+      this.petWeakenAmount = 0
+      this.petSuppressAmount = 0
+    }
+    this.petVulnTime = Math.max(0, this.petVulnTime - dt)
+    if (this.petVulnTime === 0) this.petVulnAmount = 0
+    this.petMarkTime = Math.max(0, this.petMarkTime - dt)
+    this.petFrostTime = this.isEnraged ? 0 : Math.max(0, this.petFrostTime - dt)
+    if (this.petFrostTime === 0) this.petFrostStacks = 0
+    this.petSporeMarkTime = Math.max(0, this.petSporeMarkTime - dt)
+    this.petBeastMarkTime = Math.max(0, this.petBeastMarkTime - dt)
+    this.petTauntTime = Math.max(0, this.petTauntTime - dt)
+    if (this.petTauntTime === 0) this.petTauntTarget = null
+    this.curseTime = Math.max(0, (this.curseTime || 0) - dt)
+    if (this.curseTime === 0 || this.isEnraged) this.curseSlow = 0
+    if (this.curseTime === 0) this.curseVuln = 0
+    this.lightningVulnTime = Math.max(0, (this.lightningVulnTime || 0) - dt)
+    if (this.lightningVulnTime === 0) this.lightningVulnAmount = 0
+    this.deepWinterTime = Math.max(0, (this.deepWinterTime || 0) - dt)
+    this.cantripVulnTime = Math.max(0, (this.cantripVulnTime || 0) - dt)
+    if (this.cantripVulnTime === 0) this.cantripVulnAmount = 0
+    this.cantripFireCritTime = Math.max(0, (this.cantripFireCritTime || 0) - dt)
+    if (this.cantripFireCritTime === 0) this.cantripFireCritAmount = 0
+    this.cantripIceVulnTime = Math.max(0, (this.cantripIceVulnTime || 0) - dt)
+    if (this.cantripIceVulnTime === 0) this.cantripIceVulnAmount = 0
     this._spawnT = Math.max(0, this._spawnT - dt) // 出生弹入计时（Boss 继承复用）
     this._swingT = Math.max(0, this._swingT - dt)
     this._shootFlash = Math.max(0, this._shootFlash - dt)
     this._blockTextCd = Math.max(0, (this._blockTextCd || 0) - dt)
+    const spellCombat = this.game?.weaponSystem?.spellCombat
+    const plagueDt = dt * Math.max(1, spellCombat?.dotSpeedMultiplier || 1)
     if (this.burnHits > 0) {
       this._burnTick -= dt
       if (this._burnTick <= 0) {
         this._burnTick = 0.5 // 每 0.5s 一跳
         this.burnHits--
-        this.hit(this._burnDmg)
-        this.game?.enemyManager?.addText(this.x, this.y - 10, String(Math.round(this._burnDmg * 10) / 10), null, '#ff9d4a', 12)
+        const dealt = this._burnDmg
+        this.hit(dealt)
+        this.game?.enemyManager?.addText(this.x, this.y - 10, String(Math.round(dealt * 10) / 10), null, '#ff9d4a', 12)
+        spellCombat?.onDoTTick?.(this, 'burn', dealt)
       }
     }
     if (this.poisonHits > 0) {
-      this._poisonTick -= dt
+      this._poisonTick -= plagueDt
       if (this._poisonTick <= 0) {
         this._poisonTick = 1 // 每 1s 一跳
         this.poisonHits--
-        this.hit(this._poisonDmg)
-        this.game?.enemyManager?.addText(this.x, this.y - 10, String(Math.round(this._poisonDmg * 10) / 10), null, '#7ce86a', 12)
+        const dealt = this._poisonDmg
+        this.hit(dealt)
+        this.game?.enemyManager?.addText(this.x, this.y - 10, String(Math.round(dealt * 10) / 10), null, '#7ce86a', 12)
+        spellCombat?.onDoTTick?.(this, 'poison', dealt)
+      }
+    }
+    if (this.agonyTime > 0) {
+      this.agonyTime = Math.max(0, this.agonyTime - dt)
+      this.agonyTick -= plagueDt
+      if (this.agonyTick <= 0) {
+        this.agonyTick = 0.75
+        if (this.agonyStacks > 0) {
+          let dealt = this.agonyDmg * (0.45 + this.agonyStacks * 0.25)
+          const crit = this.agonyCritChance > 0 && Math.random() < this.agonyCritChance
+          if (crit) dealt *= this.agonyCritMul || 1.5
+          this.hit(dealt)
+          this.game?.enemyManager?.addText(
+            this.x,
+            this.y - 12,
+            `${crit ? '✦' : ''}${Math.round(dealt * 10) / 10}`,
+            null,
+            crit ? '#d8b4fe' : '#a8e46b',
+            crit ? 13 : 11
+          )
+          spellCombat?.onDoTTick?.(this, 'agony', dealt)
+        }
+      }
+      if (this.agonyTime === 0) this.agonyStacks = 0
+    }
+    if (this.unsteadyTime > 0) {
+      this.unsteadyTime = Math.max(0, this.unsteadyTime - dt)
+      this.unsteadyTick -= plagueDt
+      if (this.unsteadyTick <= 0) {
+        this.unsteadyTick = 0.65
+        const dealt = this.unsteadyDmg
+        this.hit(dealt)
+        this.game?.enemyManager?.addText(this.x, this.y - 14, String(Math.round(dealt * 10) / 10), null, '#c084fc', 11)
+        spellCombat?.onDoTTick?.(this, 'unsteady', dealt)
       }
     }
     if (this.hp <= 0) {
@@ -399,12 +548,14 @@ export class Enemy extends Entity {
     return this.freeze <= 0 && this.gluttonStagger <= 0 && this.elementStun <= 0
   }
 
-  /** 远程职业射击：法师保持慢速奥术法球方便走位闪避；多弹三阶进一步降速、拉宽夹角并缩短续航避免满屏弹幕 */
-  _shoot() {
-    const dmg = this.outgoingDamage(1)
+  /** 远程职业射击：法师奥术法球提速且周期引爆法阵；三阶弓手 3 箭扇射并周期穿盾狙击 */
+  _shoot(target = null) {
+    const dmg = this.outgoingDamage(this.damage || 1)
+    const speedMul = this.petWeakenTime > 0 ? Math.max(0.4, 1 - (this.petSuppressAmount || 0)) : 1
+    this._shootCount = (this._shootCount || 0) + 1
     if (this.type === 'mage') {
-      const speed = this.rank === 1 ? 110 : this.rank === 3 ? 90 : 115
-      const life = this.rank === 3 ? 4.2 : 4.0
+      const speed = (this.rank === 1 ? 130 : this.rank === 3 ? 120 : 145) * speedMul
+      const life = this.rank === 3 ? 4.4 : 4.2
       if (this.rank === 3) {
         for (const off of [-0.2, 0, 0.2]) {
           this.game.enemyManager.spawnBullet(this.x, this.y, this.facing + off, 'mage', { rank: 3, speed, life, damage: dmg })
@@ -412,17 +563,37 @@ export class Enemy extends Entity {
       } else {
         this.game.enemyManager.spawnBullet(this.x, this.y, this.facing, 'mage', { rank: this.rank, speed, life, damage: dmg })
       }
+      // 每 3 次施法（2/3 阶法师）：在目标脚下凝结延迟奥术爆裂
+      if (this.rank >= 2 && this._shootCount % 3 === 0 && target) {
+        this.game.enemyManager?.spawnTelegraphBlast?.({
+          x: target.x,
+          y: target.y,
+          radius: this.rank === 3 ? 72 : 58,
+          delay: 0.78,
+          damage: Math.max(1, Math.round(dmg)),
+          spellAttack: true,
+          color: '#a855f7',
+        })
+      }
     } else if (this.type === 'archer') {
+      const snipeTurn = this.rank === 3 && this._shootCount % 3 === 0
       if (this.rank === 3) {
-        for (const off of [-0.08, 0.08]) {
-          this.game.enemyManager.spawnBullet(this.x, this.y, this.facing + off, 'archer', { rank: 3, speed: 410, damage: dmg })
+        for (const off of [-0.14, 0, 0.14]) {
+          const isCenterSnipe = snipeTurn && off === 0
+          this.game.enemyManager.spawnBullet(this.x, this.y, this.facing + off, 'archer', {
+            rank: 3,
+            speed: (isCenterSnipe ? 500 : 420) * speedMul,
+            damage: isCenterSnipe ? Math.max(2, dmg) : dmg,
+            pierceSummon: isCenterSnipe ? 1 : 0,
+          })
         }
       } else {
-        const speed = this.rank === 1 ? 330 : 380
+        const speed = (this.rank === 1 ? 340 : 395) * speedMul
         this.game.enemyManager.spawnBullet(this.x, this.y, this.facing, 'archer', { rank: this.rank, speed, damage: dmg })
       }
     } else {
-      this.game.enemyManager.spawnBullet(this.x, this.y, this.facing, this.type, { rank: this.rank, damage: dmg })
+      const baseSpeed = this.type === 'mage' ? 145 : 395
+      this.game.enemyManager.spawnBullet(this.x, this.y, this.facing, this.type, { rank: this.rank, speed: baseSpeed * speedMul, damage: dmg })
     }
     this.game.sound.enemyShoot()
     this._shootFlash = 0.12 // 射击闪光
@@ -433,13 +604,18 @@ export class Enemy extends Entity {
       (this.gluttonCow > 0 ? 1 - (this.gluttonCowMul || 0) : 1)
   }
 
-  _hitTarget(target, player, damage) {
+  _hitTarget(target, player, damage, extra = null) {
     damage = this.outgoingDamage(damage)
     if (target.isMapObjective) target.hit?.(damage, this)
-    else if (target.isPet) return this.game.weaponSystem.petCombat.hit(target, damage)
+    else if (target.isMonument) return false
+    else if (target.isPet) {
+      if (this.petBeastMarkTime > 0) damage *= 0.8
+      return this.game.weaponSystem.petCombat.hit(target, damage, this)
+    }
     else if (target.isShadowClone) return this.game.weaponSystem?.shadowCombat?.clones?.hitByEnemy(target, damage)
+    else if (target.isSpellSummon) return this.game.weaponSystem?.spellCombat?.hitSummon?.(target, damage, this)
     else if (target.isDecoy) player.hitDecoy(target, damage)
-    else return player.hit(damage, { enemyAttack: true, swarmTide: !!this.swarmTide })
+    else return player.hit(damage, { enemyAttack: true, swarmTide: !!this.swarmTide, ...(extra || {}) })
   }
 
   update(dt) {
@@ -480,12 +656,64 @@ export class Enemy extends Entity {
     const slowMul = Math.min(
       this.slow > 0 ? SLOW_MUL : this.primeSlow > 0 ? .7 : 1,
       this.spellSlowTime > 0 ? 1 - this.spellSlowAmount : 1,
-      this.corrodeSlowTime > 0 ? 1 - (this.corrodeSlowAmount || 0) : 1
+      this.corrodeSlowTime > 0 ? 1 - (this.corrodeSlowAmount || 0) : 1,
+      this.petSlowTime > 0 ? 1 - (this.petSlowAmount || 0) : 1,
+      this.curseTime > 0 && this.curseSlow > 0 ? 1 - this.curseSlow : 1
     )
     const bannerMul = this._bannerBuff > 0 ? 1 + this._bannerBuff : 1
-    const actDt = dt * bannerMul
+    const suppressMul = this.petWeakenTime > 0 ? Math.max(0.4, 1 - (this.petSuppressAmount || 0)) : 1
+    const actDt = dt * bannerMul * suppressMul
     const spd = this.speed * slowMul * terrainMul * bannerMul
     this._moving = false
+
+    // —— 精英词缀主动周期行为（护盾再生 / 活体召唤 / 奥秘弹环） ——
+    if (!this.isBoss && this.affixes.length > 0) {
+      if (this.hasAffix('shielded')) {
+        this._shieldRegenCd -= dt
+        if (this._shieldRegenCd <= 0) {
+          this._shieldRegenCd = 6.0
+          if (this.shieldHits < 3) {
+            this.shieldHits++
+            this.game?.enemyManager?.addText?.(this.x, this.y - this.radius - 12, '🛡 再生', null, '#5ad8e8', 11)
+          }
+        }
+      }
+      if (this.hasAffix('summoner')) {
+        this._summonerCd -= dt
+        if (this._summonerCd <= 0) {
+          this._summonerCd = 9.5
+          this._summonerChildren = (this._summonerChildren || []).filter((c) => c && c.active)
+          const em = this.game?.enemyManager
+          const cap = em ? Math.ceil(em._populationTarget() * 1.2) : 0
+          if (em && this._summonerChildren.length < 3 && em.count < cap) {
+            const a = Math.random() * TAU
+            const minion = em.spawnAt(
+              Math.max(24, Math.min((this.game.worldWidth || 2000) - 24, this.x + Math.cos(a) * 44)),
+              Math.max(24, Math.min((this.game.worldHeight || 2000) - 24, this.y + Math.sin(a) * 44)),
+              'knight',
+              { summoned: true, rank: 1 }
+            )
+            if (minion) this._summonerChildren.push(minion)
+          }
+        }
+      }
+      if (this.hasAffix('arcane') && dist < 440) {
+        this._arcaneCd -= actDt
+        if (this._arcaneCd <= 0) {
+          this._arcaneCd = 5.5
+          const baseA = this.facing
+          for (let i = 0; i < 6; i++) {
+            this.game?.enemyManager?.spawnBullet?.(this.x, this.y, baseA + (i / 6) * TAU, 'mage', {
+              rank: 2,
+              speed: 135,
+              life: 3.4,
+              damage: Math.max(1, Math.round(this.outgoingDamage(this.damage || 1))),
+            })
+          }
+          this.game?.sound?.enemyShoot?.()
+        }
+      }
+    }
 
     if (
       this.type === 'knight' ||
@@ -494,7 +722,41 @@ export class Enemy extends Entity {
       this.type === 'golem' ||
       this.type === 'wraith'
     ) {
-      // 近战突进：骑士贴脸 / 重盾重推 / 战獒快袭 / 魔像重压（2 点伤害）/ 怨灵索命（命中吸血）
+      // 近战突进：骑士贴脸 / 重盾重推 / 战獒快袭 / 魔像震地重压 / 怨灵闪现索命（命中吸血+重伤）
+      if (this.type === 'golem') {
+        this._golemSlamCd -= actDt
+        if (this._golemSlamCd <= 0 && dist <= 165) {
+          this._golemSlamCd = 4.6
+          this._swingT = 0.35
+          this.game?.enemyManager?.spawnTelegraphBlast?.({
+            x: this.x,
+            y: this.y,
+            radius: 115,
+            delay: 0.7,
+            damage: Math.max(2, Math.round(this.outgoingDamage(this.damage || 2))),
+            color: '#f59e0b',
+          })
+          this.game?.enemyManager?.addText?.(this.x, this.y - this.radius - 14, '震地猛击', null, '#f59e0b', 12)
+        }
+      } else if (this.type === 'wraith') {
+        this._wraithBlinkCd -= actDt
+        if (this._wraithBlinkCd <= 0 && dist >= 115 && dist <= 290) {
+          this._wraithBlinkCd = 5.0
+          const jump = Math.min(135, Math.max(0, dist - this.radius - targetRadius - 12))
+          this.x = Math.max(this.radius, Math.min((this.game.worldWidth || 2000) - this.radius, this.x + ux * jump))
+          this.y = Math.max(this.radius, Math.min((this.game.worldHeight || 2000) - this.radius, this.y + uy * jump))
+          this.game?.enemyManager?.addText?.(this.x, this.y - this.radius - 12, '幽影闪现', null, '#7ce8c8', 11)
+        }
+      } else if (this.type === 'knight' && this.rank === 3) {
+        this._knightChargeCd -= actDt
+        if (this._knightChargeCd <= 0 && dist >= 85 && dist <= 195) {
+          this._knightChargeCd = 4.8
+          const step = Math.min(82, Math.max(0, dist - this.radius - targetRadius - 4))
+          this.x = Math.max(this.radius, Math.min((this.game.worldWidth || 2000) - this.radius, this.x + ux * step))
+          this.y = Math.max(this.radius, Math.min((this.game.worldHeight || 2000) - this.radius, this.y + uy * step))
+          this._swingT = 0.22
+        }
+      }
       const stopDist = this.radius + targetRadius + 4
       if (dist > stopDist) {
         this.x += ux * spd * dt
@@ -505,8 +767,13 @@ export class Enemy extends Entity {
         if (this.attackCd <= 0) {
           this.attackCd = this.attackInterval
           this._swingT = this.type === 'golem' ? 0.3 : 0.22 // 魔像重砸前摇更长
-          const landed = this._hitTarget(target, player, this.damage)
-          // 怨灵吸血：命中回复 30% 生命——本体不可吞噬，克制手段只有爆发输出
+          const landed = this._hitTarget(
+            target,
+            player,
+            this.damage,
+            this.type === 'wraith' ? { grievous: 2.0 } : null
+          )
+          // 怨灵吸血：命中回复 30% 生命并施加 2 秒重伤——本体不可吞噬，克制手段只有爆发输出
           if (landed && this.type === 'wraith' && this.hp > 0 && this.hp < this.maxHp) {
             const drain = Math.max(1, Math.round(this.maxHp * 0.3))
             this.hp = Math.min(this.maxHp, this.hp + drain)
@@ -656,22 +923,44 @@ export class Enemy extends Entity {
         if (healTarget) {
           this._healingTarget = healTarget
           this._healBeamTimer = 0.7
-          this._healCd = this.rank === 3 ? 2.2 : this.rank === 1 ? 2.8 : 2.5
-          const healRatio = this.rank === 3 ? 0.26 : this.rank === 1 ? 0.14 : 0.2
-          const healAmt = Math.max(1, Math.round(healTarget.maxHp * healRatio))
-          healTarget.hp = Math.min(healTarget.maxHp, healTarget.hp + healAmt)
-          healTarget.flash = 0.15
-          if (this.rank === 3) healTarget.shieldHits = Math.max(healTarget.shieldHits || 0, 1)
-          const devourHp = Math.max(1, Math.ceil(healTarget.maxHp * healTarget._devourThresh()))
-          if (healTarget.hp > devourHp) healTarget.devourable = false
-          const label = this.rank === 3 ? `+${healAmt} 圣佑` : `+${healAmt} 圣光`
+          this._healCd = this.rank === 3 ? 2.1 : this.rank === 1 ? 2.7 : 2.4
+          const healRatio = this.rank === 3 ? 0.28 : this.rank === 1 ? 0.16 : 0.22
+          // 群疗：以最重伤友军为中心，波及 110px 内最多 3 名受伤友军；3 阶附带护盾并净化控制
+          const batch = [healTarget]
+          for (const other of this.game.enemyManager._enemies) {
+            if (batch.length >= 3) break
+            if (!other.active || other === this || other === healTarget || other.hp >= other.maxHp) continue
+            const bdx = other.x - healTarget.x
+            const bdy = other.y - healTarget.y
+            if (bdx * bdx + bdy * bdy <= 110 * 110) batch.push(other)
+          }
+          for (const ally of batch) {
+            const healAmt = Math.max(1, Math.round(ally.maxHp * healRatio))
+            ally.hp = Math.min(ally.maxHp, ally.hp + healAmt)
+            ally.flash = 0.15
+            if (this.rank === 3) {
+              ally.shieldHits = Math.max(ally.shieldHits || 0, 1)
+              if (!ally.isBoss) {
+                ally.freeze = 0
+                ally.slow = 0
+                ally.spellSlowTime = 0
+                ally.spellSlowAmount = 0
+              }
+            }
+            const devourHp = Math.max(1, Math.ceil(ally.maxHp * ally._devourThresh()))
+            if (ally.hp > devourHp) ally.devourable = false
+          }
+          const primaryAmt = Math.max(1, Math.round(healTarget.maxHp * healRatio))
+          const label = this.rank === 3
+            ? (batch.length > 1 ? `+${primaryAmt} 圣佑×${batch.length}` : `+${primaryAmt} 圣佑`)
+            : (batch.length > 1 ? `+${primaryAmt} 圣疗×${batch.length}` : `+${primaryAmt} 圣光`)
           this.game?.enemyManager?.addText(healTarget.x, healTarget.y - 12, label, null, '#ffd32a', 13)
         } else {
           this._healCd = 0.6
         }
       }
     } else if (this.type === 'alchemist') {
-      // 炼金投弹手：中距风筝，抛掷落地带清晰预警圈与短暂减速酸液池的炼金药瓶
+      // 炼金投弹手：中距风筝，抛掷落地带清晰预警圈与持续腐蚀减速池的炼金药瓶
       const range = this.range
       const retreat = range * 0.55
       if (dist > range) {
@@ -692,11 +981,13 @@ export class Enemy extends Entity {
             startY: this.y,
             targetX: target.x,
             targetY: target.y,
-            radius: 52,
+            radius: 64,
             flightDur: 0.72,
-            lingerDur: 3.4,
-            slowMul: 0.68,
-            damage: this.outgoingDamage(1),
+            lingerDur: 4.2,
+            slowMul: 0.65,
+            damage: this.outgoingDamage(this.damage || 1),
+            dotDamage: 1,
+            dotInterval: 0.85,
           })
           this.game.sound.enemyShoot?.()
         }
@@ -717,7 +1008,7 @@ export class Enemy extends Entity {
         this.attackCd -= actDt
         if (this.attackCd <= 0) {
           this.attackCd = this.attackInterval
-          this._shoot()
+          this._shoot(target)
         }
       }
     }
@@ -1161,8 +1452,35 @@ export class Enemy extends Entity {
       ctx.ellipse(0, 0, r, r, 0, 0, TAU)
       ctx.fill()
     }
+    if (this.curseTime > 0) {
+      ctx.strokeStyle = 'rgba(193, 142, 242, 0.72)'
+      ctx.lineWidth = 1.4
+      ctx.beginPath()
+      ctx.ellipse(0, r * 0.52, r + 4, r * 0.35, 0, 0, TAU)
+      ctx.stroke()
+    }
+    if (this.lightningVulnTime > 0) {
+      ctx.strokeStyle = 'rgba(126, 204, 248, 0.78)'
+      ctx.lineWidth = 1.4
+      ctx.beginPath()
+      ctx.arc(0, 0, r + 3, 0, TAU)
+      ctx.stroke()
+    }
 
     ctx.restore()
+
+    if (this.agonyStacks > 0) {
+      const pips = Math.min(8, this.agonyStacks)
+      ctx.save()
+      ctx.fillStyle = this.unsteadyTime > 0 ? '#d8b4fe' : '#a8e46b'
+      for (let i = 0; i < pips; i++) {
+        const px = this.x - ((pips - 1) * 4.5) / 2 + i * 4.5
+        ctx.beginPath()
+        ctx.arc(px, this.y + r + 5, 1.8, 0, TAU)
+        ctx.fill()
+      }
+      ctx.restore()
+    }
 
     // The snowflake badge is independent of elemental-contact marks and disappears with slow.
     if (this.spellSlowTime > 0 && this.freeze <= 0) {

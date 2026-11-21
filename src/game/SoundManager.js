@@ -130,6 +130,16 @@ export class SoundManager {
     this._tone({ freq, endFreq, dur: kind === 'fluid' || kind === 'mist' ? 0.065 : 0.05, type, vol: 0.025 })
   }
 
+  /** 光棱激光：短促聚能上扬 → 锐利激光击穿 → 水晶折射泛音。 */
+  prismBeam(scatterCount = 0, ultimate = false) {
+    this._tone({ freq: 1200, endFreq: 2300, dur: 0.032, type: 'sine', vol: ultimate ? 0.026 : 0.018 })
+    this._tone({ freq: ultimate ? 2400 : 2100, endFreq: 320, dur: ultimate ? 0.14 : 0.1, type: 'sawtooth', vol: ultimate ? 0.04 : 0.028, delay: 0.015 })
+    if (scatterCount > 0) {
+      this._tone({ freq: 1760, endFreq: 1180, dur: 0.075, type: 'sine', vol: 0.016, delay: 0.03 })
+      if (scatterCount >= 3) this._tone({ freq: 2640, endFreq: 1860, dur: 0.065, type: 'sine', vol: 0.012, delay: 0.045 })
+    }
+  }
+
   /** 近战咬合：短促低音与牙齿闭合声，重咬更低沉。 */
   bite(heavy = false, landed = true) {
     if (!landed) {

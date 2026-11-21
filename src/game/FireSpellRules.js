@@ -4,7 +4,7 @@ export const fireMultiDamageMul = count => .82 ** (count - 1)
 // 炽燃：对燃烧中的目标提高火焰伤害，燃烧对首领同样生效。
 export const fireBrittleMul = level => 1 + Math.min(2, level) * .1
 // 余烬蔓延：点燃后延迟传播给近邻，只传一代，后代继承每跳灼烧的一部分。
-export const burnSpreadRange = level => 90 + Math.min(3, level) * 20
+export const burnSpreadRange = level => 90 + Math.min(4, level) * 20
 export const burnSpreadTargets = level => level >= 3 ? 2 : 1
 export const burnSpreadDuration = 2
 export const burnSpreadInherit = .7

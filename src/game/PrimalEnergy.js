@@ -34,8 +34,8 @@ export const PRIMAL_GAIN_BOSS = 30
 export const PRIMAL_GAIN_WINDOW = 1
 export const PRIMAL_GAIN_WINDOW_MAX = 3
 
-/** 战斗涌流：附近有敌人时持续充能，保证不按空格也有完整的被动超载循环。 */
-export const ORIGIN_FLOW_RATE = 2
+/** 战斗涌流：附近有敌人时持续充能，并随「异源校准」与共振回路成长，保证成型期顺畅触发超载。 */
+export const ORIGIN_FLOW_RATE = 2.2
 export const ORIGIN_FLOW_RANGE = 480
 
 export function isOrigin(player) {
@@ -147,8 +147,11 @@ export function tickOriginCombatFlow(engine, dt) {
   for (const e of engine?.enemyManager?.enemies || []) {
     if (!e.active || e.devouring) continue
     if ((e.x - p.x) ** 2 + (e.y - p.y) ** 2 > r2) continue
+    const growth = getOriginGrowth(engine)
+    const circuits = engine?.originRoute === 'resonance' ? (p.routeState?.resonance?.circuits || 0) : 0
+    const rate = ORIGIN_FLOW_RATE * (1 + growth.foreignBonus * 0.55) * (1 + circuits * 0.2)
     const before = p.originEnergy
-    p.originEnergy = Math.min(ORIGIN_ENERGY_MAX, p.originEnergy + ORIGIN_FLOW_RATE * dt)
+    p.originEnergy = Math.min(ORIGIN_ENERGY_MAX, p.originEnergy + rate * dt)
     return p.originEnergy - before
   }
   return 0

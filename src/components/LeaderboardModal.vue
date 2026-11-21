@@ -18,7 +18,7 @@ const loading = ref(false)
 const error = ref('')
 let requestId = 0
 const modes = computed(() => gameplay.value === 'arena'
-  ? Object.fromEntries(Object.entries(MODES).map(([id, info]) => [id, info.name]))
+  ? Object.fromEntries(Object.entries(MODES).map(([id, info]) => [id, id === 'timed' ? '限时讨伐 · 12分' : info.name]))
   : ACCOUNT_MODES[gameplay.value])
 watch(gameplay, () => {
   mode.value = gameplay.value === 'arena' ? 'expedition' : Object.keys(ACCOUNT_MODES[gameplay.value])[0]

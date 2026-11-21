@@ -12,8 +12,9 @@ import { GLUTTON_FEAST_SPEED } from '../GluttonResource.js'
 const TAU = Math.PI * 2
 
 const clamp = (v, min, max) => (v < min ? min : v > max ? max : v)
-// Tide contact damage stays fractional after mitigation; ordinary attacks retain their integer floor.
-const reduceIncomingDamage = (damage, reduction, fractional) => fractional
+// Tide contact damage and already-fractional hits stay fractional after mitigation;
+// ordinary integer attacks retain their integer floor unless explicitly fractional.
+const reduceIncomingDamage = (damage, reduction, fractional) => (fractional || damage < 1)
   ? Math.max(0, damage * (1 - reduction)) : Math.max(1, Math.round(damage * (1 - reduction)))
 
 /** 角度向目标平滑插值（取最短弧，避免跨 ±π 边界时反向旋转） */
@@ -47,9 +48,13 @@ const GUIDED_EXP_THRESHOLDS = {
   9: 400,
 }
 
-/** 前期使用引导曲线，10 级后逐段减缓阈值膨胀，维持后半局升级反馈。 */
-export function getNextExpThreshold(currentThreshold, nextLevel) {
+/** 前期使用引导曲线，10 级后逐段减缓阈值膨胀，维持后半局升级反馈（20 分钟模式进一步平缓中后期）。 */
+export function getNextExpThreshold(currentThreshold, nextLevel, mode = 'timed') {
   if (GUIDED_EXP_THRESHOLDS[nextLevel]) return GUIDED_EXP_THRESHOLDS[nextLevel]
+  if (mode === 'timed20') {
+    const growth = nextLevel >= 31 ? 1.1 : nextLevel >= 21 ? 1.14 : nextLevel >= 15 ? 1.22 : nextLevel >= 10 ? 1.32 : 1.4
+    return Math.floor(currentThreshold * growth)
+  }
   const growth = nextLevel >= 15 ? 1.28 : nextLevel >= 10 ? 1.32 : 1.4
   return Math.floor(currentThreshold * growth)
 }
@@ -135,6 +140,7 @@ export class Player extends Entity {
     this.hp = this.maxHp
     this.invincible = 0 // 无敌帧（秒）：受击后短暂免疫，配合闪烁反馈
     this.flash = 0 // 受击红闪计时
+    this.healSuppressTimer = 0 // 重伤（治疗抑制）：期间所有回复量减半
     this.dead = false
 
     // —— 元素吸收（阶段七：元素融合流派） ——
@@ -338,6 +344,8 @@ export class Player extends Entity {
   getEnemyTarget(enemy) {
     const pet = this.game?.weaponSystem?.petCombat?.lureTarget(enemy)
     if (pet) return pet
+    const spellTarget = this.game?.weaponSystem?.spellCombat?.lureTarget?.(enemy)
+    if (spellTarget) return spellTarget
     const clone = this.game?.weaponSystem?.shadowCombat?.clones.lureTarget(enemy)
     if (clone) return clone
     if (!enemy || enemy.isBoss || this._decoys.length === 0) return this
@@ -368,6 +376,7 @@ export class Player extends Entity {
 
   /** 清理所有只应在单局内存在的技能与临时状态。 */
   resetRunState() {
+    this.healSuppressTimer = 0
     this.speedBuffTimer = 0
     this.devourRadiusBonus = 1
     this.thornsPulse = false
@@ -490,13 +499,23 @@ export class Player extends Entity {
     this.originFormDr = 0
   }
 
-  /** 回复生命值 */
+  /** 回复生命值（重伤期间回复量减半，保留 0.5 精度兼容分段血珠） */
   heal(amount = 1, source = '圣疗治愈') {
-    if (this.dead) return
+    if (this.dead || !(amount > 0)) return
+    const suppressed = this.healSuppressTimer > 0
+    const effective = suppressed ? Math.max(0.5, Math.round(amount * 5) / 10) : amount
     const prev = this.hp
-    this.hp = Math.min(this.maxHp, this.hp + amount)
-    if (this.hp > prev) {
-      this.game?.enemyManager?.addText(this.x, this.y - 18, `+${this.hp - prev} HP`, source, '#2ecc71', 14)
+    this.hp = Math.min(this.maxHp, this.hp + effective)
+    const gained = Math.round((this.hp - prev) * 10) / 10
+    if (gained > 0) {
+      this.game?.enemyManager?.addText(
+        this.x,
+        this.y - 18,
+        `+${gained} HP`,
+        suppressed ? `${source}·重伤减半` : source,
+        suppressed ? '#f39c12' : '#2ecc71',
+        14
+      )
     }
   }
 
@@ -527,10 +546,9 @@ export class Player extends Entity {
     this.originOverloadElement = this.strainId === 'origin' ? ranked[0] || null : null
     const spells = this.game?.weaponSystem?.spellCombat
     if (spells?.enabled) {
-      const fusion = spells.fusion
-      this._reactions = fusion ? [fusion] : []
-      this._reactionIds = new Set(this._reactions.map(r => r.id))
-      this._reactionMap = new Map(this._reactions.map(r => [r.id, r]))
+      this._reactions = []
+      this._reactionIds = new Set()
+      this._reactionMap = new Map()
       this._procs = {}
       return
     }
@@ -714,7 +732,7 @@ export class Player extends Entity {
   settleLevelUp() {
     this.exp -= this.maxExp
     this.level++
-    this.maxExp = getNextExpThreshold(this.maxExp, this.level)
+    this.maxExp = getNextExpThreshold(this.maxExp, this.level, this.game?.runSelection?.mode)
     this.game.weaponSystem.onLevelUp() // 等级攻击力成长（每级 ×1.08）
     this.game.triggerLevelUp() // 暂停 + 生成 3 个技能选项 + onLevelUp 回调
   }
@@ -784,7 +802,7 @@ export class Player extends Entity {
       damage = reduceIncomingDamage(damage, this.devourDamageReduction, attack?.swarmTide)
     }
     const petRouteReduction = this.game?.weaponSystem?.petCombat?.playerDamageReduction || 0
-    if (petRouteReduction > 0) damage = reduceIncomingDamage(damage, petRouteReduction, attack?.swarmTide)
+    if (petRouteReduction > 0) damage = reduceIncomingDamage(damage, petRouteReduction, true)
     // 基因同化：层数提供少量减伤（OriginCombat 每帧写入 originDr）。
     if (this.originDr > 0 && damage > 0) damage = reduceIncomingDamage(damage, this.originDr, attack?.swarmTide)
     // 适应性膜：只在超载窗口内生效。
@@ -794,6 +812,36 @@ export class Player extends Entity {
     // 局部形态重组：超载后的短时形变减伤。
     if (this.originFormDr > 0 && damage > 0) damage = reduceIncomingDamage(damage, this.originFormDr, attack?.swarmTide)
     if (attack?.enemyAttack) this.game?.bossTomes?.onHurt()
+    if (attack?.grievous > 0) {
+      this.healSuppressTimer = Math.max(this.healSuppressTimer || 0, attack.grievous)
+    }
+    const stripExtraShield = () => {
+      if (!attack?.breakShield) return
+      let broken = false
+      if (this.gluttonGuard > 0) {
+        this.gluttonGuard = Math.max(0, this.gluttonGuard - 1)
+        if (this.gluttonGuard <= 0) this.gluttonGuardTimer = 0
+        broken = true
+      }
+      const scShield = this.game?.weaponSystem?.shadowCombat?.shield
+      if (scShield && scShield.charges > 0) {
+        scShield.charges = Math.max(0, scShield.charges - 1)
+        broken = true
+      }
+      const spShield = this.game?.weaponSystem?.spellCombat?.shield
+      if (spShield && spShield.charges > 0) {
+        spShield.charges = Math.max(0, spShield.charges - 1)
+        broken = true
+      }
+      const pc = this.game?.weaponSystem?.petCombat
+      if (pc && pc.playerShield > 0) {
+        pc.playerShield = Math.max(0, pc.playerShield - 1)
+        broken = true
+      }
+      if (broken) {
+        this.game?.enemyManager?.addText?.(this.x, this.y - 38, '破盾!', null, '#ff7466', 15)
+      }
+    }
     let gluttonHitCounterFired = false
     if (this.gluttonGuard > 0 && this.gluttonGuardTimer > 0 && damage > 0) {
       this.gluttonGuard = Math.max(0, this.gluttonGuard - 1)
@@ -802,6 +850,7 @@ export class Player extends Entity {
       gluttonHitCounterFired = true
       this.game.weaponSystem.gluttonCombat?.onHurt?.({ blocked: true })
       if (damage <= 0) {
+        stripExtraShield()
         this.invincible = Math.max(this.invincible, 0.10)
         return false
       }
@@ -813,6 +862,7 @@ export class Player extends Entity {
       this.originGuardTimer = 0
       this.game.weaponSystem._ring(this.x, this.y, '#ffb36b', this.radius + 12)
       if (damage <= 0) {
+        stripExtraShield()
         this.invincible = 0.18
         return
       }
@@ -824,6 +874,7 @@ export class Player extends Entity {
       damage -= absorbed
       this.game.weaponSystem._ring(this.x, this.y, '#edc479', this.radius + 16)
       if (damage <= 0) {
+        stripExtraShield()
         this.invincible = 0.18
         return
       }
@@ -832,16 +883,18 @@ export class Player extends Entity {
     const shadowShield = shadowCombat?.shield
     if (shadowShield) {
       damage = shadowShield.absorb(damage, attack)
-      if (damage <= 0) return false
+      if (damage <= 0) { stripExtraShield(); return false }
     }
     if (shadowCombat) {
       damage = shadowCombat.absorbPhysicalGuard(damage, attack)
-      if (damage <= 0) return false
+      if (damage <= 0) { stripExtraShield(); return false }
     }
     damage = this.game?.bossTomes?.absorb(damage, attack) ?? damage
+    const petCombat = this.game?.weaponSystem?.petCombat
+    if (petCombat) damage = petCombat.absorb(damage, attack)
     const shield = this.game?.weaponSystem?.spellCombat?.shield
     damage = shield ? shield.absorb(damage, attack) : damage
-    if (damage <= 0) { this.invincible = .18; return false }
+    if (damage <= 0) { stripExtraShield(); this.invincible = .18; return false }
     if (this.hp - damage <= 0 && this.game?.weaponSystem?.shadowCombat?.tryFatalSubstitute?.()) return false
     this.hp -= damage
     this.invincible = 0.5 * (this.geneIFramesMul || 1) // 0.5 秒无敌（饕餮原核可延长）：仍防贴脸每帧连击，但持续受压会稳定掉血——走位有收益
@@ -892,6 +945,7 @@ export class Player extends Entity {
   update(dt) {
     if (this.dead) return // 死亡后不再更新（引擎随即暂停）
     this.invincible = Math.max(0, this.invincible - dt)
+    this.healSuppressTimer = Math.max(0, (this.healSuppressTimer || 0) - dt)
     this._leechHealCd = Math.max(0, this._leechHealCd - dt)
     this.flash = Math.max(0, this.flash - dt)
     this.evasionFlash = Math.max(0, this.evasionFlash - dt)
@@ -1085,8 +1139,10 @@ export class Player extends Entity {
       const formationMul = this.game.endlessFormationBreakTimer > 0
         ? ENDLESS_FORMATION_BREAK_SPEED_MUL
         : 1
+      const petFlow = this.game?.weaponSystem?.petCombat?.playerMoveBonus || 0
+      const spellFlow = this.game?.weaponSystem?.spellCombat?.playerMoveBonus || 0
       const curSpeed = this.speed * (this.speedBuffTimer > 0 ? 1.25 : 1) *
-        (1 + rushBonus + adrenaline + feast + originFlow + shadowFlow) * terrainMul * bossFieldMul * formationMul * (this.volleyMoveTimer > 0 ? 1.2 : 1) * (this.game?.bossTomes?.moveMultiplier || 1)
+        (1 + rushBonus + adrenaline + feast + originFlow + shadowFlow + petFlow + spellFlow) * terrainMul * bossFieldMul * formationMul * (this.volleyMoveTimer > 0 ? 1.2 : 1) * (this.game?.bossTomes?.moveMultiplier || 1)
       this.x += dir.x * curSpeed * dt
       this.y += dir.y * curSpeed * dt
       // 点地移动：本帧位移越过落点时贴到目标并收掉目标点，
@@ -1313,12 +1369,18 @@ export class Player extends Entity {
     this._lookX = (this._lookX || 0) + (Math.cos(gazeAngle) * gazeAmount - (this._lookX || 0)) * gazeK
     this._lookY = (this._lookY || 0) + (Math.sin(gazeAngle) * gazeAmount - (this._lookY || 0)) * gazeK
 
+    const ws = game?.weaponSystem
+    const ricochetRoute = this.strainId === 'ricochet' ? ws?.ricochetCombat?.route || null : null
     renderSlimeFamilyBody(ctx, this.strainId, r, slimeFamilyBodyState(t, {
       bite: bite ? 1 : 0,
       swallowing: this._devourPulse > 0.03 ? 1 : 0,
       elements: familyElements,
       hitJolt: Math.max(0, this.flash / 0.25),
       recoil: this.strainId === 'ricochet' ? this._fireKick : 0,
+      ricochetRoute,
+      prismCharge: ricochetRoute === 'bounce'
+        ? Math.max(0, Math.min(1, 1 - (ws?.cooldown || 0) / Math.max(0.05, ws?.attackInterval || 1)))
+        : 0,
       coreGlow: this.strainId === 'elemental' ? Math.min(1, (this.game?.weaponSystem?.spellCombat?.castPulse || 0) / 0.25) : 0,
       skillReady: isArena && game.running && !game.runFinished &&
         game.runState !== 'expedition-intro' && !this.dead && game.strainSkillReady,

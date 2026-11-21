@@ -1,26 +1,51 @@
-export const PET_SUPPORT = {
-  guardian: { kind: 'taunt', name: '岩甲挑衅', cooldown: 20, duration: 3, radius: 240, limit: 4, windup: .28 },
-  // 残响团团：弱化嘲讽（共生共鸣挂件的投影，人少时短、范围窄、数量少）
-  echo: { kind: 'taunt', name: '残响挑衅', cooldown: 24, duration: 2, radius: 190, limit: 2, windup: .28 },
-  hunter: { kind: 'weaken', name: '柔风抑敌', cooldown: 14, duration: 4, radius: 300, limit: 3, reduction: .25, windup: .24 },
-  dew: { kind: 'heal', name: '甘露回春', cooldown: 12, duration: .6, windup: .3 },
-  spore: { kind: 'slow', name: '孢云缓行', cooldown: 16, duration: 3, radius: 260, limit: 5, windup: .3 },
-}
+import { ECHO_PET_SPEC, PET_ROSTER_BY_ID } from './PetRoster.js'
 
-export function petSupportStats(type, levels = {}) {
-  const stats = { ...PET_SUPPORT[type] }
-  if (type === 'guardian' && levels.pet_taunt) { stats.cooldown = 16; stats.limit = 5 }
-  if (type === 'hunter' && levels.pet_wind_guard) { stats.reduction = .35; stats.duration = 5 }
-  if (type === 'dew' && levels.pet_dew_spring) stats.cooldown = 9
-  if (type === 'spore' && levels.pet_spore_bloom) { stats.radius += 30; stats.duration = 4.5 }
+export const PET_SUPPORT = Object.freeze({
+  ...Object.fromEntries(
+    Object.values(PET_ROSTER_BY_ID).map(entry => [
+      entry.id,
+      {
+        kind: entry.id,
+        name: entry.specialName,
+        cooldown: entry.specialCooldown,
+        duration: entry.specialDuration,
+        radius: entry.id === 'guardian' ? 180 : entry.id === 'dew' ? 165 : entry.id === 'frost' ? 160 : 220,
+        limit: entry.id === 'guardian' ? 6 : entry.id === 'frost' ? 10 : 8,
+        windup: 0.22,
+        desc: entry.specialDesc,
+      },
+    ])
+  ),
+  echo: {
+    kind: 'taunt',
+    name: ECHO_PET_SPEC.specialName,
+    cooldown: ECHO_PET_SPEC.specialCooldown,
+    duration: ECHO_PET_SPEC.specialDuration,
+    radius: 190,
+    limit: 2,
+    windup: 0.28,
+    desc: ECHO_PET_SPEC.specialDesc,
+  },
+})
+
+export function petSupportStats(type, levels = {}, opts = {}) {
+  const base = PET_SUPPORT[type] || PET_SUPPORT.guardian
+  const stats = { ...base }
+  const awakeId = PET_ROSTER_BY_ID[type]?.awakeId
+  const awakened = !!(awakeId && levels?.[awakeId] > 0)
+  if (type === 'guardian' && awakened) {
+    stats.cooldown = Math.max(4, stats.cooldown - 2.5)
+    stats.limit = 8
+  }
+  if (type === 'dew' && awakened) {
+    stats.cooldown = 7.5
+  }
+  const cdMul = (opts.cdMul || 1) * (opts.star ? 0.8 : 1)
+  stats.cooldown = Math.max(2.5, Number((stats.cooldown * cdMul).toFixed(2)))
+  if (opts.radiusMul) stats.radius = Math.round(stats.radius * opts.radiusMul)
   return stats
 }
 
 export function petSupportDescription(stats) {
-  const interval = `冷却 ${stats.cooldown} 秒`
-  if (stats.kind === 'heal') return `${interval}，恢复 1 点生命，优先本体；无人受伤时保留技能`
-  const targets = `最多 ${stats.limit} 名附近普通敌人`, duration = `持续 ${stats.duration} 秒`
-  if (stats.kind === 'taunt') return `${interval}，嘲讽${targets}，${duration}；首领免疫，团团倒地时解除`
-  if (stats.kind === 'weaken') return `${interval}，使${targets}的攻击力降低 ${Math.round(stats.reduction * 100)}%，${duration}；首领免疫`
-  return `${interval}，使${targets}的移速降低 40%，${duration}；首领与狂暴敌人免疫`
+  return stats?.desc || ''
 }

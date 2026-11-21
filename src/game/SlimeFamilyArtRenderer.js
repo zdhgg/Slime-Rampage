@@ -33,11 +33,12 @@ export function slimeFamilyFaceState(t, expression = {}) {
  * the real jaw is drawn by the game's own GluttonBiteVisual on top. */
 export function slimeFamilyBodyState(t, {
   bite = 0, swallowing = 0, elements = [], hitJolt = 0, recoil = 0, coreGlow = 0, skillReady = false,
+  ricochetRoute = null, prismCharge = 0,
 } = {}) {
   return {
     expr: 'idle', t,
     el: Array.isArray(elements) ? elements : [],
-    recoil, coreGlow, skillReady,
+    recoil, coreGlow, skillReady, ricochetRoute, prismCharge,
     noMouth: bite ? 1 : 0,
     gulp: swallowing ? 1 : 0,
     hitJolt,

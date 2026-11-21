@@ -34,7 +34,9 @@ async function load() {
   finally { if (id === requestId) loading.value = false }
 }
 function modeLabel(entry) {
-  return entry.gameplay === 'arena' ? `${MODES[entry.mode]?.name} · ${DIFFICULTIES[entry.difficulty]?.name}` : ACCOUNT_MODES[entry.gameplay]?.[entry.mode]
+  if (entry.gameplay !== 'arena') return ACCOUNT_MODES[entry.gameplay]?.[entry.mode]
+  const modeName = entry.mode === 'timed' ? '限时讨伐 · 12分' : MODES[entry.mode]?.name
+  return `${modeName} · ${DIFFICULTIES[entry.difficulty]?.name}`
 }
 async function importFile(event) {
   const file = event.target.files?.[0]

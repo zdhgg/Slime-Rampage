@@ -4,7 +4,7 @@ import { getEffectiveSkillMaxLevel, getSoftRankMultiplier } from './SkillProgres
 export const SHADOW_RULES = Object.freeze({
   choicesBeforeRoute: 5, routeWave: 6, routeStage: 3,
   ultimateLevel: 14, ultimateWave: 10, ultimateStage: 5, ultimateInvestment: 4,
-  ownedWeight: 1.16, routeWeight: 1.18, maxWeightBoost: 1.3,
+  ownedWeight: 1.25, routeWeight: 1.18, maxWeightBoost: 1.5,
 })
 
 export const SHADOW_ROUTES = Object.freeze({
@@ -51,7 +51,10 @@ const bladeTargetsAt = level => Math.min(10, 4 + Math.min(6, level))
 const bladeEchoAt = level => Math.min(.68, .3 + Math.min(6, level) * .05 + Math.max(0, level - 6) * .02)
 /** 「猎手直觉」：本体击杀射手/法师/炼金时返还的影袭冷却（秒），软封顶 1.6。 */
 export const shadowHuntRangedRefundAt = level => Math.min(1.6, .65 + Math.max(0, Math.floor(Number(level) || 0)) * .15)
-export const shadowHuntSpellbreakCritAt = level => [0, 0.25, 0.45, 0.65, 0.85][Math.min(4, Math.max(0, Math.floor(Number(level) || 0)))] || 0.85
+export const shadowHuntSpellbreakCritAt = level => {
+  const n = Math.max(0, Math.floor(Number(level) || 0))
+  return n <= 4 ? [0, 0.25, 0.45, 0.65, 0.85][n] : 0.85 + Math.min(0.35, (n - 4) * 0.07)
+}
 export const shadowSwarmCritInheritAt = level => {
   const n = Math.max(0, Math.floor(Number(level) || 0))
   return n <= 3 ? n * 0.12 : 0.36 + Math.min(0.24, (n - 3) * 0.04)
@@ -60,12 +63,21 @@ export const shadowSwarmCritMulAt = level => {
   const n = Math.max(0, Math.floor(Number(level) || 0))
   return n <= 3 ? n * 0.22 : 0.66 + Math.min(0.44, (n - 3) * 0.08)
 }
-export const shadowSwarmBulwarkBlocksAt = level => (level >= 3 ? 2 : level >= 1 ? 1 : 0)
-export const shadowSwarmBulwarkBurstAt = level => (level > 0 ? 0.55 + Math.min(4, level) * 0.15 : 0)
-export const shadowBladeRiposteReachAt = level => 75 + Math.max(0, Math.floor(Number(level) || 0)) * 12
-export const shadowBladeRiposteDmgAt = level => 1.0 + Math.max(0, Math.floor(Number(level) || 0)) * 0.25
-export const shadowBladeRendOrbsAt = level => (level > 0 ? 2 + Math.max(0, Math.floor(Number(level) || 0)) : 0)
-export const shadowBladeRendDmgMulAt = level => 1 + Math.max(0, Math.floor(Number(level) || 0)) * 0.12
+export const shadowSwarmBulwarkBlocksAt = level => (level >= 6 ? 3 : level >= 3 ? 2 : level >= 1 ? 1 : 0)
+export const shadowSwarmBulwarkBurstAt = level => (level > 0 ? Math.min(1.7, 0.55 + Math.max(0, Math.floor(Number(level) || 0)) * 0.15) : 0)
+export const shadowBladeRiposteReachAt = level => {
+  const n = Math.max(0, Math.floor(Number(level) || 0))
+  return 75 + Math.min(5, n) * 12 + Math.max(0, n - 5) * 7
+}
+export const shadowBladeRiposteDmgAt = level => {
+  const n = Math.max(0, Math.floor(Number(level) || 0))
+  return 1.0 + Math.min(5, n) * 0.25 + Math.min(0.55, Math.max(0, n - 5) * 0.11)
+}
+export const shadowBladeRendOrbsAt = level => (level > 0 ? Math.min(6, 2 + Math.max(0, Math.floor(Number(level) || 0))) : 0)
+export const shadowBladeRendDmgMulAt = level => {
+  const n = Math.max(0, Math.floor(Number(level) || 0))
+  return 1 + Math.min(5, n) * 0.12 + Math.min(0.4, Math.max(0, n - 5) * 0.08)
+}
 
 export const SHADOW_ROUTE_SKILLS = [
   {
@@ -78,65 +90,60 @@ export const SHADOW_ROUTE_SKILLS = [
     '提高猎杀标记目标承受的本体与分身伤害；高等级收益递减并封顶。',
     lv => `标记目标额外承伤 +${Math.round(huntBonusAt(lv) * 100)}%`,
     (game, level) => { game.weaponSystem.shadowCombat.huntPursuitLevel = level },
-    { rankCaps: { expedition: { hard: 7, hell: 10 }, timed: 8, endless: 12 } }),
+    { rankCaps: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 12 } }),
   make('shadow_hunt_reap', '致命回势', 'hunt', 8,
     '影袭击杀时返还更多影袭冷却并加速暗影魔盾充能；每次影袭最多返还一次。',
-    lv => `击杀返还 ${huntRefundAt(lv).toFixed(2)} 秒 · 魔盾充能 +${(1.0 + lv * 0.25).toFixed(2)} 秒`,
+    lv => `击杀返还 ${huntRefundAt(lv).toFixed(2)} 秒 · 魔盾充能 +${Math.min(3, 1.0 + lv * 0.25).toFixed(2)} 秒`,
     (game, level) => { game.weaponSystem.shadowCombat.huntReapLevel = level },
-    { rankCaps: { expedition: { hard: 8, hell: 10 }, timed: 8, endless: 10 } }),
-  make('shadow_hunt_refund', '猎手直觉', 'hunt', 4,
+    { rankCaps: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 12 } }),
+  make('shadow_hunt_refund', '猎手直觉', 'hunt', 8,
     '本体击杀法师、弓手或炼金投弹手时返还影袭冷却，并立即加速暗影魔盾充能。',
-    lv => `击杀远程返还影袭 ${shadowHuntRangedRefundAt(lv + 1).toFixed(2)} 秒 · 魔盾充能 +${(1.5 + (lv + 1) * 0.35).toFixed(2)} 秒`,
-    (game, level) => { game.weaponSystem.shadowCombat.huntRefundLevel = level },
-    { growthClass: 'common' }),
-  make('shadow_hunt_spellbreak', '破法绝杀', 'hunt', 4,
+    lv => `击杀远程返还影袭 ${shadowHuntRangedRefundAt(lv + 1).toFixed(2)} 秒 · 魔盾充能 +${(2 + Math.min(1.6, (lv + 1) * 0.25)).toFixed(2)} 秒`,
+    (game, level) => { game.weaponSystem.shadowCombat.huntRefundLevel = level }),
+  make('shadow_hunt_spellbreak', '破法绝杀', 'hunt', 8,
     '提高本体暴击伤害；影袭命中标记目标或远程敌人时压制非首领攻击节奏，并加速暗影魔盾充能。',
-    lv => `暴伤 +${shadowHuntSpellbreakCritAt(lv + 1).toFixed(2)} 倍 · 压制施法 ${(1.2 + (lv + 1) * 0.2).toFixed(1)} 秒 · 魔盾充能 +${(1.2 + (lv + 1) * 0.3).toFixed(1)} 秒`,
+    lv => `暴伤 +${shadowHuntSpellbreakCritAt(lv + 1).toFixed(2)} 倍 · 压制施法 ${Math.min(2.6, 1.2 + (lv + 1) * 0.2).toFixed(1)} 秒 · 魔盾充能 +${Math.min(3.6, 1.2 + (lv + 1) * 0.3).toFixed(1)} 秒`,
     (game, level) => {
       game.weaponSystem.shadowCombat.huntSpellbreakLevel = level
       setCritSource(game, 'hunt_spellbreak', { multiplier: shadowHuntSpellbreakCritAt(level) })
-    },
-    { growthClass: 'common' }),
+    }),
   make('shadow_swarm_assault', '影刃合击', 'swarm', 8,
     '提高影袭指挥分身突袭的伤害；突袭不触发暴击生影。',
     lv => `分身夹击伤害 ${Math.round(swarmMultiplierAt(lv) * 100)}%`,
     (game, level) => { game.weaponSystem.shadowCombat.swarmAssaultLevel = level },
-    { rankCaps: { expedition: { hard: 7, hell: 10 }, timed: 8, endless: 12 } }),
+    { rankCaps: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 12 } }),
   make('shadow_swarm_reap', '影潮续燃', 'swarm', 8,
     '分身击杀后，为附近其他分身恢复少量持续时间；恢复量受单次上限约束。',
     lv => `每次分身击杀恢复 ${swarmRecoveryAt(lv).toFixed(2)} 秒 · 不超过原始寿命`,
     (game, level) => { game.weaponSystem.shadowCombat.swarmReapLevel = level },
-    { rankCaps: { expedition: { hard: 8, hell: 10 }, timed: 8, endless: 12 } }),
-  make('shadow_swarm_crit', '影契共暴', 'swarm', 6,
+    { rankCaps: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 12 } }),
+  make('shadow_swarm_crit', '影契共暴', 'swarm', 8,
     '大幅提高分身的暴击继承率与暴击伤害；分身每次暴击额外加速暗影魔盾充能 0.25 秒。',
     lv => `分身暴击继承 +${Math.round(shadowSwarmCritInheritAt(lv + 1) * 100)}% · 分身暴伤 +${shadowSwarmCritMulAt(lv + 1).toFixed(2)} 倍`,
     (game, level) => { game.weaponSystem.shadowCombat.swarmCritLevel = level },
-    { rankCaps: { expedition: { hard: 6, hell: 9 }, timed: 6, endless: 10 } }),
-  make('shadow_swarm_bulwark', '影幕护主', 'swarm', 4,
+    { rankCaps: { expedition: { hard: 8, hell: 10 }, timed: 8, endless: 11 } }),
+  make('shadow_swarm_bulwark', '影幕护主', 'swarm', 8,
     '新生成或刷新的分身自带免费挡弹护甲；分身消散时在原地爆出影斩，且每只分身加速魔盾充能。',
-    lv => `免费挡弹 ${shadowSwarmBulwarkBlocksAt(lv + 1)} 次 · 消散斩 ${Math.round(shadowSwarmBulwarkBurstAt(lv + 1) * 100)}% · 魔盾充能 +${[12, 16, 20, 25][Math.min(3, lv)]}%/只`,
-    (game, level) => { game.weaponSystem.shadowCombat.swarmBulwarkLevel = level },
-    { growthClass: 'common' }),
+    lv => `免费挡弹 ${shadowSwarmBulwarkBlocksAt(lv + 1)} 次 · 消散斩 ${Math.round(shadowSwarmBulwarkBurstAt(lv + 1) * 100)}% · 魔盾充能 +${[12, 16, 20, 25, 28, 31, 34, 36][Math.min(7, lv)]}%/只`,
+    (game, level) => { game.weaponSystem.shadowCombat.swarmBulwarkLevel = level }),
   make('shadow_blade_arc', '弧刃扩散', 'blade', 8,
     '扩大暴击横斩的覆盖距离与可命中目标数，目标数有上限。',
     lv => `横斩距离 +${bladeRangeAt(lv)}px · 最多 ${bladeTargetsAt(lv)} 个目标`,
     (game, level) => { game.weaponSystem.shadowCombat.bladeArcLevel = level },
-    { rankCaps: { expedition: { hard: 7, hell: 10 }, timed: 8, endless: 12 } }),
+    { rankCaps: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 12 } }),
   make('shadow_blade_echo', '裂影回响', 'blade', 8,
     '横斩命中后短暂延迟再斩一次；回响只结算伤害，不暴击、不递归触发。',
     lv => `回响伤害 ${Math.round(bladeEchoAt(lv) * 100)}% · 延迟 0.18 秒`,
     (game, level) => { game.weaponSystem.shadowCombat.bladeEchoLevel = level },
-    { rankCaps: { expedition: { hard: 8, hell: 10 }, timed: 8, endless: 10 } }),
-  make('shadow_blade_riposte', '虚影反刃', 'blade', 4,
+    { rankCaps: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 11 } }),
+  make('shadow_blade_riposte', '虚影反刃', 'blade', 8,
     '闪避或暗影魔盾挡下法术时立即挥出周身反击横斩（受 0.45 秒冷却约束），并短暂提升暴击率。',
     lv => `反刃半径 ${shadowBladeRiposteReachAt(lv + 1)}px · 伤害 ${Math.round(shadowBladeRiposteDmgAt(lv + 1) * 100)}% · 暴击 +${15 + (lv + 1) * 5}%`,
-    (game, level) => { game.weaponSystem.shadowCombat.bladeRiposteLevel = level },
-    { growthClass: 'common' }),
-  make('shadow_blade_rend', '噬法刃舞', 'blade', 4,
+    (game, level) => { game.weaponSystem.shadowCombat.bladeRiposteLevel = level }),
+  make('shadow_blade_rend', '噬法刃舞', 'blade', 8,
     '横斩与永夜刃域可斩碎触及的普通法术弹幕，每斩碎一发加速魔盾充能 0.45 秒，并提高横斩与刃域伤害。',
     lv => `单次切碎至多 ${shadowBladeRendOrbsAt(lv + 1)} 发法球 · 横斩/刃域伤害 +${Math.round((shadowBladeRendDmgMulAt(lv + 1) - 1) * 100)}%`,
-    (game, level) => { game.weaponSystem.shadowCombat.bladeRendLevel = level },
-    { growthClass: 'common' }),
+    (game, level) => { game.weaponSystem.shadowCombat.bladeRendLevel = level }),
   {
     id: 'shadow_hunt_ultimate', name: '🌟 无间影袭', spec: 'assassin', route: 'hunt', kind: 'ultimate',
     maxLevel: 1, isShadowSkill: true, isCapstone: true, tier: 4, weight: .6,

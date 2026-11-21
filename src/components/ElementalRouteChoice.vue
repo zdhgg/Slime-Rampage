@@ -20,7 +20,7 @@ const { selectedIndex } = useCardFocus(source, (card) => {
   if (card.locked) return
   chosen.value = card; reviewing.value = true
 })
-const title = computed(() => reviewing.value ? `确认锁定【${chosen.value?.name || ''}】` : '中期路线确认 · 选择元素构筑')
+const title = computed(() => reviewing.value ? `确认升华【${chosen.value?.name || ''}】` : '专精分支升华 · 选择本系流派')
 const pick = (card) => {
   if (reviewing.value) {
     if (card.id === 'route-confirm' && chosen.value) emit('select', chosen.value)
@@ -34,10 +34,10 @@ const pick = (card) => {
 <template>
   <div class="elemental-route-overlay route-overlay" role="dialog" aria-modal="true" aria-label="元素构筑路线确认">
     <div class="elemental-route-panel route-panel">
-      <div class="route-kicker">◆ 随机探索已积累 5 次 · 元素构筑即将定型</div>
+      <div class="route-kicker">◆ 主系探索已积累 5 次 · 元素专精即将升华</div>
       <h2>{{ title }}</h2>
-      <p v-if="!reviewing" class="route-intro">已有元素会保留。单系、双系和三系以上轮转分别对应不同的战斗节奏；锁定后中后期方向不可更改。</p>
-      <p v-else class="route-intro">锁定后只开放当前路线的进阶和互斥终极。已掌握的元素与普通法术强化继续生效。</p>
+      <p v-if="!reviewing" class="route-intro">选定分支后立刻触发升华质变（未学的签名核心法术将免费获得 Lv.1），并在 Lv.14 开启本分支专属终极奥义；分支定型后本局不再更改。</p>
+      <p v-else class="route-intro">锁定后将开放该分支的 2 项专属进阶与互斥终极奥义；已掌握的主系强化与跨系兼修法术全部继续生效。</p>
       <div v-if="!reviewing" class="route-grid">
         <button v-for="(r, idx) in options" :key="r.id" class="route-card" :class="[{ locked: r.locked, 'is-selected': selectedIndex === idx }]" :style="{ '--route-color': r.color }" :disabled="r.locked" @mouseenter="selectedIndex = idx" @click="pick(r)">
           <kbd>{{ idx + 1 }}</kbd>
@@ -45,8 +45,7 @@ const pick = (card) => {
           <span>{{ r.desc }}</span><b>{{ r.bonus }}</b>
           <span class="route-ultimate"><b>终极 · {{ r.ultimateName }}</b>{{ r.ultimateDesc }}</span>
           <small v-if="r.locked">🔒 {{ r.requirement }}</small>
-          <small v-else-if="r.route === 'single'">主元素：{{ r.elements[0] }}（首个发现） · 已掌握：{{ r.elements.join('、') }} · 后续：{{ r.skills.join('、') }}</small>
-          <small v-else>已掌握：{{ r.elements.join('、') }} · 后续：{{ r.skills.join('、') }}</small>
+          <small v-else>所属专精：{{ r.schoolName || '主修专精' }} · 分支进阶：{{ (r.skills || []).join('、') }}</small>
         </button>
       </div>
       <div v-else class="route-review">
@@ -63,4 +62,17 @@ const pick = (card) => {
 <style scoped src="./routeChoiceTheme.css"></style>
 <style scoped>
 .elemental-route-overlay { --strain-accent: #b6a4ff; }
+.elemental-route-panel {
+  width: min(820px, 94vw);
+}
+.elemental-route-panel .route-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+@media (max-width: 700px) {
+  .elemental-route-panel .route-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+}
 </style>

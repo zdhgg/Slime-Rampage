@@ -41,7 +41,10 @@ export const ELEMENT_PAL = {
   lightning: { base: '#f5d250', shade: '#d1a92a', light: '#fff3b0', line: '#6a5310' },
   poison: { base: '#8fd860', shade: '#5fa83c', light: '#d6f7b0', line: '#2f5a1c' },
 }
-const elOf = id => ELEMENT_PAL[id] ? id : null
+const elOf = id => {
+  const mapped = id === 'ice' ? 'water' : id
+  return ELEMENT_PAL[mapped] ? mapped : null
+}
 const faceMode = e => e === 'happy' || e === 'release' ? 'happy' : e === 'hurt' ? 'hurt' : 'idle'
 
 /* ------------------------------ shared parts --------------------------- */
@@ -285,7 +288,7 @@ const D2R = Math.PI / 180
 const BARRELS = [[-127, 31, 1], [-53, 31, 1], [-90, 38, 1.1]]
 /** Barrel mounted on the ball's surface: flange ring, shaded tube, collar band, warm muzzle ring with a dark bore.
  * Drawn after the ball so the whole barrel is readable; `kick` 0..1 pushes it back along its axis. */
-function nozzle(ctx, ang, len, w, pl, kick = 0) {
+function nozzle(ctx, ang, len, w, pl, kick = 0, prism = false) {
   const bx = Math.cos(ang) * 66 * .88, by = 20 + Math.sin(ang) * 61 * .88
   ctx.save(); ctx.translate(bx, by); ctx.rotate(ang)
   const flange = c => ell(c, 0, 0, 5, w / 2 + 4.5, 0)
@@ -298,10 +301,12 @@ function nozzle(ctx, ang, len, w, pl, kick = 0) {
   outline(ctx, b, pl.line)
   const collar = c => { c.beginPath(); c.rect(len * .3, -w / 2 - 2, len * .2, w + 4) }
   collar(ctx); ctx.fillStyle = pl.shade; ctx.fill(); outline(ctx, collar, pl.line, .8)
+  const rimCol = prism ? '#8ef7ff' : MUZZLE
   const rim = c => ell(c, len, 0, 5.5, w / 2 + 3, 0)
-  rim(ctx); ctx.fillStyle = MUZZLE; ctx.fill(); outline(ctx, rim, pl.line)
-  ell(ctx, len + 1.4, 0, 2.8, Math.max(2.4, w / 2 - 3.4), 0, '#0d2a40')
-  if (kick > .3) glow(ctx, len + 5, 0, 20 + kick * 8, MUZZLE, .85 * kick)
+  rim(ctx); ctx.fillStyle = rimCol; ctx.fill(); outline(ctx, rim, pl.line)
+  ell(ctx, len + 1.4, 0, 2.8, Math.max(2.4, w / 2 - 3.4), 0, prism ? '#261a52' : '#0d2a40')
+  if (prism) ell(ctx, len + 1.8, 0, 1.8, Math.max(1.6, w / 2 - 5.2), 0, '#ebfcff')
+  if (kick > .3) glow(ctx, len + 5, 0, 20 + kick * 8, rimCol, .85 * kick)
   ctx.restore()
 }
 const ricochetBall = c => ell(c, 0, 20, 66, 61, 0)
@@ -319,7 +324,7 @@ const ricochetShape = c => {
 const ricochet = {
   id: 'ricochet', shadowRx: 70,
   body(ctx, st) {
-    const pl = PAL.ricochet, kick = st.recoil || 0
+    const pl = PAL.ricochet, kick = st.recoil || 0, prism = st.ricochetRoute === 'bounce'
     // combat LOD: fatter, slightly longer barrels so the crown survives at r26
     const g = K.small ? 1.2 : 1, L = K.small ? 3 : 0
     cel(ctx, ricochetBall, pl, {
@@ -330,7 +335,24 @@ const ricochet = {
         c.fillStyle = 'rgba(235,252,255,.55)'; c.fill()
       },
     })
-    for (const [a, len, wk] of BARRELS) nozzle(ctx, a * D2R, len + L, 22 * g * wk, pl, kick)
+    for (const [a, len, wk] of BARRELS) nozzle(ctx, a * D2R, len + L, 22 * g * wk, pl, kick, prism)
+    if (prism) {
+      const charge = Math.max(kick, st.prismCharge || 0)
+      const pulse = 9 + charge * 4
+      glow(ctx, 0, -58, 24 + charge * 18, '#8ef7ff', .32 + charge * .45)
+      ctx.save()
+      ctx.fillStyle = '#b4a2ef'; ctx.strokeStyle = pl.line; ctx.lineWidth = lw(1.4)
+      ctx.beginPath()
+      ctx.moveTo(0, -58 - pulse * 1.35); ctx.lineTo(pulse, -58)
+      ctx.lineTo(0, -58 + pulse * 1.35); ctx.lineTo(-pulse, -58)
+      ctx.closePath(); ctx.fill(); ctx.stroke()
+      ctx.fillStyle = '#ffffff'
+      ctx.beginPath()
+      ctx.moveTo(0, -58 - pulse * .75); ctx.lineTo(pulse * .55, -58)
+      ctx.lineTo(0, -58 + pulse * .75); ctx.lineTo(-pulse * .55, -58)
+      ctx.closePath(); ctx.fill()
+      ctx.restore()
+    }
   },
   face(ctx, st) {
     const pl = PAL.ricochet, e = faceMode(st.expr)

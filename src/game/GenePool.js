@@ -52,12 +52,12 @@ export const GENES = [
     tier: 1,
     name: '巨大化基因',
     icon: '🐘',
-    desc: '每级体型 +3px、生命上限 +2',
-    costs: [200, 300, 500, 600],
-    maxLevel: 4,
+    desc: '每级体型 +1px、生命上限 +1',
+    costs: [150, 200, 300, 450, 650, 900, 1200, 1600, 2100, 2700],
+    maxLevel: 10,
     apply(game, lv) {
-      game.player.radius = 26 + 3 * lv
-      game.player.maxHp = 5 + 2 * lv
+      game.player.radius = 26 + lv
+      game.player.maxHp = 5 + lv
     },
   },
   {
@@ -66,12 +66,12 @@ export const GENES = [
     tier: 1,
     name: '应激刺膜',
     icon: '🛡️',
-    desc: '因受击损失生命时，震退并反伤 160px 内的敌人；反伤每级 +2 点',
-    costs: [200, 300, 500, 600],
-    maxLevel: 4,
+    desc: '因受击损失生命时，震退并反伤 160px 内的敌人；反伤基础 2 点，每级 +1 点',
+    costs: [150, 200, 300, 450, 650, 900, 1200, 1600, 2100, 2700],
+    maxLevel: 10,
     apply(game, lv) {
       game.player.thornsPulse = true
-      game.player.thornsDamage = Math.max(game.player.thornsDamage || 0, 2 * lv)
+      game.player.thornsDamage = Math.max(game.player.thornsDamage || 0, 2 + lv)
     },
   },
   {
@@ -82,8 +82,8 @@ export const GENES = [
     name: '再生基因',
     icon: '💚',
     desc: '每 10 秒回复生命，每级 +1 点',
-    costs: [200, 300, 600],
-    maxLevel: 3,
+    costs: [300, 550, 950, 1500, 2300],
+    maxLevel: 5,
     apply(game, lv) {
       game.player.regen = lv
     },
@@ -95,11 +95,11 @@ export const GENES = [
     requires: [{ id: 'regen', level: 1 }],
     name: '涌泉基因',
     icon: '🌊',
-    desc: '累计吸收经验达当前升级需求的 60%/40%/25% 时回复 1 点生命；满血不计数，与噬血共用 5 秒回复间隔',
-    costs: [300, 500, 900],
-    maxLevel: 3,
+    desc: '累计吸收经验达当前升级需求的 60%/50%/40%/30%/20% 时回复 1 点生命；满血不计数，与噬血共用 5 秒回复间隔',
+    costs: [400, 750, 1300, 2100, 3400],
+    maxLevel: 5,
     apply(game, lv) {
-      game.player.geneSiphonRate = [0.6, 0.4, 0.25][lv - 1]
+      game.player.geneSiphonRate = [0.6, 0.5, 0.4, 0.3, 0.2][lv - 1]
     },
   },
   {
@@ -109,11 +109,11 @@ export const GENES = [
     requires: [{ id: 'giant', level: 1 }],
     name: '噬血基因',
     icon: '🩸',
-    desc: '击杀计数满额回复 1 点生命；每级阈值 45 → 32 → 20，回复间隔至少 5 秒',
-    costs: [300, 600, 1000],
-    maxLevel: 3,
+    desc: '击杀计数满额回复 1 点生命；每级阈值 45 → 38 → 31 → 24 → 18，回复间隔至少 5 秒',
+    costs: [400, 800, 1400, 2300, 3600],
+    maxLevel: 5,
     apply(game, lv) {
-      game.player.geneLeechKills = [45, 32, 20][lv - 1]
+      game.player.geneLeechKills = [45, 38, 31, 24, 18][lv - 1]
     },
   },
   {
@@ -124,7 +124,7 @@ export const GENES = [
     name: '复苏茧',
     icon: '🥚',
     desc: '每局一次：致命伤害改为保留 1 点生命，并获得 2 秒无敌',
-    costs: [1400],
+    costs: [4800],
     maxLevel: 1,
     apply(game) {
       game.player.geneCocoon = 1
@@ -134,13 +134,13 @@ export const GENES = [
     id: 'gorged_origin',
     branch: 'flesh',
     tier: 3,
-    requires: [{ id: 'giant', level: 2 }, { id: 'leech', level: 1 }],
+    requires: [{ id: 'giant', level: 4 }, { id: 'leech', level: 2 }],
     exclusiveGroup: 'origin',
     isCapstone: true,
     name: '饕餮原核',
     icon: '◆',
     desc: '生命上限 +2；受击无敌时间延长 24%；噬血阈值 ×0.6',
-    costs: [2500],
+    costs: [9500],
     maxLevel: 1,
     apply(game) {
       game.player.maxHp += 2
@@ -155,11 +155,11 @@ export const GENES = [
     tier: 1,
     name: '锋锐基因',
     icon: '🗡️',
-    desc: '每级攻击伤害 +6%，对飞弹、近战与法术同样生效',
-    costs: [200, 300, 500, 800],
-    maxLevel: 4,
+    desc: '每级攻击伤害 +3%，对飞弹、近战与法术同样生效',
+    costs: [150, 200, 300, 450, 700, 1000, 1400, 1900, 2400, 3000],
+    maxLevel: 10,
     apply(game, lv) {
-      game.weaponSystem.damage = 1 + 0.06 * lv
+      game.weaponSystem.damage = 1 + 0.03 * lv
     },
   },
   {
@@ -168,11 +168,11 @@ export const GENES = [
     tier: 1,
     name: '速射基因',
     icon: '⚡',
-    desc: '每级攻击间隔 ×0.96，近战与远程共用同一攻击周期',
-    costs: [200, 300, 500, 800],
-    maxLevel: 4,
+    desc: '每级攻击间隔 ×0.98，近战与远程共用同一攻击周期',
+    costs: [150, 200, 300, 450, 700, 1000, 1400, 1900, 2400, 3000],
+    maxLevel: 10,
     apply(game, lv) {
-      game.weaponSystem.fireInterval = 1.0 * Math.pow(0.96, lv)
+      game.weaponSystem.fireInterval = 1.0 * Math.pow(0.98, lv)
     },
   },
   {
@@ -181,11 +181,11 @@ export const GENES = [
     tier: 1,
     name: '狩猎亢奋',
     icon: '⏱️',
-    desc: '击杀后 2.5 秒内攻击间隔 ×0.95/级，击杀刷新窗口',
-    costs: [200, 300, 500, 600],
-    maxLevel: 4,
+    desc: '击杀后 2.5 秒内攻击间隔 ×0.97/级，击杀刷新窗口',
+    costs: [150, 250, 400, 650, 1000, 1450, 2050, 2850],
+    maxLevel: 8,
     apply(game, lv) {
-      game.weaponSystem.geneHuntHaste = Math.pow(0.95, lv)
+      game.weaponSystem.geneHuntHaste = Math.pow(0.97, lv)
     },
   },
   {
@@ -195,12 +195,12 @@ export const GENES = [
     requires: [{ id: 'razor', level: 1 }],
     name: '猎手基因',
     icon: '🎯',
-    desc: '每级暴击率 +2.5 个百分点、暴击伤害 +0.15 倍',
-    costs: [300, 600, 900],
-    maxLevel: 3,
+    desc: '每级暴击率 +1.5 个百分点、暴击伤害 +0.10 倍',
+    costs: [300, 550, 900, 1400, 2100, 3050],
+    maxLevel: 6,
     apply(game, lv) {
-      game.weaponSystem.critChance = 0.1 + 0.025 * lv
-      game.weaponSystem.critMul = 3.0 + 0.15 * lv
+      game.weaponSystem.critChance = 0.1 + 0.015 * lv
+      game.weaponSystem.critMul = 3.0 + 0.10 * lv
     },
   },
   {
@@ -210,24 +210,24 @@ export const GENES = [
     requires: [{ id: 'razor', level: 1 }],
     name: '困兽基因',
     icon: '🔥',
-    desc: '每缺失 1 点生命上限，攻击伤害 +6%/级',
-    costs: [300, 500, 900],
-    maxLevel: 3,
+    desc: '每缺失 1 点生命上限，攻击伤害 +3%/级',
+    costs: [250, 400, 650, 1000, 1450, 2050, 2800],
+    maxLevel: 7,
     apply(game, lv) {
-      game.player.geneFuryPerMissing = 0.06 * lv
+      game.player.geneFuryPerMissing = 0.03 * lv
     },
   },
   {
     id: 'arsenal_origin',
     branch: 'arms',
     tier: 3,
-    requires: [{ id: 'razor', level: 2 }, { id: 'rapid', level: 2 }],
+    requires: [{ id: 'razor', level: 4 }, { id: 'rapid', level: 4 }],
     exclusiveGroup: 'origin',
     isCapstone: true,
     name: '兵工原核',
     icon: '◆',
     desc: '攻击伤害 +15%；攻击间隔 ×0.92；适用飞弹额外穿透 1 个目标',
-    costs: [2500],
+    costs: [9500],
     maxLevel: 1,
     apply(game) {
       game.weaponSystem.damage *= 1.15
@@ -242,11 +242,11 @@ export const GENES = [
     tier: 1,
     name: '经验基因',
     icon: '📖',
-    desc: '每级经验获取 +15%',
-    costs: [200, 300, 500, 600],
-    maxLevel: 4,
+    desc: '每级经验获取 +7%',
+    costs: [150, 200, 300, 450, 650, 900, 1200, 1600, 2100, 2700],
+    maxLevel: 10,
     apply(game, lv) {
-      game.player.expGainMul = 1 + 0.15 * lv
+      game.player.expGainMul = 1 + 0.07 * lv
     },
   },
   {
@@ -255,11 +255,11 @@ export const GENES = [
     tier: 1,
     name: '迅捷基因',
     icon: '🦶',
-    desc: '每级移动速度 +8%',
-    costs: [200, 200, 300, 400],
-    maxLevel: 4,
+    desc: '每级移动速度 +5%',
+    costs: [150, 200, 300, 450, 700, 1050, 1500, 2150],
+    maxLevel: 8,
     apply(game, lv) {
-      game.player.speed = 340 * (1 + 0.08 * lv)
+      game.player.speed = 340 * (1 + 0.05 * lv)
     },
   },
   {
@@ -269,12 +269,12 @@ export const GENES = [
     requires: [{ id: 'swift', level: 1 }],
     name: '扩张基因',
     icon: '📡',
-    desc: '每级攻击范围 +8%（飞弹航程、近战触及、法术半径），拾取半径 +15%',
-    costs: [300, 500, 900],
-    maxLevel: 3,
+    desc: '每级攻击范围 +5%（飞弹航程、近战触及、法术半径），拾取半径 +9%',
+    costs: [300, 550, 900, 1400, 2100, 3050],
+    maxLevel: 6,
     apply(game, lv) {
-      game.weaponSystem.geneRangeMul = 1 + 0.08 * lv
-      game.player.pickupRadius = 150 * (1 + 0.15 * lv)
+      game.weaponSystem.geneRangeMul = 1 + 0.05 * lv
+      game.player.pickupRadius = 150 * (1 + 0.09 * lv)
     },
   },
   {
@@ -285,8 +285,8 @@ export const GENES = [
     name: '备选蓝图',
     icon: '🔄',
     desc: '每局升级选卡面板刷新次数 +1（R 键或按钮重抽）',
-    costs: [500, 900],
-    maxLevel: 2,
+    costs: [1000, 2000, 3500],
+    maxLevel: 3,
     apply(game, lv) {
       game.player.geneRerolls = lv
     },
@@ -299,7 +299,7 @@ export const GENES = [
     name: '全域磁感',
     icon: '🧲',
     desc: '经验宝石与秘籍的吸附半径翻倍',
-    costs: [1300],
+    costs: [4800],
     maxLevel: 1,
     apply(game) {
       game.player.pickupRadius *= 2
@@ -309,11 +309,11 @@ export const GENES = [
     id: 'horizon',
     branch: 'supply',
     tier: 2,
-    requires: [{ id: 'lore', level: 2 }],
+    requires: [{ id: 'lore', level: 3 }],
     name: '扩容视界',
     icon: '🗂️',
     desc: '技能选卡面板候选 +1（4 选 1）',
-    costs: [1600],
+    costs: [6000],
     maxLevel: 1,
     apply(game) {
       game.player.geneExtraOptions = 1
@@ -323,13 +323,13 @@ export const GENES = [
     id: 'flux_origin',
     branch: 'supply',
     tier: 3,
-    requires: [{ id: 'lore', level: 2 }, { id: 'expand', level: 1 }],
+    requires: [{ id: 'lore', level: 4 }, { id: 'expand', level: 2 }],
     exclusiveGroup: 'origin',
     isCapstone: true,
     name: '万象原核',
     icon: '◆',
     desc: '经验获取 +30%；移动速度 +10%；主动技能冷却 ×0.85',
-    costs: [2200],
+    costs: [8500],
     maxLevel: 1,
     apply(game) {
       game.player.expGainMul *= 1.3
@@ -347,7 +347,7 @@ export const GENES = [
     icon: '💉',
     desc: '攻击间隔 ×0.80（约攻速 +25%）；副作用：生命上限 −1',
     downside: '生命上限 −1',
-    costs: [800],
+    costs: [3200],
     maxLevel: 1,
     apply(game) {
       game.weaponSystem.fireInterval *= 0.8
@@ -363,7 +363,7 @@ export const GENES = [
     icon: '🧪',
     desc: '攻击伤害 +22%；副作用：移动速度 −10%',
     downside: '移动速度 −10%',
-    costs: [800],
+    costs: [3200],
     maxLevel: 1,
     apply(game) {
       game.weaponSystem.damage *= 1.22
@@ -379,7 +379,7 @@ export const GENES = [
     icon: '👁️',
     desc: '经验获取 +50%；副作用：拾取半径 −30%',
     downside: '拾取半径 −30%',
-    costs: [600],
+    costs: [2400],
     maxLevel: 1,
     apply(game) {
       game.player.expGainMul *= 1.5
@@ -395,7 +395,7 @@ export const GENES = [
     icon: '💎',
     desc: '攻击伤害 +40%；副作用：受击无敌帧 −35%',
     downside: '受击无敌帧 −35%',
-    costs: [1000],
+    costs: [4000],
     maxLevel: 1,
     apply(game) {
       game.weaponSystem.damage *= 1.4
@@ -411,7 +411,7 @@ export const GENES = [
     icon: '🎲',
     desc: '暴击率 +15 个百分点；副作用：经验获取 −25%',
     downside: '经验获取 −25%',
-    costs: [800],
+    costs: [3200],
     maxLevel: 1,
     apply(game) {
       game.weaponSystem.critChance += 0.15

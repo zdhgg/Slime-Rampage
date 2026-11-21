@@ -6,7 +6,7 @@ export const STRAIN_PRESENTATION = {
   summoner: {
     ...SLIME_FAMILY_ART.summoner,
     label: '共生小队', epithet: '与你并肩的每一次成长',
-    intro: '随机招募伙伴并探索追猎、孢潮、守望三条路线；第 6 波／远征第 3 章后确认方向。空格鼓舞全队，提高伙伴的攻击力、攻速与移速。',
+    intro: '前期按等级阶梯 8 选 4 组建共生小队，掌握威慑/误导/愈合猎人战术；第 6 波／远征第 3 章后从【万兽统领 / 借灵游侠 / 双生协奏】三极方向择一锁定。空格释放【共生鼓舞】震退近敌并同步全队爆发。',
   },
   origin: {
     ...SLIME_FAMILY_ART.origin,
@@ -25,8 +25,8 @@ export const STRAIN_PRESENTATION = {
   },
   elemental: {
     ...SLIME_FAMILY_ART.elemental,
-    label: '万象法师', epithet: '在体内孕育四系法术',
-    intro: '以原质飞弹起步，局内随机掌握四系法术，可走单系极化、双系融合或多系轮转；中期确认路线后追寻互斥终极。自带破盾后自动重建的法术护盾。',
+    label: '四系法师', epithet: '执掌火冰雷毒的奥法化身',
+    intro: 'Lv.2 四选一确定火／冰／电／毒主系专精与专属护盾，主系强化同时解锁至多 2 门他系基础法术兼修（火法也能放寒冰箭）；第 6 波／远征第 3 章进行专精分支升华并冲击互斥终极奥义。',
   },
   shadow: {
     ...SLIME_FAMILY_ART.shadow,
@@ -41,9 +41,9 @@ export function strainTraits(id) {
   const strain = STRAINS[id] || STRAINS.origin
   switch (strain.id) {
     case 'summoner': return [
-      { label: '初始伙伴', value: '岩甲团团' },
-      { label: '伙伴上限', value: '4 只' },
-      { label: '本体伤害', value: '−45%', cost: true },
+      { label: '初始 / 上限', value: '岩甲团团 · 8 选 4' },
+      { label: '猎人协同', value: '威慑·误导·愈合' },
+      { label: '本体基础伤', value: '−28%', cost: true },
     ]
     case 'glutton': return [
       { label: '生命上限', value: `+${strain.maxHp}` },
@@ -57,7 +57,7 @@ export function strainTraits(id) {
     ]
     case 'elemental': return [
       { label: '暴击率', value: `+${percent(strain.critChance)}%` },
-      { label: '法术配置', value: '三路线构筑' },
+      { label: '专精构筑', value: '四系＋兼修' },
       { label: '生命上限', value: String(strain.maxHp).replace('-', '−'), cost: true },
     ]
     case 'shadow': return [

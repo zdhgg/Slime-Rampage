@@ -105,7 +105,7 @@ const STRAIN_THEMES = {
 const ROUTE_SHORTS = {
   split: '分裂', pierce: '贯穿', bounce: '折射',
   mire: '腐沼', jaw: '裂颚', shell: '饕甲',
-  hunt: '猎团', spore: '孢潮', guard: '守望',
+  beast: '兽王', ranger: '游侠', bond: '协奏',
   blade: '刃潮', swarm: '群影',
   single: '极化', fusion: '融合', cycle: '轮转',
 }
@@ -131,7 +131,7 @@ const activeStrain = computed(() => {
 const strainTheme = computed(() => {
   const base = STRAIN_THEMES[activeStrain.value] || STRAIN_THEMES.origin
   if (isBossReward.value) return { label: `${base.label} · 王级秘典`, accent: props.options?.[0]?.color || base.accent }
-  if (isPartnerSelection.value) return { label: '🐾 共生史莱姆 · 伙伴契约', accent: '#edc479' }
+  if (isPartnerSelection.value) return { label: '🐾 共生史莱姆 · 伙伴选秀', accent: '#edc479' }
   return base
 })
 
@@ -152,7 +152,9 @@ const roleLabel = (s) => {
   if (s.isBossSkill) return s.isPartnerChoice ? '🐾 BOSS伙伴契约' : '📜 BOSS职业秘典'
   if (s.isCapstone || s.kind === 'ultimate') return s.tags?.[1] ? `🌟 终极 · ${s.tags[1]}` : '🌟 终极觉醒'
   if (s.isPartnerChoice) return '🐾 招募伙伴 · 在场 +1'
-  if (s.element || s.isElementalSkill || s.isElementalDiscovery || s.spec === 'elemental') return joinTagPair(s, '🔮 元素构筑')
+  if (s.isCantrip) return joinTagPair(s, '📖 跨系基础')
+  if (s.isEndlessMastery) return '∞ 无尽精通'
+  if (s.element || s.isElementalSkill || s.isElementalDiscovery || s.spec === 'elemental') return joinTagPair(s, '🔮 专精强化')
   if (s.kind === 'hybrid' && s.routes?.length === 2) {
     return `✦ 混搭 · ${ROUTE_SHORTS[s.routes[0]] || s.routes[0]}×${ROUTE_SHORTS[s.routes[1]] || s.routes[1]}`
   }
@@ -230,9 +232,11 @@ const resolveCardAccent = (s) => {
     return s.color || (route ? SHADOW_ICON_COLORS[route] : '#d892b8')
   }
   if (s.element || s.isElementalSkill || s.isElementalDiscovery || s.spec === 'elemental') {
+    if (s.branch || s.route) return s.color || ELEMENTAL_ICON_COLORS[s.branch || s.route] || '#b6a4ff'
     if (s.element) return s.color || ELEMENTAL_ICON_COLORS[s.element] || '#b6a4ff'
-    if (s.route) return s.color || ELEMENTAL_ICON_COLORS[s.route] || '#b6a4ff'
+    if (s.school) return s.color || ELEMENTAL_ICON_COLORS[s.school] || '#b6a4ff'
     if (s.id === 'spell_shield') return '#84d6e8'
+    if (s.id === 'ele_endless_arcane') return '#c9b4ff'
     return s.color || '#b6a4ff'
   }
   if (isCommonCard(s)) return COMMON_CARD_ACCENT
@@ -360,14 +364,14 @@ const cardStyle = (s) => {
     <!-- 2. 常规升级 3 卡面板 (自由探索 / 主副专精深潜 / 通用)：深苔藓悬浮进化卡牌 -->
     <div v-else class="levelup-panel" :style="{ '--strain-accent': strainTheme.accent }">
       <div v-if="!embedded" class="levelup-kicker">{{ strainTheme.label }}</div>
-      <h2 class="levelup-title">{{ rewardTitle || (isBossReward ? '📜 王级职业秘典 · 选择一项专属强化 📜' : isPartnerSelection ? '招募你的第一位搭档' : `✨ 升级！Lv.${level} · 选择一项基因进化 ✨`) }}</h2>
+      <h2 class="levelup-title">{{ rewardTitle || (isBossReward ? '📜 王级职业秘典 · 选择一项专属强化 📜' : isPartnerSelection ? '8 选 4 小队选秀 · 招募 1 位新伙伴' : `✨ 升级！Lv.${level} · 选择一项基因进化 ✨`) }}</h2>
       <div class="levelup-grow">
         {{ options[0]?.buildNote || (isBossReward
           ? (options.some(s => s.isPartnerChoice) ? '选择伙伴契约即可增加一位在场伙伴；每种一只，最多组成四人小队。' : '击败首领获得的职业秘典：不占用升级次数，只能选择当前职业的强力专属技能。')
           : isPartnerSelection
-          ? '先选一位搭档同行，后续升级或 BOSS 秘典可继续招募，最多四只伙伴共同作战。'
+          ? '从 3 位候选伙伴中挑选 1 位加入小队（最多 4 名伙伴协同作战，未满编时本体自动获得伤害补偿）。'
           : roleSpec === 'elemental'
-          ? '随机发现新元素与本系强化；掌握两系后融合，三系以上按顺序轮转。中期路线锁定后方向不再改变。'
+          ? 'Lv.2 四选一确定火／冰／电／毒主系；单局至多兼修 2 门他系基础法术，第 6 波／远征第 3 章选定分支升华。'
           : level < 5
           ? (roleSpec
             ? '🌱 阶段说明：Lv.1~4 只开放本角色专属技能树（Lv.5 自动觉醒为你的主专精，无需选择）'
@@ -399,6 +403,8 @@ const cardStyle = (s) => {
 
           <!-- 该级具体数值（亮色增益框） -->
           <div class="skill-num">{{ s.stats }}</div>
+          <div v-if="s.synergyPreview" class="skill-extra-note">{{ s.synergyPreview }}</div>
+          <div v-if="s.rangerInfusePreview" class="skill-extra-note infuse">游侠赋能：{{ s.rangerInfusePreview }}</div>
 
           <!-- 选中行动提示条 -->
           <span class="card-cta" aria-hidden="true">点击或按 Enter 选择 ✨</span>
@@ -1053,6 +1059,22 @@ const cardStyle = (s) => {
 
 .milestone-panel .keyboard-hint {
   margin-top: 18px;
+}
+
+.skill-extra-note {
+  margin-top: 6px;
+  padding: 5px 8px;
+  border-radius: 7px;
+  background: rgba(237, 196, 121, 0.12);
+  border: 1px solid rgba(237, 196, 121, 0.25);
+  color: #ffe4a1;
+  font-size: 11px;
+  line-height: 1.38;
+}
+.skill-extra-note.infuse {
+  background: rgba(142, 218, 203, 0.10);
+  border-color: rgba(142, 218, 203, 0.25);
+  color: #b8f1e4;
 }
 
 @media (max-width: 900px) {

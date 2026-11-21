@@ -9,20 +9,23 @@ const game = (mode, difficulty, extra = {}) => ({ runSelection: { mode, difficul
 const core = RICOCHET_SKILL_BY_ID.rico_velocity
 const common = RICOCHET_SKILL_BY_ID.rico_multishot
 
-assert.equal(getEffectiveSkillMaxLevel(game('expedition', 'easy'), core, 'primary'), core.maxLevel)
-assert.equal(getEffectiveSkillMaxLevel(game('expedition', 'normal'), core, 'primary'), core.maxLevel)
-assert.equal(getEffectiveSkillMaxLevel(game('expedition', 'hard'), core, 'primary'), 8)
+assert.equal(getEffectiveSkillMaxLevel(game('expedition', 'easy'), core, 'primary'), 6)
+assert.equal(getEffectiveSkillMaxLevel(game('expedition', 'normal'), core, 'primary'), 8)
+assert.equal(getEffectiveSkillMaxLevel(game('expedition', 'hard'), core, 'primary'), 10)
 assert.equal(getEffectiveSkillMaxLevel(game('expedition', 'hell'), core, 'primary'), 12)
 assert.equal(getEffectiveSkillMaxLevel(game('timed', 'hell'), core, 'primary'), 10)
 assert.equal(getEffectiveSkillMaxLevel(game('timed', 'hell'), RICOCHET_SKILL_BY_ID.rico_hunt, 'primary'), 9)
-assert.equal(getEffectiveSkillMaxLevel(game('endless', 'normal'), RICOCHET_SKILL_BY_ID.rico_hunt, 'primary'), 10)
+assert.equal(getEffectiveSkillMaxLevel(game('timed20', 'normal'), core, 'primary'), 12)
+assert.equal(getEffectiveSkillMaxLevel(game('timed20', 'normal'), RICOCHET_SKILL_BY_ID.rico_hunt, 'primary'), 11)
+assert.equal(getEffectiveSkillMaxLevel(game('timed20', 'normal'), ENDLESS_SKILLS[0], 'common'), 5)
+assert.equal(getEffectiveSkillMaxLevel(game('endless', 'normal'), RICOCHET_SKILL_BY_ID.rico_hunt, 'primary'), 12)
 assert.equal(getEffectiveSkillMaxLevel(game('expedition', 'hell'), common, 'common'), 4)
 assert.equal(getEffectiveSkillMaxLevel(game('endless', 'normal'), core, 'primary'), 14)
 assert.equal(getEffectiveSkillMaxLevel(game('endless', 'normal'), common, 'common'), common.maxLevel)
 assert.equal(getEffectiveSkillMaxLevel(game('endless', 'normal'), ENDLESS_SKILLS[0], 'common'), Infinity)
 assert.equal(ricochetSkillAvailable(game('endless', 'normal', {
   weaponSystem: { ricochetCombat: { route: 'split' } },
-  skillLevels: { rico_hunt: 10 },
+  skillLevels: { rico_hunt: 12 },
 }), RICOCHET_SKILL_BY_ID.rico_hunt), false, 'a finite skill leaves the roll pool after its last meaningful rank')
 
 const early = getSoftRankMultiplier(3, .08, 1, 1.5)
