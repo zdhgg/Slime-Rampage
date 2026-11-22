@@ -12,7 +12,7 @@ import { WeaponSystem } from './WeaponSystem.js'
 import { GemManager } from './GemManager.js'
 import { SoundManager } from './SoundManager.js'
 import { rollSkills, rollBossSkills, getSpecInfo, SKILL_DATABASE } from './SkillPool.js'
-import { RICOCHET_ROUTES, RICOCHET_SKILL_BY_ID, prismDamageScaleForCount, ricochetSkillAvailable, ricochetRouteReady } from './RicochetRules.js'
+import { RICOCHET_ROUTES, RICOCHET_SKILL_BY_ID, pierceRouteDamageMultiplier, prismDamageScaleForCount, ricochetSkillAvailable, ricochetRouteReady } from './RicochetRules.js'
 import { GLUTTON_ROUTES, GLUTTON_SKILL_BY_ID, gluttonSkillAvailable, gluttonRouteReady } from './GluttonBuild.js'
 import { SYMBIOSIS_ROUTES, SYMBIOSIS_SKILL_BY_ID, SYMBIOSIS_ENDLESS_SKILL, symbiosisDraftReady, symbiosisSkillAvailable, symbiosisRouteReady } from './SymbiosisBuild.js'
 import { ELEMENTAL_SCHOOLS } from './ElementalSchools.js'
@@ -2254,13 +2254,13 @@ export class GameEngine {
       dmg:
         Math.round(
           this.weaponSystem.damage * this.weaponSystem.levelMul * this.weaponSystem.devourDamageMul *
-          (this.weaponSystem.ricochetCombat.route === 'pierce'
-            ? 1.35
-            : this.weaponSystem.ricochetCombat.route === 'bounce'
-              ? prismDamageScaleForCount(this.weaponSystem.projectileCount)
-              : this.weaponSystem.petCombat?.enabled && this.weaponSystem.petCombat?.fullRoster
-                ? this.weaponSystem.petCombat.playerBodyDamageMultiplier()
-                : 1) * 100
+          (this.weaponSystem.ricochetCombat.enabled
+            ? (this.weaponSystem.ricochetCombat.route === 'bounce'
+              ? prismDamageScaleForCount(this.weaponSystem.projectileCount) * pierceRouteDamageMultiplier(this)
+              : pierceRouteDamageMultiplier(this))
+            : this.weaponSystem.petCombat?.enabled && this.weaponSystem.petCombat?.fullRoster
+              ? this.weaponSystem.petCombat.playerBodyDamageMultiplier()
+              : 1) * 100
         ) / 100,
       wave: this.enemyManager.wave,
       waveName: this.enemyManager.waveName,

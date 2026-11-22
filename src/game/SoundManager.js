@@ -140,6 +140,14 @@ export class SoundManager {
     }
   }
 
+  /** 贯穿重炮：厚重低频炮膛冲击 → 穿甲尖啸；终极巨炮叠加亚音速轰鸣。 */
+  pierceCannon(cannon = false, heavyActive = false) {
+    const vol = cannon ? 0.048 : heavyActive ? 0.036 : 0.026
+    this._tone({ freq: cannon ? 190 : 260, endFreq: cannon ? 42 : 68, dur: cannon ? 0.19 : 0.11, type: 'triangle', vol })
+    this._tone({ freq: cannon ? 960 : 780, endFreq: cannon ? 150 : 240, dur: cannon ? 0.15 : 0.08, type: 'sawtooth', vol: vol * 0.65, delay: 0.01 })
+    if (cannon) this._tone({ freq: 1480, endFreq: 320, dur: 0.11, type: 'square', vol: 0.018, delay: 0.025 })
+  }
+
   /** 近战咬合：短促低音与牙齿闭合声，重咬更低沉。 */
   bite(heavy = false, landed = true) {
     if (!landed) {

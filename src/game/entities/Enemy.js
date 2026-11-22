@@ -336,8 +336,9 @@ export class Enemy extends Entity {
     // 有伤害的命中会引走攻巢敌人，护盾挡住伤害也算命中。
     if (damage > 0 && this.active && this.objectiveTarget === 'nest') this.game?.mapFeatures?.drawNestAggro?.(this)
     if (this.shieldHits > 0 && damage > 0) {
-      this.shieldHits-- // 护盾吸收本次伤害
-      damage = 0
+      const breakCount = Math.max(1, effects?.shieldBreak || 1)
+      this.shieldHits = Math.max(0, this.shieldHits - breakCount) // 护盾吸收本次伤害（重炮可多段破盾并透甲）
+      damage = effects?.shieldPierceRatio > 0 ? damage * effects.shieldPierceRatio : 0
     }
     this.hp -= damage
     const stats = this.game?.weaponSystem?.stats

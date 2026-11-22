@@ -463,5 +463,159 @@ check('弹射系卡面与实现口径一致', g => {
   assert.equal(skills.rico_extension.stats(2), '折射范围 +105px · 光程 +30% · 蓄能间隔 -12%')
   assert.equal(skills.rico_amplify.stats(4), '散射命中 ≥4 目标时额外增伤 +38%')
   assert.equal(skills.rico_hunt.stats(5), '孢弹伤害 +40 个百分点 · 半血目标 +30% · 存续 +1.50 秒')
+  assert.equal(skills.rico_pierce.stats(2), '穿透 +3 敌 · 主弹伤害 +12% · 口径 +15%')
+})
+
+check('贯穿重炮：敌群展开扇面、孤立首领集火、前向微吸附优先后排首领', g => {
+  prepare(g, 'pierce')
+  g.weaponSystem.projectileCount = 5
+  const front = spawn(g, { x: 140, y: 0, hp: 10000 })
+  spawn(g, { x: 180, y: 80, hp: 10000 })
+  g.weaponSystem.fire(front)
+  const crowdAngles = g.weaponSystem._projectiles.map(p => Math.atan2(p.vy, p.vx))
+  const crowdSpread = Math.max(...crowdAngles) - Math.min(...crowdAngles)
+  assert.ok(crowdSpread > .35, '敌群时多弹展开穿甲扇面避免重合塌缩')
+  assert.equal(g.weaponSystem._projectiles.filter(p => p.homing === 0).length, 4, '侧翼弹不向首目标强收束')
+
+  // 孤立首领时自动收束集火
+  g.enemyManager._enemies.length = 0; g.weaponSystem._projectiles.length = 0
+  const soloBoss = spawnBoss(g, 10000); soloBoss.x = g.player.x + 220; soloBoss.y = g.player.y
+  g.weaponSystem.fire(soloBoss)
+  const bossAngles = g.weaponSystem._projectiles.map(p => Math.atan2(p.vy, p.vx))
+  assert.ok(Math.max(...bossAngles) - Math.min(...bossAngles) < .15, '孤立首领时自动收束扇面集火')
+
+  // 前向微吸附：穿透首名小怪后优先偏转吸附锥角内的后排首领
+  g.enemyManager._enemies.length = 0; g.weaponSystem._projectiles.length = 0
+  g.weaponSystem.projectileCount = 1
+  const vanguard = spawn(g, { x: 110, y: 0, hp: 10000 })
+  const decoyMob = spawn(g, { x: 240, y: -25, hp: 10000 })
+  const backBoss = spawnBoss(g, 10000); backBoss.x = g.player.x + 280; backBoss.y = g.player.y + 45
+  g.weaponSystem.fire(vanguard)
+  const shell = g.weaponSystem._projectiles[0]
+  sweep(g, shell, 120)
+  assert.equal(shell.target, backBoss, '穿透后在前向锥角内优先微吸附后排首领')
+  assert.ok(shell.vy > 0 && decoyMob.hp === 10000, '速度向量同步向后排首领微幅偏转')
+})
+
+check('贯穿重炮：无视重盾减伤、击碎护盾、首领叠层破甲与每轮独立破阵冲击', g => {
+  prepare(g, 'pierce'); learn(g, 'sustain', 1); learn(g, 'shock', 1)
+  g.weaponSystem.projectileCount = 2
+  const bulwark = spawn(g, { x: 110, y: 0, hp: 10000, type: 'bulwark' })
+  bulwark.facing = Math.PI // 正面朝向玩家
+  bulwark.shieldHits = 2
+  g.weaponSystem.fire(bulwark)
+  const shot = g.weaponSystem._projectiles[0]
+  const baseDmg = shot.damage
+  g.weaponSystem.ricochetCombat.hit(shot, bulwark)
+  assert.equal(bulwark.shieldHits, 0, '重弹一次击碎至多 2 层护盾')
+  near(10000 - bulwark.hp, baseDmg * .65, '无视重盾正面减伤并穿盾造成 65% 实伤')
+
+  // 首领连续命中叠层（最多 4 层）
+  g.enemyManager._enemies.length = 0; g.weaponSystem._projectiles.length = 0
+  const boss = spawnBoss(g, 10000)
+  const hits = []
+  for (let i = 0; i < 6; i++) {
+    g.weaponSystem._projectiles.length = 0
+    g.weaponSystem.fire(boss)
+    const p = g.weaponSystem._projectiles[0], before = boss.hp
+    g.weaponSystem.ricochetCombat.hit(p, boss)
+    hits.push(before - boss.hp)
+  }
+  assert.ok(hits[1] > hits[0] && hits[4] > hits[1], '连续命中同一首领逐层叠加穿甲过载')
+  near(hits[5], hits[4], '第 6 发在 4 层处封顶')
+
+  // 破阵冲击不受全局 0.2s CD 锁死，同轮多发穿透各自触发冲击波
+  g.enemyManager._enemies.length = 0; g.weaponSystem._projectiles.length = 0
+  const m1 = spawn(g, { x: 100, y: -40, hp: 10000 }), m1Back = spawn(g, { x: 170, y: -40, hp: 10000 })
+  const m2 = spawn(g, { x: 100, y: 40, hp: 10000 }), m2Back = spawn(g, { x: 170, y: 40, hp: 10000 })
+  const beforeExpl = g.weaponSystem.stats.explosions
+  g.weaponSystem.fire(m1)
+  const [pA, pB] = g.weaponSystem._projectiles
+  g.weaponSystem.ricochetCombat.hit(pA, m1); g.weaponSystem.ricochetCombat.hit(pA, m1Back)
+  g.weaponSystem.ricochetCombat.hit(pB, m2); g.weaponSystem.ricochetCombat.hit(pB, m2Back)
+  assert.equal(g.weaponSystem.stats.explosions - beforeExpl, 2, '同轮齐射多弹穿透各自触发破阵冲击')
+})
+
+check('歼灭巨炮智能索敌优先首领／密集纵队，重炮视觉曳光仅在贯穿专精后激活并正常衰减', g => {
+  // 探索期仅拿穿透腺体：保持基础冰青弹体且不提前染色出重炮炽金曳光
+  learn(g, 'pierce', 2)
+  const exploreEnemy = spawn(g, { x: 140, y: 0, hp: 1000 })
+  g.weaponSystem.fire(exploreEnemy)
+  const exploreShot = g.weaponSystem._projectiles.at(-1)
+  assert.equal(exploreShot.visual.material, 'ricochet', '未定向前保持基础冰青弹体外观')
+  sweep(g, exploreShot, 200)
+  assert.equal(g.weaponSystem.ricochetCombat.traces.some(t => t.kind === 'pierce' || t.kind === 'muzzle_cone'), false, '未选择贯穿专精前不提前出现重炮炽金曳光')
+  g.enemyManager._enemies.length = 0; g.weaponSystem._projectiles.length = 0
+
+  prepare(g, 'pierce'); learn(g, 'pierce', 2); learn(g, 'sustain', 1)
+  g.player.level = RICOCHET_RULES.ultimateLevel; g.enemyManager.wave = RICOCHET_RULES.ultimateWave
+  assert.equal(g.applySkill(skills.rico_cannon), true)
+  const rc = g.weaponSystem.ricochetCombat
+  spawn(g, { x: -70, y: 0, hp: 50 }) // 最近但孤立的杂兵
+  const boss = spawnBoss(g, 10000); boss.x = g.player.x + 360; boss.y = g.player.y + 40
+  pressSpace(g)
+  const cannon = g.weaponSystem._projectiles.at(-1)
+  assert.equal(cannon.visual.material, 'rico_pierce', '选择贯穿专精后切换为炽金重炮弹体')
+  assert.equal(cannon.target, boss, '歼灭巨炮优先锁定首领而非身边孤立小怪')
+  assert.ok(rc.traces.some(t => t.kind === 'muzzle_cone'), '重炮发射产生炮口焰锥')
+  cannon.prevX = cannon.x; cannon.prevY = cannon.y
+  cannon.x = boss.x; cannon.y = boss.y
+  g.enemyManager._buildGrid()
+  rc.resolve(cannon)
+  assert.ok(rc.traces.some(t => t.kind === 'pierce'), '重炮飞行生成炽金曳光轨迹')
+  assert.ok(rc.traces.some(t => t.kind === 'pierce_ring'), '重炮命中生成方向性马赫激波环')
+  g.render(ctx2d)
+  rc.update(1)
+  assert.equal(rc.traces.length, 0, '视觉曳光按寿命自动回收不泄漏')
+})
+
+check('移动中发射光棱与贯穿重炮：起笔与炮口焰始终随史莱姆同步、多弹不逸出本体边缘', g => {
+  // 1) 光棱主束起点随移动中的史莱姆同步，不滞留原地
+  prepare(g, 'bounce')
+  const rc = g.weaponSystem.ricochetCombat
+  const target = spawn(g, { x: 200, y: 0, hp: 10000 })
+  const x0 = g.player.x, y0 = g.player.y
+  g.weaponSystem.fire(target)
+  g.player.x = x0 + 120; g.player.y = y0 + 80
+  const beamMoves = []
+  const spyCtx = new Proxy(ctx2d, {
+    get(t, k) {
+      if (k === 'moveTo') return (x, y) => beamMoves.push({ x, y })
+      return t[k]
+    },
+  })
+  rc.render(spyCtx)
+  assert.ok(beamMoves.some(pt => Math.abs(pt.x - (g.player.x + 10)) < 2 && Math.abs(pt.y - (g.player.y - 8)) < 2),
+    '移动后光棱主束起点紧贴史莱姆当前位置，不滞留旧坐标')
+
+  // 2) 贯穿重炮：7弹齐射横向偏移收束在史莱姆半径内，且炮口焰与首段曳光随史莱姆同步
+  g.reset()
+  prepare(g, 'pierce')
+  g.weaponSystem.projectileCount = 7
+  const rcPierce = g.weaponSystem.ricochetCombat
+  const mob = spawn(g, { x: 220, y: 0, hp: 10000 })
+  const px0 = g.player.x, py0 = g.player.y
+  g.weaponSystem.fire(mob)
+  assert.ok(g.weaponSystem._projectiles.every(p => Math.abs(p.y - py0) <= 12), '7弹齐射出膛位置收束在本体宽度内')
+  const lead = g.weaponSystem._projectiles[3]
+  lead.prevX = lead.x; lead.prevY = lead.y
+  lead.x += 40
+  rcPierce.resolve(lead)
+  g.player.x = px0 - 90; g.player.y = py0 + 60
+  const pierceMoves = [], coneTranslations = []
+  const pierceSpy = new Proxy(ctx2d, {
+    get(t, k) {
+      if (k === 'moveTo') return (x, y) => pierceMoves.push({ x, y })
+      if (k === 'translate') return (x, y) => coneTranslations.push({ x, y })
+      return t[k]
+    },
+  })
+  rcPierce.render(pierceSpy)
+  const cone = rcPierce.traces.find(tr => tr.kind === 'muzzle_cone')
+  assert.ok(coneTranslations.some(pt => Math.abs(pt.x - (g.player.x + cone.ox)) < 1 && Math.abs(pt.y - (g.player.y + cone.oy)) < 1),
+    '炮口焰锥随史莱姆移动同步锚定')
+  const firstTracer = rcPierce.traces.find(tr => tr.kind === 'pierce')
+  assert.ok(pierceMoves.some(pt => Math.abs(pt.x - (g.player.x + firstTracer.ox)) < 1 && Math.abs(pt.y - (g.player.y + firstTracer.oy)) < 1),
+    '首段重炮曳光起笔锚定史莱姆当前位置')
 })
 console.log(`verify-ricochet：${passed} 组通过`)

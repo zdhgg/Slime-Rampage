@@ -19,9 +19,21 @@ export const ricochetPierceOverdrivePct = rank => {
 }
 export const ricochetShockPct = rank => {
   const n = Math.max(0, rank | 0)
-  return n <= 2 ? [0, 75, 115][n] : 115 + Math.min(105, (n - 2) * 18)
+  return n <= 2 ? [0, 40, 62][n] : 62 + Math.min(54, (n - 2) * 9)
 }
 export const bounceAmplifyPct = rank => (rank <= 0 ? 0 : rank <= 3 ? rank * 10 : 30 + Math.min(30, (rank - 3) * 4))
+export const pierceShellBonusPct = rank => {
+  const n = Math.max(0, rank | 0)
+  return n <= 4 ? n * 4 : 16 + Math.min(12, (n - 4) * 2)
+}
+export const pierceCaliberPct = rank => Math.min(35, Math.max(0, rank | 0) * 5)
+export function pierceRouteDamageMultiplier(game) {
+  const levels = game?.skillLevels || {}
+  const pierceMul = 1 + pierceShellBonusPct(levels.rico_pierce || 0) / 100
+  const route = game?.weaponSystem?.ricochetCombat?.route
+  if (route !== 'pierce') return pierceMul
+  return pierceMul * 1.35 * (levels.rico_cannon ? 1.15 : 1)
+}
 export const prismScatterBonus = rank => {
   const n = Math.max(0, rank | 0)
   return { rays: Math.min(5, n), retentionPct: Math.min(15, Math.max(0, n - 5) * 3) }
@@ -56,11 +68,11 @@ export const RICOCHET_ROUTES = {
   pierce: {
     id: 'pierce', name: '贯穿重炮', short: '贯穿', icon: '➤', color: '#f1bf74',
     seed: 'rico_pierce', ultimate: 'rico_cannon',
-    desc: '把怪群拉成队列，以大口径重弹打穿整条防线，顺势重创后排首领。',
-    bonus: '主弹伤害 ×1.35、弹体放大 30%、穿透 +1 且穿透不再衰减（100% 保伤）；疾射改为连发 4 枚聚能重弹。',
-    weakness: '火力集中在直线正面，被四面合围时需主动走位拉线。',
+    desc: '重弹以宽幅穿甲扇面横扫正面防线，命中后微幅吸附前方队列并击碎护盾，沿途贯穿并重创后排首领。',
+    bonus: '主弹伤害 ×1.35、口径 ×1.55、穿透 +1 且 100% 保伤；多弹改为不塌缩的穿甲扇面＋前向微吸附，无视重盾减伤并可击碎护盾；疾射升级为 4 轮高爆穿甲重弹。',
+    weakness: '背身及大角度侧翼缺少自动散射掩护，被四面合围时需走位调整扇面朝向。',
     activeName: '重弹齐射', ultimateName: '歼灭巨炮',
-    ultimateDesc: '常驻主弹再放大 50%；空格轰出贯穿巨炮（穿透 +6），沿途连续引爆巨型冲击波。冷却 10 秒。',
+    ultimateDesc: '常驻主弹伤害 +15%、口径再放大 40%；空格优先锁定首领或密集敌群轰出超宽贯穿巨炮（穿透 +8），无视重盾并沿途引爆巨型穿甲冲击波。冷却 10 秒。',
   },
   bounce: {
     id: 'bounce', name: '棱镜群落', short: '折射', icon: '◇', color: '#b4a2ef',
@@ -84,8 +96,11 @@ const make = (id, name, kind, maxLevel, desc, stats, extra = {}) => ({
 export const RICOCHET_SKILLS = [
   make('rico_split', '分裂胚芽', 'seed', 2, '主弹首次命中时分裂出追踪孢弹，自动追击周围其他敌人。',
     lv => `分裂概率 ${ricochetSplitChance(lv + 1)}% · 产生 ${lv >= 1 ? 3 : 2} 枚追踪孢弹`, { route: 'split' }),
-  make('rico_pierce', '穿透腺体', 'seed', 6, '主弹命中后保持直线穿透多名敌人，每次穿透保留 90% 伤害。',
-    lv => `额外穿透 ${lv + 1} 名敌人`, { route: 'pierce', growthClass: 'core', rankCaps: { expedition: { hard: 8, hell: 10 }, timed: 8, endless: 11 } }),
+  make('rico_pierce', '穿透腺体', 'seed', 5, '主弹命中后保持直线穿透并微幅吸附前方敌人，逐级放大口径与单弹伤害（未定向时每次穿透保留 90% 伤害）。',
+    lv => {
+      const rank = lv + 1
+      return `穿透 +${rank} 敌 · 主弹伤害 +${pierceShellBonusPct(rank)}% · 口径 +${pierceCaliberPct(rank)}%`
+    }, { route: 'pierce', growthClass: 'core', rankCaps: { expedition: { hard: 7, hell: 8 }, timed: 7, endless: 9 } }),
   make('rico_bounce', '折射表皮', 'seed', 6, '命中后折向 300px 内的其他敌人（保伤 85%）；棱镜群落下转为增加落点星爆散射光线数（5 级后提升散射伤害）。',
     (lv, g) => {
       const rank = lv + 1
@@ -127,12 +142,12 @@ export const RICOCHET_SKILLS = [
   }, { route: 'split', growthClass: 'core', rankCaps: { expedition: { hard: 9, hell: 11 }, timed: 9, endless: 12 } }),
   make('rico_bloom', '爆裂孢弹', 'rare', 1, '追踪孢弹击杀小怪立即引发范围毒爆；对首领／精英每累计命中 4 枚孢弹同样引爆！',
     '爆炸半径 95px · 主弹 75% 范围伤害', { route: 'split' }),
-  make('rico_sustain', '穿甲过载', 'advanced', 8, '重弹每穿透 1 名敌人后续伤害递增（最多 4 层），并对首领／精英造成额外破甲伤害。',
-    lv => `每穿 1 敌增伤 +${ricochetPierceOverdrivePct(lv + 1)}% · 对首领／精英 +${ricochetPierceOverdrivePct(lv + 1)}%`, { route: 'pierce', growthClass: 'core' }),
-  make('rico_shock', '破阵冲击', 'advanced', 8, '主弹每次穿透敌人或触发暴击时释放冲击波，震伤周围敌群。',
-    lv => `冲击波半径 95px · 单弹 ${ricochetShockPct(lv + 1)}% 伤害`, { route: 'pierce', growthClass: 'core' }),
-  make('rico_breach', '破城弹头', 'rare', 1, '主弹首击首领／精英造成重击；击杀敌人向前方扇形喷射破甲碎弹。',
-    '首领／精英首击 +40% · 击杀前向溅射 110px', { route: 'pierce' }),
+  make('rico_sustain', '穿甲过载', 'advanced', 8, '重弹每穿透 1 名敌人或连续命中同一首领／精英，后续伤害递增（最多 4 层），并额外破甲重创首领／精英。',
+    lv => `每层增伤 +${ricochetPierceOverdrivePct(lv + 1)}%（最高 4 层）· 对首领／精英 +${ricochetPierceOverdrivePct(lv + 1)}%`, { route: 'pierce', growthClass: 'core' }),
+  make('rico_shock', '破阵冲击', 'advanced', 8, '每发主弹首次穿透敌人或暴击时引爆无视重盾的穿甲冲击波（每轮齐射至多 4 次），震伤周围敌群。',
+    lv => `冲击波半径 95px · 伤害 ${ricochetShockPct(lv + 1)}%（受穿透增伤加成）`, { route: 'pierce', growthClass: 'core' }),
+  make('rico_breach', '破城弹头', 'rare', 1, '主弹首击首领／精英造成重击；击杀敌人向前方喷射无视重盾的破甲碎弹。',
+    '首领／精英首击 +40% · 击杀前向溅射 115px', { route: 'pierce' }),
   make('rico_extension', '折光加速', 'advanced', 3, '扩大光棱主束射程与落点散射折射半径，并加快光棱蓄能开火节奏。',
     lv => {
       const s = prismExtensionStats(lv + 1)
